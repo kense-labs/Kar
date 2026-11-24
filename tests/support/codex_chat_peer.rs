@@ -339,7 +339,7 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                 if text.starts_with("mcp collaboration run") {
                     assert!(text.contains("kar_submit_output"));
                     fs::write(database.join("collaboration-ready"), &turn).unwrap();
-                    let limit = Instant::now() + Duration::from_secs(20);
+                    let limit = Instant::now() + Duration::from_secs(60);
                     while database.join("hold-collaboration").is_file() {
                         assert!(Instant::now() < limit);
                         std::thread::sleep(Duration::from_millis(10));

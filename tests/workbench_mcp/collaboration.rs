@@ -106,6 +106,7 @@ pub(super) async fn run(
         done["result"]["structuredContent"]["turn"],
         request.to_string()
     );
+    super::environment::controls(url, host, p, chat, &call).await;
     fs::remove_file(db.join("hold-collaboration")).unwrap();
     let turn = called.await.unwrap();
     assert_eq!(turn["structured_output"], json!({"done":true}), "{turn}");

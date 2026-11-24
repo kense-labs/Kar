@@ -137,6 +137,8 @@ impl Workbench {
             let mut recovered=self.0.pump.recovered_workspaces.lock().unwrap();
             if !*recovered {
                 super::mcp::worktree::recover_queue_reservations(self)?;
+                super::mcp::collaboration_tools::environment::cards::recover(self)?;
+                super::mcp::collaboration_tools::environment::secrets::clean(&self.0.state)?;
                 *recovered=true;
             }
         }
@@ -145,6 +147,16 @@ impl Workbench {
         self.0.devices.maintain(self);
         self.0.task_folders.recover(self);
         self.0.pump.started.call_once(||{
+            let cleaner=Arc::downgrade(&self.0);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(300)).await;
+                    let Some(app)=cleaner.upgrade() else {return;};
+                    let state=app.state.clone();
+                    drop(app);
+                    let _=tokio::task::spawn_blocking(move || super::mcp::collaboration_tools::environment::secrets::clean(&state)).await;
+                }
+            });
             let weak=Arc::downgrade(&self.0);
             let wake=self.0.pump.wake.clone();
             tokio::spawn(async move{

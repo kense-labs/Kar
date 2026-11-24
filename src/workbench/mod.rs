@@ -64,6 +64,8 @@ pub struct Project {
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
     #[serde(default)]
+    environment: mcp::collaboration_tools::environment::Environment,
+    #[serde(default)]
     prompt_suggestions: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     model_tool_permissions: BTreeMap<Uuid, BTreeMap<Uuid, mcp::Policy>>,
@@ -130,6 +132,7 @@ struct Inner {
     viewed_gates: forge::ViewedGates,
     forge_updates: tokio::sync::watch::Sender<forge::signals::Epochs>,
     thread_updates: tokio::sync::watch::Sender<u64>,
+    card_updates: tokio::sync::watch::Sender<u64>,
     clones: forge::clone_jobs::Tracker,
     tracker_accounts:forge::trackers::Store,
     signin: forge::signin::Service,
@@ -232,6 +235,7 @@ impl Workbench {
                 roots: allowed,
                 viewed_gates: Default::default(),
                 forge_updates: tokio::sync::watch::channel(catalog.forge.epochs()).0,
+                card_updates: tokio::sync::watch::channel(0).0,
                 thread_updates: tokio::sync::watch::channel(catalog.thread_state.sequence()).0,
                 catalog: Mutex::new(catalog),
                 tracker_accounts,

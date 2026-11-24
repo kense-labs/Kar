@@ -160,13 +160,13 @@ fn committed(app: &Workbench, row: &Move) -> Result<bool> {
         h.request.id == row.request.command_id && h.source_workspace.as_ref() == Some(&row.source)
     }))
 }
-fn default_origin(project: &super::super::Project) -> bool {
+fn default_origin(project: &super::super::Project, db: &crate::workbench::Catalog) -> bool {
     project
         .metadata
         .settings
         .get("newWorktreesStartFromOrigin")
         .and_then(Value::as_bool)
-        .unwrap_or(true)
+        .unwrap_or_else(||super::collaboration_tools::environment::worktrees_from_origin(db))
 }
 fn directory_ok(policy: Option<&Policy>, target: &Path) -> bool {
     policy.and_then(Policy::worktree_directory) == target.parent()
@@ -414,7 +414,7 @@ fn dispatch(
             .filter(|r| r.project == project && r.chat == chat)
             .collect::<Vec<_>>();
         return Ok((
-            json!({"attached":checkout,"workspace":info.workspace,"project_workspace":registered.root,"branch":branch,"default_start_from_origin":default_origin(&registered),"handoffs":rows}),
+            json!({"attached":checkout,"workspace":info.workspace,"project_workspace":registered.root,"branch":branch,"default_start_from_origin":default_origin(&registered,&db),"handoffs":rows}),
             None,
         ));
     }
@@ -482,7 +482,7 @@ fn dispatch(
         let continuation_id = request.continuation_prompt.as_ref().map(|_| Uuid::new_v4());
         let start_from_origin = request
             .start_from_origin
-            .unwrap_or_else(|| default_origin(&registered));
+            .unwrap_or_else(|| default_origin(&registered,db));
         let script = request
             .run_setup_script
             .then(|| setup::Script::select(&registered))

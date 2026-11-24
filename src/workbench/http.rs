@@ -87,6 +87,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         )
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
         .merge(super::mcp::permission_routes())
+        .merge(super::mcp::collaboration_tools::environment::routes())
         .merge(super::agent_sessions::routes())
         .merge(super::acp_registry::routes())
         .merge(super::chat_controls::routes())

@@ -4,7 +4,7 @@ pub(in crate::workbench) mod operations;
 mod issues;
 pub(super) use issues::{Policy, permission_routes};
 mod registry;
-mod collaboration_tools;
+pub(in crate::workbench) mod collaboration_tools;
 mod preview_tools;
 mod html;
 pub(in crate::workbench) use preview_tools::DevicePermission;

@@ -16,6 +16,8 @@ enum Mode {
 pub(in crate::workbench) struct Policy {
     mode: Mode,
     #[serde(default)]
+    environment_writes: bool,
+    #[serde(default)]
     pub(super) preview_tools: super::preview_tools::Resources,
     #[serde(default)]
     pub(super) project_access: super::project_tools::Access,
@@ -46,6 +48,8 @@ pub(in crate::workbench) struct Policy {
 struct Configure {
     mode: Mode,
     #[serde(default)]
+    environment_writes: bool,
+    #[serde(default)]
     pub(super) preview_tools: super::preview_tools::Resources,
     #[serde(default)]
     pub(super) project_access: super::project_tools::Access,
@@ -69,6 +73,7 @@ struct Configure {
 }
 
 impl Policy {
+    pub(super) fn writes_environment(&self)->bool {self.executes() && self.environment_writes}
     pub(super) fn executes(&self) -> bool { self.mode == Mode::Execute }
     fn get(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         db.model_tool_permissions.get(&project)?.get(&chat)
@@ -117,9 +122,11 @@ async fn read(
 async fn configure(
     State(app): State<Workbench>,
     Path((p, c)): Path<(Uuid, Uuid)>,
+    device: Option<axum::Extension<crate::workbench::access::DeviceLease>>,
     Json(cfg): Json<Configure>,
 ) -> Result<Json<Policy>, forge::ForgeError> {
     app.binding(p, c)?;
+    if cfg.environment_writes && device.is_some(){return Err(forge::ForgeError::bad("only the owner can grant model environment writes"));}
     let repository = if cfg.issue_reads || cfg.issue_writes && cfg.mode == Mode::Execute {
         Some(forge::Context::issue_repository(app.clone(), p, cfg.issue_scope.as_deref()).await?)
     } else {
@@ -136,6 +143,7 @@ async fn configure(
         pull_repository,pull_reads:cfg.pull_reads,pull_writes:cfg.pull_writes,
         worktree_directory,
         mode: cfg.mode,
+        environment_writes: cfg.environment_writes,
         preview_tools: cfg.preview_tools,
         project_access: cfg.project_access.validate(&app)?,
         issue_reads: cfg.issue_reads,

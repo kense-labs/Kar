@@ -18,7 +18,7 @@ impl Workbench {
         schema: Value,
     ) -> Result<()> {
         self.binding(project, chat)?;
-        if !schema.is_object() || serde_json::to_vec(&schema)?.len() > 200_000 {
+        if !schema.is_object() || serde_json::to_string(&schema)?.chars().count() > 32_000 {
             return Err(Error::Refused("invalid requested output schema".into()));
         }
         validator(&schema)?;

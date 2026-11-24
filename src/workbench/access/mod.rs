@@ -107,6 +107,10 @@ impl IntoResponse for AccessError {
 type AccessResult<T> = Result<T, AccessError>;
 
 impl AccessStore {
+    pub(super) fn revoke_device(&self, id: Uuid) -> crate::Result<()> {
+        self.update(|db|{db.devices.remove(&id);Ok(())}).map_err(|_|crate::Error::Refused("device revocation failed".into()))
+    }
+
     pub(super) fn open(state: &FsPath) -> crate::Result<Self> {
         let file = state.join("access.json");
         let registry: Registry = match File::open(&file) {
@@ -328,6 +332,7 @@ async fn revoke(State(app): State<Workbench>, Path(id): Path<Uuid>) -> AccessRes
 pub(super) fn routes(app: Workbench, auth: Auth) -> Router {
     let admin = guest::admin()
         .merge(super::acp_registry::owner_routes())
+        .merge(super::mcp::collaboration_tools::environment::owner_routes())
         .route("/access/pairings", post(grant))
         .route("/access/devices", get(devices))
         .route("/access/devices/{id}", delete(revoke))

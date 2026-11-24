@@ -55,9 +55,13 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
             tool("kar_thread_send_attachments","Queue uploaded or previously sent attachments in this chat. Reuse input_id for retries.",json!({"attachment_ids":{"type":"array","minItems":1,"maxItems":100,"items":id},"text":{"type":"string"},"input_id":id}),&["attachment_ids"]),
         ]);
     }
+    choices.extend(environment::tools(c));
     choices
 }
 pub(super) fn handles(name: &str) -> bool {
+    if environment::handles(name) {
+        return true;
+    }
     matches!(
         name,
         "kar_send_to_user"
@@ -72,6 +76,9 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
     app.binding(grant.project, grant.chat)?;
     if app.archived(grant.chat) {
         return Err(denied());
+    }
+    if environment::handles(name) {
+        return environment::call(app, c, grant, name, input).await;
     }
     if matches!(name, "kar_send_to_user" | "kar_submit_output") {
         return output::call(app, grant, name, input);
@@ -131,4 +138,5 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
         _ => Err(denied()),
     }
 }
+pub(in crate::workbench) mod environment;
 mod output;

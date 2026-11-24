@@ -43,6 +43,9 @@ impl Grant {
             IDLE.saturating_sub(elapsed)
         }
     }
+    pub(super) fn caller_turn(&self) -> Option<Uuid> {
+        self.process.get()?.upgrade()?.model_caller_turn()
+    }
     pub fn active(&self) -> bool {
         !self.revoked.is_cancelled()
             && !self.idle().is_zero()

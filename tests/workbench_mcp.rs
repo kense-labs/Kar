@@ -9,6 +9,8 @@ mod worktree;
 mod preview_tools;
 #[path="workbench_mcp/collaboration.rs"]
 mod collaboration;
+#[path="workbench_mcp/environment.rs"]
+mod environment;
 #[path = "workbench_mcp/workflow.rs"]
 mod workflow;
 #[path = "workbench_mcp/operations.rs"]
@@ -108,6 +110,7 @@ async fn scenario() {
         &db,
         &[
             ("KAR_TEST_MCP_OBSERVER", address.as_ref()),
+            ("KAR_FEEDBACK_URL", "".as_ref()),
             ("KAR_DEVICE_TEST_DIR",db.as_os_str()),
             ("KAR_DEVICE_XCRUN_BIN",device_bin.as_os_str()),
             ("KAR_DEVICE_ADB_BIN",device_bin.as_os_str()),
@@ -296,7 +299,7 @@ async fn scenario() {
     let moved=worktree::exercise(&url,&a,&observer,p,&checkouts,&db).await;
     let interrupted=worktree::Interrupted::prepare(&a,&url,p,&observer,&checkouts,&db).await;
     kar.kill().await.unwrap();
-    let (mut restarted, url) = server::serve_with_env(&state,&authorized,&db,&[("KAR_TEST_MCP_OBSERVER",address.as_ref())]).await;
+    let (mut restarted, url) = server::serve_with_env(&state,&authorized,&db,&[("KAR_TEST_MCP_OBSERVER",address.as_ref()),("KAR_FEEDBACK_URL","".as_ref())]).await;
     let policy = server::json(a.get(format!(
         "{url}/projects/{p}/chats/{chat}/model-tools/permissions"
     )))
