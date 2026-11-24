@@ -1,3 +1,5 @@
+#[path = "support/busy_prompt.rs"]
+mod busy_prompt;
 #[path = "dsh_live/cli_routing.rs"]
 mod cli_routing;
 #[path = "support/declaration.rs"]
@@ -515,6 +517,7 @@ async fn native_inbox_withdraw_and_background_job_stop() {
     );
     assert!(controls.stop_task("unknown-job").await.is_err());
     let held = controls.prompt("DSH_HOLD").await.unwrap();
+    busy_prompt::check(&controls, held.input_id()).await;
     tokio::time::timeout(Duration::from_secs(8), data.held.notified())
         .await
         .unwrap();

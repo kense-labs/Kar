@@ -117,7 +117,7 @@ impl Input {
             input_id: self.id,
             receipt,
         });
-        if receipt.dropped_outcome().is_none() {
+        if receipt.settled_outcome().is_none() {
             return;
         }
         self.stage = Stage::Settled;

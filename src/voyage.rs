@@ -128,6 +128,7 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
             body["inputId"]
                 .as_str()
                 .map(|input_id| crate::PromptIdentity {
+                    request_id: v["id"].as_str().map(str::to_owned),
                     input_id: input_id.into(),
                     native_admission: body["admission"] == "native",
                 })

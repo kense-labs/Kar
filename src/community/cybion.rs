@@ -357,10 +357,11 @@ impl ThreadActor {
                 .collect::<Vec<_>>()
                 .into();
         }
+        let request = Uuid::new_v4();
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.record(
             if let Some(id) = id {
-                stamp.with_prompt(id, false)
+                stamp.with_prompt_request(id, false, request)
             } else {
                 stamp
             },
@@ -378,6 +379,12 @@ impl ThreadActor {
             )
             .await;
         self.control_result(&answer);
+        if id.is_some() {
+            match &answer {
+                Ok(_) => self.journal.prompt_decision(request, None),
+                Err(error) => self.journal.prompt_error(request, error, &[]),
+            }
+        }
         answer
     }
 
@@ -463,6 +470,7 @@ impl ThreadActor {
             });
             self.record(Direction::FromRuntime, RecordKind::Frame, native, events);
             let _ = active.done.send(Ok(TurnReport {
+                native_input_receipt: None,
                 structured_output: None,
                 failure,
                 outcome,
@@ -600,7 +608,7 @@ impl ThreadActor {
         match command {
             Command::Prompt(id, input, admission, ack, done) => {
                 let result = if self.turn.is_some() || !self.queue.is_empty() {
-                    Err(Error::Busy)
+                    Err(self.journal.busy_prompt(id, &input, false, &[]))
                 } else {
                     match crate::chat::Admission::commit(admission).await {
                         Ok(()) => self.start(id, input, done).await,

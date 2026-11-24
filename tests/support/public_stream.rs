@@ -57,6 +57,24 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
         let prompt = prompts[0];
         assert_eq!(prompt.prompt.as_ref().unwrap().input_id, id);
         assert_eq!(prompt.kind, RecordKind::Request);
+        let request = prompt
+            .prompt
+            .as_ref()
+            .unwrap()
+            .request_id
+            .as_deref()
+            .unwrap();
+        let replies: Vec<_> = slice
+            .iter()
+            .filter(|r| {
+                r.kind == RecordKind::Response
+                    && r.direction == kar::Direction::Host
+                    && r.native["requestId"] == request
+            })
+            .collect();
+        assert_eq!(replies.len(), 1, "one public decision per attempt");
+        assert_eq!(replies[0].native["type"], "accepted");
+        assert!(prompt.seq < replies[0].seq);
         let mut ends = Vec::new();
         for r in slice {
             if !r.agent_path.is_empty() {
@@ -78,7 +96,10 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
             }
         }
         assert_eq!(ends.len(), 1, "each root turn must end exactly once");
-        assert!(ends[0] > prompt.seq);
+        assert!(
+            ends[0] > replies[0].seq,
+            "ordinary acceptance must precede its end"
+        );
 
         compare_delivery(&mut observer, slice).await;
         if let Some(sub) = &mut reconnect {
@@ -97,6 +118,7 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
             session.steer("too late").await,
             Err(Error::Refused(_))
         ));
+        println!("verified late-steer refusal on {:?}", session.protocol());
     }
     disposal::check(session, "exited").await?;
     let records = session.records();

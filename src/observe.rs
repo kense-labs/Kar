@@ -223,7 +223,9 @@ impl SessionView {
                 Event::UserMessage { text } => view.user_messages.push(text.clone()),
                 Event::NativeInput { input_id, receipt } => {
                     view.input_receipts.insert(*input_id, *receipt);
-                    if let Some(outcome) = receipt.dropped_outcome() {
+                    if *receipt != crate::InputReceipt::Handled
+                        && let Some(outcome) = receipt.settled_outcome()
+                    {
                         view.last_outcome = Some(outcome);
                         view.last_failure = rec.turn_failure().cloned();
                         view.last_structured_output = None;

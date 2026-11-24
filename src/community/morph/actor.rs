@@ -94,11 +94,12 @@ impl Actor {
         if let Some(model) = &self.model {
             body["llm_profile"] = model.clone().into();
         }
+        let request = Uuid::new_v4();
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.record(
             None,
             if let Some(id) = input_id {
-                stamp.with_prompt(id, false)
+                stamp.with_prompt_request(id, false, request)
             } else {
                 stamp
             },
@@ -135,6 +136,17 @@ impl Actor {
                 json!({"error":err.to_string()}),
                 vec![],
             ),
+        }
+        if input_id.is_some() {
+            match &answer {
+                Err(error) => self.journal.prompt_error(request, error, &[]),
+                Ok(native) if required_id(native).is_ok() => {
+                    self.journal.prompt_decision(request, None)
+                }
+                Ok(_) => self
+                    .journal
+                    .prompt_decision(request, Some(("error", "Morph omitted the task identity"))),
+            }
         }
         answer
     }
@@ -357,6 +369,7 @@ impl Actor {
             self.answered.retain(|_, task| task != &id);
             if let Some(done) = task.done {
                 let _ = done.send(Ok(TurnReport {
+                    native_input_receipt: None,
                     structured_output: None,
                     outcome,
                     text,
@@ -391,7 +404,7 @@ impl Actor {
                         Err(e) => Err(e),
                     }
                 } else {
-                    Err(Error::Busy)
+                    Err(self.journal.busy_prompt(id, &input, false, &[]))
                 };
                 let _ = ack.send(result);
             }

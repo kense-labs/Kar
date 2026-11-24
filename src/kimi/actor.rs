@@ -137,13 +137,23 @@ impl Actor {
         let steer = done.is_none();
         let body = json!({"prompt_id":id,"content":input.blocks(Protocol::KimiKap)});
         let route = if steer { "/steer" } else { "/prompts" };
-        self.web
+        let response = self
+            .web
             .request(
                 Method::POST,
                 &(self.path.clone() + route),
                 Some(body.clone()),
             )
-            .await?;
+            .await;
+        if let Err(error) = response {
+            if !steer {
+                let request = self
+                    .journal
+                    .attempted_prompt(id, &input, false, &self.secrets);
+                self.journal.prompt_error(request, &error, &self.secrets);
+            }
+            return Err(error);
+        }
         let mut public = body;
         redact(&mut public, &self.secrets);
         let text = crate::observe::sent_prompt_text(&public).unwrap_or_default();
@@ -152,17 +162,21 @@ impl Actor {
             events.push(Event::PromptDispatched);
         }
         events.push(Event::UserMessage { text });
+        let request = Uuid::new_v4();
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.record(
             if steer {
                 stamp
             } else {
-                stamp.with_prompt(id, false)
+                stamp.with_prompt_request(id, false, request)
             },
             RecordKind::Request,
             public,
             events,
         );
+        if !steer {
+            self.journal.prompt_decision(request, None);
+        }
         let id = id.to_string();
         self.sent.insert(id.clone());
         if let Some(done) = done {
@@ -352,6 +366,7 @@ impl Actor {
             return Some((
                 t.done,
                 TurnReport {
+                    native_input_receipt: None,
                     outcome,
                     text: t
                         .texts
@@ -536,7 +551,7 @@ impl Actor {
         match c {
             Command::Prompt(id, input, admission, ack, done) => {
                 let res = if self.busy() || !self.queue.is_empty() {
-                    Err(Error::Busy)
+                    Err(self.journal.busy_prompt(id, &input, false, &self.secrets))
                 } else {
                     match crate::chat::Admission::commit(admission).await {
                         Ok(()) => self.submit(input, id, Some(done)).await,

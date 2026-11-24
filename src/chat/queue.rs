@@ -27,6 +27,8 @@ pub enum InputStatus {
     TooLarge,
     /// The provider recognized an input UUID it had previously received.
     Duplicate,
+    /// The provider explicitly refused the input at admission.
+    Refused,
     /// The provider cancelled this input before starting it.
     Cancelled,
 }
@@ -48,6 +50,9 @@ struct Entry {
 impl Entry {
     fn status(&self, info: &ChatInfo, turn: Option<&ChatTurn>) -> InputStatus {
         match turn {
+            Some(t) if t.native_input_receipt == Some(crate::InputReceipt::Refused) => {
+                InputStatus::Refused
+            }
             Some(t) if t.native_input_receipt == Some(crate::InputReceipt::Duplicate) => {
                 InputStatus::Duplicate
             }
@@ -292,6 +297,19 @@ impl Sender {
         match self.run_turn(entry.id, entry.text).await {
             Ok(_) => Ok(true),
             Err(error) => {
+                if self
+                    .sink
+                    .0
+                    .lock()
+                    .unwrap()
+                    .state
+                    .find(entry.id)
+                    .is_some_and(|turn| {
+                        turn.native_input_receipt == Some(crate::InputReceipt::Refused)
+                    })
+                {
+                    return Ok(true);
+                }
                 // A producer may withdraw the selected head while we capture its checkpoint.
                 if self
                     .store

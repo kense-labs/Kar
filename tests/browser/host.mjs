@@ -63,7 +63,12 @@ export async function exercise() {
     check(first.seq === 0 && first.session_id === s.id,"initial snapshot is missing");
     await rejects(()=>s.steer("idle steer"),"accepted a steer while idle");
     const initial = await s.prompt("slow first","first");
-    await rejects(()=>s.prompt("extra"),"accepted simultaneous prompt");
+    await rejects(()=>s.prompt("extra","blocked-input"),"accepted simultaneous prompt");
+    const busyRows = s.records();
+    const busy = busyRows.find(r => r.prompt?.input_id === "blocked-input");
+    const busyAnswer = busyRows.filter(r => r.direction === "host" && r.kind === "response" && r.native?.requestId === busy?.prompt.request_id);
+    check(busy && busyAnswer.length === 1 && busyAnswer[0].native.code === "busy" &&
+        busyAnswer[0].native.reason === "busy" && busyAnswer[0].seq > busy.seq, "missing busy prompt decision");
     await s.steer("please continue","steer");
     const queued = await s.queue("queued task","queued");
     const withdrawn = await s.queue("unused","withdraw-me");
@@ -75,6 +80,14 @@ export async function exercise() {
     check(settled.status==="done" && queueResult.status==="done","native work did not settle");
     const replay = await s.prompt("same request id","first");
     check(initial.id===replay.id,"native deduplication failed");
+    const attempts = s.records().filter(r => r.prompt?.input_id === "first");
+    check(attempts.length === 2 && attempts[0].prompt.request_id !== attempts[1].prompt.request_id,
+        "retry lost its independent request identity");
+    for (const row of attempts) {
+        check(s.records().filter(r => r.kind === "response" && r.native?.type === "accepted" &&
+            r.native.requestId === row.prompt.request_id && r.seq > row.seq).length === 1,
+            "native input receipt did not answer the prompt");
+    }
     const records = s.records();
     const snapshot = s.snapshot();
     check(snapshot.model === "fixture/local" && snapshot.status.kind === "idle" && snapshot.graph.nodes.includes(s.id), "invalid browser session queries");

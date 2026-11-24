@@ -1,3 +1,5 @@
+#[path = "../support/busy_prompt.rs"]
+mod busy_prompt;
 use super::{interrupted_copy, respond_in_workspace, sse::SseClient};
 use kar::{
     Event, SessionOptions,
@@ -676,6 +678,222 @@ async fn three_native_writes_fork_at_middle_and_reopen_both_contexts() {
         .unwrap();
     replied(&turn, "first/middle/late/inspect");
     parent.close().await.unwrap();
+}
+
+fn enable_input_transform(agent: &Path) {
+    let ext = agent.join("extensions");
+    fs::create_dir(&ext).unwrap();
+    fs::copy(
+        std::env::var_os("KAR_PI_INPUT_EXTENSION").unwrap(),
+        ext.join("input-transform.ts"),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires Pi RPC and its published examples/extensions/input-transform.ts fixture"]
+async fn native_handled_prompt_settles_without_a_model_turn() {
+    let f = fixture(true).await;
+    enable_input_transform(&f.temp.path().join("agent"));
+    let mut rt = kar::runtime("pi").unwrap();
+    rt.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
+    let s = rt.open(f.options.clone()).await.unwrap();
+    let id = Uuid::new_v4();
+    let start = s.records().len();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut events = s.subscribe(None).unwrap();
+    let listener = tokio::spawn(async move {
+        while let Some(row) = events.next().await {
+            tx.send(row).unwrap();
+        }
+    });
+    for _ in 0..2 {
+        let t = s.prompt_with_id(id, "ping").await.unwrap();
+        let report = tokio::time::timeout(std::time::Duration::from_secs(5), t.report())
+            .await
+            .expect("native handled input must settle without agent_start")
+            .unwrap();
+        assert_eq!(report.outcome, kar::Outcome::Completed);
+        assert_eq!(
+            report.native_input_receipt,
+            Some(kar::InputReceipt::Handled)
+        );
+        assert!(matches!(
+            s.status(),
+            kar::observe::AgentStatus::Idle {
+                last_outcome: None,
+                ..
+            }
+        ));
+    }
+    let rows = s.records();
+    let rows = &rows[start..];
+    let requests: Vec<_> = rows.iter().filter(|r| r.prompt.is_some()).collect();
+    assert_eq!(requests.len(), 2);
+    let mut ids = std::collections::HashSet::new();
+    for req in requests {
+        let identity = req.prompt.as_ref().unwrap();
+        let request = identity
+            .request_id
+            .as_deref()
+            .expect("missing public request identity");
+        assert!(
+            ids.insert(request.to_owned()),
+            "retried input reused its control request identity"
+        );
+        assert_eq!(identity.input_id, id.to_string());
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.native["type"] == "accepted"
+                    && r.native["requestId"] == request
+                    && r.seq > req.seq)
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        rows.iter()
+            .filter(
+                |r| r.native["command"] == "prompt" && r.native["data"]["disposition"] == "handled"
+            )
+            .count(),
+        2
+    );
+    assert!(
+        !rows
+            .iter()
+            .flat_map(|r| &r.events)
+            .any(|e| matches!(e, Event::TurnStarted | Event::TurnEnded { .. }))
+    );
+    assert!(f.calls.lock().unwrap().is_empty());
+    let held = s.prompt("kar-queue-held-at-model").await.unwrap();
+    busy_prompt::check(&s, held.input_id()).await;
+    std::fs::write(f.options.cwd.join("release"), "").unwrap();
+    assert_eq!(held.wait().await.unwrap(), kar::Outcome::Completed);
+    assert!(!s.status().is_running());
+    assert_eq!(
+        s.prompt("normal model turn")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        kar::Outcome::Completed
+    );
+    s.close().await.unwrap();
+    listener.await.unwrap();
+    for record in s.records() {
+        let live = rx.recv().await.unwrap();
+        assert_eq!(
+            serde_json::to_value(record.as_ref()).unwrap(),
+            serde_json::to_value(live.as_ref()).unwrap()
+        );
+    }
+    assert!(rx.recv().await.is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires Pi RPC and its published examples/extensions/input-transform.ts fixture"]
+async fn explicit_native_refusal_and_handled_input_drain_in_order_after_restart() {
+    let f = fixture(true).await;
+    let agent = f.temp.path().join("agent");
+    enable_input_transform(&agent);
+    let bin = std::env::var_os("KAR_PI_BIN").unwrap();
+    let store = ChatStore::open(f.temp.path().join("chats")).unwrap();
+    let s = store
+        .create("pi", Some(Path::new(&bin)), f.options.clone())
+        .await
+        .unwrap();
+    let chat = s.info().id;
+    let native = s.info().native_id.clone();
+    let work = s.info().workspace.clone();
+    s.send(Uuid::new_v4(), "seed the native session")
+        .await
+        .unwrap();
+    s.close().await.unwrap();
+    let calls = f.calls.lock().unwrap().len();
+    let model_path = agent.join("models.json");
+    let configured = fs::read(&model_path).unwrap();
+    let mut config: Value = serde_json::from_slice(&configured).unwrap();
+    config["providers"]["fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("apiKey");
+    fs::write(&model_path, config.to_string()).unwrap();
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    store
+        .enqueue(chat, first, "needs model credentials")
+        .unwrap();
+    store.enqueue(chat, second, "ping").unwrap();
+    let s = store
+        .resume_with(chat, |o| o.env.clone_from(&f.options.env))
+        .await
+        .unwrap();
+    assert_eq!(s.info().native_id, native);
+    assert_eq!(s.info().workspace, work);
+    tokio::time::timeout(std::time::Duration::from_secs(10), s.drain_queue())
+        .await
+        .unwrap()
+        .unwrap();
+    s.close().await.unwrap();
+    let history = store.history(chat).unwrap();
+    assert_eq!(history.turns.len(), 3);
+    let refused = &history.turns[1];
+    assert_eq!((refused.id, refused.status), (first, TurnStatus::Failed));
+    assert_eq!(
+        refused.native_input_receipt,
+        Some(kar::InputReceipt::Refused)
+    );
+    assert!(
+        refused
+            .failure
+            .as_ref()
+            .unwrap()
+            .reason
+            .to_ascii_lowercase()
+            .contains("api key"),
+        "{:?}",
+        refused.failure
+    );
+    let handled = &history.turns[2];
+    assert_eq!(
+        (handled.id, handled.status),
+        (second, TurnStatus::Completed)
+    );
+    assert_eq!(
+        handled.native_input_receipt,
+        Some(kar::InputReceipt::Handled)
+    );
+    assert!(handled.fork_anchor.is_none());
+    assert_eq!(f.calls.lock().unwrap().len(), calls);
+    fs::write(model_path, configured).unwrap();
+    assert_eq!(
+        store
+            .enqueue(chat, first, "needs model credentials")
+            .unwrap()
+            .status,
+        kar::chat::InputStatus::Refused
+    );
+    assert_eq!(
+        store.enqueue(chat, second, "ping").unwrap().status,
+        kar::chat::InputStatus::Sent
+    );
+    let s = store
+        .resume_with(chat, |o| o.env.clone_from(&f.options.env))
+        .await
+        .unwrap();
+    s.drain_queue().await.unwrap();
+    assert_eq!(f.calls.lock().unwrap().len(), calls);
+    assert_eq!(
+        s.send(Uuid::new_v4(), "continue with credentials")
+            .await
+            .unwrap()
+            .status,
+        TurnStatus::Completed
+    );
+    assert!(f.calls.lock().unwrap().len() > calls);
+    s.close().await.unwrap();
 }
 
 #[tokio::test]

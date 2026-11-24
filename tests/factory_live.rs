@@ -1,3 +1,5 @@
+#[path = "support/busy_prompt.rs"]
+mod busy_prompt;
 #[path = "support/declaration.rs"]
 mod declaration;
 
@@ -466,6 +468,7 @@ async fn native_control_receipts_and_settings() {
     );
 
     let held = session.prompt("FACTORY_HOLD").await.unwrap();
+    busy_prompt::check(&session, held.input_id()).await;
     tokio::time::timeout(Duration::from_secs(15), f.model.held.notified())
         .await
         .unwrap();
@@ -830,6 +833,21 @@ async fn public_prompt_readbacks() {
     public_readbacks::check(&session).await.unwrap();
     public_readbacks::stream::check(&session).await.unwrap();
     let active = f.runtime.open(f.opts.clone()).await.unwrap();
+    let held = active.prompt("FACTORY_HOLD").await.unwrap();
+    busy_prompt::check(&active, held.input_id()).await;
+    f.model.release.send_replace(true);
+    assert_eq!(held.wait().await.unwrap(), kar::Outcome::Completed);
+    assert!(!active.status().is_running());
+    assert_eq!(
+        active
+            .prompt("FACTORY_SECOND")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        kar::Outcome::Completed
+    );
     public_readbacks::stream::dispose_mid_turn(&active)
         .await
         .unwrap();

@@ -16,6 +16,9 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TurnReport {
+    /// Last native admission receipt observed for this input. A handled input needs no model turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_input_receipt: Option<crate::InputReceipt>,
     pub outcome: Outcome,
     pub text: String,
     #[serde(

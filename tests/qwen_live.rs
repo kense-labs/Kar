@@ -1,3 +1,5 @@
+#[path = "support/busy_prompt.rs"]
+mod busy_prompt;
 #[path = "support/declaration.rs"]
 mod declaration;
 
@@ -351,6 +353,10 @@ mod public_readbacks;
 async fn public_prompt_readbacks() {
     let f = fixture().await;
     let session = runtime("qwen").unwrap().open(f.opts.clone()).await.unwrap();
+    let held = session.prompt("slow marker").await.unwrap();
+    busy_prompt::check(&session, held.input_id()).await;
+    assert_eq!(held.wait().await.unwrap(), Outcome::Completed);
+    assert!(!session.status().is_running());
     public_readbacks::check(&session).await.unwrap();
     public_readbacks::stream::check(&session).await.unwrap();
     let active = runtime("qwen").unwrap().open(f.opts.clone()).await.unwrap();

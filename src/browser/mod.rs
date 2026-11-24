@@ -339,24 +339,17 @@ impl Core {
         if mode == "steer" {
             body["whenIdle"] = "reject".into();
         }
-        if let Some(id) = &request_id {
-            if id.is_empty() {
-                return Err(error("request id must be nonempty"));
-            }
-            let existing = native::lookup(&self.harness, &self.id, id.clone()).await?;
-            if !existing.is_undefined() && !existing.is_null() {
-                if mode == "steer" && !native::running(&self.conv, &self.id).await? {
-                    return Err(error("no active turn"));
-                }
-                return Ok(existing);
-            }
+        let supplied_id = request_id.clone();
+        if supplied_id.as_deref() == Some("") {
+            return Err(error("request id must be nonempty"));
         }
         let request_id =
             request_id.or_else(|| (mode == "reject").then(|| uuid::Uuid::new_v4().to_string()));
+        let control = uuid::Uuid::new_v4();
         let mut stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         if let Some(id) = &request_id {
             if mode == "reject" {
-                stamp = stamp.with_prompt(id, false);
+                stamp = stamp.with_prompt_request(id, false, control);
             }
             body["requestId"] = id.as_str().into();
         }
@@ -368,6 +361,18 @@ impl Core {
             body.clone(),
             vec![],
         );
+        if let Some(id) = supplied_id {
+            let existing = native::lookup(&self.harness, &self.id, id).await?;
+            if !existing.is_undefined() && !existing.is_null() {
+                if mode == "steer" && !native::running(&self.conv, &self.id).await? {
+                    return Err(error("no active turn"));
+                }
+                if mode == "reject" {
+                    self.journal.prompt_decision(control, None);
+                }
+                return Ok(existing);
+            }
+        }
         let result = invoke(&self.conv, "submit", &[js(&body)?, ctx()]).await;
         let handle = match result {
             Ok(value) => value,
@@ -380,9 +385,27 @@ impl Core {
                     native::summary(&err),
                     vec![],
                 );
+                if mode == "reject" {
+                    let evidence = native::summary(&err);
+                    if evidence["name"] == "ConversationBusy" {
+                        self.journal
+                            .prompt_decision(control, Some(("busy", "busy")));
+                    } else {
+                        self.journal.prompt_decision(
+                            control,
+                            Some((
+                                "runtime_refused",
+                                evidence["message"].as_str().unwrap_or("input rejected"),
+                            )),
+                        );
+                    }
+                }
                 return Err(err);
             }
         };
+        if mode == "reject" {
+            self.journal.prompt_decision(control, None);
+        }
         let record = invoke(&handle, "status", &[ctx()]).await?;
         let receipt = json(&record)?;
         let mut events = Vec::new();

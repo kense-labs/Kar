@@ -129,6 +129,8 @@ struct Queued {
     done: Reply<crate::TurnReport>,
 }
 struct Turn {
+    input_receipt: Option<crate::InputReceipt>,
+    prompt_request: uuid::Uuid,
     process_baseline: Option<crate::resources::turn::Baseline>,
     chat_input: Option<uuid::Uuid>,
     claude_input: Option<wire::claude_input::Input>,
@@ -199,6 +201,7 @@ struct Pending {
     method: String,
     reply: Option<Reply<Value>>,
     prompt_ack: Option<Reply<()>>,
+    prompt_request: Option<uuid::Uuid>,
     input: bool,
     starts_turn: bool,
     steer: Option<SteeringReceipt>,
@@ -382,9 +385,11 @@ impl Actor {
         if stamp.direction == Direction::ToRuntime
             && kind == RecordKind::Request
             && events.contains(&Event::PromptDispatched)
-            && let Some(id) = self.turn.as_ref().and_then(|t| t.chat_input)
+            && let Some(turn) = &self.turn
+            && let Some(id) = turn.chat_input
         {
-            stamp = stamp.with_prompt(id, self.protocol == Protocol::Pi);
+            stamp =
+                stamp.with_prompt_request(id, self.protocol == Protocol::Pi, turn.prompt_request);
         }
         let direction = stamp.direction;
         let session = self.source(&v).or_else(|| self.session());
@@ -592,6 +597,13 @@ impl Actor {
                 method: method.to_owned(),
                 reply,
                 prompt_ack: None,
+                prompt_request: if starts_turn
+                    && matches!(self.protocol, Protocol::Pi | Protocol::Factory)
+                {
+                    self.turn.as_ref().map(|t| t.prompt_request)
+                } else {
+                    None
+                },
                 input,
                 starts_turn,
                 steer,
@@ -660,6 +672,7 @@ impl Actor {
                 messages.push(turn.partial);
             }
             let _ = turn.done.send(result.map(|outcome| crate::TurnReport {
+                native_input_receipt: turn.input_receipt,
                 outcome,
                 structured_output: turn.structured_output,
                 failure: turn.failure,
@@ -677,7 +690,10 @@ impl Actor {
         self.claude_errors.clear();
         let claude_uuid = (self.protocol == Protocol::Claude)
             .then(|| input_id.unwrap_or_else(uuid::Uuid::new_v4));
+        let request = uuid::Uuid::new_v4();
         self.turn = Some(Turn {
+            input_receipt: None,
+            prompt_request: request,
             process_baseline: None,
             chat_input: input_id,
             claude_input: claude_uuid.map(wire::claude_input::Input::written),
@@ -742,6 +758,9 @@ impl Actor {
                 self.write(msg, RecordKind::Request).await?;
             }
             Protocol::Pi => self.rpc("prompt", prompt.pi(), None, true, true).await?,
+        }
+        if !matches!(self.protocol, Protocol::Pi | Protocol::Factory) {
+            self.journal.prompt_decision(request, None);
         }
         Ok(())
     }
@@ -927,7 +946,13 @@ impl Actor {
                     || self.grok_owner().is_some()
                     || self.manual_compaction.is_some()
                 {
-                    let _ = tx.send(Err(Error::Busy));
+                    let error = self.journal.busy_prompt(
+                        id,
+                        &prompt,
+                        self.protocol == Protocol::Pi,
+                        &self.secrets,
+                    );
+                    let _ = tx.send(Err(error));
                     return Ok(true);
                 }
                 let input_id = Some(id);
@@ -943,10 +968,10 @@ impl Actor {
                 if let Some(turn) = &mut self.turn {
                     turn.process_baseline = baseline;
                 }
-                if self.protocol == Protocol::Factory {
+                if matches!(self.protocol, Protocol::Pi | Protocol::Factory) {
                     self.pending
                         .get_mut(&self.next)
-                        .expect("Factory prompt RPC is pending")
+                        .expect("native prompt admission is pending")
                         .prompt_ack = Some(tx);
                 } else {
                     let _ = tx.send(Ok(()));
@@ -981,6 +1006,7 @@ impl Actor {
                 };
                 let entry = self.queue.remove(pos).expect("queue position exists");
                 let _ = entry.done.send(Ok(crate::TurnReport {
+                    native_input_receipt: None,
                     outcome: Outcome::Aborted,
                     structured_output: None,
                     failure: None,
@@ -1836,6 +1862,7 @@ impl Actor {
         }
         let mut reply = None;
         let mut prompt_ack = None;
+        let mut prompt_decision = None;
         if let Some(p) = response {
             let mut result =
                 if p.method == crate::cursor_models::LIST && v["error"]["code"] == -32601 {
@@ -1915,6 +1942,45 @@ impl Actor {
                     }
                     _ => {}
                 }
+            }
+            if let Some(request) = p.prompt_request {
+                let refusal = result.as_ref().err().map(|error| {
+                    let mut reason = v["error"]
+                        .as_str()
+                        .or_else(|| v.pointer("/error/message").and_then(Value::as_str))
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| error.to_string());
+                    redact_text(&mut reason, &self.secrets);
+                    reason
+                });
+                if self.protocol == Protocol::Pi
+                    && let Some(turn) = self.turn.as_ref().filter(|t| t.prompt_request == request)
+                    && let Some(input_id) = turn.chat_input
+                {
+                    let receipt = match (
+                        result.is_err(),
+                        v.pointer("/data/disposition").and_then(Value::as_str),
+                    ) {
+                        (true, _) => Some(crate::InputReceipt::Refused),
+                        (false, Some("handled")) => Some(crate::InputReceipt::Handled),
+                        (false, Some("started")) => Some(crate::InputReceipt::Started),
+                        (false, Some("queued")) => Some(crate::InputReceipt::Queued),
+                        _ => None,
+                    };
+                    if let Some(receipt) = receipt {
+                        if let Some(reason) = &refusal {
+                            events.push(Event::TurnFailure {
+                                failure: crate::TurnFailure::new(
+                                    crate::FailureClass::Unknown,
+                                    reason.clone(),
+                                ),
+                            });
+                            outcome_error = Some(Error::Refused(reason.clone()));
+                        }
+                        events.push(Event::NativeInput { input_id, receipt });
+                    }
+                }
+                prompt_decision = Some((request, refusal));
             }
             if let Some(tx) = p.prompt_ack {
                 prompt_ack = Some((
@@ -2029,6 +2095,7 @@ impl Actor {
                     outcome_error = end.publish(&mut events);
                 }
             } else if p.input
+                && !(self.protocol == Protocol::Pi && p.prompt_request.is_some())
                 && let Err(e) = &result
             {
                 outcome_error = Some(Error::Refused(e.to_string()));
@@ -2219,6 +2286,11 @@ impl Actor {
         if current_turn && let Some(turn) = &mut self.turn {
             for event in &events {
                 match event {
+                    Event::NativeInput { input_id, receipt }
+                        if Some(*input_id) == turn.chat_input =>
+                    {
+                        turn.input_receipt = Some(*receipt);
+                    }
                     Event::StructuredOutput { value } => {
                         turn.structured_output = Some(value.clone())
                     }
@@ -2237,7 +2309,7 @@ impl Actor {
             .position(|e| matches!(e, Event::TurnEnded { .. }));
         let outcome = terminal.and_then(|i| events[i].resolved_input());
         let dropped = events.iter().find_map(|e| match e {
-            Event::NativeInput { receipt, .. } => receipt.dropped_outcome(),
+            Event::NativeInput { receipt, .. } => receipt.settled_outcome(),
             _ => None,
         });
         if is_root {
@@ -2298,6 +2370,10 @@ impl Actor {
             events,
             path,
         );
+        if let Some((request, refusal)) = prompt_decision {
+            self.journal
+                .prompt_decision(request, refusal.as_deref().map(|s| ("runtime_refused", s)));
+        }
         if current_turn
             && let Some(outcome) = &outcome
             && let Some(turn) = grok_turn
@@ -2775,8 +2851,8 @@ pub(crate) fn redact_native_error(v: &mut Value, secrets: &[String]) {
     redact_value(v, secrets, true)
 }
 
-fn redact_text(text: &mut String, secrets: &[String]) {
-    for secret in secrets {
+pub(crate) fn redact_text(text: &mut String, secrets: &[String]) {
+    for secret in secrets.iter().filter(|s| !s.is_empty()) {
         if text.contains(secret) {
             *text = text.replace(secret, "[redacted]");
         }

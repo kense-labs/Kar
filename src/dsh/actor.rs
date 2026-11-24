@@ -178,9 +178,25 @@ impl Actor {
     ) -> Result<()> {
         let steer = done.is_none();
         let mut req = json!({"sessionId":self.id,"requestId":id,"mode":if steer{"steer"}else{"queue"},"content":input.blocks(Protocol::Dsh)});
-        let res = self.web.request("session/prompt", req.clone()).await?;
-        if res["accepted"] != true {
-            return Err(Error::Protocol("DSH omitted the input receipt".into()));
+        let result = self
+            .web
+            .request("session/prompt", req.clone())
+            .await
+            .and_then(|res| {
+                if res["accepted"] == true {
+                    Ok(())
+                } else {
+                    Err(Error::Protocol("DSH omitted the input receipt".into()))
+                }
+            });
+        if let Err(error) = result {
+            if !steer {
+                let request = self
+                    .journal
+                    .attempted_prompt(id, &input, false, &self.secrets);
+                self.journal.prompt_error(request, &error, &self.secrets);
+            }
+            return Err(error);
         }
         redact(&mut req, &self.secrets);
         let text = super::projection::text(&req["content"], "text");
@@ -193,12 +209,13 @@ impl Actor {
             events.push(Event::PromptDispatched);
         }
         events.push(Event::UserMessage { text });
+        let request = Uuid::new_v4();
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.journal.push(
             if steer {
                 stamp
             } else {
-                stamp.with_prompt(id, false)
+                stamp.with_prompt_request(id, false, request)
             },
             RecordKind::Request,
             None,
@@ -206,6 +223,9 @@ impl Actor {
             req,
             events,
         );
+        if !steer {
+            self.journal.prompt_decision(request, None);
+        }
         self.sent.insert(id.to_string());
         if let Some(done) = done {
             self.turns.insert(
@@ -452,6 +472,7 @@ impl Actor {
         if let Some(outcome) = finish {
             for (_, t) in self.turns.extract_if(|_, t| t.claimed) {
                 let _ = t.done.send(Ok(TurnReport {
+                    native_input_receipt: None,
                     outcome: outcome.clone(),
                     text: t.text.join("\n"),
                     failure: t.failure,
@@ -638,7 +659,7 @@ impl Actor {
         match c {
             Command::Prompt(id, input, a, ack, done) => {
                 let result = if self.busy() {
-                    Err(Error::Busy)
+                    Err(self.journal.busy_prompt(id, &input, false, &self.secrets))
                 } else {
                     match crate::chat::Admission::commit(a).await {
                         Ok(()) => self.submit(input, id, Some(done), false).await,

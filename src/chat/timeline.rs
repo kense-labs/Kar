@@ -559,7 +559,7 @@ impl ChatTurn {
                         match event {
                             Event::NativeInput { input_id, receipt } if input_id == &self.id => {
                                 self.native_input_receipt = Some(*receipt);
-                                if let Some(outcome) = receipt.dropped_outcome() {
+                                if let Some(outcome) = receipt.settled_outcome() {
                                     self.finish((&outcome).into(), root);
                                 }
                             }

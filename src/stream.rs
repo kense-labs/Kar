@@ -58,13 +58,22 @@ impl From<Direction> for RecordStamp {
 /// Host identity of an ordinary prompt. Native admission is reported by Pi RPC.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptIdentity {
+    /// Unique identity of this control attempt, independent of the caller's input ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub input_id: String,
     pub native_admission: bool,
 }
 
 impl RecordStamp {
-    pub(crate) fn with_prompt(mut self, input_id: impl ToString, native_admission: bool) -> Self {
+    pub(crate) fn with_prompt_request(
+        mut self,
+        input_id: impl ToString,
+        native_admission: bool,
+        request: Uuid,
+    ) -> Self {
         self.prompt = Some(PromptIdentity {
+            request_id: Some(request.to_string()),
             input_id: input_id.to_string(),
             native_admission,
         });
@@ -118,13 +127,18 @@ impl SteerStatus {
 pub enum InputReceipt {
     Queued,
     Started,
+    /// The runtime handled this input without starting a model turn.
+    Handled,
+    /// The runtime explicitly refused this input before starting a model turn.
+    Refused,
     Cancelled,
     Duplicate,
 }
 impl InputReceipt {
-    pub(crate) fn dropped_outcome(self) -> Option<Outcome> {
+    pub(crate) fn settled_outcome(self) -> Option<Outcome> {
         match self {
-            Self::Duplicate => Some(Outcome::Failed),
+            Self::Handled => Some(Outcome::Completed),
+            Self::Refused | Self::Duplicate => Some(Outcome::Failed),
             Self::Cancelled => Some(Outcome::Aborted),
             _ => None,
         }
@@ -380,7 +394,7 @@ impl Event {
     pub(crate) fn resolved_input(&self) -> Option<Outcome> {
         match self {
             Self::TurnEnded { outcome } => Some(outcome.clone()),
-            Self::NativeInput { receipt, .. } => receipt.dropped_outcome(),
+            Self::NativeInput { receipt, .. } => receipt.settled_outcome(),
             _ => None,
         }
     }
@@ -484,6 +498,69 @@ impl Journal {
     pub fn id(&self) -> Uuid {
         self.id
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn attempted_prompt(
+        &self,
+        input_id: Uuid,
+        input: &crate::input::Input,
+        native: bool,
+        secrets: &[String],
+    ) -> Uuid {
+        let request = Uuid::new_v4();
+        let mut body = serde_json::json!({"control":"prompt", "input":input.text, "imageCount":input.images.len()});
+        crate::transport::redact(&mut body, secrets);
+        self.push(
+            RecordStamp::from(Direction::ToRuntime).with_prompt_request(input_id, native, request),
+            RecordKind::Request,
+            None,
+            vec![],
+            body,
+            vec![],
+        );
+        request
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn busy_prompt(
+        &self,
+        id: Uuid,
+        input: &crate::input::Input,
+        native: bool,
+        secrets: &[String],
+    ) -> Error {
+        let request = self.attempted_prompt(id, input, native, secrets);
+        self.prompt_decision(request, Some(("busy", "busy")));
+        Error::Busy
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn prompt_error(&self, request: Uuid, error: &Error, secrets: &[String]) {
+        let (code, mut reason) = match error {
+            Error::Busy => ("busy", "busy".to_owned()),
+            Error::Refused(reason) => ("runtime_refused", reason.clone()),
+            _ => (
+                "error",
+                "native admission could not be confirmed".to_owned(),
+            ),
+        };
+        crate::transport::redact_text(&mut reason, secrets);
+        self.prompt_decision(request, Some((code, &reason)));
+    }
+    pub(crate) fn prompt_decision(&self, request: Uuid, rejection: Option<(&str, &str)>) {
+        let body = match rejection {
+            Some((code, reason)) => {
+                serde_json::json!({"type":"rejected", "requestId":request, "code":code, "reason":reason})
+            }
+            None => serde_json::json!({"type":"accepted", "requestId":request}),
+        };
+        self.push(
+            Direction::Host,
+            RecordKind::Response,
+            None,
+            vec![],
+            body,
+            vec![],
+        );
+    }
+
     pub(crate) fn request_dispose(&self) -> Uuid {
         let id = Uuid::new_v4();
         self.push(

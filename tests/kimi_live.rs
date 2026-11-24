@@ -1,3 +1,5 @@
+#[path = "support/busy_prompt.rs"]
+mod busy_prompt;
 #[path = "support/declaration.rs"]
 mod declaration;
 #[path = "support/sse.rs"]
@@ -563,6 +565,7 @@ async fn exercise(kap: bool) {
     tokio::time::timeout(Duration::from_secs(10), requests.model_started.notified())
         .await
         .unwrap();
+    busy_prompt::check(&controls, held.input_id()).await;
     controls.steer("KAP_STEER").await.unwrap();
     let (_, queued) = controls.queue("KAP_FIFO").await.unwrap();
     assert!(matches!(

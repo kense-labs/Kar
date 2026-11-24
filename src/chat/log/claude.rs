@@ -62,7 +62,7 @@ pub(super) async fn history(
             || origin.steered_from.is_some()
             || origin
                 .native_input_receipt
-                .is_some_and(|r| r.dropped_outcome().is_some())
+                .is_some_and(|r| r.settled_outcome().is_some())
         {
             return None;
         }

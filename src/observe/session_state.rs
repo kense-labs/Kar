@@ -343,12 +343,21 @@ impl SessionReducer {
                 continue;
             }
             if let Some(outcome) = e.resolved_input() {
-                self.snapshot.last_structured_output = r.structured_output().cloned();
-                self.snapshot.last_failure = r.turn_failure().cloned();
+                // A Pi extension can settle an input without starting a model run.
+                if !matches!(
+                    e,
+                    Event::NativeInput {
+                        receipt: crate::InputReceipt::Handled,
+                        ..
+                    }
+                ) {
+                    self.snapshot.last_structured_output = r.structured_output().cloned();
+                    self.snapshot.last_failure = r.turn_failure().cloned();
+                    self.last_outcome = Some(outcome);
+                }
                 if let Some(i) = self.run_index(&r.span_id) {
                     self.runs.remove(i);
                 }
-                self.last_outcome = Some(outcome);
                 continue;
             }
             match e {
