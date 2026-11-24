@@ -48,6 +48,10 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
     for input in ["one", "two", "three"] {
         let turn = session.prompt(input).await?;
         let id = turn.input_id().to_string();
+        let admission = turn
+            .admission()
+            .expect("missing public admission receipt")
+            .clone();
         assert_eq!(turn.wait().await?, Outcome::Completed);
         let records = session.records();
         let slice = &records[next..];
@@ -74,6 +78,8 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
             })
             .collect();
         assert_eq!(replies.len(), 1, "one public decision per attempt");
+        assert_eq!(admission.request.cursor(), prompt.cursor());
+        assert_eq!(admission.response.cursor(), replies[0].cursor());
         assert_eq!(replies[0].native["type"], "accepted");
         assert_eq!(
             prompt.control_request_id(),

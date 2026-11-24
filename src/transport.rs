@@ -766,7 +766,7 @@ impl Actor {
     ) -> Result<()> {
         let id = self.session();
         self.claude_errors.clear();
-        let request = uuid::Uuid::new_v4();
+        let request = prompt.request_id;
         self.turn = Some(Turn {
             input_receipt: None,
             prompt_request: request,

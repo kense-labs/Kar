@@ -357,7 +357,7 @@ impl ThreadActor {
                 .collect::<Vec<_>>()
                 .into();
         }
-        let request = Uuid::new_v4();
+        let request = input.request_id;
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.record(
             if let Some(id) = id {

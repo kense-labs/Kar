@@ -23,7 +23,7 @@ impl Session {
                 paths.iter().map(|p| Some(p.as_path())),
                 &self.preflight_secrets,
             );
-            self.refuse_input("prompt", id, submission, error)
+            self.refuse_input("prompt", id, Uuid::new_v4(), submission, error)
         };
         if !self.image_input {
             return Err(refused(Error::Unsupported(
@@ -44,6 +44,7 @@ impl Session {
         &self,
         control: &str,
         id: Uuid,
+        request: Uuid,
         text: &str,
         images: &[InputImage],
     ) -> Result<()> {
@@ -61,13 +62,20 @@ impl Session {
                 input: String::new(),
                 images: vec![],
             });
-        Err(self.refuse_input(control, id, submission, Error::Unsupported(reason.into())))
+        Err(self.refuse_input(
+            control,
+            id,
+            request,
+            submission,
+            Error::Unsupported(reason.into()),
+        ))
     }
 
     fn refuse_input(
         &self,
         control: &str,
         id: Uuid,
+        request: Uuid,
         submission: ImageSubmission,
         error: Error,
     ) -> Error {
@@ -76,7 +84,6 @@ impl Session {
             _ => ("error", error.to_string()),
         };
         crate::transport::redact_text(&mut reason, &self.preflight_secrets);
-        let request = Uuid::new_v4();
         let mut body =
             json!({"id":request,"inputId":id,"input":submission.input,"images":submission.images});
         let mut stamp = crate::stream::RecordStamp::from(crate::Direction::ToRuntime);

@@ -162,7 +162,7 @@ impl Actor {
             events.push(Event::PromptDispatched);
         }
         events.push(Event::UserMessage { text });
-        let request = Uuid::new_v4();
+        let request = input.request_id;
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.record(
             if steer {

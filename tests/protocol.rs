@@ -838,6 +838,33 @@ async fn controls(p: Protocol) -> kar::Result<()> {
     let turn = session.prompt("host").await?;
     assert!(session.status().is_running());
     assert!(matches!(session.prompt("racing").await, Err(Error::Busy)));
+    let original = turn.admission().unwrap();
+    let rejected = session
+        .submit_prompt(Some(turn.input_id()), "host", vec![])
+        .await?;
+    let kar::PromptDecision::Rejected {
+        receipt,
+        error: Error::Busy,
+    } = rejected
+    else {
+        panic!("an overlapping retry must have its own busy receipt")
+    };
+    assert_ne!(
+        receipt.request.control_request_id(),
+        original.request.control_request_id()
+    );
+    assert_eq!(
+        receipt.request.control_request_id(),
+        receipt.response.control_response_to()
+    );
+    assert_eq!(receipt.response.native["code"], "busy");
+    let empty = session
+        .submit_prompt(Some(turn.input_id()), "", vec![])
+        .await?;
+    assert!(
+        matches!(empty, kar::PromptDecision::Rejected { receipt, error: Error::Unsupported(_) }
+        if receipt.response.native["code"] == "unsupported")
+    );
     loop {
         let rec = records.next().await.unwrap();
         if let Some(id) = rec.events.iter().find_map(|e| match e {

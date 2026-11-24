@@ -470,6 +470,38 @@ pub(crate) fn present_json<'de, D: serde::Deserializer<'de>>(
 ) -> std::result::Result<Option<Value>, D::Error> {
     Value::deserialize(d).map(Some)
 }
+/// Both public records of one control attempt, in the original session stream.
+#[derive(Clone, Debug)]
+pub struct ControlReceipt {
+    pub request: Arc<Record>,
+    pub response: Arc<Record>,
+}
+
+impl ControlReceipt {
+    /// Finds the decision paired with this exact request, including in replayed records.
+    pub fn from_records(records: &[Arc<Record>], request_id: &str) -> Option<Self> {
+        if request_id.is_empty() {
+            return None;
+        }
+        let mut response = None;
+        for record in records.iter().rev() {
+            if record.control_response_to() == Some(request_id) {
+                response = Some(record);
+            } else if record.control_request_id() == Some(request_id) {
+                let response = response?;
+                if response.stream_id == record.stream_id && response.seq > record.seq {
+                    return Some(Self {
+                        request: record.clone(),
+                        response: response.clone(),
+                    });
+                }
+                return None;
+            }
+        }
+        None
+    }
+}
+
 impl Record {
     pub(crate) fn wire_frame_type(value: &Value) -> Option<&str> {
         ["method", "type", "kind", "event"]
@@ -488,9 +520,19 @@ impl Record {
             .or_else(|| Self::wire_frame_type(&self.native))
     }
 
+    /// Request named by a public decision, including decisions in older recordings.
+    pub fn control_response_to(&self) -> Option<&str> {
+        if self.kind != RecordKind::Response || self.direction != Direction::Host {
+            return None;
+        }
+        self.response_to
+            .as_deref()
+            .or_else(|| self.native["requestId"].as_str())
+    }
+
     /// Identifier used by the paired response to a Kar control request.
     pub fn control_request_id(&self) -> Option<&str> {
-        if self.kind != RecordKind::Request || self.direction != Direction::ToRuntime {
+        if self.kind != RecordKind::Request || self.direction == Direction::FromRuntime {
             return None;
         }
         if let Some(crate::Opening::Open { request_id, .. }) = &self.opening {
@@ -622,7 +664,7 @@ impl Journal {
         native: bool,
         secrets: &[String],
     ) -> Uuid {
-        let request = Uuid::new_v4();
+        let request = input.request_id;
         let mut body = serde_json::json!({"control":"prompt", "input":input.text, "imageCount":input.images.len()});
         crate::transport::redact(&mut body, secrets);
         self.push(
@@ -1077,6 +1119,10 @@ impl Journal {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn latest_record(&self) -> Option<Arc<Record>> {
         self.state.lock().unwrap().records.last().cloned()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn control_receipt(&self, request_id: &str) -> Option<ControlReceipt> {
+        ControlReceipt::from_records(&self.state.lock().unwrap().records, request_id)
     }
     pub fn records(&self) -> Vec<Arc<Record>> {
         self.state.lock().unwrap().records.clone()

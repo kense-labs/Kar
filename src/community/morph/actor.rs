@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     ApprovalMode, Direction, Error, Event, RecordKind, Result, SessionOptions, TurnReport,
-    stream::Journal, transport::Command,
+    input::Input, stream::Journal, transport::Command,
 };
 use reqwest::Method;
 use serde_json::{Value, json};
@@ -89,12 +89,12 @@ impl Actor {
             events,
         );
     }
-    async fn submit(&self, text: String, input_id: Option<Uuid>) -> Result<Value> {
-        let mut body = json!({"task":text,"topic_id":self.id,"workspace_dir":self.cwd});
+    async fn submit(&self, input: Input, input_id: Option<Uuid>) -> Result<Value> {
+        let mut body = json!({"task":input.text,"topic_id":self.id,"workspace_dir":self.cwd});
         if let Some(model) = &self.model {
             body["llm_profile"] = model.clone().into();
         }
-        let request = Uuid::new_v4();
+        let request = input.request_id;
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.record(
             None,
@@ -193,8 +193,8 @@ impl Actor {
         self.follow(&saved.id, None, Some(saved.projection));
         Ok(Value::Null)
     }
-    async fn start(&mut self, id: Uuid, text: String, done: Report) -> Result<()> {
-        let answer = match self.submit(text, Some(id)).await {
+    async fn start(&mut self, id: Uuid, input: Input, done: Report) -> Result<()> {
+        let answer = match self.submit(input, Some(id)).await {
             Ok(answer) => answer,
             Err(error) => {
                 let _ = done.send(Err(Error::Refused(error.to_string())));
@@ -208,11 +208,11 @@ impl Actor {
         self.follow(carrier, Some(done), None);
         Ok(())
     }
-    async fn steer(&mut self, text: String) -> Result<Value> {
+    async fn steer(&mut self, input: Input) -> Result<Value> {
         if self.tasks.is_empty() {
             return Err(Error::Refused("no active turn".into()));
         }
-        let answer = self.submit(text, None).await?;
+        let answer = self.submit(input, None).await?;
         let id = required_id(&answer)?;
         let carrier = answer["steer_target_task_id"]
             .as_str()
@@ -403,7 +403,7 @@ impl Actor {
             Command::Prompt(id, input, admission, ack, done) => {
                 let result = if self.tasks.is_empty() && self.queue.is_empty() {
                     match crate::chat::Admission::commit(admission).await {
-                        Ok(()) => self.start(id, input.text, done).await,
+                        Ok(()) => self.start(id, input, done).await,
                         Err(e) => Err(e),
                     }
                 } else {
@@ -435,7 +435,7 @@ impl Actor {
             }
             Command::Steer(input_id, input, ack) => {
                 let request = self.journal.steer_request(input_id, &input, &[]);
-                let result = self.steer(input.text).await;
+                let result = self.steer(input).await;
                 self.journal.control_result(request, &result, &[]);
                 let _ = ack.send(result);
             }
@@ -504,7 +504,7 @@ impl Actor {
             if self.tasks.is_empty()
                 && let Some((id, text, done)) = self.queue.pop_front()
             {
-                let _ = self.start(id, text, done).await;
+                let _ = self.start(id, Input::text(text), done).await;
                 self.journal.host_event(Event::InputRemoved {
                     input_id: id.to_string(),
                 });

@@ -37,12 +37,19 @@ pub struct TurnReport {
 /// A dispatched input. Dropping this handle stops waiting, not the agent.
 pub struct Turn {
     input_id: Uuid,
+    admission: Option<crate::ControlReceipt>,
     receiver: oneshot::Receiver<Result<TurnReport>>,
 }
 impl Turn {
     /// UUID supplied by the caller or allocated when the prompt was submitted.
     pub fn input_id(&self) -> Uuid {
         self.input_id
+    }
+
+    /// The public request and decision for an ordinary prompt. A queued turn
+    /// can be returned before the runtime receives its prompt.
+    pub fn admission(&self) -> Option<&crate::ControlReceipt> {
+        self.admission.as_ref()
     }
 
     pub async fn wait(self) -> Result<Outcome> {
@@ -53,6 +60,15 @@ impl Turn {
             .await
             .map_err(|_| Error::Closed("turn owner stopped".into()))?
     }
+}
+
+/// A completed public prompt decision. Unconfirmed transport failures stay errors.
+pub enum PromptDecision {
+    Accepted(Turn),
+    Rejected {
+        receipt: crate::ControlReceipt,
+        error: Error,
+    },
 }
 
 pub enum Delivery {
@@ -1384,6 +1400,10 @@ impl Session {
         self.journal.placement()
     }
 
+    pub fn control_receipt(&self, request_id: &str) -> Option<crate::ControlReceipt> {
+        self.journal.control_receipt(request_id)
+    }
+
     pub fn records(&self) -> Vec<Arc<Record>> {
         self.journal.records()
     }
@@ -1489,20 +1509,45 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<Turn> {
-        let text = text.into();
-        self.check_input("prompt", id, &text, &images)?;
-        self.start_prompt(id, text, images, None).await
+        match self.submit_prompt(Some(id), text, images).await? {
+            PromptDecision::Accepted(turn) => Ok(turn),
+            PromptDecision::Rejected { error, .. } => Err(error),
+        }
+    }
+    /// Submit an ordinary prompt and inspect the paired public records even
+    /// when the runtime or local validation rejects this attempt.
+    pub async fn submit_prompt(
+        &self,
+        input_id: Option<Uuid>,
+        text: impl Into<String>,
+        images: Vec<crate::InputImage>,
+    ) -> Result<PromptDecision> {
+        let id = input_id.unwrap_or_else(Uuid::new_v4);
+        let input = crate::input::Input::new(text.into(), images);
+        let request = input.request_id;
+        let result = match self.check_input("prompt", id, request, &input.text, &input.images) {
+            Ok(()) => self.start_prompt(id, input, None).await,
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(turn) => Ok(PromptDecision::Accepted(turn)),
+            Err(error) => match self.control_receipt(&request.to_string()) {
+                Some(receipt) if receipt.response.native["type"] == "rejected" => {
+                    Ok(PromptDecision::Rejected { receipt, error })
+                }
+                _ => Err(error),
+            },
+        }
     }
     pub(crate) async fn start_prompt(
         &self,
         id: Uuid,
-        text: String,
-        images: Vec<crate::InputImage>,
+        input: crate::input::Input,
         admission: Option<crate::chat::Admission>,
     ) -> Result<Turn> {
         let (done, receiver) = oneshot::channel();
-        crate::input::check_text(&text, self.text_limit)?;
-        let input = crate::input::Input { text, images };
+        crate::input::check_text(&input.text, self.text_limit)?;
+        let request_id = input.request_id;
         // A managed turn owns the workspace until the actor actually attempts dispatch.
         // A local timeout could otherwise leave a still-live command behind after releasing it.
         let timeout = admission.is_none().then_some(self.timeout);
@@ -1512,6 +1557,7 @@ impl Session {
         .await?;
         Ok(Turn {
             input_id: id,
+            admission: self.control_receipt(&request_id.to_string()),
             receiver,
         })
     }
@@ -1520,13 +1566,14 @@ impl Session {
         let id = Uuid::new_v4();
         let (done, receiver) = oneshot::channel();
         let text = text.into();
-        self.check_input("queue", id, &text, &[])?;
+        self.check_input("queue", id, Uuid::new_v4(), &text, &[])?;
         crate::input::check_text(&text, self.text_limit)?;
         self.call(|tx| Command::Queue(id, text, tx, done)).await?;
         Ok((
             id,
             Turn {
                 input_id: id,
+                admission: None,
                 receiver,
             },
         ))
@@ -1575,11 +1622,8 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<()> {
-        let input = crate::input::Input {
-            text: text.into(),
-            images,
-        };
-        self.check_input("steer", id, &input.text, &input.images)?;
+        let input = crate::input::Input::new(text.into(), images);
+        self.check_input("steer", id, input.request_id, &input.text, &input.images)?;
         crate::input::check_text(&input.text, self.text_limit)?;
         self.call(|tx| Command::Steer(id, input, tx))
             .await

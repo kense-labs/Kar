@@ -760,7 +760,7 @@ impl Sender {
         };
         let result = match self
             .session
-            .start_prompt(id, text, Vec::new(), Some(admission))
+            .start_prompt(id, crate::input::Input::text(text), Some(admission))
             .await
         {
             Ok(turn) => {
