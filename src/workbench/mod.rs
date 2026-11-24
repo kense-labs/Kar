@@ -7,6 +7,7 @@ mod forge;
 mod git;
 mod handoff;
 mod http;
+mod interactions;
 mod search;
 mod terminal_preview;
 pub mod workflows;
@@ -48,7 +49,18 @@ struct Root {
     dir: Dir,
 }
 
-type Controller = Arc<AsyncMutex<Option<ChatSession>>>;
+#[derive(Default)]
+struct Controller {
+    owner: AsyncMutex<Option<ChatSession>>,
+    // Control requests must be able to answer a native prompt while send holds the owner.
+    live: Mutex<std::sync::Weak<crate::Session>>,
+}
+
+impl Controller {
+    fn publish(&self, session: &ChatSession) {
+        *self.live.lock().unwrap() = session.live_session();
+    }
+}
 
 struct Inner {
     chats: ChatStore,
@@ -61,7 +73,7 @@ struct Inner {
     terminal_preview: terminal_preview::TerminalPreview,
     workflows: workflows::Engine,
     _lease: File,
-    controllers: Mutex<HashMap<Uuid, Controller>>,
+    controllers: Mutex<HashMap<Uuid, Arc<Controller>>>,
 }
 
 #[derive(Clone)]
@@ -222,7 +234,7 @@ impl Workbench {
         Ok(info)
     }
 
-    fn controller(&self, id: Uuid) -> Controller {
+    fn controller(&self, id: Uuid) -> Arc<Controller> {
         self.0
             .controllers
             .lock()
@@ -261,15 +273,28 @@ impl Workbench {
         runtime: &str,
         model: Option<String>,
     ) -> Result<ProjectChat> {
+        self.create_chat_with_approvals(project, id, runtime, model, crate::ApprovalMode::Deny)
+            .await
+    }
+
+    async fn create_chat_with_approvals(
+        &self,
+        project: Uuid,
+        id: Uuid,
+        runtime: &str,
+        model: Option<String>,
+        approvals: crate::ApprovalMode,
+    ) -> Result<ProjectChat> {
         let p = self.project(project)?;
         self.workspace(&p)?;
         let slot = self.controller(id);
-        let mut owner = slot.lock().await;
+        let mut owner = slot.owner.lock().await;
         match self.0.chats.initial_info(id) {
             Ok(info)
                 if info.forked_from.is_none()
                     && info.workspace == p.root
                     && info.runtime == runtime
+                    && info.approvals == approvals
                     && info.model == model =>
             {
                 return Ok(ProjectChat {
@@ -289,8 +314,10 @@ impl Workbench {
         let mut opts = SessionOptions::new(p.root);
         opts.remove_env("KAR_WORKBENCH_TOKEN")?;
         opts.model = model;
+        opts.approvals = approvals;
         let session = self.0.chats.create_with_id(id, runtime, None, opts).await?;
         let info = session.info().clone();
+        slot.publish(&session);
         *owner = Some(session);
         Ok(ProjectChat {
             project,
@@ -310,7 +337,7 @@ impl Workbench {
         let app = self.clone();
         tokio::spawn(async move {
             let controller = app.controller(chat);
-            let mut owner = controller.lock().await;
+            let mut owner = controller.owner.lock().await;
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }
@@ -333,7 +360,7 @@ impl Workbench {
     ) -> Result<ProjectChat> {
         let info = self.binding(project, chat)?;
         let slot = self.controller(chat);
-        let mut owner = slot.lock().await;
+        let mut owner = slot.owner.lock().await;
         if archived && let Some(session) = owner.take() {
             session.close().await?;
         }

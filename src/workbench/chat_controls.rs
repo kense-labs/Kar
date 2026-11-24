@@ -60,7 +60,7 @@ impl Workbench {
                 continue;
             }
             let controller = self.controller(id);
-            match controller.try_lock() {
+            match controller.owner.try_lock() {
                 Ok(slot) if slot.as_ref().is_none_or(ChatSession::is_closed) => {}
                 _ => continue,
             }
@@ -115,7 +115,7 @@ impl Workbench {
                             let app=app.clone();
                             tokio::spawn(async move {
                                 let slot=app.controller(chat);
-                                let Ok(mut owner)=slot.try_lock() else{return};
+                                let Ok(mut owner)=slot.owner.try_lock() else{return};
                                 if app.archived(chat) || app.binding(project,chat).is_err(){return}
                                 // Native history is reconciled by ChatStore before its FIFO worker starts.
                                 if let Err(e)=app.attach(chat,&mut owner).await {app.queue_error(chat,&e);}
@@ -142,14 +142,15 @@ impl Workbench {
             old.close().await?
         }
         if owner.is_none() {
-            **owner = Some(
-                self.0
-                    .chats
-                    .resume_with(id, |opts| {
-                        opts.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
-                    })
-                    .await?,
-            );
+            let session = self
+                .0
+                .chats
+                .resume_with(id, |opts| {
+                    opts.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
+                })
+                .await?;
+            self.controller(id).publish(&session);
+            **owner = Some(session);
         }
         self.0.pump.errors.lock().unwrap().remove(&id);
         Ok(())
@@ -234,7 +235,7 @@ async fn rollback(
         before: q.before,
     };
     let slot = app.controller(c);
-    let owner = slot.try_lock().map_err(|_| Error::Busy)?;
+    let owner = slot.owner.try_lock().map_err(|_| Error::Busy)?;
     if let Some(session) = owner.as_ref() {
         return Ok(Json(session.rollback(point, q.dry_run).await?));
     }
@@ -325,7 +326,7 @@ async fn fork(
     } else {
         tokio::spawn(async move {
             let slot = app.controller(chat);
-            let mut owner = slot.try_lock().map_err(|_| Error::Busy)?;
+            let mut owner = slot.owner.try_lock().map_err(|_| Error::Busy)?;
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }

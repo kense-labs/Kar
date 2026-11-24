@@ -398,6 +398,7 @@ kar workbench --root "$PWD"
 | 注册、列出项目 | `POST /projects` 接受 `{"root":"/absolute/project","name":"Kar"}`。`GET /projects` 返回有权访问的项目。 |
 | 新建或列出聊天 | `POST /projects/{p}/chats` 接受 `runtime`、可选的 `model` 和用于重试的聊天 UUID `id`。`GET /projects/{p}/chats?include_archived=true` 可包含已归档的聊天。 |
 | 发送消息 | `POST /projects/{p}/chats/{c}/messages` 接受输入 UUID `id` 与 `text`。重启后发送会恢复原生会话。 |
+| 审批和表单 | 创建聊天时传入 `"approvals":"host"`，从快照中的 `history.pending_requests` 读取待办。向该聊天的 `/requests/respond` 发送 POST，带原始 `id`、`cursor` 和答复。例如批准一次使用 `"action":"decide","decision":"allow_once"`，提交表单使用 `"action":"question","reply":{"action":"submit","values":{"字段ID":"值"}}`。服务重启后可 `POST /attach` 重新连接并查看原生待办。 |
 | 时间线与续收 | `GET /projects/{p}/chats/{c}/snapshot` 和 `/events` 使用 Kar 的聊天快照与 SSE，支持 `Last-Event-ID`。 |
 | 队列和恢复投递 | 对聊天路径下的 `/queue` 使用 `POST {"id":"输入UUID","text":"消息"}` 持久入队，`GET` 读取状态及最近的接管错误，`DELETE /queue/{id}` 撤回。工作台重启后会扫描已注册项目的队列并恢复原生会话，继续按入队顺序处理。 |
 | 逐回合文件与工作区回滚 | `GET /checkpoints` 列出该聊天每个回合的检查点和文件。`POST /rollback` 接收 `turn`、可选 `before` 和 `dry_run`。 |

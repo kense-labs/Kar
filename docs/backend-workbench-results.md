@@ -56,3 +56,9 @@ macOS 的原生文档入口已接入 Codex app-server。统一验收命令为 `c
 | --- | --- |
 | `cargo test --locked --test chat_restart -- workbench-fork` | 两个 HTTP 客户端、实际 Git 工作树和 Codex 协议替身。父聊天执行三轮，从第二轮生成子聊天并在目标工作树继续修改。服务重启后重试，核对两个工作树、原生分叉次数、子聊天最新回合和不同请求占用同一 UUID 的拒绝。 |
 | `cargo test --locked --test chat_restart -- fork-with-id` | 对原地分叉和不可确认的原生接纳分别重试，核对请求身份与历史。 |
+
+## macOS 工作台交互控制（待统一验收）
+
+普通消息发送期间，第二个授权客户端可以直接回答活动会话的审批、问题、策略或资源选择。答复同时绑定原生请求 ID 和事件游标。重启后的显式连接使用同一工作区和原生会话，返回当前待办。创建时默认采用拒绝策略，显式选择 `approvals=host` 启用人工决策。
+
+`cargo test --locked --test chat_restart -- workbench-requests` 使用实际 Kar 工作台、两个 HTTP 客户端和 Codex 协议替身。两端同时答同一表单，应只有一条答复抵达原生进程。重启后再制造相同原生请求 ID，核对旧游标被拒绝、新表单仍可提交，以及原会话一共收到两条答复。该场景已编译，尚待统一执行。

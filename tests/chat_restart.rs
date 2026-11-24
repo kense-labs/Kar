@@ -1943,12 +1943,18 @@ mod workbench_fork;
 mod workbench_projects;
 #[path = "support/workbench_queue.rs"]
 mod workbench_queue;
+#[path = "support/workbench_requests.rs"]
+mod workbench_requests;
 #[path = "support/workbench_server.rs"]
 mod workbench_server;
 
 #[path = "support/worktree_chats.rs"]
 mod worktree_chats;
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("workbench-requests") {
+        workbench_requests::run();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("workbench-fork") {
         workbench_fork::run();
         return;

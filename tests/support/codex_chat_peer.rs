@@ -248,6 +248,29 @@ pub(crate) fn agent() {
                 emit(
                     json!({"method":"turn/started","params":{"threadId":session,"turn":{"id":turn}}}),
                 );
+                if text == "ask clients" {
+                    emit(
+                        json!({"id":901,"method":"item/tool/requestUserInput","params":{"threadId":session,"turnId":turn,"questions":[{"id":"q","question":"Choose a color"}]}}),
+                    );
+                    let mut answer = String::new();
+                    if input.read_line(&mut answer).unwrap() == 0 {
+                        return;
+                    }
+                    let answer: Value = serde_json::from_str(&answer).unwrap();
+                    assert_eq!(answer["id"], 901);
+                    assert!(answer["result"]["answers"]["q"]["answers"][0].is_string());
+                    let mut seen = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(database.join("form-answers"))
+                        .unwrap();
+                    writeln!(
+                        seen,
+                        "{}",
+                        json!({"session":session,"turn":turn,"answer":answer["result"]})
+                    )
+                    .unwrap();
+                }
                 if text == "declared quota" {
                     emit(
                         json!({"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":100,"resetsAt":1900000000}}}}),

@@ -271,7 +271,8 @@ impl Workbench {
                     ));
                 }
                 let controller = self.controller(chat);
-                let owner = controller.lock().await;
+                let mut owner = controller.owner.lock().await;
+                self.attach(chat, &mut owner).await?;
                 let session = owner
                     .as_ref()
                     .ok_or_else(|| Error::Closed("workflow chat is unavailable".into()))?;

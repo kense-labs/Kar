@@ -22,7 +22,7 @@ impl Workbench {
         tokio::spawn(async move {
             let controller = app.controller(chat);
             // A switch requested mid-turn must not silently occur after the caller's observed turn.
-            let mut owner = controller.try_lock().map_err(|_| Error::Busy)?;
+            let mut owner = controller.owner.try_lock().map_err(|_| Error::Busy)?;
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }
@@ -44,15 +44,7 @@ impl Workbench {
                 }
             }
             if let Some(source) = &*owner {
-                let history = source.history()?;
-                if history
-                    .turns
-                    .last()
-                    .is_some_and(|t| t.status == crate::chat::TurnStatus::Running)
-                    || !history.pending_requests.is_empty()
-                    || history
-                        .manual_compaction
-                        .is_some_and(|r| r.status.is_pending())
+                if source.needs_controller()?
                     || app.0.chats.queued_inputs(chat)?.iter().any(|i| {
                         matches!(
                             i.status,
@@ -67,6 +59,9 @@ impl Workbench {
                 source.close().await?;
             }
             let (receipt, next) = app.0.chats.handoff(chat, request).await?;
+            if let Some(session) = &next {
+                controller.publish(session);
+            }
             *owner = next;
             Ok(receipt)
         })

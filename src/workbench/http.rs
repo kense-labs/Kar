@@ -80,6 +80,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         )
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
         .merge(super::chat_controls::routes())
+        .merge(super::interactions::routes())
         .merge(super::workflows::routes())
         .merge(super::documents::routes())
         .merge(super::forge::routes())
@@ -139,6 +140,8 @@ struct NewChat {
     id: Option<Uuid>,
     runtime: String,
     model: Option<String>,
+    #[serde(default)]
+    approvals: crate::ApprovalMode,
 }
 async fn create_chat(
     State(app): State<Workbench>,
@@ -146,8 +149,14 @@ async fn create_chat(
     Json(p): Json<NewChat>,
 ) -> Reply<ProjectChat> {
     Ok(Json(
-        app.create_chat(id, p.id.unwrap_or_else(Uuid::new_v4), &p.runtime, p.model)
-            .await?,
+        app.create_chat_with_approvals(
+            id,
+            p.id.unwrap_or_else(Uuid::new_v4),
+            &p.runtime,
+            p.model,
+            p.approvals,
+        )
+        .await?,
     ))
 }
 #[derive(Deserialize)]

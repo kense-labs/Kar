@@ -515,7 +515,7 @@ pub struct ChatSession {
 struct Sender {
     _worktree: Option<File>,
     store: ChatStore,
-    session: Session,
+    session: Arc<Session>,
     sink: Sink,
     info: ChatInfo,
 }
@@ -542,7 +542,7 @@ impl ChatSession {
         let sender = Arc::new(Sender {
             _worktree: worktree,
             store,
-            session,
+            session: Arc::new(session),
             sink,
             info,
         });
@@ -555,6 +555,14 @@ impl ChatSession {
     }
     pub(crate) fn is_closed(&self) -> bool {
         self.sender.session.is_closed()
+    }
+    pub(crate) fn live_session(&self) -> std::sync::Weak<Session> {
+        Arc::downgrade(&self.sender.session)
+    }
+    pub(crate) fn needs_controller(&self) -> Result<bool> {
+        let log = self.sender.sink.0.lock().unwrap();
+        log.healthy()?;
+        Ok(log.state.needs_controller())
     }
     pub fn info(&self) -> &ChatInfo {
         &self.sender.info
