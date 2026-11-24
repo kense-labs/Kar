@@ -267,7 +267,7 @@ async fn fetch(
         .collect();
     Ok((id, rows))
 }
-fn rate_model(name: &str) -> String {
+pub(super) fn rate_model(name: &str) -> String {
     static SUFFIX: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
             r"(?:-thinking)?(?:-(?:none|minimal|low|medium|high|xhigh|max))?(?:-fast)?$",

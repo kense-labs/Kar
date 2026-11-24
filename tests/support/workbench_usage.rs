@@ -164,6 +164,65 @@ pub(super) async fn run() {
     assert_eq!(row["model"], "claude-sonnet-4");
     assert_eq!(row["totals"]["output"], 6);
     assert_eq!(row["totals"]["reasoning"], 4);
+    let settings = format!("{url}/usage/settings");
+    let before = json(http.get(&settings)).await;
+    assert_eq!(before["revision"], 0);
+    assert_eq!(before["settings"]["history_retention_days"], 92);
+    let update = json!({"request_id":uuid::Uuid::new_v4(),"expected_revision":0,"settings":{"history_retention_days":"unlimited","model_aliases":{"unknown":"first","first":"custom","cycle":"loop","loop":"cycle"},"price_overrides":{"custom":{"input_cost_per_million_tokens":50000,"output_cost_per_million_tokens":100000},"metered":{"input_cost_per_million_tokens":10000,"output_cost_per_million_tokens":50000}}}});
+    let receipt = json(http.put(&settings).json(&update)).await;
+    assert_eq!(receipt["revision"], 1);
+    let mut edited = update.clone();
+    edited["request_id"] = json!(uuid::Uuid::new_v4());
+    edited["expected_revision"] = json!(1);
+    let newer = json(http.put(&settings).json(&edited)).await;
+    assert_eq!(newer["revision"], 2);
+    assert_eq!(json(http.put(&settings).json(&update)).await, receipt);
+    let summary = json(http.post(format!("{url}/usage/summary")).json(&filtered)).await;
+    assert_eq!(summary["settings_revision"], 2);
+    let sole = &summary["buckets"][0];
+    assert_eq!(sole["model"], "custom");
+    assert_eq!(sole["records"], 1);
+    assert_eq!(sole["cost_usd"], 1.7);
+    assert_eq!(
+        json(http.get(format!("{settings}?revision=1"))).await,
+        receipt
+    );
+    let changed = json(http.post(format!("{url}/usage/summary")).json(&request)).await;
+    let oc = changed["buckets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["provider"] == "opencode")
+        .unwrap();
+    assert_eq!(oc["cost_source"], "model_priced");
+    assert_eq!(oc["cost_usd"], 0.64);
+    let mut wrong = update.clone();
+    wrong["settings"]["history_retention_days"] = json!(7);
+    assert!(
+        http.put(&settings)
+            .json(&wrong)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_client_error()
+    );
+    wrong["request_id"] = json!(uuid::Uuid::new_v4());
+    assert_eq!(
+        http.put(&settings)
+            .json(&wrong)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    server.kill().await.unwrap();
+    server.wait().await.unwrap();
+    let (mut server, url) = serve_with_env(&state, &work, &home, &env).await;
+    let settings = format!("{url}/usage/settings");
+    assert_eq!(json(http.get(&settings)).await, newer);
+    assert_eq!(json(http.put(settings).json(&update)).await, receipt);
     server.kill().await.unwrap();
     server.wait().await.unwrap();
 }

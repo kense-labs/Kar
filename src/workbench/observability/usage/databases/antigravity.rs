@@ -130,7 +130,7 @@ fn concrete(m: &str) -> bool {
                     .is_some_and(|t| t.starts_with(|c: char| c.is_ascii_digit()))
             }))
 }
-fn rate(m: &str) -> String {
+pub(in super::super) fn rate(m: &str) -> String {
     match m {
         "gemini-3-flash-agent"
         | "gemini-3-flash-agent-a"

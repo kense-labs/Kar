@@ -5,6 +5,7 @@ mod databases;
 mod pricing;
 mod records;
 mod scans;
+pub(super) mod settings;
 use super::super::http::ApiError;
 use super::{Workbench, now, stamp};
 use crate::{Error, Result};
@@ -83,6 +84,7 @@ struct Entry {
 pub(super) struct Service {
     rates: pricing::Cache,
     cursor: cursor::Cache,
+    settings: Arc<settings::Store>,
     index_file: PathBuf,
     latest: Mutex<Option<Arc<scans::Snapshot>>>,
     gate: tokio::sync::Mutex<()>,
@@ -92,6 +94,7 @@ impl Service {
         Self {
             rates: pricing::Cache::new(dir),
             cursor: cursor::Cache::new(dir),
+            settings: Arc::new(settings::Store::new(dir)),
             index_file: dir.join("usage-index-v1.json"),
             latest: Default::default(),
             gate: Default::default(),
@@ -101,9 +104,12 @@ impl Service {
         let _g = self.gate.lock().await;
         let previous = self.latest.lock().unwrap().clone();
         let file = self.index_file.clone();
-        let next = tokio::task::spawn_blocking(move || scans::read(&file, previous, chat_dir))
-            .await
-            .map_err(|e| Error::Closed(e.to_string()))??;
+        let captured_settings = self.settings.clone();
+        let next = tokio::task::spawn_blocking(move || {
+            scans::read(&file, previous, chat_dir, &captured_settings)
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
         let next = Arc::new(next);
         *self.latest.lock().unwrap() = Some(next.clone());
         Ok(next)
@@ -122,6 +128,12 @@ pub(super) async fn summary(
     let window = input.window()?;
     let (since, until) = input.account_bounds(&window)?;
     let svc = app.0.observability.usage.clone();
+    let store = svc.clone();
+    let settings = tokio::task::spawn_blocking(move || store.settings.read(None))
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
+    let cutoff = settings.settings.cutoff(now());
+    let since = since.max(cutoff);
     let chat_dir = app.0.chats.directory().to_path_buf();
     let previous = svc.latest.lock().unwrap().clone();
     let provisional = input.provisional && !input.await_refresh && previous.is_some();
@@ -152,6 +164,36 @@ pub(super) async fn summary(
     } else {
         None
     };
+    let rates = if !provisional && rates.fetched.is_some_and(|at| now() - at >= 60_000) {
+        let aliases = settings.settings.aliases();
+        let unlisted = |e: &Entry| {
+            let m = aliases
+                .get(e.model.as_str())
+                .copied()
+                .or(e.rate_model.as_deref())
+                .unwrap_or(&e.model);
+            !settings
+                .settings
+                .price_overrides
+                .contains_key(aliases.get(e.model.as_str()).copied().unwrap_or(&e.model))
+                && rates.eligible(m)
+        };
+        if snapshot
+            .files
+            .values()
+            .any(|f| f.entries.iter().any(unlisted))
+            || account
+                .as_ref()
+                .and_then(|a| a.account.as_ref())
+                .is_some_and(|a| a.rows.iter().any(unlisted))
+        {
+            svc.rates.get(true).await
+        } else {
+            rates
+        }
+    } else {
+        rates
+    };
     let url = svc.rates.url.clone();
     Ok(Json(
         tokio::task::spawn_blocking(move || {
@@ -163,9 +205,19 @@ pub(super) async fn summary(
                 &input,
                 window,
                 provisional,
+                &settings,
             )
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))?,
     ))
+}
+
+impl Workbench {
+    /// Read the latest or a historical revision through the same store used by summaries.
+    pub fn usage_settings(&self, revision: Option<u64>) -> Result<Value> {
+        Ok(serde_json::to_value(
+            self.0.observability.usage.settings.read(revision)?,
+        )?)
+    }
 }

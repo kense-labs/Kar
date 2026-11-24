@@ -172,13 +172,42 @@ impl Rates {
         }
         self.models.get(key)
     }
-    pub fn price(&self, r: &Entry) -> Price {
+    pub fn listed(&self, model: &str) -> bool {
+        self.lookup(model).is_some()
+    }
+    pub fn eligible(&self, model: &str) -> bool {
+        let base = model
+            .split('[')
+            .next()
+            .unwrap_or("")
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        !matches!(
+            base.as_str(),
+            "" | "<synthetic>" | "synthetic" | "opus" | "sonnet" | "haiku" | "fable" | "unknown"
+        ) && !self.listed(model)
+    }
+    pub fn price(&self, r: &Entry, local: Option<&settings::Override>) -> Price {
+        let override_model = local.map(|p| Model {
+            base: SpeedRates {
+                standard: p.rates(),
+                fast: None,
+                ultrafast: None,
+            },
+            tiers: BTreeMap::new(),
+        });
         let model = r
             .rate_model
             .as_deref()
             .and_then(|n| self.lookup(n))
             .or_else(|| self.lookup(&r.model));
-        let reported = r.cost.filter(|c| c.is_finite() && *c >= 0.);
+        let model = override_model.as_ref().or(model);
+        let reported = r
+            .cost
+            .filter(|c| local.is_none() && c.is_finite() && *c >= 0.);
         let Some(m) = model else {
             return Price {
                 total: reported.unwrap_or(0.),

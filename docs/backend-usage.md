@@ -20,3 +20,9 @@ OpenCode 的两个数据库表（message、session_message）与 storage/message
 Cursor 从 CURSOR_API_KEY 交换账号令牌，随后从固定的 Cursor Dashboard API 读取个人与团队历史。团队请求始终同时指定当前用户。接口按账单总事件数识别翻页重叠，保留确实发生多次的相同计费事件。以账号标识的 SHA-256 联合主机指纹，来源缓存只持久化散列及规范化计量。await_refresh=true 等待账号读取，读取失败保留该来源旧记录并显示 partial。复验命令为 `cargo test --locked --lib cursor_account_usage_counts_paid_occurrences_across_overlapping_pages`；用本地 HTTP 服务模拟分页、凭证交换和团队限制。真实账号需要主机上的 Cursor API key，与离线协议证据分别登记。
 
 Claude、Codex 和 Pi 的压缩记录同样支持 .jsonl.zst，复用现有纯 Rust zstd 流式解码器。HTTP 用例把同一批已归档的 Codex 请求同时放入压缩与普通文件，核对不重复计量。
+
+## 用量配置版本
+
+`GET /usage/settings` 返回最新 revision 与 settings；加 `?revision=1` 可取回历史版本。默认模型别名与费率覆盖为空，历史保留 92 天。`PUT /usage/settings` 接收 request_id（UUID）、expected_revision 和完整 settings。修改已知版本时递增版本号，文件置换前同步内容，置换后同步目录。重用同一请求与内容时返回第一次写入的版本，跨重启有效；用过的 ID 提交其他内容会被拒绝。过期的 expected_revision 返回 409。Kar 的 `Workbench::usage_settings` 供其他后端调用者读取同一版本。
+
+设置的 model_aliases 可串接，循环路径上的模型保留各自名称。model_filter 始终匹配原始供应商及模型。price_overrides 的输入、输出、读缓存及写缓存价格单位均为每百万 token 美元，模型覆盖对申报金额优先。history_retention_days 可为正整数或 unlimited，清理过期删除文件前再核对当前配置。汇总响应包含 settings_revision。集中 workbench-usage 用例包含两次写入、旧版本回放、重启后重试、冲突、筛选与定价覆盖。

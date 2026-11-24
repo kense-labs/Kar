@@ -13,6 +13,10 @@ use serde::Deserialize;
 
 pub(in crate::workbench) fn routes() -> Router<Workbench> {
     Router::new()
+        .route(
+            "/usage/settings",
+            get(usage::settings::get).put(usage::settings::put),
+        )
         .route("/usage/summary", post(usage::summary))
         .route("/usage/rates/refresh", post(usage::rates))
         .route("/diagnostics/otlp", post(otlp::check))

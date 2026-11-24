@@ -10,6 +10,8 @@ pub(super) struct FileUsage {
     pub format: String,
     pub entries: Vec<Entry>,
     parser: records::Parser,
+    #[serde(default)]
+    modified_ms: Option<i64>,
     signature: String,
     identity: String,
     offset: u64,
@@ -66,6 +68,7 @@ impl Snapshot {
                     format: "cursor".into(),
                     entries: a.rows.clone(),
                     parser: Default::default(),
+                    modified_ms: None,
                     signature: String::new(),
                     identity: String::new(),
                     offset: 0,
@@ -221,6 +224,15 @@ fn source(root: &Path, provider: &str) -> Source {
         ..Default::default()
     }
 }
+fn modified(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as i64)
+}
 fn guard(file: &mut File, offset: u64) -> io::Result<Vec<u8>> {
     file.seek(SeekFrom::Start(0))?;
     let mut digest = Sha256::new();
@@ -267,6 +279,7 @@ fn read_file(
         format: format.into(),
         entries: vec![],
         parser: Default::default(),
+        modified_ms: None,
         signature: String::new(),
         identity: id,
         offset: 0,
@@ -318,6 +331,7 @@ fn read_file(
         result.guard = guard(&mut file, result.offset)?;
     }
     result.signature = sig;
+    result.modified_ms = modified(path);
     Ok((Arc::new(result), false))
 }
 fn read_native_file(
@@ -353,6 +367,7 @@ fn read_native_file(
             format: format.into(),
             entries,
             parser: Default::default(),
+            modified_ms: modified(path),
             signature: sig,
             identity: String::new(),
             offset: 0,
@@ -468,6 +483,7 @@ pub(super) fn read(
     file: &Path,
     previous: Option<Arc<Snapshot>>,
     chat: PathBuf,
+    settings: &settings::Store,
 ) -> Result<Snapshot> {
     let start = Instant::now();
     let mut files = previous.map(|p| p.files.clone()).unwrap_or_else(|| {
@@ -482,13 +498,14 @@ pub(super) fn read(
             .collect()
     });
     let mut sources = vec![];
-    let mut changed = false;
+    let original_count = files.len();
     let roots: BTreeSet<_> = roots(chat)?
         .into_iter()
         .map(|(f, p)| (f, fs::canonicalize(&p).unwrap_or(p)))
         .collect();
     // Changing the configured provider home must not surface usage from a disconnected account.
     files.retain(|_, f| roots.contains(&(f.format.as_str(), f.root.clone())));
+    let mut changed = original_count != files.len();
     for (format, root) in roots {
         let report = scan(&root, format, &mut files);
         changed |= report.scanned_files > 0;
@@ -508,10 +525,19 @@ pub(super) fn read(
             sources.push(report);
         }
     }
-    if changed {
-        let save: BTreeMap<_, _> = files.iter().map(|(p, f)| (p, f.as_ref())).collect();
-        super::super::triage::atomic(file, &serde_json::to_vec(&save)?)?;
-    }
+    settings.with_cutoff(|cutoff| {
+        let before = files.len();
+        files.retain(|p, f| f.modified_ms.is_none_or(|ms| ms >= cutoff) || p.is_file());
+        if changed || before != files.len() {
+            let save: BTreeMap<_, _> = files
+                .iter()
+                .filter(|(_, f)| f.modified_ms.is_none_or(|ms| ms >= cutoff))
+                .map(|(p, f)| (p, f.as_ref()))
+                .collect();
+            super::super::triage::atomic(file, &serde_json::to_vec(&save)?)?;
+        }
+        Ok(())
+    })?;
     Ok(Snapshot {
         files,
         sources,

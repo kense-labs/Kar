@@ -149,7 +149,9 @@ pub(super) fn build(
     q: &Request,
     w: Window,
     refreshing: bool,
+    version: &settings::Version,
 ) -> Value {
+    let aliases = version.settings.aliases();
     let mut native = BTreeSet::new();
     for f in s.files.values().filter(|f| f.format != "kar") {
         for e in &f.entries {
@@ -220,19 +222,36 @@ pub(super) fn build(
             .bounds
             .filter(|_| w.hour)
             .map(|(a, _)| a + (e.timestamp - a) / 3_600_000 * 3_600_000);
-        let entry = Entry {
+        let mut entry = Entry {
             tokens,
             cost,
             one_hour,
             ..e.clone()
         };
+        let model = aliases.get(e.model.as_str()).copied().unwrap_or(&e.model);
+        if model != e.model {
+            entry.model = model.into();
+            entry.rate_model = if rates.listed(model) {
+                None
+            } else {
+                match e.provider.as_str() {
+                    "cursor" => Some(cursor::rate_model(model)),
+                    "pi" => model.split_once('/').map(|(_, n)| n.into()),
+                    "antigravity" => Some(databases::antigravity::rate(model)),
+                    _ => None,
+                }
+            };
+        }
         if !e.session.is_empty() {
             sessions[source].insert(&e.session);
         }
         buckets
-            .entry((day, hour, &e.provider, &e.model, source))
+            .entry((day, hour, &e.provider, model, source))
             .or_insert_with(Bucket::default)
-            .add(&entry, rates.price(&entry));
+            .add(
+                &entry,
+                rates.price(&entry, version.settings.price_overrides.get(model)),
+            );
     }
     let round = |x: f64| (x * 1e6).round() / 1e6;
     let buckets=buckets.into_iter().map(|((day,hour,provider,model,src),b)|{let mut row=json!({"day":day,"provider":provider,"model":model,"source_path":s.sources[src].root,"totals":b.totals,"cost_usd":round(b.cost),"cache_savings_usd":b.savings,"records":b.records,"sessions":b.sessions.len(),"unpriced_records":b.unpriced,"unpriced_tokens":b.unpriced_tokens,"cost_source":if b.unpriced==b.records{"unpriced"}else if b.reported==b.records{"provider_reported"}else{"model_priced"}});
@@ -253,7 +272,7 @@ pub(super) fn build(
             v
         })
         .collect::<Vec<_>>();
-    let mut out = json!({"contract_version":6,"read_at":stamp(s.at),"since_day":q.since_day,"until_day":q.until_day,"time_zone":q.time_zone,"scan_duration_ms":s.duration,"buckets":buckets,"sources":sources,"pricing":rates.view(url)});
+    let mut out = json!({"contract_version":6,"settings_revision":version.revision,"read_at":stamp(s.at),"since_day":q.since_day,"until_day":q.until_day,"time_zone":q.time_zone,"scan_duration_ms":s.duration,"buckets":buckets,"sources":sources,"pricing":rates.view(url)});
     if let Some(f) = &q.model_filter {
         out["model_filter"] = json!(f);
     }
