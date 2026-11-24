@@ -233,11 +233,11 @@ impl ChatStore {
     ) -> Result<()> {
         let _lock = self.inbox_lock(log.state.info.id)?;
         let inbox = self.read_inbox(&log.state.info)?;
-        if inbox.entries.iter().any(|e| {
-            matches!(
-                e.status(&log.state),
-                InputStatus::Pending | InputStatus::Sending
-            )
+        let rewinding = matches!(&update, super::ChatUpdate::ContextRewound { .. });
+        if inbox.entries.iter().any(|e| match e.status(&log.state) {
+            InputStatus::Pending | InputStatus::Sending => true,
+            InputStatus::Uncertain => rewinding,
+            _ => false,
         }) {
             return Err(Error::Busy);
         }

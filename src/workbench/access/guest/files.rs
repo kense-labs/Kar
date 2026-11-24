@@ -27,37 +27,19 @@ impl Visible {
 // Associate it only with turns in that chat's visible prefix, including nested forks.
 fn inherited_limits(app: &Workbench, h: &ChatHistory) -> BTreeMap<Uuid, usize> {
     let mut limits = BTreeMap::from([(h.chat.id, h.turns.len())]);
-    let mut origin = h.chat.forked_from.clone();
+    let mut child = h.chat.id;
     let mut limit = h.turns.len();
-    let mut cut = origin
-        .as_ref()
-        .and_then(|f| h.turns.iter().position(|t| t.id == f.turn));
-    while let (Some(fork), Some(end)) = (origin, cut) {
-        limit = limit.min(end + 1);
-        if limits.contains_key(&fork.chat) {
+    while let Ok(Some((parent, prefix))) = app.0.chats.fork_prefix(child) {
+        limit = prefix
+            .iter()
+            .zip(&h.turns[..limit])
+            .take_while(|(id, turn)| **id == turn.id)
+            .count();
+        if limit == 0 || limits.contains_key(&parent) {
             break;
         }
-        limits.insert(fork.chat, limit);
-        let Ok(parent) = app.0.chats.initial_info(fork.chat) else {
-            break;
-        };
-        origin = parent.forked_from;
-        cut = origin.as_ref().and_then(|f| {
-            h.turns[..limit]
-                .iter()
-                .position(|t| t.id == f.turn)
-                .or_else(|| {
-                    // The fork may select an earlier turn than its parent's own fork point.
-                    let saved = app.0.chats.history(fork.chat).ok()?;
-                    let end = saved.turns.iter().position(|t| t.id == f.turn)?;
-                    let common = saved.turns[..=end]
-                        .iter()
-                        .zip(&h.turns[..limit])
-                        .take_while(|(a, b)| a.id == b.id)
-                        .count();
-                    common.checked_sub(1)
-                })
-        });
+        limits.insert(parent, limit);
+        child = parent;
     }
     limits
 }

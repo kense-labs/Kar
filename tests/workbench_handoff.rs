@@ -415,7 +415,18 @@ async fn same_chat_rewind() {
             .status()
             .is_success()
     );
+    let store = kar::chat::ChatStore::open(f.dir.join("state")).unwrap();
+    let snapshot = store.feed_snapshot(f.chat).unwrap();
+    let mut feed = store.follow(f.chat, Some(snapshot.cursor)).unwrap();
+    let mut replica = kar::chat::ChatReplica::from_snapshot(snapshot);
     let receipt = body(f.post("rewinds", &request)).await;
+    while replica.rewinds().is_empty() {
+        let event = feed.recv().await.unwrap();
+        assert!(replica.apply(event.clone()).unwrap());
+        assert!(!replica.apply(event).unwrap());
+    }
+    assert_eq!(replica.turns().last().unwrap().id, second);
+    assert_eq!(serde_json::to_value(&replica.rewinds()[0]).unwrap(), receipt);
     assert_eq!(receipt["chat"], f.chat.to_string());
     assert_eq!(receipt["mode"], "portable_context");
     assert_ne!(receipt["native_id"], created["info"]["native_id"]);

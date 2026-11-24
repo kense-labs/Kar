@@ -343,16 +343,19 @@ async fn rewind(
         if app.archived(chat) {
             return Err(Error::Refused("chat is archived".into()));
         }
-        if owner
-            .as_ref()
-            .is_some_and(|s| s.needs_controller().unwrap_or(true))
-            || app.0.chats.queued_inputs(chat)?.iter().any(|i| {
-                matches!(
-                    i.status,
-                    crate::chat::InputStatus::Pending | crate::chat::InputStatus::Sending
-                )
-            })
+        if let Some(session) = owner.as_ref()
+            && session.needs_controller()?
         {
+            return Err(Error::Busy);
+        }
+        if app.0.chats.queued_inputs(chat)?.iter().any(|i| {
+            matches!(
+                i.status,
+                crate::chat::InputStatus::Pending
+                    | crate::chat::InputStatus::Sending
+                    | crate::chat::InputStatus::Uncertain
+            )
+        }) {
             return Err(Error::Busy);
         }
         if let Some(session) = owner.take() {

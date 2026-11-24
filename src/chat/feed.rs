@@ -155,6 +155,9 @@ impl ChatReplica {
     pub fn chat(&self) -> &ChatInfo {
         &self.state.info
     }
+    pub fn rewinds(&self) -> &[super::ContextRewind] {
+        &self.state.rewinds
+    }
     pub fn handoffs(&self) -> &[super::Handoff] {
         &self.state.handoffs
     }

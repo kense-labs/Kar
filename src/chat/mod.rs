@@ -308,6 +308,23 @@ impl ChatStore {
         .0
         .info)
     }
+    /// The inherited row is written directly after the child's header before publication.
+    pub(crate) fn fork_prefix(&self, chat: Uuid) -> Result<Option<(Uuid, Vec<Uuid>)>> {
+        use std::io::{BufRead, BufReader};
+        let mut reader = BufReader::new(File::open(self.path(chat))?);
+        let (header, _) = log::parse_header(&mut reader, Some(chat))?;
+        let Some(origin) = header.info.forked_from else {
+            return Ok(None);
+        };
+        let mut row = Vec::new();
+        reader.read_until(b'\n', &mut row)?;
+        match serde_json::from_slice(&row)? {
+            ChatUpdate::Inherited { turns } if turns.last().map(|t| t.id) == Some(origin.turn) => {
+                Ok(Some((origin.chat, turns.into_iter().map(|t| t.id).collect())))
+            }
+            _ => Err(Error::Protocol("invalid inherited turn prefix".into())),
+        }
+    }
     pub(crate) fn saved_info(&self, id: Uuid) -> Result<ChatInfo> {
         log::info(File::open(self.path(id))?, id)
     }
