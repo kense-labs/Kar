@@ -1,4 +1,6 @@
 //! Installed agent binaries, isolated homes and loopback model endpoints.
+#[path = "native_live/claude_history.rs"]
+mod claude_history;
 #[path = "native_live/cursor.rs"]
 mod cursor;
 #[path = "native_live/pi_history.rs"]
@@ -357,6 +359,8 @@ fn respond_observed(
                             {"question":"Which checks?","header":"Checks","multiSelect":true,"options":[{"label":"Unit","description":"Unit suite"},{"label":"Replay","description":"Replay suite"}]}
                         ]}),
                     )
+                } else if last.contains("oar-claude-recover") {
+                    ("Read", "toolu_recover", json!({"file_path":target}))
                 } else if last.contains("oar-pi-recover") {
                     ("read", "pi_read_1", json!({"path":target}))
                 } else if background {
@@ -394,17 +398,29 @@ fn respond_observed(
         }
         let mut events = vec![
             json!({"type":"message_start","message":{"id":"msg_probe","type":"message","role":"assistant","model":reported_model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0}}}),
-            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
-            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":reply_text}}),
-            json!({"type":"content_block_stop","index":0}),
         ];
+        let reasoning = conversation.contains("oar-claude-recover");
+        let text_index = usize::from(reasoning);
+        if reasoning {
+            events.extend([
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"native reasoning block"}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"fixture-signature"}}),
+                json!({"type":"content_block_stop","index":0}),
+            ]);
+        }
+        events.extend([
+            json!({"type":"content_block_start","index":text_index,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":text_index,"delta":{"type":"text_delta","text":reply_text}}),
+            json!({"type":"content_block_stop","index":text_index}),
+        ]);
         if reply_text != "violet-answer"
             && String::from_utf8_lossy(&body).contains("orange-original")
         {
             events.extend([
-                json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
-                json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"second-block"}}),
-                json!({"type":"content_block_stop","index":1}),
+                json!({"type":"content_block_start","index":text_index+1,"content_block":{"type":"text","text":""}}),
+                json!({"type":"content_block_delta","index":text_index+1,"delta":{"type":"text_delta","text":"second-block"}}),
+                json!({"type":"content_block_stop","index":text_index+1}),
             ]);
         }
         events.extend([

@@ -147,6 +147,81 @@ pub(super) fn snapshot_tools(edits: &mut Vec<Edit>, elided: bool) {
 }
 
 impl ChatTurn {
+    /// None means the native blocks conflict with a locally observed item.
+    /// Otherwise report whether any message or tool information would change.
+    pub(crate) fn transcript_adds_content(&self, root: &str, edits: &[Edit]) -> Option<bool> {
+        use std::collections::HashMap;
+        let mut messages = HashMap::new();
+        let mut tools = HashMap::new();
+        for edit in edits {
+            match edit {
+                Edit::Text {
+                    key: Some(id),
+                    role,
+                    text,
+                    ..
+                } => {
+                    messages.insert(id.as_str(), (role, text, false));
+                }
+                Edit::ToolSnapshot { id, activity } => {
+                    tools.insert(id.as_str(), (activity, false));
+                }
+                _ => {}
+            }
+        }
+        let mut changed = false;
+        for item in self
+            .items
+            .iter()
+            .filter(|i| i.source.path.is_empty() && i.source.session_id.as_deref() == Some(root))
+        {
+            match &item.item {
+                Item::Message {
+                    role: Role::User, ..
+                } => {}
+                Item::Message {
+                    role,
+                    text,
+                    provider_id,
+                    complete,
+                } => {
+                    let (native_role, native_text, seen) =
+                        messages.get_mut(provider_id.as_deref()?)?;
+                    if *native_role != role
+                        || !native_text.starts_with(text.as_str())
+                        || (*complete && *native_text != text)
+                    {
+                        return None;
+                    }
+                    *seen = true;
+                    changed |= !complete;
+                }
+                Item::Tool { id, activity } => {
+                    let (native, seen) = tools.get_mut(id.as_str())?;
+                    if (activity.name.is_some() && activity.name != native.name)
+                        || (!activity.input_partial
+                            && activity.input.is_some()
+                            && activity.input != native.input)
+                        || (activity.result.is_some() && activity.result != native.result)
+                    {
+                        return None;
+                    }
+                    *seen = true;
+                    changed |= activity.input_partial
+                        || activity.name != native.name
+                        || activity.input != native.input
+                        || activity.result != native.result;
+                }
+                _ => {}
+            }
+        }
+        Some(
+            changed
+                || messages.values().any(|(_, _, seen)| !seen)
+                || tools.values().any(|(_, seen)| !seen),
+        )
+    }
+
     pub fn tool_groups(&self, runtime: &str) -> Vec<crate::observe::ToolGroupSegment> {
         use crate::observe::ToolGroupPart;
         crate::observe::group_tool_activity(
@@ -301,6 +376,12 @@ impl ChatTurn {
             self.items.push(entry);
         }
         self.items.extend(additions);
+    }
+    pub(super) fn apply_claude_history(&mut self, frame: &Frame, root: &str) {
+        self.apply_transcript(frame, root);
+        if self.status == TurnStatus::Interrupted {
+            self.finish(TurnStatus::Interrupted, root);
+        }
     }
     pub(super) fn apply(&mut self, frame: &Frame, root: &str) {
         self.apply_edits(frame, root, ToolEvents::Live);

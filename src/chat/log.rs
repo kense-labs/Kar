@@ -806,6 +806,18 @@ impl State {
                     Protocol::Pi => self
                         .find(id)
                         .is_some_and(|t| t.pi_input_timestamp_ms.is_some()),
+                    Protocol::Claude => {
+                        frame
+                            .native_turn
+                            .as_deref()
+                            .and_then(|s| Uuid::parse_str(s).ok())
+                            == Some(id)
+                            && frame.source.path.is_empty()
+                            && frame.source.session_id.as_deref() == Some(&self.info.native_id)
+                            && self
+                                .find(id)
+                                .is_some_and(|t| t.input_sent && !t.native_continuation)
+                    }
                     Protocol::Factory => {
                         frame
                             .native_turn
@@ -846,6 +858,8 @@ impl State {
                         &self.info.native_id,
                         super::timeline::ToolEvents::DshHistory,
                     );
+                } else if self.info.protocol == Protocol::Claude {
+                    last.apply_claude_history(&frame, &self.info.native_id);
                 } else if self.info.protocol == Protocol::Acp && self.info.runtime == "opencode" {
                     last.apply_transcript(&frame, &self.info.native_id);
                 } else {
@@ -1055,8 +1069,21 @@ impl Log {
         store: &super::ChatStore,
     ) -> Result<()> {
         if session.protocol() == Protocol::Claude {
-            for id in claude::received(&self.state.info, options, &self.state.turns).await? {
+            let history = claude::history(&self.state.info, options, &self.state.turns).await?;
+            for id in history.received {
                 self.input_sent(id)?;
+            }
+            if !history.edits.is_empty()
+                && let Some(last) = self.state.unfinished_turn()
+                && let Some(frame) = session.recover_transcript(
+                    "claude/transcript",
+                    last.id.to_string(),
+                    history.edits,
+                    options,
+                    |edits| last.transcript_adds_content(session.id(), edits) == Some(true),
+                )?
+            {
+                self.commit(ChatUpdate::Reconciled { id: last.id, frame })?;
             }
         }
         if let Some(last) = self.state.unfinished_turn()

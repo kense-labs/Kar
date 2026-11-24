@@ -1650,11 +1650,12 @@ impl Session {
             "pi/transcript",
             edits,
             options,
-            |edits| local.matches_pi_history(self.id(), edits),
+            |edits| local.transcript_adds_content(self.id(), edits).is_some(),
         )
     }
-    pub(crate) fn opencode_transcript(
+    pub(crate) fn recover_transcript(
         &self,
+        kind: &str,
         user: String,
         edits: Vec<crate::chat::ChatEdit>,
         options: &SessionOptions,
@@ -1664,7 +1665,7 @@ impl Session {
             &self.journal,
             self.id(),
             user,
-            "opencode/transcript",
+            kind,
             edits,
             options,
             accept,

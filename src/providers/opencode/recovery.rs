@@ -405,7 +405,7 @@ pub(crate) async fn recover(
     edits.push(ChatEdit::Activity {
         event: Event::TurnEnded { outcome },
     });
-    session.opencode_transcript(turn.user, edits, opts, |edits| {
+    session.recover_transcript("opencode/transcript", turn.user, edits, opts, |edits| {
         consistent(local, root, edits)
     })
 }

@@ -20,70 +20,6 @@ struct Entry {
     offset: u64,
 }
 
-impl crate::chat::ChatTurn {
-    pub(crate) fn matches_pi_history(&self, root: &str, edits: &[ChatEdit]) -> bool {
-        use crate::chat::Item;
-        let mut messages = HashMap::new();
-        let mut tools = HashMap::new();
-        for edit in edits {
-            match edit {
-                ChatEdit::Text {
-                    key: Some(id),
-                    role,
-                    text,
-                    ..
-                } => {
-                    messages.insert(id.as_str(), (role, text.as_str()));
-                }
-                ChatEdit::ToolSnapshot { id, activity } => {
-                    tools.insert(id.as_str(), activity);
-                }
-                _ => {}
-            }
-        }
-        self.items
-            .iter()
-            .filter(|i| i.source.path.is_empty() && i.source.session_id.as_deref() == Some(root))
-            .all(|i| match &i.item {
-                Item::Message {
-                    role: Role::User, ..
-                } => true,
-                Item::Message {
-                    role,
-                    text,
-                    provider_id,
-                    complete,
-                } => provider_id
-                    .as_deref()
-                    .and_then(|k| messages.get(k))
-                    .is_some_and(|(r, s)| {
-                        *r == role
-                            && if *complete {
-                                s == text
-                            } else {
-                                s.starts_with(text)
-                            }
-                    }),
-                Item::Tool { id, activity } => tools.get(id.as_str()).is_some_and(|t| {
-                    activity
-                        .name
-                        .as_ref()
-                        .is_none_or(|n| t.name.as_ref() == Some(n))
-                        && (activity.input_partial
-                            || activity
-                                .input
-                                .as_ref()
-                                .is_none_or(|input| t.input.as_ref() == Some(input)))
-                        && activity
-                            .result
-                            .as_ref()
-                            .is_none_or(|result| t.result.as_ref() == Some(result))
-                }),
-                _ => true,
-            })
-    }
-}
-
 fn matches_input(message: &Value, text: &str) -> bool {
     match &message["content"] {
         Value::String(s) => s == text,
@@ -300,7 +236,7 @@ pub(crate) fn saved_anchor(
     let mut raw = serde_json::to_value(edits)?;
     crate::transport::redact(&mut raw, &crate::options::session_secrets(options));
     let edits = serde_json::from_value::<Vec<ChatEdit>>(raw)?;
-    if !local.matches_pi_history(root, &edits) {
+    if local.transcript_adds_content(root, &edits).is_none() {
         return Ok(None);
     }
     Ok(edits.into_iter().find_map(|e| match e {
@@ -587,17 +523,17 @@ mod tests {
             b"",
         )
         .unwrap();
-        assert!(local.matches_pi_history("root", &history));
+        assert!(local.transcript_adds_content("root", &history).is_some());
         let Item::Message { complete, .. } = &mut local.items.last_mut().unwrap().item else {
             unreachable!()
         };
         *complete = true;
-        assert!(!local.matches_pi_history("root", &history));
+        assert!(local.transcript_adds_content("root", &history).is_none());
         let Item::Message { text, complete, .. } = &mut local.items.last_mut().unwrap().item else {
             unreachable!()
         };
         *complete = false;
         *text = "other".into();
-        assert!(!local.matches_pi_history("root", &history));
+        assert!(local.transcript_adds_content("root", &history).is_none());
     }
 }

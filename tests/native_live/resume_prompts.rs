@@ -10,7 +10,7 @@ const BASE: [&str; 2] = ["RUST_BASE_ORIGINAL_4721", "RUST_BASE_CHANGED_6374"];
 const APPEND: [&str; 2] = ["RUST_APPEND_ORIGINAL_9376", "RUST_APPEND_CHANGED_5918"];
 type Calls = Arc<Mutex<Vec<Value>>>;
 
-fn settings(id: &str, root: &Path, endpoint: &str) -> SessionOptions {
+pub(super) fn settings(id: &str, root: &Path, endpoint: &str) -> SessionOptions {
     let work = root.join("project");
     let home = root.join("home");
     fs::create_dir(&work).unwrap();
