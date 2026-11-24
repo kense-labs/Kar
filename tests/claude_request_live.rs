@@ -276,3 +276,172 @@ async fn native_root_request_matches_the_model_and_expires_on_close() {
     assert!(raw.last_model_request().await.unwrap().is_none());
     http.abort();
 }
+
+#[tokio::test]
+#[ignore = "requires KAR_CLAUDE_BIN >=2.1.326; isolated source transcript, SessionStart hook and loopback model"]
+async fn side_questions_leave_running_and_stopped_native_transcripts_intact() {
+    use axum::response::Response;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+    type SideState = (Requests, PathBuf, Arc<Notify>, Arc<Notify>, Arc<AtomicBool>);
+    async fn delay_source(
+        State((calls, target, held, release, active)): State<SideState>,
+        Json(body): Json<Value>,
+    ) -> Response {
+        let last = body["messages"]
+            .as_array()
+            .and_then(|messages| messages.last())
+            .map(|m| m["content"].to_string())
+            .unwrap_or_default();
+        if last.contains("hold this source turn")
+            && !last.contains("question for")
+            && active.swap(false, Ordering::SeqCst)
+        {
+            held.notify_one();
+            release.notified().await;
+        }
+        model(State((calls, target)), Json(body))
+            .await
+            .into_response()
+    }
+    fn transcripts(dir: &std::path::Path) -> std::collections::BTreeSet<PathBuf> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|s| s == "jsonl"))
+            .collect()
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let work = root.join("work");
+    std::fs::create_dir(&work).unwrap();
+    let home = root.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let marker = root.join("observed-hooks");
+    std::fs::write(home.join("settings.json"),json!({"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"printf x >> \"$KAR_TEST_SIDE_HOOK\""}]}]}}).to_string()).unwrap();
+    let calls = Requests::default();
+    let held = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let app = Router::new()
+        .route("/v1/messages", post(delay_source))
+        .with_state((
+            calls.clone(),
+            root.join("write"),
+            held.clone(),
+            release.clone(),
+            Arc::new(AtomicBool::new(true)),
+        ));
+    let http = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut opts = SessionOptions::new(&work);
+    for (key, value) in [
+        ("HOME", home.as_os_str()),
+        ("CLAUDE_CONFIG_DIR", home.as_os_str()),
+        ("KAR_TEST_SIDE_HOOK", marker.as_os_str()),
+        ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1".as_ref()),
+        ("ANTHROPIC_API_KEY", "loopback-only".as_ref()),
+        ("ANTHROPIC_AUTH_TOKEN", "".as_ref()),
+        ("ANTHROPIC_BASE_URL", url.as_ref()),
+    ] {
+        opts.env.insert(key.into(), value.into());
+    }
+    opts.model = Some("sonnet".into());
+    let mut rt = kar::runtime("claude").unwrap();
+    rt.program = std::env::var_os("KAR_CLAUDE_BIN").unwrap().into();
+    let installation = rt
+        .probe_installation(&kar::InstallationOptions {
+            cwd: Some(work.clone()),
+            env: opts
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                .collect(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        rt.session_capabilities(&installation)
+            .unwrap()
+            .side_question,
+        Some(true)
+    );
+    let source = rt.open(opts.clone()).await.unwrap();
+    assert_eq!(
+        source
+            .prompt("saved source history")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        Outcome::Completed
+    );
+    let file = source.native_session_file().await.unwrap().unwrap();
+    let mut side = kar::SideQuestionOptions::new(&work);
+    side.env = opts.env;
+    side.model = opts.model;
+    side.timeout = Duration::from_secs(30);
+    let ask = |question: &'static str, running: bool| {
+        let (rt, side, source, file, marker, calls) = (&rt, &side, &source, &file, &marker, &calls);
+        async move {
+            let source_before = std::fs::read(file).unwrap();
+            let files = transcripts(file.parent().unwrap());
+            let hooks = std::fs::read(marker).unwrap();
+            assert!(!hooks.is_empty());
+            assert_eq!(
+                rt.side_question(source.id(), question, side).await.unwrap(),
+                "fixture answer"
+            );
+            let capture = calls.lock().unwrap();
+            let matches: Vec<_> = capture
+                .iter()
+                .filter(|body| body["messages"].to_string().contains(question))
+                .collect();
+            assert_eq!(matches.len(), 1);
+            assert!(matches[0]["tools"].as_array().is_some_and(Vec::is_empty));
+            assert!(
+                matches[0]["messages"]
+                    .to_string()
+                    .contains("saved source history")
+            );
+            assert_eq!(std::fs::read(marker).unwrap(), hooks);
+            assert_eq!(transcripts(file.parent().unwrap()), files);
+            let after = std::fs::read(file).unwrap();
+            assert!(!String::from_utf8_lossy(&after).contains(question));
+            if running {
+                assert!(after.starts_with(&source_before));
+            } else {
+                assert_eq!(after, source_before);
+            }
+        }
+    };
+    let turn = source.prompt("hold this source turn").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), held.notified())
+        .await
+        .unwrap();
+    assert!(source.status().is_running());
+    ask("question for running source", true).await;
+    release.notify_one();
+    assert_eq!(turn.wait().await.unwrap(), Outcome::Completed);
+    source.close().await.unwrap();
+    ask("question for stopped source", false).await;
+    assert!(
+        rt.side_question(
+            &Uuid::new_v4().to_string(),
+            "question for missing source",
+            &side
+        )
+        .await
+        .is_err()
+    );
+    assert!(!calls.lock().unwrap().iter().any(|body| {
+        body["messages"]
+            .to_string()
+            .contains("question for missing source")
+    }));
+    http.abort();
+}

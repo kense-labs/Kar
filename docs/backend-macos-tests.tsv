@@ -6,6 +6,7 @@ claude	abort_fallback_live	claude_unanswered_interrupt	KAR_CLAUDE_BIN	requires n
 claude	account_live	claude_key_status	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
 claude	claude_limit_reset_live	real_dialog_and_changed_remote_labels	KAR_CLAUDE_BIN	requires a native Claude Code with /limit-reset, all services use synthetic data locally
 claude	claude_request_live	native_root_request_matches_the_model_and_expires_on_close	KAR_CLAUDE_BIN	requires Claude Code >=2.1.274; runs real request capture with a loopback model
+claude	claude_request_live	side_questions_leave_running_and_stopped_native_transcripts_intact	KAR_CLAUDE_BIN	requires Claude Code >=2.1.326; isolated transcript, SessionStart hook and loopback model
 claude	native_live	actual_claude_durable_chat_across_processes	KAR_CLAUDE_BIN	Claude Code 2.1.326+ for the side-question part, isolated home and loopback model
 claude	native_live	actual_claude_input_receipts_and_reconnect	KAR_CLAUDE_BIN	requires installed Claude Code; tests native UUID refusal, cancellation and HTTP replay against a loopback model
 claude	native_live	actual_claude_steering_and_reconnect	KAR_CLAUDE_BIN	requires Claude Code; checks both tool-loop and separate native turns with a loopback model
