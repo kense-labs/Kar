@@ -1980,12 +1980,12 @@ vendor-test	sea-trial/vendor/pi-extension-lifecycle.vendor.test.ts#L45	new and r
 vendor-test	sea-trial/vendor/pi-extension-shutdown.vendor.test.ts#L42	a never-settling user hook warns and releases the native session after ten seconds	52,53,54,55,59,61,62	待逐项核销
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L10	handled input resolves without a model turn, including an already aborted caller signal	14,15,15,16,17,18,20,21,23	见 backend-evidence.tsv 同址记录
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L27	a handled adapter-held input has one bubble and releases the following queue entry	31,34,37,38,39,39,41,42,43,45	待逐项核销
-vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L49	an extension run competing with queued preflight is kept; a native refusal is recorded without retry	56,57,58,59,61,62,64,65,67,69	待逐项核销
-vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L73	a handled command's independent extension run has no command input identity	77,78,79,80,81,82,85,86,87,88	待逐项核销
-vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L92	handling after an independent extension run ended keeps its outcome separate	101,102,103,105,106,106,107,109,110	待逐项核销
+vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L49	an extension run competing with queued preflight is kept; a native refusal is recorded without retry	56,57,58,59,61,62,64,65,67,69	见 backend-evidence.tsv 同址记录
+vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L73	a handled command's independent extension run has no command input identity	77,78,79,80,81,82,85,86,87,88	见 backend-evidence.tsv 同址记录
+vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L92	handling after an independent extension run ended keeps its outcome separate	101,102,103,105,106,106,107,109,110	见 backend-evidence.tsv 同址记录
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L114	handled steer preserves the active run and its identity	118,121,122,123,124,124	待逐项核销
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L128	handled command errors remain separate native facts, never a successful turn	132,133,133,134,135	待逐项核销
-vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L138	abort accepted during a command preflight cancels the run started by that command	147,148,149,150,151,152,153	待逐项核销
+vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L138	abort accepted during a command preflight cancels the run started by that command	147,148,149,150,151,152,153	见 backend-evidence.tsv 同址记录
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L157	settlement-triggered compaction refuses held inputs with their own receipts and reaches idle	166,172,174,175,177,178,179	待逐项核销
 vendor-test	sea-trial/vendor/pi-native-abort.vendor.test.ts#L13	a Pi extension's native abort is reported without an OAR abort request	20,32,33,34,36,37	待逐项核销
 vendor-test	sea-trial/vendor/pi-preflight.vendor.test.ts#L7	native Pi missing-key refusal drains queued work and leaves the next prompt usable	12,13,14,15,16,18,19	见 backend-evidence.tsv 同址记录
