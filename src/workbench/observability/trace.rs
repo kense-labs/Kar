@@ -61,6 +61,25 @@ impl Trace {
         open.open(path)?.write_all(&line)?;
         Ok(())
     }
+    pub(in crate::workbench) fn rotated(&self, before:std::time::SystemTime, apply:bool)->Result<(u64,u64)> {
+        let _guard=self.write.lock().unwrap();
+        let mut files=0;
+        let mut bytes=0u64;
+        for backup in 1..=BACKUPS {
+            let path=self.path(backup);
+            match std::fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_file() && meta.modified()? < before => {
+                    files+=1;
+                    bytes=bytes.saturating_add(meta.len());
+                    if apply {std::fs::remove_file(path)?;}
+                }
+                Ok(_) => (),
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>(),
+                Err(e)=>return Err(e.into()),
+            }
+        }
+        Ok((files,bytes))
+    }
     fn files(&self) -> Vec<(PathBuf, std::io::Result<File>)> {
         let _g = self.write.lock().unwrap();
         (0..=BACKUPS)

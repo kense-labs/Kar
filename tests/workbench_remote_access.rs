@@ -3,6 +3,8 @@
 mod codex_chat_peer;
 #[path = "support/workbench_guest_recovery.rs"]
 mod guest_cases;
+#[path = "support/workbench_host_storage.rs"]
+mod host_storage;
 #[path = "support/workbench_server.rs"]
 mod server;
 use reqwest::{Client, StatusCode};
@@ -327,7 +329,9 @@ fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("app-server") => codex_chat_peer::agent(),
         Some("--version") => println!("codex 0.169.0"),
+        Some("host-storage") => tokio::runtime::Runtime::new().unwrap().block_on(host_storage::exercise()),
         _ => tokio::runtime::Runtime::new().unwrap().block_on(async {
+            host_storage::exercise().await;
             tokio::time::timeout(Duration::from_secs(90), scenario())
                 .await
                 .unwrap();

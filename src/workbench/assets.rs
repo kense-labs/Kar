@@ -101,17 +101,31 @@ pub(super) fn prepare(app: &Workbench, p: Uuid, spec: Spec, owner: Option<Uuid>)
     let at = now();
     app.update(|db|{
             if !db.projects.contains_key(&p){return Err(missing());}
-            db.assets.reads.retain(|_,r|r.expires_ms>at);
-            // A published chat reference owns its own bytes and can be reused without this ticket.
-            let expired:Vec<_>=db.assets.uploads.iter().filter(|(_,u)|at>=u.created_ms.saturating_add(PENDING_MS)).map(|(id,_)|*id).collect();
-            for old in expired{
-                match fs::remove_file(path(&app,old)){Err(e) if e.kind()!=std::io::ErrorKind::NotFound=>return Err(e.into()),_=>{}}
-                db.assets.uploads.remove(&old);
-            }
+            expired(app,db,at,true)?;
             db.assets.uploads.insert(id,Upload{prepared_by:owner,project:p,spec,secret_hash:digest(&secret),created_ms:at,chat:None});
             Ok(json!({"id":id,"upload_path":format!("/assets/upload/{id}/{secret}"),"expires_ms":at+TICKET_MS}))
         })
 }
+pub(in crate::workbench) fn expired(app: &Workbench, db:&mut super::Catalog, at:u64, apply:bool)->Result<(u64,u64)> {
+    let ids:Vec<_>=db.assets.uploads.iter().filter(|(_,u)|at>=u.created_ms.saturating_add(PENDING_MS)).map(|(id,_)|*id).collect();
+    let mut bytes=0u64;
+    for id in &ids {
+        let path=path(app,*id);
+        match fs::symlink_metadata(&path) {
+            Ok(meta) => {
+                if !meta.is_file(){return Err(Error::Refused("invalid pending upload file".into()));}
+                bytes=bytes.saturating_add(meta.len());
+                if apply { fs::remove_file(&path)?; }
+            }
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>(),
+            Err(e)=>return Err(e.into()),
+        }
+        if apply {db.assets.uploads.remove(id);}
+    }
+    if apply {db.assets.reads.retain(|_,r|r.expires_ms>at);}
+    Ok((ids.len() as u64,bytes))
+}
+
 async fn upload(
     State(app): State<Workbench>,
     Path((id, token)): Path<(Uuid, String)>,

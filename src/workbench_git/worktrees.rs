@@ -572,6 +572,22 @@ impl Repository {
     }
 
     /// Remove only the registered checkout. Branches and their commits are retained.
+    pub(crate) fn managed_candidates(&self) -> Result<Vec<(ManagedWorktree,std::time::SystemTime)>> {
+        if !self.common.join("kar-worktrees").try_exists()? {return Ok(Vec::new());}
+        let records=Registry::open(self)?;
+        let mut candidates=Vec::new();
+        for item in fs::read_dir(&records.dir)? {
+            let entry=item?;
+            let path=entry.path();
+            if !entry.file_type()?.is_file() || path.extension().and_then(|x|x.to_str())!=Some("json"){continue;}
+            let Some(id)=path.file_stem().and_then(|x|x.to_str()).and_then(|s|s.parse().ok()) else {continue;};
+            if let Some(record)=records.load(id)? && record.phase==Phase::Ready {
+                candidates.push((record.tree,entry.metadata()?.modified()?));
+            }
+        }
+        Ok(candidates)
+    }
+
     pub fn remove_worktree(&self, id: Uuid) -> Result<()> {
         self.remove_worktree_if(id, |_| Ok(()))
     }

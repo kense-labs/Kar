@@ -109,7 +109,7 @@ struct State {
 }
 pub(super) struct Service {
     usage: Arc<usage::Service>,
-    traces: Arc<trace::Trace>,
+    pub(in crate::workbench) traces: Arc<trace::Trace>,
     triage: Arc<triage::Triage>,
     state: Arc<Mutex<State>>,
     updates: watch::Sender<Option<Arc<Frame>>>,
