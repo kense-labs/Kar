@@ -420,3 +420,73 @@ async fn chrome_loads_project_preview() -> Result<()> {
     api(c.delete(&fixture.term)).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn clear_wakes_two_observers_and_survives_restart_without_replacing_the_pty() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("root");
+    let project = root.join("project");
+    fs::create_dir_all(&project)?;
+    let state = tmp.path().join("state");
+    let server = Server::start(&state, &root).await?;
+    let (a, b) = (Client::new(), Client::new());
+    let scope = server.register(&a, &project).await?;
+    let one = terminal(&a, &scope).await?;
+    let other = terminal(&a, &scope).await?;
+    let process = api(a.get(&one)).await?["process"].clone();
+    write(
+        &a,
+        &one,
+        Uuid::new_v4(),
+        "stty -echo; printf 'erase%s\\n' old\n",
+    )
+    .await?;
+    output(&a, &one, 0, "eraseold").await?;
+    write(&a, &other, Uuid::new_v4(), "printf 'keep%s\\n' other\n").await?;
+    output(&a, &other, 0, "keepother").await?;
+    let after = api(b.get(format!("{one}/output"))).await?["end"]
+        .as_u64()
+        .unwrap();
+    let watch = |client: Client, one: String| async move {
+        let mut cursor = after;
+        loop {
+            let page = api(client.get(format!("{one}/output?after={cursor}&wait_ms=5000"))).await?;
+            if !page["events"].as_array().unwrap().is_empty() {
+                return Result::Ok(page);
+            }
+            cursor = page["next"].as_u64().unwrap();
+        }
+    };
+    let reader_a = tokio::spawn(watch(a.clone(), one.clone()));
+    let reader_b = tokio::spawn(watch(b.clone(), one.clone()));
+    let event = api(a.post(format!("{one}/clear"))).await?;
+    let mark = event["cursor"].as_u64().unwrap();
+    assert_eq!(event["type"], "cleared");
+    assert!(mark > after);
+    for reader in [reader_a, reader_b] {
+        let page = tokio::time::timeout(Duration::from_secs(7), reader).await???;
+        assert_eq!(page["events"], json!([event]));
+        assert_eq!(page["oldest"], mark);
+    }
+    write(&b, &one, Uuid::new_v4(), "printf 'after%s\\n' clear\n").await?;
+    let (_, new) = output(&a, &one, mark, "afterclear").await?;
+    assert!(!String::from_utf8_lossy(&new).contains("eraseold"));
+    assert_eq!(api(a.get(&one)).await?["process"], process);
+    let suffixes = [one, other].map(|s| s.strip_prefix(&server.base).unwrap().to_owned());
+    server.kill().await?;
+    let restarted = Server::start(&state, &root).await?;
+    for (index, path) in suffixes.iter().enumerate() {
+        let page = api(a.get(format!("{}{path}/output", restarted.base))).await?;
+        let bytes = STANDARD.decode(page["data_base64"].as_str().unwrap())?;
+        let bytes = String::from_utf8_lossy(&bytes);
+        if index == 0 {
+            assert_eq!(page["events"], json!([event]));
+            assert!(bytes.contains("afterclear") && !bytes.contains("eraseold"));
+        } else {
+            assert_eq!(page["events"], json!([]));
+            assert!(bytes.contains("keepother"));
+        }
+    }
+    restarted.kill().await?;
+    Ok(())
+}

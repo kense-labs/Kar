@@ -1,4 +1,6 @@
-use super::{InputReceipt, Meta, Page, Port, Status, Workbench, preview::Preview, process};
+use super::{
+    InputReceipt, Meta, Page, Port, Status, TerminalEvent, Workbench, preview::Preview, process,
+};
 use crate::workbench::access::DeviceLease;
 use crate::{Error, Result, workbench::http::ApiError};
 use axum::{
@@ -27,6 +29,7 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
         .route("/projects/{p}/terminals/{id}", get(info).delete(close))
         .route("/projects/{p}/terminals/{id}/output", get(output))
         .route("/projects/{p}/terminals/{id}/input", post(input))
+        .route("/projects/{p}/terminals/{id}/clear", post(clear))
         .route(
             "/projects/{p}/terminals/{id}/size",
             axum::routing::put(resize),
@@ -131,6 +134,17 @@ async fn output(
         }
     }
 }
+async fn clear(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+) -> Reply<TerminalEvent> {
+    blocking(move || {
+        app.project(p)?;
+        app.0.terminal_preview.find(p, id)?.clear()
+    })
+    .await
+}
+
 #[derive(Deserialize)]
 struct Input {
     id: Uuid,

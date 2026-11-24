@@ -63,6 +63,12 @@ struct Page {
     end: u64,
     missed: bool,
     data_base64: String,
+    events: Vec<TerminalEvent>,
+}
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TerminalEvent {
+    Cleared { cursor: u64 },
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct InputReceipt {
@@ -278,7 +284,16 @@ impl Terminal {
             end: history.end,
             missed: after < start,
             data_base64: STANDARD.encode(bytes),
+            events: history
+                .cleared_since(after)
+                .map(|cursor| TerminalEvent::Cleared { cursor })
+                .collect(),
         })
+    }
+    fn clear(&self) -> Result<TerminalEvent> {
+        let result = self.history.lock().unwrap().clear();
+        self.notify();
+        Ok(TerminalEvent::Cleared { cursor: result? })
     }
     fn input(&self, id: Uuid, bytes: &[u8]) -> Result<InputReceipt> {
         if bytes.is_empty() || bytes.len() > 65536 {

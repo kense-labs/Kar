@@ -15,11 +15,18 @@ pub(super) struct History {
     dir: PathBuf,
     chunks: VecDeque<(u64, u64)>,
     pub end: u64,
+    clears: VecDeque<u64>,
 }
 
 impl History {
     pub fn open(dir: &Path) -> Result<Self> {
         fs::create_dir_all(dir)?;
+        let clears: VecDeque<u64> = match fs::File::open(dir.join("clears.json")) {
+            Ok(f) => serde_json::from_reader(f)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => VecDeque::new(),
+            Err(e) => return Err(e.into()),
+        };
+        let cleared = clears.back().copied().unwrap_or(0);
         let mut chunks = Vec::new();
         for entry in fs::read_dir(dir)? {
             let file = entry?;
@@ -30,7 +37,11 @@ impl History {
             else {
                 continue;
             };
-            chunks.push((start, file.metadata()?.len()));
+            if start < cleared {
+                fs::remove_file(file.path())?;
+            } else {
+                chunks.push((start, file.metadata()?.len()));
+            }
         }
         chunks.sort_unstable();
         if chunks
@@ -39,12 +50,33 @@ impl History {
         {
             return Err(Error::Protocol("non-contiguous terminal history".into()));
         }
-        let end = chunks.last().map_or(0, |(start, len)| start + len);
+        let end = chunks.last().map_or(cleared, |(start, len)| start + len);
         Ok(Self {
             dir: dir.into(),
             chunks: chunks.into(),
             end,
+            clears,
         })
+    }
+    // A clear consumes one cursor position even if the PTY has not written any bytes.
+    // Commit the barrier before unlinking files, so restart cannot resurrect cleared output.
+    pub fn clear(&mut self) -> Result<u64> {
+        let cursor = self.end.checked_add(1).ok_or(Error::InvalidCursor)?;
+        let mut clears = self.clears.clone();
+        clears.push_back(cursor);
+        if clears.len() > 1024 {
+            clears.pop_front();
+        }
+        super::write_json(&self.dir.join("clears.json"), &clears)?;
+        self.clears = clears;
+        self.end = cursor;
+        for (start, _) in std::mem::take(&mut self.chunks) {
+            fs::remove_file(self.path(start))?;
+        }
+        Ok(cursor)
+    }
+    pub fn cleared_since(&self, after: u64) -> impl Iterator<Item = u64> + '_ {
+        self.clears.iter().copied().filter(move |c| *c > after)
     }
     fn path(&self, start: u64) -> PathBuf {
         self.dir.join(format!("{start:020}.bin"))
