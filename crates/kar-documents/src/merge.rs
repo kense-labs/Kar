@@ -14,7 +14,7 @@ pub struct Change<T> {
     pub proposed: T,
 }
 
-#[derive(Debug, Error, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Error, PartialEq, Serialize, Deserialize)]
 #[error("{target} ({property}): {reason}")]
 pub struct Conflict {
     pub target: String,
@@ -39,18 +39,10 @@ fn present_value<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>
 pub(crate) enum Comparison {
     Base,
     Current,
+    Adopt,
 }
 
 impl<T: PartialEq + Serialize> Change<T> {
-    pub(crate) fn compare(
-        &self,
-        current: Option<&T>,
-        target: &str,
-        property: &str,
-    ) -> anyhow::Result<Outcome> {
-        self.compare_at(current, target, property, Comparison::Current)
-    }
-
     pub(crate) fn compare_at(
         &self,
         current: Option<&T>,
@@ -69,7 +61,7 @@ impl<T: PartialEq + Serialize> Change<T> {
             if current == &self.proposed || self.base == self.proposed {
                 return Ok(Outcome::Unchanged);
             }
-            if current == &self.base {
+            if current == &self.base || matches!(comparison, Comparison::Adopt) {
                 return Ok(Outcome::Applied);
             }
         }

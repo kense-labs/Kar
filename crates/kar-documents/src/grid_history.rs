@@ -92,6 +92,7 @@ pub(crate) fn merge_excel(
     latest: &mut Workbook,
     edits: &[(Cell, CellEdit)],
     history: &[GridChange],
+    comparison: Comparison,
 ) -> Result<bool> {
     let mut base = Workbook::open(base_file)?;
     for (cell, edit) in edits {
@@ -100,7 +101,7 @@ pub(crate) fn merge_excel(
     let mut changed = false;
     if history.is_empty() {
         for (cell, edit) in edits {
-            changed |= cell.apply(latest, edit)? == Outcome::Applied;
+            changed |= cell.apply_at(latest, edit, comparison)? == Outcome::Applied;
         }
         return Ok(changed);
     }
@@ -136,7 +137,7 @@ pub(crate) fn merge_excel(
                 proposed: proposed.cell_style(sheet, r, c).fill,
             }),
         };
-        changed |= cell.apply(latest, &mapped)? == Outcome::Applied;
+        changed |= cell.apply_at(latest, &mapped, comparison)? == Outcome::Applied;
     }
     Ok(changed)
 }

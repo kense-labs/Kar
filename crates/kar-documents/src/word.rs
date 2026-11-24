@@ -1,4 +1,4 @@
-use crate::{Change, Outcome, replace_word_text};
+use crate::{Change, Outcome, merge::Comparison, replace_word_text};
 use anyhow::{Result, ensure};
 use docs_engine::Document;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,16 @@ pub struct WordEdit {
 
 impl WordEdit {
     pub fn apply(&self, base: &Document, current: &mut Document) -> Result<Outcome> {
+        self.apply_at(base, current, Comparison::Current, false)
+    }
+
+    pub(crate) fn apply_at(
+        &self,
+        base: &Document,
+        current: &mut Document,
+        comparison: Comparison,
+        paragraphs_stable: bool,
+    ) -> Result<Outcome> {
         let old = base
             .paragraphs()
             .get(self.paragraph)
@@ -37,7 +47,15 @@ impl WordEdit {
             self.range.start,
             self.range.end
         );
-        let index = map_paragraph(base, current, self.paragraph).ok_or_else(|| {
+        let index = if paragraphs_stable {
+            current
+                .paragraphs()
+                .get(self.paragraph)
+                .map(|_| self.paragraph)
+        } else {
+            map_paragraph(base, current, self.paragraph)
+        }
+        .ok_or_else(|| {
             change.conflict(
                 None,
                 &label,
@@ -57,9 +75,9 @@ impl WordEdit {
             change.conflict(Some(text), &label, "text", "overlapping text changes")
         })?;
         let value = text[mapped.clone()].to_owned();
-        let outcome = change.compare(Some(&value), &label, "text")?;
+        let outcome = change.compare_at(Some(&value), &label, "text", comparison)?;
         if outcome == Outcome::Applied {
-            replace_word_text(current, index, mapped, selected, &self.replacement)?;
+            replace_word_text(current, index, mapped, &value, &self.replacement)?;
         }
         Ok(outcome)
     }

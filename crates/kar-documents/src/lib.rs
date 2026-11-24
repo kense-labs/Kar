@@ -6,6 +6,7 @@ pub use grid_history::{GridAction, GridChange};
 pub mod excel;
 mod merge;
 pub mod slides;
+pub mod store;
 pub mod word;
 pub use merge::{Change, Conflict, Outcome};
 

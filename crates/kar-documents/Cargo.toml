@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+sha2 = "0.11"
 anyhow = "1"
 docs_engine = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
 

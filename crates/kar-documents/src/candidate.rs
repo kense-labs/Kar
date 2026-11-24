@@ -46,6 +46,17 @@ pub fn prepare_with_grid_history(
     edits: &OfficeEdits,
     history: &[crate::GridChange],
 ) -> Result<Option<Vec<u8>>> {
+    prepare_staged(base, current, edits, history, Comparison::Current, false)
+}
+
+pub(crate) fn prepare_staged(
+    base: &[u8],
+    current: &[u8],
+    edits: &OfficeEdits,
+    history: &[crate::GridChange],
+    comparison: Comparison,
+    paragraphs_stable: bool,
+) -> Result<Option<Vec<u8>>> {
     ensure!(
         matches!(edits, OfficeEdits::Excel(_)) || history.is_empty(),
         "grid history supplied for a non-spreadsheet edit"
@@ -66,7 +77,8 @@ pub fn prepare_with_grid_history(
             let base = Document::open(&before)?;
             let mut model = Document::open(&candidate)?;
             for op in ops {
-                changed |= op.apply(&base, &mut model)? == Outcome::Applied;
+                changed |= op.apply_at(&base, &mut model, comparison, paragraphs_stable)?
+                    == Outcome::Applied;
             }
             if changed {
                 model.save()?;
@@ -74,7 +86,8 @@ pub fn prepare_with_grid_history(
         }
         OfficeEdits::Excel(ops) => {
             let mut model = Workbook::open(&candidate)?;
-            changed = crate::grid_history::merge_excel(&before, &mut model, ops, history)?;
+            changed =
+                crate::grid_history::merge_excel(&before, &mut model, ops, history, comparison)?;
             if changed {
                 ensure!(
                     !model.has_macros(),
@@ -93,7 +106,7 @@ pub fn prepare_with_grid_history(
             let mut model = Presentation::open(&candidate)?;
             for (target, op) in ops {
                 target.apply_at(&mut base, op, Comparison::Base)?;
-                changed |= target.apply(&mut model, op)? == Outcome::Applied;
+                changed |= target.apply_at(&mut model, op, comparison)? == Outcome::Applied;
             }
             if changed {
                 model.save()?;

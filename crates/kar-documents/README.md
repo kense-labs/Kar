@@ -23,3 +23,17 @@ cargo test --locked --manifest-path crates/kar-documents/Cargo.toml
 For a stale spreadsheet proposal, `prepare_with_grid_history` takes committed row/column inserts and deletes from the service between the two revisions. It replays those changes in the base and proposed models to translate addresses and Excel formulas. An empty journal asserts the service saw no structural changes. With an unknown external save, `prepare` reports an unresolved target. Tests check B3/D3 move to B4/D4, the new formula is =B4*3 with a cached result of 36, and a deleted logical cell conflicts even when its neighbor holds the same original value.
 
 These tests exercise the document library. The shared service still needs to associate it with revisions, operation IDs, persistent receipts, disk publication and subscriber cursors.
+
+## Document transactions
+
+`DocumentStore::open(state_dir, working_file)` registers a single Office file. A store holds an exclusive writer lock. Its manifest records immutable SHA-256 snapshots, author and operation ID, the command, a receipt and an ordered cursor. Retrying an acknowledged or unacknowledged command returns its original receipt. Reusing its ID for another payload is rejected.
+
+Each accepted edit persists a publication intent and snapshot, atomically replaces the working file, then finalizes the revision and receipt. Reopening resumes an incomplete publication. An observed external save becomes a revision. When a pending intent encounters different external bytes it retains both versions and records a conflict. An external writer racing the last comparison and rename still requires workspace-wide write coordination.
+
+`Action::Resolve` accepts the conflict cursor, decision and latest reviewed revision. Keep-current, adopt-proposed and manual Office edits preserve unrelated properties. A stale resolution returns the current revision for review. `state`, `events(after)` and `snapshot(revision)` return persisted results.
+
+The macOS transaction tests exercised all three decisions, stale resolution, retry after reopening, operation-ID collisions, an intervening external editor save and three reconstructed durable publication windows. The reconstructed windows cover a stop before file replacement, a stop after replacement, and an external edit against pending intent.
+
+```sh
+cargo test --locked --manifest-path crates/kar-documents/Cargo.toml --test transactions
+```
