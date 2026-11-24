@@ -406,10 +406,11 @@ id = "thread-metadata"
 phase = 2
 name = "聊天生命周期、收藏排序、已读、标签、标题及暂缓"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
-kar = ["src/workbench/thread_state/mod.rs","src/workbench/thread_state/queries.rs"]
-status = "持久标签、标题、排序、暂缓、已读及变更续收已接入。删除、侧聊天、自动唤醒及完整 shell 事件仍待补齐"
+kar = ["src/workbench/thread_state/mod.rs", "src/workbench/shell/scan.rs", "src/workbench/thread_family.rs"]
+implementation_commit = "ca1731c"
+status = "已有标签、标题、排序、暂缓及唤醒条件。父聊天归档、恢复、删除级联至侧聊，普通分叉保留；onlyIfUnused 检查自有回合、未决消息和活动控制器。待统一验收。"
 implementation_ref = "a3970f2"
-test_target = "cargo test --locked --test chat_restart -- workbench-fork"
+test_target = "cargo test --locked --test chat_restart -- workbench-thread-family"
 accept = "两端创建聊天、修改标题与标签、固定及重排、访问及标为未读、暂缓、恢复和归档。按命令 ID 重试并重启，比对有序列表、可见性、侧聊天、删除及旧客户端恢复投影。"
 
 [[gap]]
@@ -426,11 +427,11 @@ accept = "改变模型、运行模式及交互模式，区分下一回合应用�
 id = "dispatch-preparation"
 phase = 2
 name = "派发模式、延迟回合、准备进度、失败重试及结构化输出"
-upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
-kar = ["src/workbench/chat_controls.rs"]
-status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
-test_target = "cargo test --locked --test chat_restart -- workbench-queue"
-accept = "遍历普通、排队、续写、重启活动回合和延迟启动。模拟准备失败，先后报告进度及重试，重复释放只发一次；按声明的输出 schema 检查返回及错误，重新连接核对投影与通知接受状态。"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/ThreadLaunchService.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/workbench/chat_controls.rs", "src/workbench/mcp/orchestrator/threads.rs", "src/chat/queue.rs"]
+status = "排队、工作树启动和结构化输出有实现。尚缺启动任务按同一 run ID 报告 worktree/setup 进度、记录失败、恢复后重试及幂等放行的完整操作。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "在工作树准备时让初始化脚本失败，两个客户端读取同一 run 的失败与阶段；修复脚本并重启，重试同一 run，两端重复放行后核对原生首次输入只发一次并保留附件、schema。"
 
 [[gap]]
 id = "request-lifecycle"
@@ -511,9 +512,10 @@ id = "mcp-app-session"
 phase = 2
 name = "应用工具调用、工具信息、资源读取和上下文更新"
 upstream = ["apps/server/src/mcpApps/McpAppRequests.ts"]
-kar = ["src/mcp.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test protocol"
+kar = ["src/workbench/mcp_apps.rs", "src/workbench/mcp_apps"]
+implementation_commit = "96ee4e7"
+status = "源卡片与原生聊天绑定，工具 schema、调用、资源和模型上下文有操作入口。当前按原生驱动能力拒绝不可用操作，重启与分叉需复验。"
+test_target = "cargo test --locked --test workbench_mcp"
 accept = "固定会话和工具调用身份，分别读工具 schema、调用、读取资源和更新模型上下文；重试、过期授权和不同聊天请求核对返回和供应商交互。"
 
 [[gap]]
@@ -543,9 +545,9 @@ id = "server-settings"
 phase = 2
 name = "工作台配置、更新任务、快捷键和服务生命周期"
 upstream = ["apps/server/src/serverSettings.ts", "apps/server/src/keybindings.ts", "apps/server/src/ws.ts"]
-kar = ["src/workbench/mod.rs"]
-implementation_commit = "01a1d6e"
-status = "配置、两客户端修订订阅、快捷键优先级、外部文件变更和损坏修复已接入。桌面更新准备、提交及重启对账通过 Kar 控制通道交给宿主；真实安装需要独立桌面发行环境。"
+kar = ["src/workbench/configuration", "src/workbench/managed_providers"]
+implementation_commit = "917bdf4"
+status = "已接入配置、两客户端修订、快捷键及修复、供应商安装，以及通过同用户本地套接字准备、提交和恢复桌面更新任务。实际签名包和 Kar 桌面宿主仍待验证。"
 test_target = "cargo test --locked --test workbench_configuration"
 accept = "重启后读取设置、实例更新与快捷键；验证版本探测、进度、准备/提交桌面更新、配置与生命周期订阅的初始状态及变更。使用 Kar 更新来源。"
 
@@ -620,11 +622,11 @@ accept = "读取及观察工作流和定时任务列表、计数、脚本定义�
 id = "terminal-views"
 phase = 2
 name = "多客户端终端显示、观察及元数据流"
-upstream = ["apps/server/src/ws.ts"]
-kar = ["src/workbench/terminal_preview/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+upstream = ["apps/server/src/terminal/Manager.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/terminal_preview/routes.rs", "src/workbench/terminal_preview/mod.rs"]
+status = "可按输出游标重连并长轮询，支持清屏、输入与尺寸调整。Kar 的 resize 直接设置 PTY；尚缺随已连接观看者取最小行列、单客户端应答终端查询、以及单独订阅终端目录元数据。"
 test_target = "cargo test --locked --test workbench_terminal_preview"
-accept = "对同一终端分别 attach 和 observe，验证写入及尺寸的所属者、快照重放、清屏、关闭和仅元数据订阅。"
+accept = "连接 120×40 和 80×24 两端，共享 PTY 取 80×24；小端离开恢复 120×40。向终端发送设备查询，两端回应时仅接受选定端的应答，另一个只看元数据的客户端见创建及关闭。"
 
 [[gap]]
 id = "native-devices"
@@ -878,8 +880,8 @@ name = "工作台 MCP 拉取请求、指南、监听和 CI"
 upstream = ["apps/server/src/mcp/toolkits/pullRequests/tools.ts", "apps/server/src/mcp/toolkits/pullRequests/handlers.ts"]
 kar = ["src/workbench/forge"]
 operation_mapping = "backend-workbench-mcp-map.tsv"
-implementation_commit = "242fd6a"
-status = "已接入当前工作树发布及关联、持久监视和 CI 唤醒、不可变头提交的审阅指引、原生远端修改及 CI 动作。按具体托管服务、权限和版本验收。"
+implementation_commit = "a139238"
+status = "当前工作树发布及关联、持久监视和 CI 唤醒、不可变 head 的审阅指引、按页读取列表和讨论、指定 revision 的补丁，以及原生远端修改与 CI 操作均有入口。按托管服务实测权限及回执。"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "逐项检查单个及批量关联、向导读写、订阅、审批、合并和 CI 操作归属及真实托管端回执。"
 
@@ -990,8 +992,8 @@ name = "工具传输、会话认证及作用域"
 upstream = ["apps/server/src/mcp/McpHttpServer.ts"]
 kar = ["src/workbench/mcp"]
 operation_mapping = "backend-workbench-http-map.tsv"
-implementation_commit = "4606209"
-status = "有状态及无状态发现、调用、关闭，外部 OAuth、动态 ACP 原生协商及注册拒绝回执均有入口。外部里程碑事件是独立操作。"
+implementation_commit = "0676d3f"
+status = "已接入外部 OAuth、有状态与无状态工具、动态 ACP 注册及外部 12 种里程碑的列表、轮询和实时流。最近 1000 条保留稳定 ID 与游标，原生模型授权无法订阅。"
 implementation_ref = "03ffd3d"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "以两个独立客户端初始化、列出、调用及关闭工具会话，验证会话撤销、来源限制、访问边界和延迟加载。"
@@ -1164,7 +1166,7 @@ name = "原生安装计划说明与实际执行结果"
 upstream = ["packages/oar/src/contracts/install.ts","packages/oar/src/contracts/update.ts"]
 kar = ["src/setup.rs","src/setup/plan.rs","src/setup/update.rs"]
 implementation_commit = "1a01ff5"
-status = "可读和可编程的计划包含来源、命令步骤、网络及执行身份；拒绝原因、已安装/新安装分类和原样输出必须按实际返回单独核实。"
+status = "计划给出来源、命令、网络及执行身份。install/update 当前返回 Installation 或 Error；已安装和刚安装未分别分类、部分拒绝原因不可机器区分，实际安装器的合并输出与退出码未完整返回。"
 test_target = "cargo test --locked --test setup_cli"
 accept = "对选择和缺少发布线、缺少依赖、权限不足及已安装和新安装分别运行。计划不得下载；真实执行在可丢弃的受管目录核对返回分类、来源、版本和诊断。"
 

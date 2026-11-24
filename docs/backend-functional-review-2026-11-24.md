@@ -1,6 +1,6 @@
 # Kar 后端功能复核 · 2026-11-24
 
-复核对象为 GitHub `main` 的 `d02239d9234a`、上游运行时 `v0.130.1`（`2b15859a13dc`）及 T3 Code `2808e878de91`。以下结论来自固定提交的实际处理逻辑。列出的操作供独立验收复现，当前候选的统一实测仍待执行。
+首次复核的 Kar 基线为 GitHub `main` 的 `d02239d9234a`、上游运行时 `v0.130.1`（`2b15859a13dc`）及 T3 Code `2808e878de91`。以下结论来自固定提交的实际处理逻辑。列出的操作供独立验收复现，当前候选的统一实测仍待执行。
 
 ## 11 月 25 日复核与验收交接
 
@@ -22,9 +22,17 @@
 **仍有可观察的差异。**
 
 - 固定工作台对 Cursor 的后台 shell 有专门的等待与停止回调。Kar 的 Cursor ACP 未取得等价原生句柄，该项目前是传输实现缺口。 [固定 SDK 补丁](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/patches/%40cursor__sdk%401.4.2.patch)
-- 普通原生登录、退出与额度已有入口。共享同一凭据的运行中聊天如何在账号变更前协调停机、账号档案导入与重新连接，以及第三方 MCP 服务单独登录，需要逐操作对照。 [Kar 账号入口及边界](backend-account-workbench.md)
-- 服务器端能管理供应商 CLI 的安装和自己的设置。桌面更新的准备、提交和状态已接通 Kar 本机控制通道。真实安装及重启需要 Kar 桌面更新宿主和签名发行包。 [上游桌面更新服务](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/desktopUpdate/DesktopAppUpdate.ts)
-- 确认应单列的动作还包括父聊天删除和侧聊天联动、绑定到原生工具条目的 MCP App 交互，以及外部 MCP 客户端按游标订阅里程碑。普通聊天分叉、原生登录、全量聊天 SSE 和工具清单通知各自已有独立用途。这三项在逐项清单内跟踪。
+- 工作树初始化脚本失败后，T3 可以显示 worktree/setup 阶段、保留同一个 run、重试并放行。Kar 已有工作树启动、FIFO 与结构化输出，但还缺少这组可恢复的操作。 [上游启动和重试处理](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/orchestration-v2/ThreadLaunchService.ts#L1644)
+- 两个不同尺寸的客户端同时看一个终端时，上游取已连接观看者的最小行列，并由单一观看者应答终端查询。Kar 的输出游标可重连，但调整尺寸直接作用于 PTY；独立订阅终端目录元数据也缺少入口。 [上游观看者约定](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/terminal/Manager.ts#L187)
+- Codex/ChatGPT 的账号档案导入、重新连接和交接订阅仍缺少等价入口。上游核验身份签名、受众与授权范围。Kar 已支持供应商原生登录、退出、读额度，并在内置账号变更前按凭据目录协调本工作台的聊天（`89e872e`）。Codex 和 Claude 的额度重置已有 Kar CLI / Rust SDK 入口，工作台 HTTP 当前只可查询额度。 [上游账号交接](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/provider/CodexChatGptAuth.ts) · [Kar 账号入口](backend-account-workbench.md)
+
+**本轮已接入的其他操作**
+
+ 侧聊天随父聊天归档、恢复及删除，保留独立分叉和既有手动归档（`ca1731c`）。MCP App 的工具与资源请求绑定到原生卡片，按回合保存模型上下文（`96ee4e7`）。外部 MCP 客户端可发现、轮询和续收 12 类里程碑，最近 1,000 条跨重启保存（`0676d3f`）。桌面更新任务支持准备、提交及重启后与宿主对账（`917bdf4`）；签名发布包在真实桌面宿主安装仍需实测。 [侧聊天生命周期](backend-workbench-thread-family.md) · [MCP App 卡片](backend-mcp-app-session.md) · [桌面宿主协议](backend-workbench-configuration.md)
+
+**待逐项确认的边界**
+
+远端委派已接入创建、停止、结果回传和重启对账；上游单独暴露的完成通知确认、丢弃和父聊天唤醒策略，还需逐操作核对。请求的送达失败、富文本查找结果的展示位置也保留独立条目。逐项表中的“待核对”表示证据尚不完整。
 
 **运行时的独立差异。** 对共享 Morph Console 和远端 Cybion 聊天，原实现会在释放本地控制权时同时发出退出事件。固定上游只在实际停止进程后报告退出。Kar 在 `ee61e23` 保留原关闭回执，并区分控制器释放和原生退出；接手方可用 `cargo test --locked --test cybion` 和 [Morph 实机用例](../tests/morph_live.rs) 对照。安装计划从 `1a01ff5` 起给出来源、程序、参数、网络及执行身份。运行时 SDK 的历史成员映射仍有标为「部分契约」的行，包含同一操作的多种导出、Rust 类型差异和已在后续提交修正的旧结论；例如某些安装被拒绝时的结构化原因、实际安装/更新结果的标准输出和错误输出，还存在对外可见的差别。 [运行时契约映射](backend-sdk-map.tsv)
 
