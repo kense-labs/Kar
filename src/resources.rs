@@ -81,6 +81,39 @@ impl Root {
     pub(crate) fn shared(&self) -> bool {
         self.scope.is_some()
     }
+    pub(crate) fn shares_process_with(&self, other: &Self) -> bool {
+        self.shared() && other.shared() && self.pid == other.pid && self.born == other.born
+    }
+    /// A controller with a stalled pipe may be unable to process its close message. Only
+    /// signal a group created for this session, whose original leader is still present.
+    pub(crate) fn stop_dedicated_group(&self) -> crate::Result<bool> {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            use nix::{
+                errno::Errno,
+                sys::signal::{Signal, killpg},
+                unistd::{Pid, getpgid},
+            };
+            if self.shared()
+                || self.ownership.is_some()
+                || self.pid <= 1
+                || self.pid > i32::MAX as u32
+            {
+                return Ok(false);
+            }
+            let pid = Pid::from_raw(self.pid as i32);
+            if getpgid(Some(pid)).ok() != Some(pid) || os::birth(self.pid) != Some(self.born) {
+                return Ok(false);
+            }
+            match killpg(pid, Signal::SIGKILL) {
+                Ok(()) => Ok(true),
+                Err(Errno::ESRCH) => Ok(false),
+                Err(e) => Err(std::io::Error::from(e).into()),
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        Ok(false)
+    }
     pub(crate) async fn read(&self) -> Option<SessionResources> {
         if let Some(proof) = &self.ownership
             && !tokio::time::timeout(std::time::Duration::from_secs(1), proof.clone())

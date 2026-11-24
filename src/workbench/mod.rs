@@ -6,6 +6,7 @@ mod chat_controls;
 mod devices;
 mod documents;
 mod files;
+mod force_stop;
 mod forge;
 mod git;
 mod git_actions;

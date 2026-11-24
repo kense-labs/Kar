@@ -145,6 +145,7 @@ impl Workbench {
         id: Uuid,
         owner: &mut MutexGuard<'_, Option<ChatSession>>,
     ) -> Result<()> {
+        let _dispatch = self.0.chats.stop_fence(id, false)?;
         if owner.as_ref().is_some_and(ChatSession::is_closed)
             && let Some(old) = owner.take()
         {

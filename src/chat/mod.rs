@@ -307,6 +307,35 @@ impl ChatStore {
         }
         Ok(open.open(self.dir.join(format!("{id}.lock")))?)
     }
+    // The stop fence covers admission and controller acquisition, never the whole running turn.
+    // Closing a busy controller therefore cannot wait on a lock held by that turn.
+    pub(crate) fn stop_fence(&self, id: Uuid, stopping: bool) -> Result<File> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(self.dir.join(format!("{id}.stop.lock")))?;
+        if stopping {
+            file.try_lock()
+        } else {
+            file.try_lock_shared()
+        }.map_err(|e| match e {
+            std::fs::TryLockError::WouldBlock => Error::Busy,
+            std::fs::TryLockError::Error(e) => e.into(),
+        })?;
+        Ok(file)
+    }
+    pub(crate) fn confirm_offline(&self, id: Uuid) -> Result<File> {
+        let lease = self.lease(id, false)?;
+        lease.try_lock().map_err(|e| match e {
+            std::fs::TryLockError::WouldBlock => Error::Busy,
+            std::fs::TryLockError::Error(e) => e.into(),
+        })?;
+        Ok(lease)
+    }
     fn read_state(&self, mut file: File, id: Uuid) -> Result<log::State> {
         // A controller takes the journal exclusively when claiming its lease. Hold
         // the shared journal lock across the snapshot and the short ownership probe.
@@ -491,6 +520,7 @@ impl ChatStore {
             .map_err(|e| Error::Closed(e.to_string()))?
     }
     fn locked_log(&self, id: Uuid) -> Result<log::Log> {
+        let _dispatch = self.stop_fence(id, false)?;
         let lease = self.lease(id, false)?;
         // An orphan can be settled by an observer while the controller is offline.
         let mut journal = OpenOptions::new()

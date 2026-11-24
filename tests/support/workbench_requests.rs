@@ -126,5 +126,71 @@ async fn scenario() {
         b.post(&stop).send().await.unwrap().status(),
         reqwest::StatusCode::CONFLICT
     );
+    let forced = Uuid::new_v4();
+    let blocked = a
+        .post(format!("{chat}/messages"))
+        .json(&json!({"id":forced,"text":"ask clients"}));
+    let waiting = tokio::spawn(blocked.send());
+    let _open_form = pending(&b, &chat).await;
+    let release = format!("{chat}/force-stop");
+    let wrong = b
+        .post(&release)
+        .json(&json!({"turn":turn}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), reqwest::StatusCode::CONFLICT);
+    let queue = format!("{chat}/queue");
+    ok(a.post(format!("{queue}/commands"))
+        .json(&json!({"action":"hold","command_id":Uuid::new_v4()})))
+    .await;
+    let follow = Uuid::new_v4();
+    ok(a.post(&queue)
+        .json(&json!({"id":follow,"text":"after forced release"})))
+    .await;
+    let stopped = ok(b.post(&release).json(&json!({"turn":forced}))).await;
+    assert_eq!(stopped["turn"], forced.to_string());
+    assert_eq!(stopped["outcome"], "killed");
+    let interrupted = waiting.await.unwrap().unwrap();
+    assert!(!interrupted.status().is_success());
+    let offline = ok(b.post(&release).json(&json!({"turn":forced}))).await;
+    assert_eq!(offline["outcome"], "released");
+    let snapshot = ok(b.get(format!("{chat}/snapshot"))).await;
+    assert_eq!(
+        snapshot["history"]["turns"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["status"],
+        "interrupted"
+    );
+    ok(a.post(format!("{queue}/commands"))
+        .json(&json!({"action":"resume","command_id":Uuid::new_v4()})))
+    .await;
+    loop {
+        let snapshot = ok(b.get(format!("{chat}/snapshot"))).await;
+        if snapshot["history"]["turns"]
+            .as_array()
+            .unwrap()
+            .last()
+            .is_some_and(|t| t["id"] == follow.to_string() && t["status"] == "completed")
+        {
+            assert_eq!(
+                snapshot["history"]["chat"]["native_id"],
+                created["info"]["native_id"]
+            );
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        b.post(&release)
+            .json(&json!({"turn":forced}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
     server.kill().await.unwrap();
 }

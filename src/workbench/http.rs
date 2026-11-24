@@ -90,6 +90,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::thread_find::routes())
         .merge(super::thread_state::routes())
         .merge(super::interactions::routes())
+        .merge(super::force_stop::routes())
         .merge(super::assets::routes())
         .merge(super::workflows::routes())
         .merge(super::devices::routes())

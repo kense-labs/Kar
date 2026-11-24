@@ -363,6 +363,7 @@ impl Admission {
     }
     fn begin(self) -> Result<()> {
         let chat = self.sink.0.lock().unwrap().state.info.id;
+        let _dispatch = self.store.stop_fence(chat, false)?;
         let _lock = self.store.inbox_lock(chat)?;
         let mut log = self.sink.0.lock().unwrap();
         if log
