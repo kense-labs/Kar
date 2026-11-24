@@ -3,8 +3,9 @@
 product = "Kar"
 implementation = "Kar 自有后端、适配器、持久化、CLI 和服务逻辑使用纯 Rust。供应商原生程序通过其协议接入。"
 priority = "先完成同一聊天的多客户端实时订阅、断线续收和控制器重启恢复，再持续完成其余可做的后端项。"
-excluded_validation = ["Windows 实机验证"]
-statuses = ["已验收", "未完成或失败", "供应商不支持", "缺环境待验证", "本轮排除：Windows 实机验证"]
+platform = "本轮两份清单均专注 macOS。Linux 的专项适配、编译与实测后移，保留此前运行的证据。"
+excluded_validation = ["Linux（后续阶段）", "Windows 实机验证"]
+statuses = ["已验收", "未完成或失败", "供应商不支持", "缺环境待验证", "平台后移：Linux", "本轮排除：Windows 实机验证"]
 
 [baseline.runtime]
 version = "0.130.1"
@@ -60,12 +61,12 @@ columns = ["上游契约、用例 ID 或供应商断言位置", "Kar 验收编�
 passed = "给出正常入口的可重跑证据和实际结果。协议模拟和实机结果分别标注。"
 unsupported = "记录特定供应商和版本的协议、源码或原生拒绝证据，验证 Kar 对外准确表达该限制。只有相应协议确实无法提供且在 Kar 侧无法可靠实现时，才能使用此状态。"
 environment = "明确缺失的程序、账号、平台或部署，列出已做的替代验证和取得环境后的复验命令。未执行的实机测试保留待验证。"
-unfinished = "任何可实现、可修复或能在现有环境核验的缺口继续做。只有 Windows 实机验证排除，其他平台环境缺失须列出。"
+unfinished = "任何可实现、可修复或能在现有环境核验的缺口继续做。本轮以 macOS 可实现、可验证的工作为准。Linux 专项后移，Windows 实机排除。"
 regression = ["cargo fmt --all -- --check", "cargo clippy --locked --all-targets -- -D warnings", "cargo test --locked"]
-closure = "核对所有适用条目及此后 Kar 已有进展，逐项报告已验收及证据、供应商不支持、缺环境待验证、Windows 实机排除；收尾时所有可做的实现与验证均须完成。"
+closure = "核对所有适用条目及此后 Kar 已有进展，逐项报告已验收及证据、供应商不支持、缺环境待验证、Linux 后移及 Windows 实机排除；收尾时所有可做的实现与验证均须完成。"
 parallel_checklist = "backend-workbench-acceptance.toml"
 handoff = "两阶段按固定源码和清单并行实现。消费会话、队列和游标的模块可在接口稳定后接入。两阶段功能集成后，使用同一候选提交统一运行验收。"
-validation_order = "开发时补齐实现、测试用例和复验命令，只在编译依赖或接口需要时进行检查。已实现的条目先登记为待统一验收。集中验收时运行两份清单的适用场景、实机供应商与平台矩阵、强杀重启、双客户端断线续收及全量回归。保留既有版本的证据，按实际运行提交登记新结果。"
+validation_order = "开发时补齐实现、测试用例和复验命令，只在编译依赖或接口需要时进行检查。已实现的条目先登记为待统一验收。集中验收时在 macOS 运行两份清单的适用场景与实机供应商矩阵、强杀重启、双客户端断线续收及全量回归。保留既有版本的证据，按实际运行提交登记新结果。"
 
 [[checks]]
 id = "realtime"
