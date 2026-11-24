@@ -78,3 +78,9 @@ cargo run --locked --example backend_suite -- --runtime kar --execute --output /
 固定上游的 Cybion `community/cybion/thread.ts` 将新建时指定的标题和推理强度传给线程，恢复时读取已有线程，HTTP 404 携带请求位置和线程 ID。Kar 的普通 SDK、CLI 和聊天入口现共用这条路径。本轮 macOS 开发环境未提供 Cybion 部署地址、访问密钥和部署版本。协议用例使用本地 HTTP 服务。真实服务复验需由部署提供可用的模型 Worker 和可创建测试线程的凭据，设置 `KAR_CYBION_BASE_URL`、`KAR_CYBION_API_KEY` 及可核对的 `KAR_CYBION_DEPLOYMENT_VERSION`，执行 `cargo test --locked --test cybion deployed_thread_creation_and_resume -- --ignored --exact --nocapture`。可选 `KAR_CYBION_TEST_MODEL` 和 `KAR_CYBION_TEST_EFFORT` 应取自该部署支持的值。本轮已编译用例，实际创建跨会话的两轮与 404 证据待收集。
 
 固定上游的 Morph `community/morph/projection.ts` 从 Console 的重试轨迹读取当前尝试、最大尝试次数和可选等待毫秒数。Kar 已具备共享或外部 Console 的三条 macOS 原生恢复与投递用例，版本线索保存在原有台账中。本轮新增的重试投影覆盖秒、毫秒、缺省等待与缺失尝试字段。集中验收时用 `cargo test --locked --lib retry_uses_the_native_attempt_counts_and_delay_units` 检查投影，再用可触发重试的真实 Console 和模型服务核对原生轨迹与 Kar 事件。新增字段尚待真实重试观测。
+
+## Rust SDK 成员
+
+`docs/backend-sdk-map.tsv` 把固定上游的契约、成员、契约文件和公共导出对应到 Kar 主干提交内的 Rust 定义或实现。每行列出原文件及行号、公开名称、Kar 版本、代码定位、操作和待跑命令。`SDK 部分契约` 标出对照发现的行为差异，见该行说明。重复导出按实际入口分别登记。集中验收时按供应商补充环境、版本和实际结果。
+
+第一批包含 305 个位置，涉及运行时、品牌、组合探测、会话能力、凭据声明、工作区清单、上下文、目标、模型请求、工具输出和 Claude 旁注。Kar 的 `upstream_verified_platforms` 描述固定上游的 CI 声明。Kar 自己的 macOS 实机结果见验收台账。

@@ -202,6 +202,37 @@ fn run() -> Result<(), String> {
     if cli.keys().any(|key| !indexed.contains(key)) || cli.len() != indexed.len() {
         return Err("CLI map and pinned source index contain different locators".into());
     }
+    let sdk_rows = read(
+        "docs/backend-sdk-map.tsv",
+        "kind\tupstream\tlocator\tcommit\tkar_file\tanchor\tlevel\toperation\tcommand\tnote",
+    )?;
+    let indexed_sdk: BTreeSet<_> = index
+        .iter()
+        .filter(|r| {
+            matches!(
+                r[0].as_str(),
+                "contract" | "contract-file" | "contract-member" | "package-export"
+            )
+        })
+        .map(|r| (&r[0], &r[1], &r[2]))
+        .collect();
+    let mut sdk = BTreeMap::new();
+    for row in &sdk_rows {
+        let key = (&row[0], &row[1], &row[2]);
+        if !indexed_sdk.contains(&key) {
+            return Err(format!("unknown SDK locator {key:?}"));
+        }
+        let text = cli_files
+            .entry((&row[3], &row[4]))
+            .or_insert_with(|| git_file(Path::new("."), &row[3], &row[4]))
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let line = anchor_line(text, &row[5])
+            .ok_or_else(|| format!("missing SDK anchor in {}:{}: {}", row[3], row[4], row[5]))?;
+        if sdk.insert(key, (row, line)).is_some() {
+            return Err(format!("duplicate SDK locator {key:?}"));
+        }
+    }
     if let Some(repo) = upstream {
         check_sources(Path::new(&repo), &index)?;
     }
@@ -317,6 +348,30 @@ fn run() -> Result<(), String> {
             ]);
             continue;
         }
+        if let Some((row, at)) = sdk.get(&(&r[0], &r[1], &r[2])) {
+            let local = format!("{}#L{at}", row[4]);
+            print_row(&[
+                &r[0],
+                &r[1],
+                &r[2],
+                "",
+                &row[6],
+                "SDK",
+                "依调用的适配器",
+                "待实测记录",
+                "Rust API",
+                "macOS",
+                &row[3],
+                &local,
+                &row[8],
+                &row[7],
+                &row[9],
+                "固定两端源码已核对；运行留待统一验收",
+                "未完成或失败",
+                &row[9],
+            ]);
+            continue;
+        }
         let mut occurrences = BTreeMap::new();
         for line in r[3].split(',') {
             let occurrence = occurrences.entry(line).or_insert(0);
@@ -377,12 +432,13 @@ fn run() -> Result<(), String> {
         return Err(format!("no indexed source or locator matching {filter:?}"));
     }
     eprintln!(
-        "{} source rows, {} evidence rows ({} exact duplicates), {} reviewed assertion mappings, {} CLI mappings",
+        "{} source rows, {} evidence rows ({} exact duplicates), {} reviewed assertion mappings, {} CLI mappings, {} SDK mappings",
         index.len(),
         evidence.len(),
         evidence.len() - unique.len(),
         links.len(),
-        cli.len()
+        cli.len(),
+        sdk.len()
     );
     Ok(())
 }
