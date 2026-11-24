@@ -2959,6 +2959,7 @@ dependencies = [
  "rcgen",
  "regex",
  "reqwest",
+ "ring",
  "rustix",
  "ruzstd",
  "semver",

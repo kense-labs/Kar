@@ -33,6 +33,8 @@ pub(super) fn cases() -> Vec<Case> {
             "--test",
             "workbench_remote_access",
             "--test",
+            "workbench_oauth",
+            "--test",
             "workbench_workflows",
             "--test",
             "workbench_forge",

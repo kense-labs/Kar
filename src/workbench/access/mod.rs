@@ -1,6 +1,8 @@
 //! Owner-issued, one-use pairing grants and revocable device credentials.
 pub(super) use guest::reconcile_guest_inputs;
+mod browser;
 mod guest;
+pub(in crate::workbench) mod oauth;
 use super::Workbench;
 use crate::Error;
 use axum::{
@@ -30,6 +32,10 @@ use uuid::Uuid;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Registry {
+    #[serde(default)]
+    oauth: oauth::Store,
+    #[serde(default)]
+    environment: browser::Store,
     grants: BTreeMap<String, u64>,
     devices: BTreeMap<Uuid, Device>,
     #[serde(default)]
@@ -42,6 +48,8 @@ struct Device {
     label: String,
     created_ms: u64,
     digest: String,
+    #[serde(default)]
+    account: Option<browser::Account>,
 }
 
 pub(super) struct AccessStore {
@@ -108,7 +116,11 @@ type AccessResult<T> = Result<T, AccessError>;
 
 impl AccessStore {
     pub(super) fn revoke_device(&self, id: Uuid) -> crate::Result<()> {
-        self.update(|db|{db.devices.remove(&id);Ok(())}).map_err(|_|crate::Error::Refused("device revocation failed".into()))
+        self.update(|db| {
+            db.devices.remove(&id);
+            Ok(())
+        })
+        .map_err(|_| crate::Error::Refused("device revocation failed".into()))
     }
 
     pub(super) fn open(state: &FsPath) -> crate::Result<Self> {
@@ -161,7 +173,10 @@ impl AccessStore {
             .unwrap()
             .devices
             .get(&id)
-            .is_some_and(|d| bool::from(d.digest.as_bytes().ct_eq(hashed.as_bytes())))
+            .is_some_and(|d| {
+                d.account.as_ref().is_none_or(|a| a.until > now())
+                    && bool::from(d.digest.as_bytes().ct_eq(hashed.as_bytes()))
+            })
     }
 }
 
@@ -195,26 +210,13 @@ async fn owner(State(auth): State<Auth>, req: Request, next: Next) -> Response {
 }
 
 pub(super) async fn authorize(State(auth): State<Auth>, mut req: Request, next: Next) -> Response {
-    let key = bearer(req.headers());
-    if auth.owner(key) {
+    if auth.owner(bearer(req.headers())) {
         return next.run(req).await;
     }
-    let Some((id, secret)) = key.split_once('.') else {
-        return AccessError::Invalid.into_response();
+    let device = match browser::authenticate(&auth, &req) {
+        Ok(lease) => lease,
+        Err(e) => return e.into_response(),
     };
-    let Ok(id) = id.parse() else {
-        return AccessError::Invalid.into_response();
-    };
-    let hash = digest(secret);
-    let device = DeviceLease {
-        app: std::sync::Arc::downgrade(&auth.app.0),
-        id,
-        hash,
-        changed: auth.app.0.access.changed.subscribe(),
-    };
-    if !device.active() {
-        return AccessError::Invalid.into_response();
-    }
     req.extensions_mut().insert(device.clone());
     restrict(req, next, device.revoked()).await
 }
@@ -233,7 +235,28 @@ impl DeviceLease {
             .is_some_and(|app| app.access.device_active(self.id, &self.hash))
     }
     pub(super) async fn revoked(mut self) {
-        while self.active() && self.changed.changed().await.is_ok() {}
+        let until = self.app.upgrade().and_then(|app| {
+            app.access
+                .registry
+                .lock()
+                .unwrap()
+                .devices
+                .get(&self.id)?
+                .account
+                .as_ref()
+                .map(|a| a.until)
+        });
+        while self.active() {
+            let expiry = async {
+                if let Some(t) = until {
+                    tokio::time::sleep(std::time::Duration::from_millis(t.saturating_sub(now())))
+                        .await
+                } else {
+                    std::future::pending::<()>().await
+                }
+            };
+            tokio::select! {_=expiry=>return,r=self.changed.changed()=>if r.is_err(){return}}
+        }
     }
 }
 
@@ -306,6 +329,7 @@ async fn pair(State(app): State<Workbench>, Json(p): Json<Pair>) -> AccessResult
                 label: label.into(),
                 created_ms: current,
                 digest: digest(&secret),
+                account: None,
             },
         );
         Ok(json!({"id":id,"label":label,"token":format!("{id}.{secret}")}))
@@ -314,22 +338,25 @@ async fn pair(State(app): State<Workbench>, Json(p): Json<Pair>) -> AccessResult
 }
 async fn devices(State(app): State<Workbench>) -> Json<Value> {
     let db = app.0.access.registry.lock().unwrap();
-    Json(json!(
-        db.devices
-            .values()
-            .map(|d| json!({"id":d.id,"label":d.label,"created_ms":d.created_ms}))
-            .collect::<Vec<_>>()
-    ))
+    let mut items = db
+        .devices
+        .values()
+        .map(|d| json!({"id":d.id,"label":d.label,"created_ms":d.created_ms}))
+        .collect::<Vec<_>>();
+    items.extend(oauth::clients(&db));
+    Json(json!(items))
 }
 async fn revoke(State(app): State<Workbench>, Path(id): Path<Uuid>) -> AccessResult<Json<()>> {
     update(app, move |db| {
         db.devices.remove(&id);
+        oauth::revoke_id(db, id);
         Ok(())
     })
     .await
 }
 
 pub(super) fn routes(app: Workbench, auth: Auth) -> Router {
+    let public = oauth::routes(auth.clone()).merge(browser::routes(auth.clone()));
     let admin = guest::admin()
         .merge(super::relay_client::routes())
         .merge(super::acp_registry::owner_routes())
@@ -343,4 +370,5 @@ pub(super) fn routes(app: Workbench, auth: Auth) -> Router {
         .merge(guest::public(app.clone()))
         .route("/access/pair", post(pair))
         .with_state(app)
+        .merge(public)
 }

@@ -15,6 +15,7 @@ const IDLE: Duration = Duration::from_secs(24 * 3600);
 pub(super) enum Identity {
     Owner,
     Device(Uuid),
+    External(Uuid),
     Provider(Uuid),
 }
 
@@ -109,7 +110,7 @@ pub(in crate::workbench) struct Registry {
     sessions: Mutex<HashMap<Uuid, Arc<HttpSession>>>,
 }
 impl Registry {
-    pub(super) fn origin(&self)->Option<String>{self.endpoint.get().map(|a|format!("http://{a}"))}
+    pub(in crate::workbench) fn origin(&self)->Option<String>{self.endpoint.get().map(|a|format!("http://{a}"))}
     pub(super) fn command_gate(&self, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
         let mut gates = self.commands.lock().unwrap();
         gates.retain(|_, gate| gate.strong_count() > 0);

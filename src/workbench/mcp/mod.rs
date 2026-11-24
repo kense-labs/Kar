@@ -97,13 +97,19 @@ async fn admit(
         req.extensions_mut().insert(grant.clone());
         return access::restrict(req, next, grant.expired()).await;
     }
-    access::authorize(State(auth), req, next).await
+    if let Some(external)=access::oauth::resolve(&app,access::bearer(req.headers())){
+        req.extensions_mut().insert(external.clone());
+        return access::restrict(req,next,external.revoked()).await;
+    }
+    access::oauth::challenge(&app,access::authorize(State(auth), req, next).await)
 }
 async fn scope(State(app): State<Workbench>, mut req: Request, next: Next) -> Response {
     let grant = req.extensions().get::<Arc<Grant>>().cloned();
+    let external=req.extensions().get::<access::oauth::Lease>();
     let identity = match (&grant, req.extensions().get::<access::DeviceLease>()) {
         (Some(g), _) => Identity::Provider(g.id),
         (_, Some(d)) => Identity::Device(d.id),
+        _ if external.is_some() => Identity::External(external.unwrap().id),
         _ => Identity::Owner,
     };
     let plan = if let Some(raw) = req.headers().get("kar-mode-limit") {
@@ -119,6 +125,7 @@ async fn scope(State(app): State<Workbench>, mut req: Request, next: Next) -> Re
     };
     // An owner may grant scoped file reads; a narrower provider limit still wins.
     let files_allowed=hdr(req.headers(),"kar-mode-limit").is_none_or(|m|m.starts_with("full-access/"));
+    let plan = plan || external.is_some_and(|lease|lease.mode=="read-only");
     let policy = grant.as_ref().and_then(|g| issues::authorized(&app, g));
     req.extensions_mut().insert(Caller {
         policy,
