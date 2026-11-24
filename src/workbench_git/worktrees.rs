@@ -409,11 +409,20 @@ impl Repository {
 
     /// Remove only the registered checkout. Branches and their commits are retained.
     pub fn remove_worktree(&self, id: Uuid) -> Result<()> {
+        self.remove_worktree_if(id, |_| Ok(()))
+    }
+
+    pub(crate) fn remove_worktree_if(
+        &self,
+        id: Uuid,
+        authorize: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<()> {
         let _pin = pin_saved_checkout(&self.root, self.worktree_id)?;
         let registry = Registry::open(self)?;
         let mut r = registry
             .load(id)?
             .ok_or_else(|| refused("unknown Kar worktree ID"))?;
+        authorize(&r.tree.path)?;
         if r.phase == Phase::Removed {
             return Ok(());
         }

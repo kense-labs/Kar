@@ -181,6 +181,21 @@ async fn scenario() {
     .await;
     let p = project["id"].as_str().unwrap();
     let project_url = format!("{url}/projects/{p}");
+    // A registered Git checkout may also own CLI-created worktrees outside the host's roots.
+    let outside_id = Uuid::new_v4();
+    let outside = temp.path().join("outside");
+    kar::workbench_git::Repository::open(&repo)
+        .unwrap()
+        .create_worktree(outside_id, &outside, "outside", "HEAD")
+        .unwrap();
+    let rejected = a
+        .post(format!("{project_url}/git"))
+        .json(&json!({"op":"worktree_remove","id":outside_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+    assert!(outside.join("notes.txt").is_file());
     let forge = format!("{project_url}/forge");
     let drivers = ok(a.get(format!("{url}/forge/drivers"))).await;
     assert_eq!(drivers.as_array().unwrap().len(), 9);

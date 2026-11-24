@@ -135,7 +135,12 @@ async fn change(
                     &start
                 )?));
             }
-            Action::WorktreeRemove { id } => repo.remove_worktree(id)?,
+            Action::WorktreeRemove { id } => repo.remove_worktree_if(id, |path| {
+                if app.destination(path)? != path {
+                    return Err(denied());
+                }
+                Ok(())
+            })?,
         }
         Ok(json!(repo.status()?))
     })
