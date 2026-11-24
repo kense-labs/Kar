@@ -6,7 +6,7 @@ use std::{num::NonZeroU64, path::PathBuf, time::Duration};
 
 #[derive(clap::Args)]
 pub(super) struct WorkspaceInventory {
-    /// Omit the runtime to inspect every selected installation.
+    /// Choose one runtime, or use all (the default) to inspect every installation.
     runtime: Option<String>,
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
@@ -63,7 +63,10 @@ impl WorkspaceInventory {
             },
             timeout: self.timeout_ms.map(|n| Duration::from_millis(n.get())),
         };
-        if let Some(id) = self.runtime {
+        if self.runtime.as_deref() == Some("all") && self.bin.is_some() {
+            return Err(Error::Refused("--bin requires a single runtime".into()));
+        }
+        if let Some(id) = self.runtime.filter(|id| id != "all") {
             let mut rt = runtime(&id)?;
             if let Some(bin) = self.bin {
                 rt.program = bin;

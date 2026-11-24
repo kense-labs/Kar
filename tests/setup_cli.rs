@@ -226,6 +226,16 @@ fn workspace_inventories_keep_missing_provider_rows_and_validate_options() {
                 "missing"
             );
         }
+        cmd.arg("all");
+        let explicit = cmd.output().unwrap();
+        assert!(explicit.status.success());
+        let explicit: Vec<serde_json::Value> = String::from_utf8(explicit.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(explicit, rows);
+        assert!(!kar(&[kind, "all", "--bin", "absent"]).status.success());
         assert!(!kar(&[kind, "--bin", "absent"]).status.success());
         assert!(!kar(&[kind, "--timeout-ms", "0"]).status.success());
     }

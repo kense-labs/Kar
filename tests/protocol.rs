@@ -35,6 +35,8 @@ mod environment;
 mod grok_turns;
 #[path = "protocol/installation.rs"]
 mod installation;
+#[path = "protocol/inventory_batch.rs"]
+mod inventory_batch;
 #[path = "protocol/launch_args.rs"]
 mod launch_args;
 #[path = "protocol/mcp_handoff.rs"]
@@ -1473,6 +1475,20 @@ async fn manual_compaction_controls() -> kar::Result<()> {
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if std::env::var_os("KAR_INVENTORY_BATCH").is_some() {
+        let id = std::path::Path::new(&args[0])
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        if id == "claude"
+            && args[1..] == ["--version"]
+            && std::env::var_os("KAR_STALL_INVENTORY").is_some()
+        {
+            std::thread::sleep(Duration::from_secs(10));
+        }
+        return account::peer(id, &args[1..]);
+    }
     if let Some(dir) = std::env::var_os("KAR_CREW_TRACE") {
         return crew_options::peer(&args, std::path::Path::new(&dir));
     }
@@ -1629,6 +1645,7 @@ async fn main() {
         .unwrap()
         .unwrap();
     println!("CLI recording, cursor replay and MCP delegation passed");
+    inventory_batch::exercise();
     crew_options::exercise();
     open_instruction_policies().await.unwrap();
     structured_output().await.unwrap();
