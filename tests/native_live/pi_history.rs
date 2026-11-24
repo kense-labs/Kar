@@ -3,8 +3,6 @@ use super::abort_turn;
 mod adapter_queue;
 #[path = "../support/busy_prompt.rs"]
 mod busy_prompt;
-#[path = "../support/chat_replay.rs"]
-mod chat_replay;
 #[path = "pi_history/extension_runs.rs"]
 mod extension_runs;
 use super::{interrupted_copy, respond_in_workspace, sse::SseClient};
@@ -1059,7 +1057,7 @@ async fn public_prompt_readbacks() {
 #[tokio::test]
 #[ignore = "requires KAR_PI_BIN; hard-kills a Kar CLI during a real Pi model request"]
 async fn queued_inputs_and_two_http_clients_survive_controller_kill() {
-    use chat_replay::{receive, serve};
+    use crate::chat_replay::{receive, serve};
     use kar::chat::InputStatus;
 
     let f = fixture(true).await;

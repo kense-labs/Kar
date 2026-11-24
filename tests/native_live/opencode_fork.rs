@@ -683,3 +683,7 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
         );
     }
 }
+
+#[cfg(unix)]
+#[path = "opencode_queue.rs"]
+mod queue_crash;

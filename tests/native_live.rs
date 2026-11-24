@@ -1,6 +1,8 @@
 //! Installed agent binaries, isolated homes and loopback model endpoints.
 #[path = "support/abort_turn.rs"]
 mod abort_turn;
+#[path = "support/chat_replay.rs"]
+mod chat_replay;
 #[path = "native_live/claude_history.rs"]
 mod claude_history;
 #[path = "native_live/cursor.rs"]
@@ -293,12 +295,14 @@ fn respond_observed(
             && last.contains("KAR-LIVE-SECOND")
             && !last.contains("tool_result");
         let fork_read = workspace.is_some() && last.contains("KAR-FORK-READ-SHARED");
+        let queue_read = workspace.is_some() && last.contains("KAR-QUEUE-READ-LOCAL");
         if target.is_some()
             || schema_turn
             || spawn_probe
             || steer_probe
             || followup_write
             || fork_read
+            || queue_read
         {
             let answered = request["messages"]
                 .as_array()
@@ -309,7 +313,24 @@ fn respond_observed(
             let background = last.contains("kar-background-task");
             let asking = last.contains("kar-form-question");
             if !answered || background || asking || schema_turn || spawn_probe {
-                let (name, id, input) = if fork_read {
+                let (name, id, input) = if queue_read {
+                    let tool = request["tools"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|s| s["name"] == "read")
+                        .unwrap();
+                    let name = if tool["input_schema"]["properties"].get("filePath").is_some() {
+                        "filePath"
+                    } else {
+                        "path"
+                    };
+                    (
+                        "read",
+                        "toolu_queue_local",
+                        json!({(name):workspace.unwrap().join("queue-read.txt")}),
+                    )
+                } else if fork_read {
                     (
                         "read",
                         "toolu_fork_shared",
