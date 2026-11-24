@@ -1,4 +1,11 @@
 //! Incremental projections over live records and recordings.
+mod conversation;
+pub use conversation::{
+    Conversation, ConversationInput, ConversationKey, DeliveryState, InputAttempt, InputAttemptKind,
+    AttemptState, DropReason, EchoEvidence, InputEcho, InputTurn, TurnPhase, conversation_of,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use conversation::ConversationSubscription;
 mod session_state;
 mod tool_groups;
 mod turn_end;

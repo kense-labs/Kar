@@ -64,6 +64,25 @@ fn cli_imports_and_replays_kar_v3_recordings() {
         .unwrap();
     assert!(replay.status.success());
     assert_eq!(replay.stdout, fs::read(&output).unwrap());
+    let logical = Command::new(env!("CARGO_BIN_EXE_kar"))
+        .arg("replay")
+        .arg(&output)
+        .arg("--conversation")
+        .output()
+        .unwrap();
+    assert!(
+        logical.status.success(),
+        "{}",
+        String::from_utf8_lossy(&logical.stderr)
+    );
+    let history: Value = serde_json::from_slice(&logical.stdout).unwrap();
+    let input = &history["inputs"][0];
+    assert_eq!(history["inputs"].as_array().unwrap().len(), 1);
+    assert_eq!(input["input_id"], "client/1");
+    assert_eq!(input["handled"]["after_seq"], 1);
+    assert_eq!(input["attempts"][0]["state"], "accepted");
+    assert_eq!(input["attempts"][0]["response"]["seq"], 2);
+    assert!(input["observations"].as_array().unwrap().is_empty());
     let suffix = Command::new(env!("CARGO_BIN_EXE_kar"))
         .arg("replay")
         .arg(&output)

@@ -1,5 +1,6 @@
 //! Follow one input across native admission, adapter queue dispatch and host withdrawal.
 use super::{ObservedTurnEnd, Reader, body, control};
+use crate::observe::conversation::{self, InputAttemptKind};
 use crate::{
     Cursor, Direction, Event, FailureClass, InputReceipt, Outcome, Record, RecordKind, Result,
     TurnFailure,
@@ -115,27 +116,18 @@ impl<'a> InputReader<'a> {
         let Some(id) = record.control_request_id() else {
             return;
         };
-        let op = control(record);
-        let submitted = record
-            .prompt
-            .as_ref()
-            .map(|p| p.input_id.as_str())
-            .or_else(|| body(record)["inputId"].as_str());
-        if op == Some("withdraw") {
+        let Some(op) = InputAttemptKind::of(record) else {
+            return;
+        };
+        let submitted = conversation::submitted_id(record);
+        if op == InputAttemptKind::Withdraw {
             if submitted == Some(self.input) && !self.attempt.superseded {
                 self.attempt.withdrawal = Some(id.to_owned());
             }
             return;
         }
-        if record.prompt.is_none() && !matches!(op, Some("prompt" | "steer" | "queue")) {
-            return;
-        }
-        let valid_carry = !record.carries.is_empty()
-            && record.carries.iter().all(|key| {
-                self.queue.claimable.contains(key)
-                // A native Kar dispatch reuses its queued UUID. Voyage claims have separate carrier identity.
-                && (record.upstream.is_none() || submitted != Some(key.as_str()))
-            });
+        let valid_carry =
+            conversation::valid_carries(record, |key| self.queue.claimable.contains(key));
         if valid_carry {
             if !self.attempt.superseded
                 && record

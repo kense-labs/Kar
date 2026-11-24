@@ -24,7 +24,7 @@ impl ObservedTurnEnd {
     }
 }
 
-fn body(record: &Record) -> &serde_json::Value {
+pub(super) fn body(record: &Record) -> &serde_json::Value {
     record
         .upstream
         .as_ref()
@@ -32,7 +32,7 @@ fn body(record: &Record) -> &serde_json::Value {
         .unwrap_or(&record.native)
 }
 
-fn control(record: &Record) -> Option<&str> {
+pub(super) fn control(record: &Record) -> Option<&str> {
     let value = body(record);
     value["kind"]
         .as_str()

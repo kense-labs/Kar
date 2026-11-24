@@ -196,6 +196,7 @@ mod tests {
                 agent_path: vec![],
                 span_id: None,
                 elided: false,
+                elided_input_echoes: vec![],
                 upstream: None,
             };
             let report = record.compactions().next().unwrap();

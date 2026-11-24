@@ -502,6 +502,9 @@ pub struct Record {
     pub agent_path: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub elided: bool,
+    /// Input identities preserved when the in-memory replay budget elides a native frame.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elided_input_echoes: Vec<crate::observe::InputEcho>,
     pub native: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<Value>,
@@ -1037,6 +1040,7 @@ impl Journal {
         }
         let record = Arc::new(Record {
             elided: false,
+            elided_input_echoes: vec![],
             upstream: None,
             span_id,
             prompt: stamp.prompt,

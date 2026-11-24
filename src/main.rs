@@ -166,6 +166,9 @@ enum Action {
         after: Option<u64>,
         #[arg(long, requires = "after")]
         stream: Option<uuid::Uuid>,
+        /// Rebuild logical input delivery history, including each control attempt and native echo.
+        #[arg(long, conflicts_with_all = ["after", "stream"])]
+        conversation: bool,
     },
 }
 #[derive(Subcommand)]
@@ -882,17 +885,19 @@ async fn execute(command: Action) -> Result<()> {
             path,
             after,
             stream,
+            conversation,
         } => {
             let cursor = after.zip(stream).map(|(after_seq, stream_id)| Cursor {
                 stream_id,
                 after_seq,
             });
-            replay(&path, cursor.as_ref(), std::io::stdout().lock())?;
+            replay(&path, cursor.as_ref(), conversation, std::io::stdout().lock())?;
         }
     }
     Ok(())
 }
-fn replay(path: &Path, cursor: Option<&Cursor>, mut out: impl Write) -> Result<()> {
+fn replay(path: &Path, cursor: Option<&Cursor>, conversation: bool, mut out: impl Write) -> Result<()> {
+    let mut history = conversation.then(kar::observe::Conversation::default);
     let mut stream = None;
     let mut seen = cursor.is_none();
     for (seq, line) in std::io::BufReader::new(std::fs::File::open(path)?)
@@ -918,10 +923,17 @@ fn replay(path: &Path, cursor: Option<&Cursor>, mut out: impl Write) -> Result<(
                 continue;
             }
         }
-        json_line(&r, &mut out)?;
+        if let Some(history) = &mut history {
+            history.apply(&std::sync::Arc::new(r));
+        } else {
+            json_line(&r, &mut out)?;
+        }
     }
     if !seen {
         return Err(Error::InvalidCursor);
+    }
+    if let Some(history) = history {
+        json_line(&history, &mut out)?;
     }
     Ok(())
 }

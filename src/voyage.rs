@@ -82,7 +82,7 @@ pub fn import(
     }
     Ok(summary)
 }
-fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
+pub(crate) fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
     let kind: RecordKind = serde_json::from_value(v["kind"].clone())?;
     let body = &v["body"];
     let session_id = v["sessionId"]
@@ -218,6 +218,7 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
         span_id: v["spanId"].as_str().map(str::to_owned),
         agent_path: serde_json::from_value(v["agentPath"].clone())?,
         elided: body["elided"] == true,
+        elided_input_echoes: vec![],
         native: body.get("native").unwrap_or(body).clone(),
         upstream: Some(v.clone()),
         events,

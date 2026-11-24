@@ -43,7 +43,7 @@ impl Record {
             .saturating_add(if tools == 0 { 0 } else { tools + 1 })
     }
 
-    pub(super) fn elided_copy(&self) -> Self {
+    pub(crate) fn elided_copy(&self) -> Self {
         let events = self
             .events
             .iter()
@@ -89,6 +89,7 @@ impl Record {
             span_id: self.span_id.clone(),
             agent_path: self.agent_path.clone(),
             elided: true,
+            elided_input_echoes: self.input_echoes(),
             native: Value::Null,
             upstream: self.upstream.clone(),
             events,

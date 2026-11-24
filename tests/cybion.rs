@@ -149,6 +149,49 @@ async fn equal_inputs_replay_with_distinct_host_origins() {
         assert_eq!(saved.origin, sourced(kind, label).origin);
         assert_eq!(turn.report().await.unwrap().text, "quick answer");
     }
+    let history = session.conversation();
+    assert_eq!(history.inputs().len(), 2);
+    for (item, source) in history.inputs().iter().zip(["keyboard", "ci-worker"]) {
+        assert_eq!(item.text, "quick");
+        assert_eq!(
+            item.origin.as_ref().and_then(|o| o.source.as_deref()),
+            Some(source)
+        );
+        assert_eq!(item.state, kar::observe::DeliveryState::Accepted);
+        assert_eq!(item.attempts.len(), 1);
+        assert_eq!(item.attempts[0].state, kar::observe::AttemptState::Accepted);
+        assert!(
+            item.observations.is_empty(),
+            "Cybion transcripts do not identify the host UUID"
+        );
+    }
+    assert_ne!(history.inputs()[0].key, history.inputs()[1].key);
+    let mut initial = session.observe_conversation(None).unwrap();
+    assert_eq!(initial.next().await.unwrap().inputs().len(), 2);
+    let after = history.inputs()[0].attempts[0]
+        .response
+        .as_ref()
+        .unwrap()
+        .cursor();
+    let mut subscription = session.observe_conversation(Some(&after)).unwrap();
+    let resumed = subscription.next().await.unwrap();
+    assert_eq!(resumed.cursors()[&after.stream_id], after.after_seq + 1);
+    assert_eq!(resumed.inputs()[0].origin, history.inputs()[0].origin);
+    let foreign = kar::Cursor {
+        stream_id: uuid::Uuid::new_v4(),
+        ..after
+    };
+    assert!(matches!(
+        session.observe_conversation(Some(&foreign)),
+        Err(Error::InvalidCursor)
+    ));
+    assert_eq!(
+        serde_json::to_value(&history).unwrap(),
+        serde_json::to_value(kar::observe::conversation_of(
+            &session.records()[..=history.cursors()[&session.stream_id()] as usize]
+        ))
+        .unwrap()
+    );
     {
         let state = state.lock().unwrap();
         assert_eq!(state.submissions.len(), 2);
@@ -198,6 +241,29 @@ async fn delayed_steer_preserves_the_running_turn_and_holds_the_queue() {
         )
         .await
         .unwrap();
+    let id = queued.input_id();
+    session.withdraw(id).await.unwrap();
+    assert!(matches!(queued.report().await, Err(Error::Refused(_))));
+    let lookup = kar::observe::ConversationKey {
+        session_id: Some(session.id().into()),
+        agent_path: vec![],
+        stream_id: None,
+        id: id.to_string(),
+    };
+    assert_eq!(
+        session.conversation().get(&lookup).unwrap().state,
+        kar::observe::DeliveryState::Withdrawn
+    );
+    let queued = session
+        .queue_with_options(
+            "quick",
+            kar::InputOptions {
+                input_id: Some(id),
+                ..sourced(kar::InputOriginKind::Automation, "retry-scheduler")
+            },
+        )
+        .await
+        .unwrap();
     for (control, label) in [("steer", "worker"), ("queue", "scheduler")] {
         assert!(session.records().iter().any(|r| r.native["type"] == control
             && r.origin.as_ref().and_then(|o| o.source.as_deref()) == Some(label)));
@@ -238,6 +304,24 @@ async fn delayed_steer_preserves_the_running_turn_and_holds_the_queue() {
         Outcome::Aborted
     );
     assert_eq!(queued.report().await.unwrap().text, "quick answer");
+    use kar::observe::{AttemptState, InputAttemptKind::*};
+    let history = session.conversation();
+    let sent = history.get(&lookup).unwrap();
+    assert_eq!(
+        sent.attempts.iter().map(|a| a.kind).collect::<Vec<_>>(),
+        [Queue, Withdraw, Queue, Prompt]
+    );
+    assert!(
+        sent.attempts
+            .iter()
+            .all(|a| a.state == AttemptState::Accepted)
+    );
+    assert_eq!(sent.carries, [id.to_string()]);
+    assert_eq!(
+        sent.origin.as_ref().unwrap().source.as_deref(),
+        Some("retry-scheduler")
+    );
+
     assert_eq!(state.lock().unwrap().submissions.len(), 3);
     session.close().await.unwrap();
 }
