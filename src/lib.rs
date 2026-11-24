@@ -172,7 +172,7 @@ pub use side_question::SideQuestionOptions;
 #[cfg(not(target_arch = "wasm32"))]
 mod setup;
 #[cfg(not(target_arch = "wasm32"))]
-pub use setup::{InstallPlan, UpdateCheck};
+pub use setup::{InstallCommand, InstallPlan, InstallPreview, UpdateCheck};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod input;

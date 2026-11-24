@@ -499,7 +499,7 @@ async fn execute(command: Action) -> Result<()> {
         } => {
             let r = runtime(&id)?;
             if plan {
-                json_line(&r.install_plan_for(line.as_deref())?, std::io::stdout())?;
+                json_line(&r.install_plan_for(line.as_deref())?.preview(), std::io::stdout())?;
             } else {
                 json_line(
                     &r.install_with(line.as_deref(), Duration::from_millis(timeout_ms.get()))

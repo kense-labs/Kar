@@ -19,6 +19,16 @@ fn release_line_planning_requires_an_explicit_supported_choice() {
         let plan = kar(&["install", "opencode", "--plan", "--line", line]);
         assert!(plan.status.success());
         let plan: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+        assert_eq!(plan["network"], true);
+        assert_eq!(plan["privileges"], "current_user");
+        assert!(plan["source"].as_str().unwrap().starts_with("https://"));
+        assert!(
+            plan["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|s| s["program"].is_string() && s["arguments"].is_array())
+        );
         if cfg!(windows) {
             assert_eq!(plan["package"], package);
         } else {
@@ -55,10 +65,10 @@ fn installation(runtime: &str) -> serde_json::Value {
     assert!(result.status.success());
     let row: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(
-        row["installation"]["kind"], "available",
+        plan["installation"]["kind"], "available",
         "selected native installation"
     );
-    row["installation"].clone()
+    plan["installation"].clone()
 }
 
 fn native_check(runtime: &str) {
@@ -70,8 +80,8 @@ fn native_check(runtime: &str) {
         String::from_utf8_lossy(&result.stderr)
     );
     let row: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    let check = &row["check"];
-    assert_eq!(row["id"], runtime);
+    let check = &plan["check"];
+    assert_eq!(plan["id"], runtime);
     assert_eq!(
         check["kind"], "ok",
         "requires a vendor-managed copy and access to the native release source: {check}"
@@ -139,7 +149,7 @@ fn account_batch_keeps_each_provider_identity_and_requires_a_target_for_changes(
         assert_eq!(ids.len(), rows.len());
         for name in ["codex", "claude", "grok", "pi"] {
             let row = rows.iter().find(|r| r["id"] == name).unwrap();
-            assert_eq!(row["installation"]["kind"], "missing");
+            assert_eq!(plan["installation"]["kind"], "missing");
         }
     }
     for operation in ["login", "logout"] {

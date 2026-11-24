@@ -1,5 +1,7 @@
 //! Vendor-owned installation methods. Planning does not change the host.
 mod update;
+mod plan;
+pub use plan::{InstallCommand, InstallPreview};
 use crate::{Error, Installation, Result, Runtime};
 use serde::Serialize;
 use std::{process::Stdio, time::Duration};
@@ -137,8 +139,7 @@ impl Runtime {
     async fn run_installer(&self, plan: InstallPlan) -> Result<()> {
         match plan {
             InstallPlan::Npm { package } => {
-                let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-                let mut command = Command::new(npm);
+                let mut command = Command::new(plan::npm_program());
                 command.args(["install", "--global", package]);
                 checked(command).await?;
             }
@@ -150,17 +151,7 @@ impl Runtime {
                 let temp = tempfile::NamedTempFile::new()?;
                 let mut download = Command::new("curl");
                 download
-                    .args([
-                        "--fail",
-                        "--silent",
-                        "--show-error",
-                        "--location",
-                        "--proto",
-                        "=https",
-                        "--proto-redir",
-                        "=https",
-                        "--output",
-                    ])
+                    .args(plan::download_args())
                     .arg(temp.path())
                     .arg(url);
                 checked(download).await?;
