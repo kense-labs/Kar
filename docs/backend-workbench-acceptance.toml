@@ -172,7 +172,8 @@ accept = [
 ]
 
 [final_acceptance]
-source_parity = "原八组场景与源码差异清单一并核销。逐项追踪公开后端入口、其子操作和实际处理函数，将新发现的差异追加到清单；全部可实现功能先用纯 Rust 补齐并集成，随后统一验收。"
+owner = "由用户指定的验收方在交接候选上执行。开发方提供正常入口、命令、依赖和已知外部限制。"
+source_parity = "以本文件八项及综合场景的用户操作、权限、结果和持久状态验收。固定源码和历史差异清单供定位；Kar 已有入口能完成同一操作时复用该入口。"
 scenario = "在隔离测试仓库从 Issue 或 PR 建独立工作树，两个客户端打开同一聊天，由两个供应商接力。通过 PTY 运行服务，经预览确认输出，推送提交并核对 PR；用 Webhook 启动工作流，访客提议由主人接纳。在服务重启后检查各对象身份、权限、历史、执行次数及对远端的实际影响。"
 regression = ["cargo fmt --all -- --check", "cargo clippy --locked --all-targets -- -D warnings", "cargo test --locked"]
 coediting_scenario = "在上述工作树中由人和 AI 并发修改同一份 Markdown。将双方兼容的改动提交到 PR，核对远端文件内容。再制造冲突并重启 Kar，核对待处理提议可取回，未经解决的提议未写入工作区或提交。"
