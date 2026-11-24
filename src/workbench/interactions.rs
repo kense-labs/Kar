@@ -30,6 +30,23 @@ impl Workbench {
     }
 }
 
+#[derive(Default, Deserialize)]
+struct Attempt {
+    request_id: Option<Uuid>,
+}
+
+async fn interrupt(
+    State(app): State<Workbench>,
+    Path((p, c, turn)): Path<(Uuid, Uuid, Uuid)>,
+    axum::extract::Query(attempt): axum::extract::Query<Attempt>,
+) -> std::result::Result<Json<()>, ApiError> {
+    let session = app
+        .active_control(p, c)?
+        .ok_or_else(crate::transport::AbortRequest::stale)?;
+    session.abort_turn(turn, attempt.request_id).await?;
+    Ok(Json(()))
+}
+
 async fn attach(
     State(app): State<Workbench>,
     Path((p, c)): Path<(Uuid, Uuid)>,
@@ -117,6 +134,10 @@ async fn respond(
 
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
+        .route(
+            "/projects/{project}/chats/{chat}/turns/{turn}/interrupt",
+            post(interrupt),
+        )
         .route("/projects/{project}/chats/{chat}/attach", post(attach))
         .route(
             "/projects/{project}/chats/{chat}/requests/respond",

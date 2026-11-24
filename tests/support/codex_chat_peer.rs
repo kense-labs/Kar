@@ -252,6 +252,22 @@ pub(crate) fn agent() {
                 emit(
                     json!({"method":"turn/started","params":{"threadId":session,"turn":{"id":turn}}}),
                 );
+                if text == "await interrupt" {
+                    fs::write(database.join("interrupt-ready"), &turn).unwrap();
+                    let mut line = String::new();
+                    if input.read_line(&mut line).unwrap() == 0 {
+                        return;
+                    }
+                    let interrupt: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(interrupt["method"], "turn/interrupt");
+                    assert_eq!(interrupt["params"]["turnId"], turn);
+                    assert_eq!(interrupt["params"]["threadId"], session);
+                    emit(json!({"id":interrupt["id"],"result":{}}));
+                    emit(
+                        json!({"method":"turn/completed","params":{"threadId":session,"turn":{"id":turn,"status":"interrupted"}}}),
+                    );
+                    continue;
+                }
                 if text == "ask clients" {
                     emit(
                         json!({"id":901,"method":"item/tool/requestUserInput","params":{"threadId":session,"turnId":turn,"questions":[{"id":"q","question":"Choose a color"}]}}),

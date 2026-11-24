@@ -102,5 +102,29 @@ async fn scenario() {
         receipts[1]["answer"]["answers"]["q"]["answers"][0],
         "second"
     );
+    let turn = Uuid::new_v4();
+    let post = a
+        .post(format!("{chat}/messages"))
+        .json(&json!({"id":turn,"text":"await interrupt"}));
+    let sending = tokio::spawn(ok(post));
+    while !native.join("interrupt-ready").exists() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let stop = format!("{chat}/turns/{turn}/interrupt");
+    for wrong in [
+        format!("{chat}/turns/{}/interrupt", Uuid::new_v4()),
+        format!("{stop}?request_id={}", Uuid::new_v4()),
+    ] {
+        assert_eq!(
+            b.post(wrong).send().await.unwrap().status(),
+            reqwest::StatusCode::CONFLICT
+        );
+    }
+    ok(b.post(&stop)).await;
+    assert_eq!(sending.await.unwrap()["status"], "aborted");
+    assert_eq!(
+        b.post(&stop).send().await.unwrap().status(),
+        reqwest::StatusCode::CONFLICT
+    );
     server.kill().await.unwrap();
 }

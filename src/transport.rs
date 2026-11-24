@@ -111,8 +111,10 @@ pub(crate) struct AbortRequest {
     pub reply: Reply<Value>,
 }
 impl AbortRequest {
+    pub(crate) const STALE: &'static str = "prompt no longer owns the active turn";
+
     pub(crate) fn stale() -> Error {
-        Error::Refused("prompt no longer owns the active turn".into())
+        Error::Refused(Self::STALE.into())
     }
 
     pub(crate) fn for_current(self, journal: &Journal) -> Option<Reply<Value>> {

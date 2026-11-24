@@ -31,6 +31,9 @@ impl IntoResponse for ApiError {
             Error::Io(e) if e.kind() == io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
             Error::Io(e) if e.kind() == io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
             Error::Busy => StatusCode::CONFLICT,
+            Error::Refused(reason) if reason == crate::transport::AbortRequest::STALE => {
+                StatusCode::CONFLICT
+            }
             Error::InvalidCursor | Error::Refused(_) | Error::Unsupported(_) => {
                 StatusCode::BAD_REQUEST
             }
