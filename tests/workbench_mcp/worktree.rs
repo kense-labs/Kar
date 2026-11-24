@@ -119,6 +119,7 @@ pub(super) async fn exercise(
         .await["result"]["isError"],
         true
     );
+    server::json(host.post(format!("{url}/projects/mutate")).json(&json!({"type":"project.update","projectId":project,"commandId":"kar-setup-test","scripts":[{"id":"setup","name":"Prepare checkout","command":"echo setup >> setup-count","icon":"configure","runOnWorktreeCreate":true}]}))).await;
     let id = Uuid::new_v4();
     let draft =
         json!({"command_id":id,"branch":"kar-move","continuation_prompt":"continue in checkout"});
@@ -227,6 +228,7 @@ pub(super) async fn exercise(
         checkout["handoffs"][0]["remote_base"],
         "refs/remotes/kar-upstream/main"
     );
+    assert_eq!(checkout["handoffs"][0]["setup_script"]["status"], "started");
     assert!(workspace.join("remote-base").is_file());
     assert!(!root.join("remote-base").is_file());
     let again = server::json(invoke("kar_worktree_handoff", draft)).await;
@@ -264,6 +266,18 @@ pub(super) async fn exercise(
         workspace,
         continuation,
     };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !result.workspace.join("setup-count").is_file() {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(result.workspace.join("setup-count")).unwrap(),
+        "setup\n"
+    );
+    assert!(!root.join("setup-count").exists());
     result.check(host, url, project).await;
     result
 }

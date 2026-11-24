@@ -1,5 +1,6 @@
 //! The MCP call admits a move and releases the caller. A durable worker rebinds the same Kar chat
 //! at a turn boundary; waiting for the current model from inside its tool call would deadlock.
+mod setup;
 use super::*;
 use crate::{
     Error, Result,
@@ -18,6 +19,11 @@ struct Request {
     base_ref: String,
     continuation_prompt: Option<String>,
     start_from_origin: Option<bool>,
+    #[serde(default = "yes")]
+    run_setup_script: bool,
+}
+fn yes() -> bool {
+    true
 }
 fn head() -> String {
     "HEAD".into()
@@ -44,6 +50,10 @@ pub(in crate::workbench) struct Move {
     start_from_origin: bool,
     #[serde(default)]
     remote_base: Option<String>,
+    #[serde(default)]
+    script: Option<setup::Script>,
+    #[serde(default)]
+    setup_script: Option<setup::Outcome>,
     status: Phase,
     detail: Option<String>,
 }
@@ -310,6 +320,12 @@ async fn finish(
     if let (Some(prompt), Some(input)) = (&row.request.continuation_prompt, row.continuation_id) {
         app.0.chats.enqueue(row.chat, input, prompt)?;
     }
+    let service = app.clone();
+    let op = row.clone();
+    let cwd = target.clone();
+    let setup = tokio::task::spawn_blocking(move || setup::run(&service, &op, &cwd))
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?;
     app.update(|db| {
         db.lifecycle
             .move_checkout(row.project, row.chat, id, &row.source, &target)?;
@@ -319,6 +335,7 @@ async fn finish(
             .ok_or_else(crate::workbench::missing)?;
         r.workspace = Some(target);
         r.remote_base = remote;
+        r.setup_script = Some(setup);
         r.status = Phase::Attached;
         r.detail = None;
         Ok(())
@@ -466,7 +483,13 @@ fn dispatch(
         let start_from_origin = request
             .start_from_origin
             .unwrap_or_else(|| default_origin(&registered));
+        let script = request
+            .run_setup_script
+            .then(|| setup::Script::select(&registered))
+            .flatten();
         let row = Move {
+            script,
+            setup_script: None,
             project,
             chat,
             continuation_id,

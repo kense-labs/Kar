@@ -465,13 +465,27 @@ impl Workbench {
                 }
             }
         }
-        let workspace = self.workspace(&p)?;
-        let worktree_pin = crate::workbench_git::pin_checkout(&p.root)?.map(|(_, f)| f);
+        self.terminal_at(project,id,p.root,cols,rows)
+    }
+
+    pub(in crate::workbench) fn start_task_script(&self, project:Uuid, task:Uuid,cwd:&Path,terminal:Uuid,command:&str)->Result<bool>{
+        if self.0.task_folders.workspace(project,task)?.as_deref()!=Some(cwd) {
+            return Err(super::denied());
+        }
+        self.terminal_at(project,terminal,cwd.into(),120,30)?;
+        let mut input=command.as_bytes().to_vec();
+        input.push(b'\r');
+        Ok(self.0.terminal_preview.find(project,terminal)?.input(task,&input)?.delivered)
+    }
+
+    fn terminal_at(&self,project:Uuid,id:Uuid,cwd:PathBuf,cols:u16,rows:u16)->Result<Meta>{
+        let workspace = self.workspace_at(&cwd)?;
+        let worktree_pin = crate::workbench_git::pin_checkout(&cwd)?.map(|(_, f)| f);
         let state = &self.0.terminal_preview;
         let mut known = state.terminals.lock().unwrap();
         if let Some(s) = known.get(&id) {
             let m = s.snapshot();
-            if m.project != project || m.cwd != p.root {
+            if m.project != project || m.cwd != cwd {
                 return Err(missing());
             }
             return Ok(m);
@@ -483,7 +497,7 @@ impl Workbench {
         let m = Meta {
             id,
             project,
-            cwd: p.root,
+            cwd,
             shell,
             cols,
             rows,

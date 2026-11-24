@@ -105,7 +105,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
         tools.push(Tool{name:"kar_worktree_status",description:"Read this chat's current workspace attachment and its last managed handoff.",properties:json!({"project_id":id,"thread_id":id}),required:&[]});
         if !caller.plan && caller.policy.as_ref().and_then(Policy::worktree_directory).is_some(){
             tools.push(Tool{name:"kar_worktree_handoff",description:"Move this chat to a new branch in its granted worktree directory after its current turn. Reuse command_id on retries. A continuation is admitted once in the new workspace.",
-                properties:json!({"project_id":id,"thread_id":id,"command_id":id,"branch":{"type":"string"},"base_ref":{"type":"string"},"start_from_origin":{"type":"boolean"},"continuation_prompt":{"type":"string"}}),required:&["command_id","branch"]});
+                properties:json!({"project_id":id,"thread_id":id,"command_id":id,"branch":{"type":"string"},"base_ref":{"type":"string"},"start_from_origin":{"type":"boolean"},"run_setup_script":{"type":"boolean"},"continuation_prompt":{"type":"string"}}),required:&["command_id","branch"]});
         }
     }
     if let Some(policy) = caller.policy.as_ref().filter(|p| p.reads_workflows()) {
