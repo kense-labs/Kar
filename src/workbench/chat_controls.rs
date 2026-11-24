@@ -415,11 +415,18 @@ async fn fork(
     } else {
         tokio::spawn(async move {
             let slot = app.controller(chat);
-            let mut owner = slot.owner.try_lock().map_err(|_| Error::Busy)?;
             app.binding(p, chat)?;
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }
+            let mut owner = match slot.owner.try_lock() {
+                Ok(owner) => owner,
+                Err(_) => {
+                    let destination = destination.ok_or(Error::Busy)?;
+                    let live = slot.fork.lock().unwrap().clone().ok_or(Error::Busy)?;
+                    return live.fork(request.turn, request.id, destination, isolate_host_token).await;
+                }
+            };
             if let Some(source) = owner.as_ref().filter(|s| !s.is_closed()) {
                 source
                     .fork_at_with_id(request.turn, request.id, destination, isolate_host_token)

@@ -14,6 +14,7 @@ pub use log::ChatUpdate;
 pub use timeline::{Edit as ChatEdit, Frame as ChatFrame, MorphProgress};
 mod fork;
 pub use fork::{ForkOrigin, ForkWorktreeBase};
+pub(crate) use fork::LiveFork;
 pub(crate) mod import;
 pub use checkpoint::{
     ChangeKind, Checkpoint, CheckpointPoint, FileChange, RollbackReport, TurnDiff,
@@ -621,7 +622,7 @@ impl ChatStore {
     }
 }
 pub struct ChatSession {
-    launch: SessionOptions,
+    launch: Arc<SessionOptions>,
     sender: Arc<Sender>,
     worker: queue::QueueWorker,
 }
@@ -662,7 +663,7 @@ impl ChatSession {
         });
         let worker = queue::QueueWorker::start(&sender);
         Ok(Self {
-            launch,
+            launch: Arc::new(launch),
             sender,
             worker,
         })
@@ -672,7 +673,7 @@ impl ChatSession {
     }
     pub(crate) fn forget_launch_server(&mut self, name: &str) {
         // A native fork receives its own authority when its workbench controller attaches.
-        self.launch.mcp_servers.remove(name);
+        Arc::make_mut(&mut self.launch).mcp_servers.remove(name);
     }
     pub(crate) fn live_session(&self) -> std::sync::Weak<Session> {
         Arc::downgrade(&self.sender.session)

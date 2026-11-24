@@ -133,9 +133,23 @@ async fn scenario() {
         b"review notes"
     );
     let cut = say(&a, &parent, "shared-child").await;
-    let latest = say(&b, &parent, "shared-next").await;
+    fs::write(native.join("hold-parent-turn"), []).unwrap();
+    let (client, chat_url) = (b.clone(), parent.clone());
+    let third = tokio::spawn(async move { say(&client, &chat_url, "shared-next").await });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !native.join("parent-turn-running").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     let request = json!({"id":child,"turn":cut["id"],"destination_project":target_project});
     let receipt = ok(a.post(format!("{parent}/forks")).json(&request)).await;
+    assert!(!third.is_finished());
+    assert_eq!(fs::read(main.join("shared")).unwrap(), b"shared-next");
+    assert_eq!(fs::read(target.join("shared")).unwrap(), b"shared-child");
+    fs::remove_file(native.join("hold-parent-turn")).unwrap();
+    let latest = third.await.unwrap();
     assert_eq!(receipt["project"], target_project);
     let h = &receipt["history"];
     assert_eq!(h["chat"]["id"], child.to_string());

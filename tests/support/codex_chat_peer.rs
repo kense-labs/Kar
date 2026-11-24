@@ -334,6 +334,14 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                 emit(
                     json!({"method":"turn/started","params":{"threadId":session,"turn":{"id":turn}}}),
                 );
+                if text == "shared-next" && database.join("hold-parent-turn").exists() {
+                    fs::write(database.join("parent-turn-running"), []).unwrap();
+                    let until = Instant::now() + Duration::from_secs(30);
+                    while database.join("hold-parent-turn").exists() {
+                        assert!(Instant::now() < until, "held parent turn timed out");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
                 if text == "await queue steer" {
                     fs::write(database.join("steer-ready"), &turn).unwrap();
                     let mut line = String::new();

@@ -91,6 +91,7 @@ struct Controller {
     model_tools: Mutex<Option<mcp::Lease>>,
     // Control requests must be able to answer a native prompt while send holds the owner.
     live: Mutex<std::sync::Weak<crate::Session>>,
+    fork: Mutex<Option<crate::chat::LiveFork>>,
 }
 
 impl Controller {
@@ -101,6 +102,7 @@ impl Controller {
     }
     fn publish(&self, session: &ChatSession) {
         *self.live.lock().unwrap() = session.live_session();
+        *self.fork.lock().unwrap() = Some(session.live_fork());
     }
 }
 

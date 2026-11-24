@@ -63,6 +63,62 @@ impl ForkRepositoryBase {
         Ok(())
     }
 }
+/// A workbench send holds its owner until the turn settles. An independent
+/// checkpoint fork can read the live journal through this non-owning handle.
+#[derive(Clone)]
+pub(crate) struct LiveFork {
+    sender: std::sync::Weak<super::Sender>,
+    options: std::sync::Weak<SessionOptions>,
+}
+impl LiveFork {
+    pub(crate) async fn fork(
+        self,
+        turn: Uuid,
+        child: Uuid,
+        destination: PathBuf,
+        configure: impl FnOnce(&mut SessionOptions),
+    ) -> Result<super::ChatHistory> {
+        let sender = self.sender.upgrade().ok_or(Error::Busy)?;
+        if sender.session.is_closed() {
+            return Err(Error::Busy);
+        }
+        {
+            let log = sender.sink.0.lock().unwrap();
+            if !isolated_codex_cut(&log.state, turn) || log.state.active().is_none() {
+                return Err(Error::Busy);
+            }
+        }
+        sender
+            .store
+            .fork_request(
+                sender.info.id,
+                turn,
+                child,
+                Some(destination),
+                Some((
+                    sender.sink.clone(),
+                    self.options.upgrade().ok_or(Error::Busy)?.as_ref().clone(),
+                )),
+                configure,
+            )
+            .await
+    }
+}
+
+fn isolated_codex_cut(state: &log::State, id: Uuid) -> bool {
+    state.info.protocol == Protocol::Codex
+        && state.find(id).is_some_and(|t| {
+            t.status == TurnStatus::Completed
+                && t.fork_anchor.as_ref().is_some_and(|anchor| {
+                    !anchor.is_empty() && Some(anchor) == t.native_turn_id.as_ref()
+                })
+                && t.checkpoint
+                    .as_ref()
+                    .is_some_and(|c| c.after_tree.is_some())
+                && source::witness(t).ok() == Some(state.info.native_id.as_str())
+        })
+}
+
 impl ChatStore {
     pub(crate) fn fork_claimed(&self, id: Uuid) -> Result<bool> {
         Ok(Request::path(self, id).try_exists()?)
@@ -114,7 +170,7 @@ impl ChatStore {
         let log = self.open_controller(source).await?;
         let opts = log.state.info.options();
         let source = Sink(Arc::new(Mutex::new(log)));
-        let mut launch = self.prepare_fork(&source, turn, opts).await?;
+        let mut launch = self.prepare_fork(&source, turn, opts, false).await?;
         configure(&mut launch.options);
         self.fork_from(source, turn, launch, None).await
     }
@@ -128,7 +184,7 @@ impl ChatStore {
         let log = self.open_controller(source).await?;
         let opts = log.state.info.options();
         let source = Sink(Arc::new(Mutex::new(log)));
-        let launch = self.prepare_fork(&source, turn, opts).await?;
+        let launch = self.prepare_fork(&source, turn, opts, true).await?;
         self.fork_from(source, turn, launch, Some(checkout.into()))
             .await
     }
@@ -194,7 +250,9 @@ impl ChatStore {
                 (Sink(Arc::new(Mutex::new(log))), opts)
             }
         };
-        let mut launch = self.prepare_fork(&source, turn, opts).await?;
+        let mut launch = self
+            .prepare_fork(&source, turn, opts, worktree.is_some())
+            .await?;
         configure(&mut launch.options);
         crate::stream::retention::check_limit(launch.options.retained_bytes)?;
         let store = self.clone();
@@ -286,12 +344,16 @@ impl ChatStore {
         source: &Sink,
         turn: Uuid,
         options: SessionOptions,
+        independent: bool,
     ) -> Result<source::Launch> {
         let store = self.clone();
         let source = source.clone();
         tokio::task::spawn_blocking(move || {
             let log = source.0.lock().unwrap();
-            if log.state.active().is_some() || log.state.pending_handoff().is_some() {
+            if log.state.pending_handoff().is_some()
+                || (log.state.active().is_some()
+                    && !(independent && isolated_codex_cut(&log.state, turn)))
+            {
                 return Err(Error::Busy);
             }
             source::Launch::prepare(&store, &log.state, turn, options)
@@ -328,6 +390,19 @@ impl ChatStore {
             log.state.info.clone()
         };
         launch.activate(&mut parent);
+        // All forks share the source stage. Serialize its publication separately
+        // from writes to the working files so two destination forks cannot race.
+        let _publication = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.dir.join(format!("{}.fork.lock", parent.id)))?;
+        match _publication.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => return Err(Error::Busy),
+            Err(fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
         let _pin = parent.pin_worktree()?;
         let stage = self.fork_stage(parent.id);
         let staged_info = self.staged_fork(parent.id)?;
@@ -383,7 +458,9 @@ impl ChatStore {
             .or_else(|| staged_checkout.map(|i| i.workspace.as_path()))
             .map(|path| worktree::Destination::open(&parent, path, &mut opts).map(Arc::new))
             .transpose()?;
-        let _parent_lease = if destination.is_some() {
+        let independent_cut =
+            destination.is_some() && isolated_codex_cut(&source.0.lock().unwrap().state, turn);
+        let _parent_lease = if destination.is_some() && !independent_cut {
             Some(self.workspace_lease(&parent.workspace)?)
         } else {
             None
@@ -402,11 +479,12 @@ impl ChatStore {
         let mut prefix = {
             let log = source.0.lock().unwrap();
             log.healthy()?;
-            if log.state.active().is_some()
-                || !log.state.pending_requests.is_empty()
-                || log.state.compacting()
-                || log.state.waiting_steering()
-                || log.state.observing_notifications()
+            if !independent_cut
+                && (log.state.active().is_some()
+                    || !log.state.pending_requests.is_empty()
+                    || log.state.compacting()
+                    || log.state.waiting_steering()
+                    || log.state.observing_notifications())
             {
                 return Err(Error::Busy);
             }
@@ -704,6 +782,12 @@ impl ChatStore {
     }
 }
 impl ChatSession {
+    pub(crate) fn live_fork(&self) -> LiveFork {
+        LiveFork {
+            sender: Arc::downgrade(&self.sender),
+            options: Arc::downgrade(&self.launch),
+        }
+    }
     /// Start a child from this idle chat, preserving its launch environment and the full parent history.
     pub async fn fork_at(&self, turn: Uuid) -> Result<ChatSession> {
         self.sender
@@ -713,7 +797,7 @@ impl ChatSession {
                 turn,
                 self.sender
                     .store
-                    .prepare_fork(&self.sender.sink, turn, self.launch.clone())
+                    .prepare_fork(&self.sender.sink, turn, self.launch.as_ref().clone(), false)
                     .await?,
                 None,
             )
@@ -734,7 +818,7 @@ impl ChatSession {
                 turn,
                 child_id,
                 worktree,
-                Some((self.sender.sink.clone(), self.launch.clone())),
+                Some((self.sender.sink.clone(), self.launch.as_ref().clone())),
                 configure,
             )
             .await
@@ -752,7 +836,7 @@ impl ChatSession {
                 turn,
                 self.sender
                     .store
-                    .prepare_fork(&self.sender.sink, turn, self.launch.clone())
+                    .prepare_fork(&self.sender.sink, turn, self.launch.as_ref().clone(), true)
                     .await?,
                 Some(checkout.into()),
             )
