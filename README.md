@@ -369,6 +369,18 @@ Git 对象保存在聊天目录的 `<根聊天UUID>.git` 裸仓库。每个回�
 
 Rust 后端可以直接读取 `ChatTurn.checkpoint.files`。在已打开且空闲的聊天上使用 `ChatSession::rollback`，关闭聊天后使用 `ChatStore::rollback`。传入 `CheckpointPoint { turn, before }` 和 `dry_run`，从返回值读取 `files`、`conflicts` 和 `applied`。旧聊天从升级后的下一回合开始记录检查点。缺少结束快照的回合会标为不可用。
 
+### 在原聊天回到早先的模型上下文
+
+先从 `kar chat history --chat <聊天UUID>` 选择一个已完成的回合，然后执行：
+
+```sh
+kar chat rewind <目标回合UUID> --chat <聊天UUID> --id <命令UUID> --expected-head <当前末轮UUID>
+```
+
+下一条消息仍发往同一个 Kar 聊天，工作区文件保留当前内容。较晚的回合会移出当前时间线。回执列出移出的回合、原生会话 ID，以及采用原生分叉还是传递裁剪后的历史。只接受原生分叉时可加 `--native`。重试沿用相同命令 UUID 和参数。`--expected-head` 可避免另一客户端发出新回合后回退到过时的位置。
+
+工作台调用 `POST /projects/{project}/chats/{chat}/rewinds`，请求体使用 `id`、`turn` 和可选的 `expected_head`。快照及事件订阅均能读到这次回退。
+
 ### 从选中的回合继续聊
 
 `kar chat fork` 把工作区恢复到所选回合结束时的 Git 检查点，并从该回合的原生锚点创建新聊天。新聊天包含所选回合及之前的问答。原聊天的完整时间线可以用原聊天 ID 查看。两个聊天共用同一个工作目录。
