@@ -112,6 +112,7 @@ struct Inner {
     chats: ChatStore,
     roots: Vec<Root>,
     catalog: Mutex<Catalog>,
+    forge_updates: tokio::sync::watch::Sender<forge::signals::Epochs>,
     thread_updates: tokio::sync::watch::Sender<u64>,
     clones: forge::clone_jobs::Tracker,
     tracker_accounts:forge::trackers::Store,
@@ -189,6 +190,7 @@ impl Workbench {
         let shell = shell::Service::open(&state,&allowed)?;
         let access = access::AccessStore::open(&state)?;
         let devices = devices::Service::open(&state)?;
+        let (checkpoints, completed) = std::sync::mpsc::channel();
         let app = Self(Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
             let service = weak.clone();
             let chats = chats.with_repository_scopes(Arc::new(move |chat| {
@@ -197,6 +199,7 @@ impl Workbench {
                     .ok_or_else(|| Error::Closed("workbench stopped".into()))?;
                 task_folders::checkpoints::repositories(&Workbench(inner), chat)
             }));
+            let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
             Inner {
                 mcp: Default::default(),
                 shell,
@@ -207,6 +210,7 @@ impl Workbench {
                 task_folders,
                 chats,
                 roots: allowed,
+                forge_updates: tokio::sync::watch::channel(catalog.forge.epochs()).0,
                 thread_updates: tokio::sync::watch::channel(catalog.thread_state.sequence()).0,
                 catalog: Mutex::new(catalog),
                 tracker_accounts,
@@ -221,6 +225,7 @@ impl Workbench {
                 controllers: Default::default(),
             }
         }));
+        forge::signals::checkpoint_worker(&app, completed)?;
         git_actions::recover(&app)?;
         forge::clone_jobs::recover(&app)?;
         Ok(app)
@@ -287,6 +292,7 @@ impl Workbench {
         self.0.shell.changed();
         #[cfg(unix)]
         File::open(&self.0.state)?.sync_all()?;
+        forge::signals::notify(&self.0.forge_updates, saved.forge.epochs());
         Ok(result)
     }
 
@@ -516,6 +522,7 @@ impl Workbench {
                 catalog.archived.remove(&chat)
             };
             if changed {
+                catalog.forge.linked_chat_changed(chat)?;
                 let now = jiff::Timestamp::now().as_millisecond() as u64;
                 let meta = catalog.thread_state.rows.entry(chat).or_default();
                 meta.archived_ms = archived.then_some(now);

@@ -395,6 +395,7 @@ async fn change(
             };
             s.commands.insert(req.command_id, (req.action, idx));
             s.changes.push(change.clone());
+            db.forge.linked_chat_changed(c)?;
             Ok(change)
         })?;
         app.0

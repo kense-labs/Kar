@@ -30,13 +30,16 @@ pub(super) async fn refresh(
             "provider returned a different change request",
         ));
     }
-    Ok(app.update(|db|{
-        let r=db.forge.reviews.get_mut(&key).expect("registered review");
-        if seq>r.applied {
-            if r.pull.is_null() || !matches!((timestamp(&pull),timestamp(&r.pull)),(Some(older),Some(newer)) if older<newer){r.pull=pull;}
-            r.applied=seq;
+    Ok(app.update(|db| {
+        let r = db.forge.reviews.get_mut(&key).expect("registered review");
+        if seq > r.applied {
+            let older = matches!((timestamp(&pull),timestamp(&r.pull)),(Some(incoming),Some(saved)) if incoming < saved);
+            if r.pull.is_null() || !older {
+                r.pull = pull.clone();
+            }
+            r.applied = seq;
         }
-        Ok(r.pull.clone())
+        Ok(if r.pull.is_null(){pull}else{r.pull.clone()})
     })?)
 }
 

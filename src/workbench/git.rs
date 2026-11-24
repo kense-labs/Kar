@@ -139,7 +139,10 @@ async fn change(
             }
             Action::Stage { paths } => repo.stage(&paths)?,
             Action::Commit { message } => return Ok(json!({"commit":repo.commit(&message)?})),
-            Action::Push => repo.push()?,
+            Action::Push => {
+                repo.push()?;
+                app.update(|db| db.forge.pull_changed())?;
+            }
             Action::Pull => return Ok(json!({"commit":repo.pull()?})),
             Action::WorktreeAdd {
                 id,

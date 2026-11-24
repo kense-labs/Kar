@@ -21,6 +21,7 @@ pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<Stri
         .ok_or_else(|| ForgeError::bad("forge returned no default branch"))
 }
 mod routing;
+pub(in crate::workbench) mod signals;
 pub(in crate::workbench) mod signin;
 pub(super) mod trackers;
 pub(super) fn routes() -> axum::Router<Workbench> {
@@ -210,6 +211,8 @@ type Reply<T> = Result<Json<T>, ForgeError>;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct ForgeState {
+    #[serde(default)]
+    activity: signals::Activity,
     #[serde(default)]
     publications: BTreeMap<Uuid, repository::publication::Record>,
     #[serde(default)]

@@ -1595,6 +1595,9 @@ impl Log {
                 pending.before.changes(&after),
                 after.repositories.clone(),
             )?;
+            if let Some(observer) = &pending.store.turn_checkpointed {
+                observer(self.state.info.id);
+            }
             if self.state.info.protocol == Protocol::Claude
                 && self.state.find(id).is_some_and(|t| {
                     t.steered_inputs

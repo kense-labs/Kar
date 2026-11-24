@@ -239,6 +239,7 @@ impl Operation {
                 })
                 .await
                 .map_err(|e| Error::Closed(e.to_string()))??;
+            self.app.update(|db| db.forge.pull_changed())?;
             result["push"] = json!({"status":state,"remote":target.remote,"branch":branch,
                 "upstream_branch":format!("{}/{}",target.remote,target.branch),"published_branch":target.branch,"set_upstream":set_upstream});
         }

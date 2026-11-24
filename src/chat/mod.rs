@@ -234,8 +234,13 @@ impl SessionOptions {
 pub struct ChatStore {
     dir: PathBuf,
     repository_scopes: Option<checkpoint::scopes::Lookup>,
+    turn_checkpointed: Option<Arc<dyn Fn(Uuid) + Send + Sync>>,
 }
 impl ChatStore {
+    pub(crate) fn with_turn_checkpointed(mut self, observer: Arc<dyn Fn(Uuid) + Send + Sync>) -> Self {
+        self.turn_checkpointed = Some(observer);
+        self
+    }
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
         let mut create = DirBuilder::new();
         create.recursive(true);
@@ -248,6 +253,7 @@ impl ChatStore {
         Ok(Self {
             dir: dir.as_ref().canonicalize()?,
             repository_scopes: None,
+            turn_checkpointed: None,
         })
     }
     pub fn local() -> Result<Self> {

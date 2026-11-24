@@ -56,7 +56,7 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
         let m = db
             .forge
             .operations
-            .get_mut(&id)
+            .get(&id)
             .ok_or_else(|| Error::Refused("unknown operation".into()))?;
         if m.result.as_ref().is_some_and(Result::is_ok) {
             return Ok(m.result.clone().unwrap());
@@ -77,21 +77,25 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
             let number = number.ok_or_else(|| {
                 Error::Refused("provider did not identify the new change request".into())
             })?;
+            let binding = Binding {
+                project: m.project,
+                chat: m.chat,
+                repository: m.repository.clone(),
+                kind: kind.into(),
+                number,
+            };
+            if !db.forge.bindings.values().any(|v| v == &binding) {
+                db.forge.links_changed()?;
+            }
+            if kind == "pull" {
+                db.forge.pull_changed()?;
+            }
             db.forge
                 .link_activity
-                .insert(m.chat, jiff::Timestamp::now().as_millisecond() as u64);
-            db.forge.bindings.insert(
-                id,
-                Binding {
-                    project: m.project,
-                    chat: m.chat,
-                    repository: m.repository.clone(),
-                    kind: kind.into(),
-                    number,
-                },
-            );
+                .insert(binding.chat, jiff::Timestamp::now().as_millisecond() as u64);
+            db.forge.bindings.insert(id, binding);
         }
-        m.result = Some(result.clone());
+        db.forge.operations.get_mut(&id).unwrap().result = Some(result.clone());
         Ok(result)
     })??))
 }
@@ -410,6 +414,7 @@ fn save_binding(app: &Workbench, id: Uuid, binding: Binding) -> Reply<Binding> {
             ));
         }
         if !db.forge.bindings.values().any(|b| b == &binding) {
+            db.forge.links_changed()?;
             db.forge
                 .link_activity
                 .insert(binding.chat, jiff::Timestamp::now().as_millisecond() as u64);
@@ -564,6 +569,7 @@ async fn issue_tracker(State(app): State<Workbench>, Path(project): Path<Uuid>) 
 }
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
+        .merge(signals::routes())
         .merge(routing::routes())
         .merge(trackers::routes())
         .merge(signin::routes())

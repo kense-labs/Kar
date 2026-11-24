@@ -5,6 +5,8 @@ mod codex_chat_peer;
 mod diff_contents;
 #[path = "support/workbench_server.rs"]
 mod server;
+#[path = "workbench_forge/signals.rs"]
+mod signals;
 use axum::{
     Json, Router,
     extract::{Path as Param, State},
@@ -302,6 +304,7 @@ async fn scenario() {
     let input = json!({"id":Uuid::new_v4(),"chat":id,"op":"create_pull","head":"feature","base":"main","title":"notes","body":"changes"});
     let pr = ok(a.post(format!("{forge}/operations")).json(&input)).await;
     assert_eq!(pr["number"], 1);
+    let links_cursor = signals::before(&a, &url, p).await;
     let stack = ok(a.get(format!("{forge}/pulls/1/stack"))).await;
     assert_eq!(stack["id"], "18");
     assert_eq!(stack["layers"][0]["state"], "merged");
@@ -384,6 +387,7 @@ async fn scenario() {
     let later = publication::first(&a, &url, &root, &mock).await;
     process.kill().await.unwrap();
     let (mut process, url) = server::serve_with_env(&state, &root, &native, &env).await;
+    signals::after(&a, &url, p, links_cursor).await;
     publication::after_restart(&a, &url, &mock, later).await;
     assert_eq!(actions::linked(&a, &url, second, p).await, linked);
     let forge = format!("{url}/projects/{p}/forge");
