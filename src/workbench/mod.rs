@@ -5,6 +5,7 @@ mod documents;
 mod files;
 mod forge;
 mod git;
+mod git_actions;
 mod handoff;
 mod http;
 mod interactions;
@@ -41,6 +42,8 @@ pub struct Project {
 struct Catalog {
     #[serde(default)]
     forge: forge::ForgeState,
+    #[serde(default)]
+    git_actions: BTreeMap<Uuid, git_actions::Record>,
     projects: BTreeMap<Uuid, Project>,
     #[serde(default)]
     tracked_folders:BTreeMap<Uuid,Vec<task_folders::Tracked>>,
@@ -134,7 +137,7 @@ impl Workbench {
             Err(e) => return Err(e.into()),
         };
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
-        Ok(Self(Arc::new(Inner {
+        let app = Self(Arc::new(Inner {
             workflows: workflows::Engine::open(&state, clock)?,
             terminal_preview,
             chats,
@@ -146,7 +149,9 @@ impl Workbench {
             documents: Default::default(),
             _lease: lease,
             controllers: Default::default(),
-        })))
+        }));
+        git_actions::recover(&app)?;
+        Ok(app)
     }
 
     fn allowed(&self, path: &Path) -> Result<&Root> {

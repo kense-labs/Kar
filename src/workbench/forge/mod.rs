@@ -4,6 +4,17 @@ mod github;
 mod providers;
 mod review;
 mod routes;
+pub(super) use routes::stacked_pull;
+pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<String, ForgeError> {
+    Context::open(app, project)
+        .await?
+        .execute(&Operation::Identity)
+        .await?["default_branch"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| ForgeError::bad("forge returned no default branch"))
+}
 pub(super) fn routes() -> axum::Router<Workbench> {
     routes::routes()
 }

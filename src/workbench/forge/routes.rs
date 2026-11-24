@@ -133,6 +133,54 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
     let result = c.execute(&op).await;
     complete(&app, id, result)
 }
+pub(in crate::workbench) async fn stacked_pull(
+    app: Workbench,
+    project: Uuid,
+    id: Uuid,
+    chat: Option<Uuid>,
+    head: String,
+    base: String,
+    title: String,
+    body: String,
+) -> Result<Value, ForgeError> {
+    let c = Context::open(app.clone(), project).await?;
+    let pulls = c.execute(&Operation::Pulls).await?;
+    if let Some(open) = pulls.as_array().into_iter().flatten().find(|r| {
+        r["head_ref"] == head
+            && r["base_ref"] == base
+            && !matches!(r["state"].as_str(), Some("closed" | "merged"))
+    }) {
+        return Ok(json!({"status":"opened_existing","pull":open}));
+    }
+    let pull = if let Some(chat) = chat {
+        execute(
+            app,
+            project,
+            Input {
+                id,
+                chat,
+                operation: Operation::CreatePull {
+                    head,
+                    base,
+                    title,
+                    body,
+                },
+            },
+        )
+        .await?
+        .0
+    } else {
+        c.execute(&Operation::CreatePull {
+            head,
+            base,
+            title,
+            body: format!("{body}\n\n<!-- kar-operation:{id} -->"),
+        })
+        .await?
+    };
+    Ok(json!({"status":"created","pull":pull}))
+}
+
 async fn mutate(
     State(app): State<Workbench>,
     Path(project): Path<Uuid>,

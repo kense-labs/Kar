@@ -240,7 +240,7 @@ impl Repository {
         }
     }
 
-    fn check_branch(&self, name: &str) -> Result<()> {
+    pub(super) fn check_branch(&self, name: &str) -> Result<()> {
         if name.starts_with('-') || name.starts_with("@{") || name.is_empty() {
             return Err(Error::Refused("invalid branch name".into()));
         }

@@ -344,6 +344,7 @@ async fn scenario() {
     assert_eq!(links.as_array().unwrap().len(), 4);
     actions::issue(&a, &forge, id).await;
     actions::review(&a, &forge, id).await;
+    stacked::run(&a, &format!("{url}/projects/{p}"), &repo, &bare, id, &mock).await;
     assert!(
         !fs::read_to_string(state.join("workbench/projects.json"))
             .unwrap()
@@ -361,6 +362,8 @@ mod actions_live;
 mod hosted;
 #[path = "workbench_forge/providers.rs"]
 mod providers;
+#[path = "workbench_forge/stacked.rs"]
+mod stacked;
 fn main() {
     match std::env::args().nth(1).as_deref() {
         Some(mode @ ("hosted-issue-actions" | "hosted-review-actions")) => {
