@@ -4,63 +4,8 @@ use crate::{Error, Result};
 use std::{collections::BTreeSet, net::IpAddr};
 
 #[cfg(target_os = "macos")]
-pub(super) fn identity(pid: u32) -> Option<ProcessId> {
-    let info =
-        libproc::proc_pid::pidinfo::<libproc::task_info::TaskAllInfo>(pid.try_into().ok()?, 0)
-            .ok()?;
-    Some(ProcessId {
-        pid,
-        born: info
-            .pbsd
-            .pbi_start_tvsec
-            .checked_mul(1_000_000)?
-            .checked_add(info.pbsd.pbi_start_tvusec)?,
-    })
-}
-#[cfg(not(target_os = "macos"))]
-pub(super) fn identity(_pid: u32) -> Option<ProcessId> {
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn descendants(root: ProcessId) -> Vec<ProcessId> {
-    use libproc::{
-        proc_pid::pidinfo,
-        processes::{ProcFilter, pids_by_type},
-        task_info::TaskAllInfo,
-    };
-    if identity(root.pid) != Some(root) {
-        return vec![];
-    }
-    let mut seen = BTreeSet::from([root.pid]);
-    let mut list = vec![root];
-    let mut pos = 0;
-    while pos < list.len() {
-        let parent = list[pos];
-        pos += 1;
-        for pid in
-            pids_by_type(ProcFilter::ByParentProcess { ppid: parent.pid }).unwrap_or_default()
-        {
-            if seen.contains(&pid) {
-                continue;
-            }
-            let Ok(info) = pidinfo::<TaskAllInfo>(pid as i32, 0) else {
-                continue;
-            };
-            if info.pbsd.pbi_ppid != parent.pid {
-                continue;
-            }
-            if let Some(child) = identity(pid)
-                && child.born >= parent.born
-                && identity(parent.pid) == Some(parent)
-            {
-                seen.insert(pid);
-                list.push(child);
-            }
-        }
-    }
-    list
-}
+use crate::resources::tree::descendants;
+pub(super) use crate::resources::tree::identity;
 
 #[cfg(target_os = "macos")]
 pub(super) fn stop_tree(root: ProcessId) {

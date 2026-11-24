@@ -1,4 +1,5 @@
 //! Point-in-time process-tree memory observations, independent of the session journal.
+pub(crate) mod tree;
 pub(crate) mod turn;
 use futures_util::{
     FutureExt,
@@ -77,6 +78,12 @@ impl Root {
     ) -> Self {
         self.ownership = Some(proof.boxed().shared());
         self
+    }
+    pub(crate) fn identity(&self) -> tree::ProcessId {
+        tree::ProcessId {
+            pid: self.pid,
+            born: self.born,
+        }
     }
     pub(crate) fn shared(&self) -> bool {
         self.scope.is_some()

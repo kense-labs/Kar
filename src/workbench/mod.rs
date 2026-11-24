@@ -4,6 +4,7 @@ mod agent_sessions;
 mod assets;
 mod chat_controls;
 mod devices;
+mod observability;
 mod documents;
 mod files;
 mod force_stop;
@@ -87,6 +88,7 @@ impl Controller {
 }
 
 struct Inner {
+    observability: observability::Service,
     chats: ChatStore,
     roots: Vec<Root>,
     catalog: Mutex<Catalog>,
@@ -173,6 +175,7 @@ impl Workbench {
                 task_folders::checkpoints::repositories(&Workbench(inner), chat)
             }));
             Inner {
+                observability: Default::default(),
                 workflows,
                 terminal_preview,
                 task_folders,

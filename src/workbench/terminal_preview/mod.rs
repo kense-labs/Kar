@@ -24,11 +24,7 @@ use std::{
 use tokio::sync::watch;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-struct ProcessId {
-    pid: u32,
-    born: u64,
-}
+use crate::resources::tree::ProcessId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 struct Port {
     owner: ProcessId,
@@ -373,6 +369,21 @@ pub(super) struct TerminalPreview {
     reports: browser::profiles::Reports,
 }
 impl TerminalPreview {
+    pub(super) fn process_roots(&self) -> Vec<ProcessId> {
+        self.terminals
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|t| {
+                let m = t.meta.lock().unwrap();
+                if matches!(m.status, Status::Running) {
+                    m.process
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
     pub fn open(state: &Path) -> Result<Self> {
         let dir = state.join("terminals");
         fs::create_dir_all(&dir)?;

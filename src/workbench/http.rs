@@ -94,6 +94,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::assets::routes())
         .merge(super::workflows::routes())
         .merge(super::devices::routes())
+        .merge(super::observability::routes())
         .merge(super::documents::routes())
         .merge(super::forge::routes())
         .merge(super::git::routes())
