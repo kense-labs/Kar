@@ -10,6 +10,10 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
     Router::new()
         .route("/projects/{project}/workflows", get(list))
         .route(
+            "/projects/{project}/workflows/{workflow}/webhook/rules",
+            get(webhook::rules_get).put(webhook::rules_put),
+        )
+        .route(
             "/projects/{project}/workflows/{workflow}/webhook/rotate",
             post(webhook::rotate),
         )

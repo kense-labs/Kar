@@ -52,7 +52,7 @@ impl Workbench {
             |w: &Workflow| projects.contains(&w.project) && w.next_ms.is_some_and(|at| at <= now);
         let advance = |r: &Run| {
             projects.contains(&r.project)
-                && (r.status == Status::Ready
+                && ((r.status == Status::Ready && r.webhook_due_ms.is_none_or(|at| at <= now))
                     || (r.status == Status::Waiting && r.wake_at_ms.is_some_and(|at| at <= now)))
         };
         {
@@ -121,6 +121,8 @@ impl Workbench {
                     if external && remaining == 0 {
                         continue;
                     }
+                    run.webhook_due_ms = None;
+                    run.webhook_templates = None;
                     run.begin(now);
                     if external {
                         remaining -= 1;
@@ -276,11 +278,15 @@ impl Workbench {
                 let session = owner
                     .as_ref()
                     .ok_or_else(|| Error::Closed("workflow chat is unavailable".into()))?;
-                let context = context(run)?;
-                let text = format!(
-                    "{prompt}\n\nWorkflow input and previous step results (JSON):\n{}",
-                    String::from_utf8_lossy(&context)
-                );
+                let text = if run.webhook_rendered {
+                    prompt.clone()
+                } else {
+                    let context = context(run)?;
+                    format!(
+                        "{prompt}\n\nWorkflow input and previous step results (JSON):\n{}",
+                        String::from_utf8_lossy(&context)
+                    )
+                };
                 if self.workflow_run(run.project, run.id)?.cancel_requested {
                     return Ok(Outcome::Known(
                         false,

@@ -126,6 +126,12 @@ pub struct Receipt {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_due_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    webhook_templates: Option<Vec<Step>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    webhook_rendered: bool,
     pub id: Uuid,
     pub project: Uuid,
     pub workflow: Uuid,
@@ -219,6 +225,10 @@ struct Data {
     webhook_tokens: BTreeMap<Uuid, String>,
     #[serde(default)]
     deliveries: BTreeMap<Uuid, Vec<webhook::Receipt>>,
+    #[serde(default)]
+    webhook_rules: BTreeMap<Uuid, webhook::Rules>,
+    #[serde(default)]
+    webhook_windows: BTreeMap<Uuid, webhook::Window>,
     runs: BTreeMap<Uuid, Run>,
     actions: BTreeMap<Uuid, (Uuid, Action)>,
 }
@@ -315,6 +325,9 @@ fn insert_run(d: &mut Data, w: &Workflow, trigger: Trigger, input: Value, now: i
         return Err(Error::Refused("workflow disabled".into()));
     }
     let run = Run {
+        webhook_due_ms: None,
+        webhook_templates: None,
+        webhook_rendered: false,
         id: Uuid::new_v4(),
         project: w.project,
         workflow: w.id,
@@ -381,6 +394,8 @@ impl Workbench {
             } else {
                 d.secrets.remove(&id);
                 d.webhook_tokens.remove(&id);
+                d.webhook_rules.remove(&id);
+                d.webhook_windows.remove(&id);
             }
             let w = Workflow {
                 project,

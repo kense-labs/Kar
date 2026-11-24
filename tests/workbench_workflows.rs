@@ -325,6 +325,76 @@ async fn http_scenarios() {
     .await;
     assert_eq!(after, detail);
     assert_eq!(fs::read(root.join("hooks")).unwrap(), b"H");
+    let grouped=save(&host,&base,p,json!({"type":"webhook"}),json!([{"type":"agent","runtime":"codex","prompt":"Issue {{body.title}}; optional={{query.nope}}"}])).await;
+    let manage = format!("/projects/{p}/workflows/{grouped}");
+    let rules = json!({"signature":{"header":"x-issue-digest","encoding":"base64","prefix":"hMac "},
+        "filters":[{"path":"body.labels[].name","op":"in","value":["kar","chat"]}],
+        "replay_key":"{{headers.x-delivery}}","coalesce_key":"{{body.issue}}","coalesce_window_seconds":10,"render_agent_prompts":true});
+    ok(host
+        .put(format!("{base}{manage}/webhook/rules"))
+        .json(&rules))
+    .await;
+    let path = ok(host.post(format!("{base}{manage}/webhook/rotate"))).await["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let post_issue = |url: &str, delivery: &str, label: &str, title: &str| {
+        use base64::Engine as _;
+        let data = serde_json::to_vec(&json!({"issue":42,"labels":[{"name":label}],"title":title}))
+            .unwrap();
+        let mut mac = Hmac::<sha2_mac::Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+        mac.update(&data);
+        let signature =
+            base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+        remote
+            .post(format!("{url}{path}"))
+            .header("x-issue-digest", format!("HMAC {signature}"))
+            .header("x-delivery", delivery.to_owned())
+            .body(data)
+    };
+    assert_eq!(
+        ok(post_issue(&base, "a", "ignore", "unused")).await["outcome"],
+        "filtered"
+    );
+    let first = ok(post_issue(&base, "a", "kar", "version one")).await;
+    let grouped_id = first["run_id"].as_str().unwrap();
+    assert_eq!(
+        ok(post_issue(&base, "b", "chat", "@helper /go /next")).await,
+        first
+    );
+    child.kill().await.unwrap();
+    (child, base) = server::serve(&state, &root, &native).await;
+    assert_eq!(ok(post_issue(&base, "a", "kar", "duplicate")).await, first);
+    let finished = wait(&host, &base, p, grouped_id, "completed").await;
+    let rendered = finished["steps"][0]["prompt"].as_str().unwrap();
+    assert!(
+        rendered.contains("<webhook-data-")
+            && rendered.contains("@\u{2060}helper /\u{2060}go /\u{2060}next")
+            && !rendered.contains("version one")
+    );
+    let records = ok(host.get(format!("{base}{manage}/deliveries?accept_any_outcome=true"))).await;
+    let outcomes = records["deliveries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["outcome"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes, ["duplicate", "coalesced", "accepted", "filtered"]);
+    let mid = records["deliveries"][1]["id"].as_str().unwrap();
+    let entry = ok(host.get(format!(
+        "{base}{manage}/deliveries/{mid}?accept_any_outcome=true"
+    )))
+    .await;
+    assert_eq!(entry["delivery"]["headers"]["x-issue-digest"], "[redacted]");
+    assert_eq!(entry["delivery"]["missing"], json!(["query.nope"]));
+    assert_eq!(
+        ok(host.get(format!("{base}{manage}/runs")))
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     let def = save(
         &host,
         &base,

@@ -1,9 +1,12 @@
 //! Private URL credentials and per-attempt receipts. The decision, receipt and run share one commit.
-use super::{Data, Engine, Run, Schedule, Trigger, Workbench, Workflow, insert_run, missing};
+mod admission;
+mod rules;
+use super::{Data, Engine, Schedule, Workbench, Workflow, missing};
 use crate::{
     Error, Result,
     workbench::http::{ApiError, blocking},
 };
+pub(super) use admission::Window;
 use axum::{
     Json,
     body::Bytes,
@@ -11,7 +14,9 @@ use axum::{
     http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
+use base64::Engine as _;
 use hmac::{Hmac, KeyInit, Mac};
+pub(super) use rules::Rules;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2_mac::Sha256;
@@ -23,6 +28,8 @@ use uuid::Uuid;
 pub(super) struct Receipt {
     #[serde(flatten)]
     summary: Summary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    missing: Vec<String>,
     headers: BTreeMap<String, String>,
     query: String,
     body: String,
@@ -66,6 +73,48 @@ fn workflow(d: &Data, project: Uuid, id: Uuid) -> Result<&Workflow> {
         .get(&id)
         .filter(|w| w.project == project)
         .ok_or_else(missing)
+}
+pub(super) async fn rules_get(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+) -> Reply {
+    blocking(move || {
+        app.project(p)?;
+        let db = app.0.workflows.db.lock().unwrap();
+        workflow(&db, p, id)?;
+        Ok(json!(
+            db.webhook_rules.get(&id).cloned().unwrap_or_default()
+        ))
+    })
+    .await
+}
+pub(super) async fn rules_put(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+    Json(mut rules): Json<Rules>,
+) -> Reply {
+    rules.validate()?;
+    rules.signature.header.make_ascii_lowercase();
+    blocking(move || {
+        app.project(p)?;
+        app.0.workflows.update(|d| {
+            if !matches!(workflow(d, p, id)?.definition.schedule, Schedule::Webhook) {
+                return Err(Error::Refused("workflow does not accept webhooks".into()));
+            }
+            if (rules.signature.header != "x-kar-signature"
+                || !matches!(rules.signature.encoding, rules::Encoding::Hex)
+                || rules.signature.prefix != "sha256=")
+                && !d.secrets.contains_key(&id)
+            {
+                return Err(Error::Refused(
+                    "configure the webhook signing secret first".into(),
+                ));
+            }
+            d.webhook_rules.insert(id, rules.clone());
+            Ok(json!(rules))
+        })
+    })
+    .await
 }
 pub(super) async fn rotate(
     State(app): State<Workbench>,
@@ -167,6 +216,7 @@ fn redacted_query(query: &str) -> String {
         .join("&")
 }
 struct Request {
+    received_ms: i64,
     project: Uuid,
     workflow: Uuid,
     token: Option<String>,
@@ -182,6 +232,7 @@ impl Request {
         outcome: &str,
         run_id: Option<Uuid>,
         error: Option<String>,
+        rules: &Rules,
     ) -> Receipt {
         let n = self.body.len().min(64 * 1024);
         let bytes = &self.body[..n];
@@ -191,6 +242,7 @@ impl Request {
             _ => bytes,
         };
         Receipt {
+            missing: Vec::new(),
             summary: Summary {
                 id: Uuid::new_v4(),
                 workflow: self.workflow,
@@ -214,7 +266,9 @@ impl Request {
                 .map(|(name, value)| {
                     (
                         name.to_string(),
-                        if redact(name.as_str()) {
+                        if redact(name.as_str())
+                            || rules.signature.header.eq_ignore_ascii_case(name.as_str())
+                        {
                             "[redacted]".into()
                         } else {
                             value.to_str().unwrap_or("").to_owned()
@@ -226,22 +280,37 @@ impl Request {
             body_truncated: truncated,
         }
     }
-    fn signature_matches(&self, secret: &str) -> bool {
+    fn signature_matches(&self, secret: &str, signature: &rules::Signature) -> bool {
         let Some(sig) = self
             .headers
-            .get("x-kar-signature")
+            .get(&signature.header)
             .and_then(|h| h.to_str().ok())
-            .and_then(|s| s.strip_prefix("sha256="))
+            .map(str::trim)
         else {
             return false;
         };
-        if sig.len() != 64 || !sig.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let Some(prefix) = sig.get(..signature.prefix.len()) else {
+            return false;
+        };
+        if !prefix.eq_ignore_ascii_case(&signature.prefix) {
             return false;
         }
-        let mut tag = [0u8; 32];
-        for (i, byte) in tag.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&sig[2 * i..2 * i + 2], 16).expect("two hexadecimal digits");
-        }
+        let data = &sig[prefix.len()..];
+        let tag = match signature.encoding {
+            rules::Encoding::Hex
+                if data.len() == 64 && data.bytes().all(|b| b.is_ascii_hexdigit()) =>
+            {
+                (0..32)
+                    .map(|i| u8::from_str_radix(&data[2 * i..2 * i + 2], 16).unwrap())
+                    .collect::<Vec<_>>()
+            }
+            rules::Encoding::Base64 => match base64::engine::general_purpose::STANDARD.decode(data)
+            {
+                Ok(v) => v,
+                Err(_) => return false,
+            },
+            _ => return false,
+        };
         let mut mac =
             Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("variable length key");
         mac.update(&self.body);
@@ -271,7 +340,7 @@ impl Request {
             }),
         ))
     }
-    fn deliver(&self, engine: &Engine) -> Result<Result<Run>> {
+    fn deliver(&self, engine: &Engine) -> Result<Result<admission::Decision>> {
         engine.update_checked(
             |d| {
                 let w = workflow(d, self.project, self.workflow)?;
@@ -287,61 +356,63 @@ impl Request {
                     return Err(missing());
                 }
                 let secret = d.secrets.get(&self.workflow);
-                let verified = secret.is_some_and(|s| self.signature_matches(s));
+                let rules = d.webhook_rules.get(&w.id).cloned().unwrap_or_default();
+                let verified = secret.is_some_and(|s| self.signature_matches(s, &rules.signature));
                 // The tokenless path is for signed deliveries only. Refusals here have no
                 // authenticated task identity and cannot evict its delivery history.
                 if self.token.is_none() && !verified {
                     return Err(invalid_signature());
                 }
-                Ok((w.clone(), verified, secret.is_some()))
+                Ok((w.clone(), verified, secret.is_some(), rules))
             },
-            |d, (w, verified, signed)| {
+            |d, (w, verified, signed, rules)| {
                 let now = engine.clock.now_ms();
                 let (outcome, result) = if signed && !verified {
                     ("rejected_signature", Err(invalid_signature()))
                 } else if !w.definition.enabled {
                     ("disabled", Err(Error::Refused("workflow disabled".into())))
                 } else {
-                    match self.input() {
+                    match self.admit(d, &w, &rules, now) {
+                        Ok(decision) => (decision.outcome, Ok(decision)),
                         Err(e) => ("dispatch_failed", Err(e)),
-                        Ok((key, input)) => {
-                            let trigger = Trigger::Webhook(key);
-                            let duplicate = d
-                                .runs
-                                .values()
-                                .any(|r| r.workflow == w.id && r.trigger == trigger);
-                            let run = insert_run(d, &w, trigger, input, now);
-                            (
-                                if run.is_err() {
-                                    "dispatch_failed"
-                                } else if duplicate {
-                                    "duplicate"
-                                } else {
-                                    "accepted"
-                                },
-                                run,
-                            )
-                        }
                     }
                 };
-                let receipt = self.receipt(
-                    now,
+                let mut receipt = self.receipt(
+                    self.received_ms,
                     verified,
                     outcome,
-                    result.as_ref().ok().map(|r| r.id),
-                    result.as_ref().err().map(ToString::to_string),
+                    result.as_ref().ok().and_then(|r| r.run),
+                    result
+                        .as_ref()
+                        .err()
+                        .map(ToString::to_string)
+                        .or_else(|| result.as_ref().ok().and_then(|r| r.error.clone())),
+                    &rules,
                 );
+                if let Ok(r) = &result {
+                    receipt.missing = r.missing.clone();
+                }
                 let rows = d.deliveries.entry(w.id).or_default();
-                let suppressed = |r: &Receipt| {
-                    matches!(
-                        r.summary.outcome.as_str(),
-                        "duplicate" | "coalesced" | "rate_limited"
-                    )
+                let bucket = |r: &Receipt| match r.summary.outcome.as_str() {
+                    "duplicate" | "coalesced" | "rate_limited" | "queue_full" => 1,
+                    "filtered" => 2,
+                    _ => 0,
                 };
-                let bucket = suppressed(&receipt);
-                if rows.iter().filter(|r| suppressed(r) == bucket).count()
-                    >= if bucket { 20 } else { 50 }
-                    && let Some(i) = rows.iter().position(|r| suppressed(r) == bucket)
+                let kind = bucket(&receipt);
+                if kind != 0
+                    && rows
+                        .iter()
+                        .filter(|r| {
+                            bucket(r) == kind && now.saturating_sub(r.summary.received_ms) < 60000
+                        })
+                        .count()
+                        >= 10
+                {
+                    return Ok(result);
+                }
+                if rows.iter().filter(|r| bucket(r) == kind).count()
+                    >= if kind == 0 { 50 } else { 20 }
+                    && let Some(i) = rows.iter().position(|r| bucket(r) == kind)
                 {
                     rows.remove(i);
                 }
@@ -355,13 +426,27 @@ fn invalid_signature() -> Error {
     io::Error::new(io::ErrorKind::PermissionDenied, "invalid webhook signature").into()
 }
 async fn deliver(app: Workbench, req: Request) -> Response {
-    blocking(move || {
+    let result = blocking(move || {
         app.project(req.project)?;
-        let run = req.deliver(&app.0.workflows)??;
-        Ok(json!({"run_id":run.id}))
+        let decision = req.deliver(&app.0.workflows)??;
+        if let Some(id) = decision.run {
+            return Ok(json!({"run_id":id}));
+        }
+        Ok(json!({"outcome":decision.outcome}))
     })
-    .await
-    .into_response()
+    .await;
+    match result {
+        Ok(body)
+            if matches!(
+                body.0["outcome"].as_str(),
+                Some("rate_limited" | "queue_full")
+            ) =>
+        {
+            (StatusCode::TOO_MANY_REQUESTS, body).into_response()
+        }
+        Ok(body) if body.0["outcome"] == "expired" => (StatusCode::GONE, body).into_response(),
+        r => r.into_response(),
+    }
 }
 pub(super) async fn signed(
     State(app): State<Workbench>,
@@ -370,12 +455,21 @@ pub(super) async fn signed(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !headers.contains_key("x-kar-signature") {
-        return StatusCode::UNAUTHORIZED.into_response();
+    {
+        let db = app.0.workflows.db.lock().unwrap();
+        let header = db
+            .webhook_rules
+            .get(&workflow)
+            .map_or("x-kar-signature", |r| r.signature.header.as_str());
+        if !headers.contains_key(header) {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     }
+    let received_ms = app.0.workflows.clock.now_ms();
     deliver(
         app,
         Request {
+            received_ms,
             project,
             workflow,
             token: None,
@@ -393,9 +487,11 @@ pub(super) async fn tokenized(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    let received_ms = app.0.workflows.clock.now_ms();
     deliver(
         app,
         Request {
+            received_ms,
             project,
             workflow,
             token: Some(token),
