@@ -51,6 +51,10 @@ pub(super) fn cases() -> Vec<Case> {
     cases.push(local);
     for (mode, requires) in [
         (
+            "workbench-usage",
+            "isolated HOME, native-format usage records and a local HTTP price source",
+        ),
+        (
             "workbench-observability",
             "macOS system CPU, memory, isolated child PTY signals and two HTTP subscribers",
         ),
@@ -128,6 +132,14 @@ pub(super) fn cases() -> Vec<Case> {
     );
     cloud.libtest = true;
     cases.push(cloud);
+    let mut usage = scenario(
+        "lib",
+        "kar_usage_is_scoped_by_open_child_and_handoff",
+        &["--lib", "kar_usage_is_scoped_by_open_child_and_handoff"],
+        "Kar usage from parent, child and handed-off controller streams",
+    );
+    usage.libtest = true;
+    cases.push(usage);
     for (test, env, conditions) in [
         (
             "workbench-simlock-live",
