@@ -346,7 +346,7 @@ name = "工作区、独立工作树和仓库范围的联动回滚"
 upstream = ["apps/server/src/orchestration-v2/CheckpointRollbackService.ts", "apps/server/src/orchestration-v2/CheckpointRollbackService.taskFolder.test.ts", "apps/server/src/orchestration-v2/CheckpointRestoreSafety.ts"]
 kar = ["src/chat/checkpoint/restore.rs", "src/chat/fork/worktree.rs"]
 status = "根目录、受管仓库、跨目录分叉基线及全仓库冲突预检已接入，待统一验收"
-implementation_ref = "0efe2ce, 772a249"
+implementation_ref = "0efe2ce, 772a249, e78c698"
 test_target = "cargo test --locked --test chat_restart -- workbench-task-folders"
 accept = "两个受管仓库在同一回合修改。预览指出各自的路径；存在冲突时所有仓库都维持原内容。落盘恢复、重启重试及在独立目录分叉后继续聊时，逐一读取文件、原生会话和父工作区。"
 
@@ -356,8 +356,8 @@ phase = 2
 name = "定向中断、强制停止和活动回合输入"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts", "apps/server/src/orchestration-v2/ProviderTurnControlService.ts"]
 kar = ["src/session/prompt_run.rs","src/workbench/interactions.rs"]
-status = "按 input 和 request 定向中断已集成；强制停止、定向续写及派生任务终止仍待逐项核对"
-implementation_ref = "a02f848, 67be12f"
+status = "按 input 和 request 定向中断已集成；指定回合续写及原生回执已接入；强制停止和派生任务终止待核对"
+implementation_ref = "a02f848, 67be12f, ed93575"
 test_target = "cargo test --locked --test chat_restart -- workbench-requests"
 accept = "两端观察同一回合，在正确 input、过期 input、错 request 和同一 input 重试时发送中断；核对只有正确目标收到原生命令、两端终态及下一回合。分别核对子任务链、已离线会话和强停的清理结果。"
 
@@ -367,8 +367,8 @@ phase = 2
 name = "已排队回合的编辑、重新排序、提升、延迟启动与重启投递"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/QueuedRunOrder.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
 kar = ["src/chat/queue.rs", "src/workbench/chat_controls.rs"]
-status = "持久 FIFO、撤回、暂停、编辑、改序、指定开始和恢复已集成；提升及附件编辑待补"
-implementation_ref = "7c6ae33"
+status = "持久 FIFO、撤回、暂停、编辑、改序、指定开始和恢复已集成；定向提升已接入；附件编辑待补"
+implementation_ref = "7c6ae33, d069f15, ed93575"
 test_target = "cargo test --locked --test chat_restart -- workbench-queue"
 accept = "活动回合中排入 A/B/C，编辑 B、调整顺序并重启。接收回执前后分别撤回、改序和提升为 steer，检查原生投递顺序、文本、ID 和是否重复。"
 
@@ -377,8 +377,9 @@ id = "thread-find"
 phase = 2
 name = "聊天内查找、结果导航、分阶段返回和单条时间线读取"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/ThreadFind.ts", "apps/server/src/orchestration-v2/ProjectionStore.ts"]
-kar = ["src/workbench/search.rs", "src/chat/timeline.rs"]
-status = "跨聊天搜索已接入；单个聊天结果定位、单条取回及流式查找待补"
+kar = ["src/workbench/thread_find/mod.rs", "src/chat/timeline.rs"]
+status = "稳定条目标识、出现位置和两阶段查找已集成；富文本显示投影仍待核对"
+implementation_ref = "e93c30a"
 test_target = "cargo test --locked --test chat_restart -- workbench-fork"
 accept = "在分叉前后添加同词的多条消息，按文本出现序号、游标和正负偏移导航，核对首个匹配与完整计数共享同一快照。读取匹配项，对不存在或别的聊天的标识返回空。"
 
@@ -398,9 +399,10 @@ id = "thread-metadata"
 phase = 2
 name = "聊天生命周期、收藏排序、已读、标签、标题及暂缓"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
-kar = ["src/workbench/mod.rs"]
-status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
-test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+kar = ["src/workbench/thread_state/mod.rs","src/workbench/thread_state/queries.rs"]
+status = "持久标签、标题、排序、暂缓、已读及变更续收已接入。删除、侧聊天、自动唤醒及完整 shell 事件仍待补齐"
+implementation_ref = "a3970f2"
+test_target = "cargo test --locked --test chat_restart -- workbench-fork"
 accept = "两端创建聊天、修改标题与标签、固定及重排、访问及标为未读、暂缓、恢复和归档。按命令 ID 重试并重启，比对有序列表、可见性、侧聊天、删除及旧客户端恢复投影。"
 
 [[gap]]
@@ -462,3 +464,173 @@ kar = ["src/workbench/access/guest.rs"]
 status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
 test_target = "cargo test --locked --test workbench_remote_access"
 accept = "打开、兑换并关闭分享；访客提交两则消息，所有者关闭一则、接受另一则，服务端使用已保存正文。断线/重启后核对投影、客户端权限及真实供应商投递次数。"
+
+[[gap]]
+id = "workbench-editor"
+phase = 2
+name = "系统编辑器启动与定位"
+upstream = ["apps/server/src/process/externalLauncher.ts"]
+kar = ["src/workbench/files.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "在授权工作目录开指定文件、行和列，对照默认编辑器、所选编辑器、缺失程序及启动错误。"
+
+[[gap]]
+id = "native-chat-import"
+phase = 2
+name = "扫描并导入原生会话"
+upstream = ["apps/server/src/project/AgentSessionScanner.ts"]
+kar = ["src/chat/import.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart"
+accept = "分别扫描多个已配置的供应商，过滤范围、时间和重复原生 ID。导入保留原工作区、消息及可恢复标识；二次导入无重复。"
+
+[[gap]]
+id = "assets-intake"
+phase = 2
+name = "受限资源 URL、附件上传、持久化和撤销"
+upstream = ["apps/server/src/assets/AttachmentUpload.ts", "apps/server/src/attachmentStore.ts", "apps/server/src/orchestration-v2/AttachmentClaims.ts"]
+kar = ["src/workbench/files.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-queue"
+accept = "客户端领取上传 URL、上传文件、把暂存附件交给本轮聊天或删除。过期、跨项目、重复领取及失败后清理都应能复验。跟踪附件进入队列、编辑及供应商重启。"
+
+[[gap]]
+id = "mcp-app-session"
+phase = 2
+name = "应用工具调用、工具信息、资源读取和上下文更新"
+upstream = ["apps/server/src/mcpApps/McpAppRequests.ts"]
+kar = ["src/mcp.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test protocol"
+accept = "固定会话和工具调用身份，分别读工具 schema、调用、读取资源和更新模型上下文；重试、过期授权和不同聊天请求核对返回和供应商交互。"
+
+[[gap]]
+id = "provider-account-flows"
+phase = 2
+name = "供应商与 MCP 登录、反馈、额度及凭据交接"
+upstream = ["apps/server/src/provider/ProviderAuthService.ts"]
+kar = ["src/workbench/interactions.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test protocol"
+accept = "从两个客户端启动、响应、完成、取消、观察授权流；验证来源客户端绑定。检查凭据移除、退出、MCP 登录、账号导入/重连、反馈和额度结果。"
+
+[[gap]]
+id = "provider-install-jobs"
+phase = 2
+name = "供应商安装、取消、进度续收及移除"
+upstream = ["apps/server/src/provider/providerInstallation.ts", "apps/server/src/provider/ProviderInstallationGate.ts"]
+kar = ["src/workbench/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test protocol"
+accept = "两个客户端观察同一安装任务，核对路径、版本、并发请求、取消及重试。卸载只清理该实例拥有的二进制文件。"
+
+[[gap]]
+id = "server-settings"
+phase = 2
+name = "工作台配置、更新任务、快捷键和服务生命周期"
+upstream = ["apps/server/src/serverSettings.ts", "apps/server/src/keybindings.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "重启后读取设置、实例更新与快捷键；验证版本探测、进度、准备/提交桌面更新、配置与生命周期订阅的初始状态及变更。使用 Kar 更新来源。"
+
+[[gap]]
+id = "server-storage"
+phase = 2
+name = "存储分析、局部清理、报告和数据库空间回收"
+upstream = ["apps/server/src/storageCleanup.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "记录清理前分类占用、可回收量及跳过的活动记录。执行显式清理、复读报告、核对剩余历史游标、附件及回收空间。"
+
+[[gap]]
+id = "workbench-peers"
+phase = 2
+name = "环境链接、配对、授权应答及远程聊天窗口"
+upstream = ["apps/server/src/peer/PeerLinks.ts", "apps/server/src/peer/PeerLinkRequests.ts"]
+kar = ["src/workbench/access/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+accept = "相互授权两个环境，获取名称、远程历史分页、单条详情和实时更新；拒绝请求、撤销链接及远端离线时核对权限与游标。"
+
+[[gap]]
+id = "registry-agents"
+phase = 2
+name = "ACP 注册表安装、账号、供应商和会话管理"
+upstream = ["apps/server/src/provider/AcpRegistrySessions.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test protocol"
+accept = "按固定来源搜索并准备 ACP 实例、处理 URL 授权；列出及选择供应商和会话、导入、删除、禁用、卸载及退出。逐操作检查原生副作用和范围。"
+
+[[gap]]
+id = "host-observability"
+phase = 2
+name = "主机与进程资源、追踪、使用量和诊断"
+upstream = ["apps/server/src/diagnostics/ProcessDiagnostics.ts", "apps/server/src/diagnostics/TraceDiagnostics.ts", "apps/server/src/resourceTelemetry/ResourceTelemetry.ts", "apps/server/src/usage/UsageService.ts", "apps/server/src/triage/TriageService.ts"]
+kar = ["src/workbench/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "以 macOS 本机服务读取进程、主机负载、活动和历史窗口。核对 telemetry 首帧、重试、OTLP 检查、费用刷新、triage 和进程信号的授权目标与结果。"
+
+[[gap]]
+id = "relay-install"
+phase = 2
+name = "远程中继程序状态、安装与进度"
+upstream = ["apps/server/src/cloud/RelayClientLedger.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/access/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+accept = "检查中继程序状态，订阅安装进度，成功后重新发现同一版本。分别记录断线、失败和缺少远端环境。"
+
+[[gap]]
+id = "workflow-management"
+phase = 2
+name = "工作流快照、计数、定义源及定时任务管理"
+upstream = ["apps/server/src/ws.ts", "apps/server/src/scheduledTasks/ScheduledTaskService.ts"]
+kar = ["src/workbench/workflows/routes.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test workbench_workflows"
+accept = "读取及观察工作流和定时任务列表、计数、脚本定义，保存和删除；应答、取消、恢复、立即运行及启停后重启，核对原有回执和下次时间。"
+
+[[gap]]
+id = "terminal-views"
+phase = 2
+name = "多客户端终端显示、观察及元数据流"
+upstream = ["apps/server/src/ws.ts"]
+kar = ["src/workbench/terminal_preview/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-terminal"
+accept = "对同一终端分别 attach 和 observe，验证写入及尺寸的所属者、快照重放、清屏、关闭和仅元数据订阅。"
+
+[[gap]]
+id = "native-devices"
+phase = 2
+name = "设备发现、宿主配置、本地和远程生命周期"
+upstream = ["apps/server/src/ws.ts"]
+kar = ["src/workbench/devices/mod.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-devices"
+accept = "分别使用 Mac 本地、SSH、Expo 和 Simlock 执行发现、打开、操作、抓屏和关闭，在设备重名、账号变化、租约过期和断线时验证隔离。"
+
+[[gap]]
+id = "source-review"
+phase = 2
+name = "分支和托管变更请求的准备与评审"
+upstream = ["apps/server/src/review/ReviewService.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/git.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test workbench_forge"
+accept = "对本地分支和托管 PR 读取提交、文件与变更前后内容；检查空文件、冲突、缓存、独立工作树和当前工作区被占用的行为。"
+
+[[gap]]
+id = "chat-shell-read"
+phase = 2
+name = "聊天目录、历史窗口、变更流及侧栏查询"
+upstream = ["apps/server/src/orchestration-v2/ProjectionStore.ts", "apps/server/src/orchestration-v2/ThreadSearch.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/thread_state/queries.rs"]
+status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+test_target = "cargo test --locked --test chat_restart -- workbench-fork"
+accept = "查父子及跨项目分叉、归档、批量标题和链接、较早已结项目分页与工作树。大历史分页，重启从旧游标补发；单独核对侧聊天、原生子任务和完整 shell 事件。"
