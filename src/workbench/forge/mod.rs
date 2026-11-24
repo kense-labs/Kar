@@ -9,7 +9,7 @@ mod repository;
 mod review;
 pub(in crate::workbench) use publish::PullTarget;
 mod routes;
-pub(super) use routes::stacked_pull;
+pub(super) use routes::{model_issue_write, stacked_pull};
 pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<String, ForgeError> {
     Context::open(app, project)
         .await?
@@ -25,6 +25,12 @@ pub(in crate::workbench) mod signals;
 pub(in crate::workbench) mod signin;
 pub(super) mod trackers;
 pub(in crate::workbench) use providers::viewed::Gates as ViewedGates;
+fn supports_issues(driver: &str) -> bool {
+    matches!(
+        driver,
+        "github" | "gitlab" | "tanstack-source" | "forgejo" | "azure-devops" | "linear"
+    )
+}
 pub(super) fn routes() -> axum::Router<Workbench> {
     routes::routes()
 }
@@ -576,6 +582,19 @@ impl Context {
             signin: None,
             cwd,
         })
+    }
+    pub(in crate::workbench) async fn issue_repository(
+        app: Workbench,
+        project: Uuid,
+        scope: Option<&str>,
+    ) -> Result<String, ForgeError> {
+        let ctx = Self::for_operation(app, project, &Operation::Issues, scope).await?;
+        if !supports_issues(&ctx.kind) {
+            return Err(ForgeError::unsupported(
+                "this driver does not offer an issue tracker",
+            ));
+        }
+        Ok(ctx.identity())
     }
     fn identity(&self) -> String {
         format!("{}://{}/{}", self.kind, self.host, self.repository)

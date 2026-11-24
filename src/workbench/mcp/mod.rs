@@ -1,4 +1,6 @@
 //! Workbench tools use a caller-scoped transport independent of the runtime's stdio MCP server.
+mod issues;
+pub(super) use issues::{Policy, permission_routes};
 mod registry;
 mod toolkit;
 use super::{Workbench, access};
@@ -29,6 +31,7 @@ struct Caller {
     identity: Identity,
     grant: Option<Arc<Grant>>,
     plan: bool,
+    issue_policy: Option<Policy>,
 }
 fn hdr<'a>(h: &'a HeaderMap, k: &str) -> Option<&'a str> {
     h.get(k)?.to_str().ok()
@@ -82,7 +85,7 @@ async fn admit(
     }
     access::authorize(State(auth), req, next).await
 }
-async fn scope(mut req: Request, next: Next) -> Response {
+async fn scope(State(app): State<Workbench>, mut req: Request, next: Next) -> Response {
     let grant = req.extensions().get::<Arc<Grant>>().cloned();
     let identity = match (&grant, req.extensions().get::<access::DeviceLease>()) {
         (Some(g), _) => Identity::Provider(g.id),
@@ -100,7 +103,9 @@ async fn scope(mut req: Request, next: Next) -> Response {
     } else {
         false
     };
+    let issue_policy = grant.as_ref().and_then(|g| issues::authorized(&app, g, plan));
     req.extensions_mut().insert(Caller {
+        issue_policy,
         identity,
         grant,
         plan,
@@ -116,7 +121,7 @@ pub(super) fn routes(app: Workbench, auth: access::Auth) -> Router {
     Router::new()
         .route("/mcp", post(rpc).get(events).delete(close))
         .layer(DefaultBodyLimit::max(1024 * 1024))
-        .layer(middleware::from_fn(scope))
+        .layer(middleware::from_fn_with_state(app.clone(), scope))
         .layer(middleware::from_fn_with_state((app.clone(), auth), admit))
         .with_state(app)
 }

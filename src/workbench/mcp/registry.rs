@@ -72,6 +72,9 @@ impl Lease {
         chat.forget_launch_server(SERVER);
         let _ = self.grant.process.set(chat.live_session());
     }
+    pub(super) fn tools_changed(&self) {
+        self.grant.changes.send_modify(|n| *n += 1);
+    }
     pub(in crate::workbench) fn touch(&self) {
         *self.grant.clock.lock().unwrap() = (Instant::now(), access::now(), false);
     }

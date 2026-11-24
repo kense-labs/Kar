@@ -8,7 +8,7 @@ use axum::{
 
 async fn drivers() -> Json<Value> {
     Json(json!(DRIVER_KINDS.iter().map(|kind|json!({
-        "kind":kind,"upstream_pull_actions":declared_pull_actions(kind),"issues_in_upstream":matches!(*kind,"github"|"gitlab"|"tanstack-source"|"forgejo"|"azure-devops"|"linear"),
+        "kind":kind,"upstream_pull_actions":declared_pull_actions(kind),"issues_in_upstream":supports_issues(kind),
         "reviews":actions::capabilities(kind),"pulls_in_upstream":*kind!="linear","enabled":*kind!="tanstack-source" || std::env::var("KAR_TANSTACK_SOURCE").as_deref()==Ok("1")
     })).collect::<Vec<_>>()))
 }
@@ -100,6 +100,40 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
     })??))
 }
 async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
+    execute_checked(app, project, input, |_, _| Ok(())).await
+}
+
+pub(in crate::workbench) async fn model_issue_write(
+    app: Workbench,
+    project: Uuid,
+    chat: Uuid,
+    id: Uuid,
+    issue_scope: Option<String>,
+    operation: Operation,
+    authorize: impl FnOnce(&crate::workbench::Catalog, &str) -> crate::Result<()>,
+) -> Result<Value, ForgeError> {
+    if !matches!(
+        operation,
+        Operation::CreateIssue { .. } | Operation::CommentIssue { .. }
+    ) {
+        return Err(ForgeError::bad("unsupported model issue operation"));
+    }
+    let input = Input {
+        id,
+        chat,
+        issue_scope,
+        operation,
+        routing: None,
+    };
+    Ok(execute_checked(app, project, input, authorize).await?.0)
+}
+
+async fn execute_checked(
+    app: Workbench,
+    project: Uuid,
+    input: Input,
+    authorize: impl FnOnce(&crate::workbench::Catalog, &str) -> crate::Result<()>,
+) -> Reply<Value> {
     app.binding(project, input.chat)?;
     if !input.operation.mutates() {
         return Err(ForgeError::bad("use /query for reads"));
@@ -117,6 +151,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
     let identity = c.identity();
     let id = input.id;
     let remembered = app.update(|db| {
+        authorize(db, &identity)?;
         if db.forge.bindings.contains_key(&id) && !db.forge.operations.contains_key(&id) {
             return Err(Error::Refused(
                 "operation ID already belongs to a binding".into(),

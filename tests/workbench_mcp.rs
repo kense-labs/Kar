@@ -1,4 +1,6 @@
 //! Exercise the authenticated Kar listener and the credential handed to a native Codex protocol peer.
+#[path = "workbench_mcp/issues.rs"]
+mod issues;
 #[allow(dead_code)]
 #[path = "support/codex_chat_peer.rs"]
 mod peer;
@@ -69,6 +71,8 @@ async fn scenario() {
     for dir in [&root, &db] {
         fs::create_dir(dir).unwrap();
     }
+    let config = t.path().join("forge.toml");
+    let writes = issues::fixture(&root, &config).await;
     let observer = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
@@ -77,7 +81,11 @@ async fn scenario() {
         &state,
         &root,
         &db,
-        &[("KAR_TEST_MCP_OBSERVER", address.as_ref())],
+        &[
+            ("KAR_TEST_MCP_OBSERVER", address.as_ref()),
+            ("KAR_FORGE_CONFIG", config.as_os_str()),
+            ("KAR_MCP_TEST_FORGE", "local-only".as_ref()),
+        ],
     )
     .await;
     let c = Client::new();
@@ -173,6 +181,7 @@ async fn scenario() {
     ))
     .await;
     assert_eq!(foreign["result"]["isError"], true);
+    let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")
             .header("mcp-protocol-version", "2026-07-28")
@@ -246,4 +255,16 @@ async fn scenario() {
             .any(|w| w == provider.as_bytes())
     );
     kar.kill().await.unwrap();
+    let (mut restarted, url) = server::serve(&state, &root, &db).await;
+    let policy = server::json(a.get(format!(
+        "{url}/projects/{p}/chats/{chat}/model-tools/permissions"
+    )))
+    .await;
+    assert_eq!(policy["mode"], "execute");
+    assert_eq!(policy["issue_writes"], false);
+    let receipt =
+        server::json(a.get(format!("{url}/projects/{p}/forge/operations/{comment}"))).await;
+    assert_eq!(receipt["result"]["Ok"]["comment_id"], 31);
+    assert_eq!(writes.lock().unwrap().len(), 2);
+    restarted.kill().await.unwrap();
 }

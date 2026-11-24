@@ -66,6 +66,22 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             required: &["query"],
         },
     ];
+    if caller.issue_policy.is_some() {
+        let text = json!({"type":"string"});
+        let names = json!({"type":"array","items":text});
+        tools.push(Tool {
+            name: "kar_create_issue",
+            description: "Create an issue in this chat's authorized project tracker. Reuse command_id on retries.",
+            properties: json!({"command_id":id,"project_id":id,"thread_id":id,"title":text,"body":text,"labels":names,"assignees":names}),
+            required: &["command_id", "title"],
+        });
+        tools.push(Tool {
+            name: "kar_comment_on_issue",
+            description: "Post a comment on a numbered issue in this chat's authorized project tracker. Reuse command_id on retries.",
+            properties: json!({"command_id":id,"project_id":id,"thread_id":id,"number":{"type":"integer","minimum":1},"body":text}),
+            required: &["command_id", "number", "body"],
+        });
+    }
     if caller.grant.as_ref().is_some_and(|g| g.runtime == "claude") {
         tools.push(Tool {
             name:"kar_background_wait",
@@ -205,6 +221,9 @@ pub(super) async fn call(
     name: &str,
     input: Value,
 ) -> Result<Value> {
+    if matches!(name, "kar_create_issue" | "kar_comment_on_issue") {
+        return issues::call(app, caller, name, input).await;
+    }
     if name == "kar_background_wait" {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -293,7 +312,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
             Ok(
                 json!({"server":"Kar","tools":tools(c).iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
                 "provider_session":c.grant.as_ref().map(|g|json!({"id":g.id,"project_id":g.project,"thread_id":g.chat,"runtime":g.runtime})),
-                "write_access":!c.plan && c.grant.is_none()}),
+                "write_access":!c.plan && c.grant.is_none() || c.issue_policy.is_some(),"issue_write_access":c.issue_policy.is_some()}),
             )
         }
         "kar_project_list" => {

@@ -63,6 +63,8 @@ pub struct Project {
 struct Catalog {
     #[serde(default)]
     prompt_suggestions: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    model_tool_permissions: BTreeMap<Uuid, BTreeMap<Uuid, mcp::Policy>>,
     #[serde(default)]
     assets: assets::Registry,
     #[serde(default)]
