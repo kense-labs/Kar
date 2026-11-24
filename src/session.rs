@@ -1,6 +1,7 @@
 mod image_input;
 mod prompt_run;
 mod qwen;
+mod workbench_acp;
 pub use prompt_run::{PromptInterrupt, PromptRun, PromptRunOptions};
 pub(crate) mod reachability;
 
@@ -886,6 +887,9 @@ impl Session {
                     .map(|(name, s)| s.acp(name))
                     .collect();
                 let mut params = json!({"cwd":cwd_str,"mcpServers":servers});
+                if runtime.id == "fx" {
+                    params["_meta"] = json!({"fx":{"profileMcpServers":true}});
+                }
                 // DSH registers its directories on the exact native agent scope.
                 if !dirs.is_empty() && runtime.id != "dsh" {
                     if !crate::opening::advertised(caps, "additionalDirectories") {
@@ -994,7 +998,10 @@ impl Session {
                     return Err(err);
                 }
                 crate::options::opencode::confirm(&session.info, &opencode_agents)?;
-                if let Some(mode) = &options.settings.acp_mode {
+                let workbench_acp = matches!(runtime.id.as_str(), "kiro" | "fx");
+                if workbench_acp {
+                    session.configure_workbench_acp(&runtime.id, &id, &options).await?;
+                } else if let Some(mode) = &options.settings.acp_mode {
                     if !crate::options::acp_mode_advertised(&session.info, &runtime.id, mode) {
                         return Err(Error::Unsupported(format!(
                             "ACP did not advertise session mode {mode:?}"
@@ -1026,7 +1033,7 @@ impl Session {
                     session.info =
                         crate::antigravity::configure(&session, &id, &session.info, &options)
                             .await?;
-                } else if let Some(model) = options.model {
+                } else if !workbench_acp && let Some(model) = options.model {
                     if let Some(key) = crate::options::acp_model_option(&session.info)
                         .and_then(|v| v["id"].as_str())
                     {
@@ -1056,7 +1063,7 @@ impl Session {
                             .await?;
                     }
                 }
-                if !antigravity && let Some(effort) = &options.settings.effort {
+                if !antigravity && !workbench_acp && let Some(effort) = &options.settings.effort {
                     let option = crate::options::acp_effort_option(&session.info, cursor_acp)
                         .ok_or_else(|| {
                             Error::Unsupported(format!(

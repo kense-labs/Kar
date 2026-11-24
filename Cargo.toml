@@ -175,3 +175,8 @@ path = "tools/backend-coverage.rs"
 name = "workbench_agent_sessions"
 path = "tests/workbench_agent_sessions.rs"
 harness = false
+
+[[test]]
+name = "workbench_provider_chat"
+path = "tests/workbench_provider_chat.rs"
+harness = false

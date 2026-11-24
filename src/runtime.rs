@@ -349,6 +349,8 @@ fn builtins() -> &'static [RuntimeSpec] {
         ("grok", "grok", &["agent", "--no-leader", "stdio"], Acp),
         ("kimi", "kimi", &[], KimiKap),
         ("devin", "devin", &["acp"], Acp),
+        ("kiro", "kiro-cli", &["acp", "--agent-engine=v3", "--auth-method=cli"], Acp),
+        ("fx", "fx", &["acp"], Acp),
         ("codebuddy", "codebuddy", &["--acp"], Acp),
         ("antigravity", "agy", &["acp", "--process-per-session"], Acp),
         ("qwen", "qwen", &[], Qwen),
