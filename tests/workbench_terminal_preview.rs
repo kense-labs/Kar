@@ -213,6 +213,10 @@ fn fixture_http_server() {
         let mut stream = stream.unwrap();
         let mut input = std::io::BufReader::new(stream.try_clone().unwrap());
         let mut line = String::new();
+        if name == "browser-controls" {
+            browser_document(&mut stream, &mut input);
+            continue;
+        }
         while input.read_line(&mut line).unwrap_or(0) > 0 {
             if line == "\r\n" {
                 break;
@@ -545,6 +549,125 @@ async fn stop_checks_live_owner_and_job_and_only_terminates_the_selected_listene
     for fixture in [one, two] {
         api(c.delete(fixture.term)).await?;
     }
+    server.kill().await?;
+    Ok(())
+}
+
+fn browser_document(stream: &mut std::net::TcpStream, input: &mut impl BufRead) {
+    let mut first = String::new();
+    input.read_line(&mut first).unwrap();
+    let mut line = String::new();
+    while input.read_line(&mut line).unwrap_or(0) > 0 && line != "\r\n" {
+        line.clear();
+    }
+    let path = first.split_whitespace().nth(1).unwrap_or("/");
+    let (kind, cache, body) = if path == "/asset" {
+        let marker = Uuid::new_v4().to_string();
+        ("text/plain", "public, max-age=3600", marker)
+    } else {
+        // Observe actual renderer state. Fetching a cacheable asset makes cache eviction visible
+        // independently of the Kar API's response to the clear request.
+        ("text/html","no-store",r#"<html><body>Kar preview browser-controls<script>
+          const load = crypto.randomUUID();
+          const stored = localStorage.kar || (localStorage.kar = crypto.randomUUID());
+          if (!document.cookie) document.cookie = 'kar=' + crypto.randomUUID() + '; path=/';
+          async function sample() {
+            const asset = await (await fetch('/asset', {cache:'force-cache'})).text();
+            document.title = [load, stored, document.cookie, asset, innerWidth, matchMedia('(prefers-color-scheme: dark)').matches].join('|');
+          }
+          sample(); setInterval(sample, 200);
+        </script></body></html>"#.to_owned())
+    };
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nCache-Control: {cache}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+}
+
+async fn title_when(
+    c: &Client,
+    url: &str,
+    predicate: impl Fn(&[String]) -> bool,
+) -> Result<Vec<String>> {
+    for _ in 0..70 {
+        let state = api(c.get(url)).await?;
+        let fields: Vec<_> = state["title"]
+            .as_str()
+            .unwrap_or("")
+            .split('|')
+            .map(str::to_owned)
+            .collect();
+        if fields.len() == 6 && predicate(&fields) {
+            return Ok(fields);
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    Err("browser did not report the requested document state".into())
+}
+
+#[tokio::test]
+#[ignore = "requires an installed Chromium executable (KAR_PREVIEW_BROWSER)"]
+async fn managed_chromium_applies_controls_and_keeps_two_profiles_independent() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("roots");
+    fs::create_dir(&root)?;
+    let server = Server::start(&tmp.path().join("state"), &root).await?;
+    let c = Client::new();
+    let f = launch(&server, &c, &root.join("project"), "browser-controls").await?;
+    let grant = api(c
+        .post(format!("{}/previews", f.p))
+        .json(&json!({"terminal":f.term.rsplit('/').next(),"target":f.target,"profile_id":"qa"})))
+    .await?;
+    let browser = |g: &Value| format!("{}/previews/{}/browser", f.p, g["id"].as_str().unwrap());
+    let one = browser(&f.grant);
+    let two = browser(&grant);
+    let initial = title_when(&c, &one, |v| !v[2].is_empty()).await?;
+    let other = title_when(&c, &two, |v| !v[2].is_empty()).await?;
+    let base = one.strip_suffix("/browser").unwrap();
+    let bad = c
+        .put(format!("{base}/viewport"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"_tag":"freeform","width":3840,"height":3840}))
+        .send()
+        .await?;
+    assert!(!bad.status().is_success());
+    api(c
+        .put(format!("{base}/viewport"))
+        .json(&json!({"_tag":"freeform","width":800,"height":600})))
+    .await?;
+    let view = api(c
+        .patch(&one)
+        .json(&json!({"zoom_factor":2.0,"color_scheme":"dark"})))
+    .await?;
+    assert_eq!(view["rendered_viewport"]["clientWidth"], 400);
+    title_when(&c, &one, |v| v[4] == "400" && v[5] == "true").await?;
+    let png = c
+        .get(format!("{base}/screen"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    api(c.patch(&one).json(&json!({"clear":"cache"}))).await?;
+    title_when(&c, &one, |v| v[3] != initial[3]).await?;
+    api(c.patch(&one).json(&json!({"clear":"cookies"}))).await?;
+    title_when(&c, &one, |v| v[2].is_empty()).await?;
+    api(c.patch(&one).json(&json!({"hard_reload":true}))).await?;
+    title_when(&c, &one, |v| {
+        v[0] != initial[0] && v[1] == initial[1] && !v[2].is_empty() && v[2] != initial[2]
+    })
+    .await?;
+    api(c.post(format!("{}/preview-profiles/default/clear", f.p))).await?;
+    title_when(&c, &one, |v| v[1] != initial[1]).await?;
+    let intact = title_when(&c, &two, |_| true).await?;
+    assert_eq!(&intact[0..4], &other[0..4]);
+    for url in [one, two] {
+        api(c.delete(url.strip_suffix("/browser").unwrap())).await?;
+    }
+    api(c.delete(f.term)).await?;
     server.kill().await?;
     Ok(())
 }

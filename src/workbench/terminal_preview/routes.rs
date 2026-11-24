@@ -1,3 +1,4 @@
+use super::browser::{self, Adjust, Display, Viewport};
 use super::{
     InputReceipt, Meta, Page, Port, Status, TerminalEvent, Workbench, preview::Preview, process,
 };
@@ -45,6 +46,19 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
             axum::routing::delete(close_preview),
         )
         .route("/projects/{p}/previews/{id}/tunnel", get(tunnel))
+        .route(
+            "/projects/{p}/previews/{id}/browser",
+            get(browser_status).patch(adjust),
+        )
+        .route(
+            "/projects/{p}/previews/{id}/viewport",
+            axum::routing::put(viewport),
+        )
+        .route("/projects/{p}/previews/{id}/screen", get(screen))
+        .route(
+            "/projects/{p}/preview-profiles/{profile}/clear",
+            post(clear_profile),
+        )
 }
 
 #[derive(Deserialize)]
@@ -226,6 +240,9 @@ async fn stop_listener(
 struct Target {
     terminal: Uuid,
     target: Port,
+    profile_id: Option<String>,
+    #[serde(flatten)]
+    display: Display,
 }
 async fn open_preview(
     State(app): State<Workbench>,
@@ -234,11 +251,21 @@ async fn open_preview(
     Json(q): Json<Target>,
 ) -> Reply<Preview> {
     app.project(p)?;
+    let profile_id = q.profile_id.unwrap_or_else(|| "default".into());
+    browser::profile(&profile_id)?;
+    q.display.validate()?;
     let state = &app.0.terminal_preview;
     Ok(Json(
         state
             .grants
-            .open(p, state.find(p, q.terminal)?, q.target, device.map(|d| d.0))
+            .open(
+                p,
+                state.find(p, q.terminal)?,
+                q.target,
+                device.map(|d| d.0),
+                profile_id,
+                q.display,
+            )
             .await?,
     ))
 }
@@ -277,4 +304,90 @@ async fn tunnel(
         .grants
         .get(p, id, device.map(|d| d.id))?;
     Ok(upgrade.on_upgrade(move |socket| grant.websocket(socket)))
+}
+
+type Device = Option<axum::Extension<DeviceLease>>;
+fn grant(
+    app: &Workbench,
+    p: Uuid,
+    id: Uuid,
+    device: Device,
+) -> Result<std::sync::Arc<super::preview::Grant>> {
+    app.project(p)?;
+    app.0
+        .terminal_preview
+        .grants
+        .get(p, id, device.map(|d| d.id))
+}
+async fn browser_status(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+    device: Device,
+) -> Reply<serde_json::Value> {
+    let grant = grant(&app, p, id, device)?;
+    Ok(Json(
+        app.0
+            .terminal_preview
+            .browsers
+            .control(grant, None, Adjust::default())
+            .await?,
+    ))
+}
+async fn viewport(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+    device: Device,
+    Json(viewport): Json<Viewport>,
+) -> Reply<serde_json::Value> {
+    let grant = grant(&app, p, id, device)?;
+    Ok(Json(
+        app.0
+            .terminal_preview
+            .browsers
+            .control(grant, Some(viewport), Adjust::default())
+            .await?,
+    ))
+}
+async fn adjust(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+    device: Device,
+    Json(args): Json<Adjust>,
+) -> Reply<serde_json::Value> {
+    let grant = grant(&app, p, id, device)?;
+    Ok(Json(
+        app.0
+            .terminal_preview
+            .browsers
+            .control(grant, None, args)
+            .await?,
+    ))
+}
+async fn screen(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+    device: Device,
+) -> std::result::Result<impl axum::response::IntoResponse, ApiError> {
+    let grant = grant(&app, p, id, device)?;
+    let png = app.0.terminal_preview.browsers.screen(grant).await?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        png,
+    ))
+}
+async fn clear_profile(
+    State(app): State<Workbench>,
+    Path((p, profile)): Path<(Uuid, String)>,
+    device: Device,
+) -> Reply<()> {
+    app.project(p)?;
+    app.0
+        .terminal_preview
+        .browsers
+        .clear_profile(p, device.map(|d| d.id), profile)
+        .await?;
+    Ok(Json(()))
 }

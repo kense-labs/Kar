@@ -1,4 +1,5 @@
 //! Project-owned interactive terminals and revocable previews of their listeners.
+mod browser;
 mod history;
 mod preview;
 mod process;
@@ -367,6 +368,7 @@ pub(super) struct TerminalPreview {
     dir: PathBuf,
     terminals: Mutex<HashMap<Uuid, Arc<Terminal>>>,
     grants: preview::Grants,
+    browsers: Arc<browser::Pool>,
 }
 impl TerminalPreview {
     pub fn open(state: &Path) -> Result<Self> {
@@ -402,6 +404,7 @@ impl TerminalPreview {
             dir,
             terminals: Mutex::new(terminals),
             grants: preview::Grants::default(),
+            browsers: Arc::new(browser::Pool::new(state.join("preview-browser-profiles"))),
         })
     }
     fn find(&self, project: Uuid, id: Uuid) -> Result<Arc<Terminal>> {

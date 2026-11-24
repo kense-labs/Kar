@@ -1,4 +1,4 @@
-use super::{Port, ProcessId, Status, Terminal, process};
+use super::{Port, ProcessId, Status, Terminal, browser::Display, process};
 use crate::{Error, Result, workbench::access::DeviceLease};
 use axum::{
     Router,
@@ -34,10 +34,14 @@ pub(super) struct Preview {
     pub terminal: Uuid,
     target: Port,
     pub url: String,
+    pub profile_id: String,
+    #[serde(flatten)]
+    pub display: Display,
 }
 
 pub(super) struct Grant {
     pub info: Preview,
+    display: Mutex<Display>,
     device: Option<DeviceLease>,
     terminal: Weak<Terminal>,
     root: ProcessId,
@@ -62,7 +66,28 @@ impl Grant {
         self.info.project == project
             && device.is_none_or(|id| self.device.as_ref().is_some_and(|d| d.id == id))
     }
-    async fn visible(&self) -> Result<bool> {
+    pub fn snapshot(&self) -> Preview {
+        Preview {
+            display: self.display(),
+            ..self.info.clone()
+        }
+    }
+    pub fn display(&self) -> Display {
+        self.display.lock().unwrap().clone()
+    }
+    pub fn set_display(&self, value: Display) {
+        *self.display.lock().unwrap() = value;
+    }
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+    pub fn owner(&self) -> Option<Uuid> {
+        self.device.as_ref().map(|d| d.id)
+    }
+    pub fn revocation(&self) -> watch::Receiver<bool> {
+        self.stop.subscribe()
+    }
+    pub async fn visible(&self) -> Result<bool> {
         if !self.active()
             || !self
                 .terminal
@@ -150,6 +175,8 @@ impl Grants {
         term: Arc<Terminal>,
         target: Port,
         device: Option<DeviceLease>,
+        profile_id: String,
+        display: Display,
     ) -> Result<Preview> {
         let m = term.snapshot();
         let root = m
@@ -179,9 +206,12 @@ impl Grants {
             terminal: m.id,
             target,
             url: format!("http://{authority}/"),
+            profile_id,
+            display: display.clone(),
         };
         let grant = Arc::new(Grant {
             info: info.clone(),
+            display: Mutex::new(display),
             device: device.clone(),
             terminal: Arc::downgrade(&term),
             root,
@@ -233,7 +263,7 @@ impl Grants {
             .unwrap()
             .values()
             .filter(|g| g.belongs_to(project, device) && g.active())
-            .map(|g| g.info.clone())
+            .map(|g| g.snapshot())
             .collect()
     }
     pub fn close(&self, project: Uuid, id: Uuid, device: Option<Uuid>) -> Result<()> {
@@ -253,7 +283,7 @@ impl Drop for Grants {
     }
 }
 
-async fn proxy(State(grant): State<Arc<Grant>>, mut req: Request) -> Response {
+pub(super) async fn proxy(State(grant): State<Arc<Grant>>, mut req: Request) -> Response {
     if req
         .headers()
         .get(header::HOST)
