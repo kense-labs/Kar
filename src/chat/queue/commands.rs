@@ -31,14 +31,19 @@ impl Inbox {
     pub(super) fn next<'a>(&'a self, state: &State) -> Option<&'a Entry> {
         self.entries.iter().find(|entry| {
             (!self.held || self.released == Some(entry.id))
-                && entry.status(&state.info, state.find(entry.id)) == InputStatus::Pending
+                && entry.status(state) == InputStatus::Pending
         })
     }
 
     fn position(&self, state: &State, id: Uuid) -> Result<usize> {
         self.entries
             .iter()
-            .position(|e| e.id == id && state.find(id).is_none() && !e.withdrawn)
+            .position(|e| {
+                e.id == id
+                    && state.find(id).is_none()
+                    && !e.withdrawn
+                    && e.promotion.as_ref().is_none_or(|p| p.returned_to_queue)
+            })
             .ok_or_else(|| Error::Refused("input is no longer queued".into()))
     }
 }
@@ -53,6 +58,11 @@ impl ChatStore {
         let _lock = self.inbox_lock(chat)?;
         let state = self.read_state(File::open(self.path(chat))?, chat)?;
         let mut inbox = self.read_inbox(&state.info)?;
+        if inbox.promotions.contains_key(&command_id) {
+            return Err(Error::Refused(
+                "queue command ID belongs to a different request".into(),
+            ));
+        }
         if let Some(prior) = inbox.commands.get(&command_id) {
             return if prior.action == action {
                 Ok(prior.receipt.clone())
@@ -84,7 +94,7 @@ impl ChatStore {
                 let head = inbox
                     .entries
                     .iter()
-                    .position(|e| e.status(&state.info, state.find(e.id)) == InputStatus::Pending)
+                    .position(|e| e.status(&state) == InputStatus::Pending)
                     .unwrap_or(inbox.entries.len());
                 inbox.entries.insert(head, entry);
                 inbox.released = Some(*input);
@@ -131,11 +141,7 @@ impl ChatStore {
         let inbox = self.read_inbox(&state.info)?;
         Ok((
             inbox.held,
-            inbox
-                .entries
-                .iter()
-                .map(|e| e.receipt(&state.info, state.find(e.id)))
-                .collect(),
+            inbox.entries.iter().map(|e| e.receipt(&state)).collect(),
         ))
     }
 }

@@ -1,9 +1,12 @@
 //! Producers can add inputs while another process owns the native session. The queue
 //! stores admission order. The chat journal is authoritative about dispatch attempts.
 mod commands;
-use super::{ChatInfo, ChatSession, ChatStore, ChatTurn, Sender, Sink, TurnStatus};
+mod promotion;
+use super::{ChatInfo, ChatSession, ChatStore, Sender, Sink, TurnStatus};
 use crate::{Error, Result};
 pub use commands::{QueueAction, QueueReceipt};
+pub(crate) use promotion::Claim;
+pub use promotion::{QueuePromotion, SteerTarget};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
@@ -41,10 +44,14 @@ pub struct QueuedInput {
     pub id: Uuid,
     pub text: String,
     pub status: InputStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promotion: Option<QueuePromotion>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct Entry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    promotion: Option<QueuePromotion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     initial_text: Option<String>,
     id: Uuid,
@@ -52,7 +59,17 @@ struct Entry {
     withdrawn: bool,
 }
 impl Entry {
-    fn status(&self, info: &ChatInfo, turn: Option<&ChatTurn>) -> InputStatus {
+    fn status(&self, state: &super::log::State) -> InputStatus {
+        let info = &state.info;
+        let turn = state.find(self.id);
+        if turn.is_none()
+            && let Some(status) = self
+                .promotion
+                .as_ref()
+                .and_then(|p| p.status(self.id, state))
+        {
+            return status;
+        }
         match turn {
             Some(t) if t.native_input_receipt == Some(crate::InputReceipt::Refused) => {
                 InputStatus::Refused
@@ -84,11 +101,12 @@ impl Entry {
             None => InputStatus::Pending,
         }
     }
-    fn receipt(&self, info: &ChatInfo, turn: Option<&ChatTurn>) -> QueuedInput {
+    fn receipt(&self, state: &super::log::State) -> QueuedInput {
         QueuedInput {
             id: self.id,
             text: self.text.clone(),
-            status: self.status(info, turn),
+            status: self.status(state),
+            promotion: self.promotion.clone(),
         }
     }
 }
@@ -99,6 +117,8 @@ struct Inbox {
     entries: Vec<Entry>,
     #[serde(default)]
     held: bool,
+    #[serde(default)]
+    promotions: std::collections::BTreeMap<Uuid, (Uuid, SteerTarget)>,
     #[serde(default)]
     released: Option<Uuid>,
     #[serde(default)]
@@ -117,6 +137,7 @@ impl ChatStore {
                     native_id: self.initial_info(chat.id)?.native_id,
                     entries: vec![],
                     held: false,
+                    promotions: Default::default(),
                     released: None,
                     commands: Default::default(),
                 });
@@ -166,7 +187,7 @@ impl ChatStore {
         let inbox = self.read_inbox(&log.state.info)?;
         if inbox.entries.iter().any(|e| {
             matches!(
-                e.status(&log.state.info, log.state.find(e.id)),
+                e.status(&log.state),
                 InputStatus::Pending | InputStatus::Sending
             )
         }) {
@@ -191,14 +212,14 @@ impl ChatStore {
         let turn = state.find(id);
         let mut inbox = self.read_inbox(&state.info)?;
         let receipt = if let Some(text) = text {
-            if turn.is_none() {
-                state.check_new_prompt_id(id)?;
-            }
             if let Some(entry) = inbox.entries.iter().find(|e| e.id == id) {
                 if entry.text != text && entry.initial_text.as_ref() != Some(&text) {
                     return Err(different_prompt());
                 }
-                return Ok(entry.receipt(&state.info, turn));
+                return Ok(entry.receipt(&state));
+            }
+            if turn.is_none() {
+                state.check_new_prompt_id(id)?;
             }
             if turn.is_some_and(|t| t.prompt() != Some(text.as_str())) {
                 return Err(different_prompt());
@@ -211,11 +232,12 @@ impl ChatStore {
             }
             let entry = Entry {
                 initial_text: None,
+                promotion: None,
                 id,
                 text,
                 withdrawn: false,
             };
-            let receipt = entry.receipt(&state.info, turn);
+            let receipt = entry.receipt(&state);
             inbox.entries.push(entry);
             receipt
         } else {
@@ -224,14 +246,19 @@ impl ChatStore {
                 .iter_mut()
                 .find(|e| e.id == id)
                 .ok_or_else(|| Error::Refused("unknown queued input".into()))?;
-            if turn.is_some() {
+            if turn.is_some()
+                || entry
+                    .promotion
+                    .as_ref()
+                    .is_some_and(|p| !p.returned_to_queue)
+            {
                 return Err(Error::Refused("input dispatch has already started".into()));
             }
             if entry.withdrawn {
-                return Ok(entry.receipt(&state.info, None));
+                return Ok(entry.receipt(&state));
             }
             entry.withdrawn = true;
-            entry.receipt(&state.info, None)
+            entry.receipt(&state)
         };
         self.save_inbox(&inbox)?;
         Ok(receipt)
@@ -245,7 +272,7 @@ impl ChatStore {
             .read_inbox(&state.info)?
             .entries
             .iter()
-            .map(|e| e.receipt(&state.info, state.find(e.id)))
+            .map(|e| e.receipt(&state))
             .collect())
     }
 }
@@ -282,6 +309,13 @@ impl Admission {
         if let Some(entry) = inbox.entries.iter().find(|e| e.id == self.id) {
             if entry.text != self.text {
                 return Err(different_prompt());
+            }
+            if entry
+                .promotion
+                .as_ref()
+                .is_some_and(|p| !p.returned_to_queue)
+            {
+                return Err(Error::Refused("input was claimed for steering".into()));
             }
             if entry.withdrawn {
                 return Err(Error::Refused("input was withdrawn".into()));
@@ -350,13 +384,12 @@ impl Sender {
                     return Ok(true);
                 }
                 // A producer may withdraw the selected head while we capture its checkpoint.
-                if self
-                    .store
-                    .read_inbox(&self.info)?
-                    .entries
-                    .iter()
-                    .any(|e| e.id == id && (e.withdrawn || e.text != text))
-                {
+                if self.store.read_inbox(&self.info)?.entries.iter().any(|e| {
+                    e.id == id
+                        && (e.withdrawn
+                            || e.text != text
+                            || e.promotion.as_ref().is_some_and(|p| !p.returned_to_queue))
+                }) {
                     Ok(true)
                 } else {
                     Err(error)

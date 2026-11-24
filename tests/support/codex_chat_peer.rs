@@ -260,6 +260,27 @@ pub(crate) fn agent() {
                 emit(
                     json!({"method":"turn/started","params":{"threadId":session,"turn":{"id":turn}}}),
                 );
+                if text == "await queue steer" {
+                    fs::write(database.join("steer-ready"), &turn).unwrap();
+                    let mut line = String::new();
+                    if input.read_line(&mut line).unwrap() == 0 {
+                        return;
+                    }
+                    let steer: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(steer["method"], "turn/steer");
+                    assert_eq!(steer["params"]["expectedTurnId"], turn);
+                    assert_eq!(steer["params"]["threadId"], session);
+                    assert_eq!(
+                        steer["params"]["input"][0]["text"],
+                        "apply inside this turn"
+                    );
+                    fs::write(
+                        database.join("steered-text"),
+                        steer["params"]["input"][0]["text"].as_str().unwrap(),
+                    )
+                    .unwrap();
+                    emit(json!({"id":steer["id"],"result":{"turnId":turn}}));
+                }
                 if text == "await interrupt" {
                     fs::write(database.join("interrupt-ready"), &turn).unwrap();
                     let mut line = String::new();

@@ -175,5 +175,49 @@ async fn scenario() {
         })
         .collect::<Vec<_>>();
     assert_eq!(&calls[3..], ["B", "C", "edited A"]);
+    let target = Uuid::new_v4();
+    let active = tokio::spawn(ok(client
+        .post(format!("{url}{path}/messages"))
+        .json(&json!({"id":target,"text":"await queue steer"}))));
+    while !native.join("steer-ready").exists() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let follow = Uuid::new_v4();
+    let body = json!({"id":follow,"text":"apply inside this turn"});
+    ok(client.post(&endpoint).json(&body)).await;
+    let promote = format!("{endpoint}/{follow}/steer");
+    let action = json!({"command_id":Uuid::new_v4(),"turn":target});
+    let bad = client
+        .post(&promote)
+        .json(&json!({"command_id":Uuid::new_v4(),"turn":Uuid::new_v4()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), reqwest::StatusCode::CONFLICT);
+    let promoted = ok(client.post(&promote).json(&action)).await;
+    assert!(
+        promoted["promotion"]["native_acknowledged"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(active.await.unwrap()["status"], "completed");
+    server.kill().await.unwrap();
+    let (mut server, url) = serve(&state, &work, &native).await;
+    let endpoint = format!("{url}{path}/queue");
+    let replay = ok(client
+        .post(format!("{endpoint}/{follow}/steer"))
+        .json(&action))
+    .await;
+    assert_eq!(replay["status"], "sent");
+    assert_eq!(
+        ok(client.post(&endpoint).json(&body)).await["status"],
+        "sent"
+    );
+    assert_eq!(
+        fs::read_to_string(native.join("steered-text")).unwrap(),
+        "apply inside this turn"
+    );
+    let calls = fs::read_to_string(native.join("calls")).unwrap();
+    assert!(!calls.contains("apply inside this turn"));
     server.kill().await.unwrap();
 }

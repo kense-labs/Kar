@@ -15,7 +15,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 impl Workbench {
-    fn active_control(&self, project: Uuid, chat: Uuid) -> Result<Option<Arc<Session>>> {
+    pub(super) fn active_control(&self, project: Uuid, chat: Uuid) -> Result<Option<Arc<Session>>> {
         self.binding(project, chat)?;
         if self.archived(chat) {
             return Err(Error::Refused("chat is archived".into()));
@@ -45,6 +45,67 @@ async fn interrupt(
         .ok_or_else(crate::transport::AbortRequest::stale)?;
     session.abort_turn(turn, attempt.request_id).await?;
     Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+struct Promote {
+    command_id: Uuid,
+    #[serde(flatten)]
+    target: crate::chat::SteerTarget,
+}
+
+async fn promote(
+    State(app): State<Workbench>,
+    Path((project, chat, input)): Path<(Uuid, Uuid, Uuid)>,
+    Json(req): Json<Promote>,
+) -> std::result::Result<Json<crate::chat::QueuedInput>, ApiError> {
+    let session = app.active_control(project, chat)?;
+    // Once reserved, the command must finish recording its result even if the HTTP client disconnects.
+    let receipt = tokio::spawn(async move {
+        let store = app.0.chats.clone();
+        let claim = {
+            let store = store.clone();
+            let online = session.is_some();
+            tokio::task::spawn_blocking(move || {
+                store.claim_queue_steer(chat, input, req.command_id, req.target, online)
+            })
+            .await
+            .map_err(|e| Error::Closed(e.to_string()))??
+        };
+        let text = match claim {
+            crate::chat::SteerClaim::Prior(receipt) => return Ok::<_, Error>(receipt),
+            crate::chat::SteerClaim::Deliver(text) => text,
+        };
+        let session = session.expect("claim requires an active controller");
+        // Codex turn/steer waits for the native JSON-RPC result. Fire-and-forget transports
+        // need the correlated event in the target turn before showing delivery as confirmed.
+        let native_acknowledged = session.protocol() == crate::Protocol::Codex;
+        let result = if session.capabilities().steering {
+            session
+                .steer_turn(
+                    req.target.turn,
+                    req.target.request_id,
+                    input,
+                    text,
+                    Vec::new(),
+                )
+                .await
+        } else {
+            Err(Error::Unsupported(
+                "this provider does not support steering".into(),
+            ))
+        };
+        let receipt = tokio::task::spawn_blocking(move || {
+            store.finish_queue_steer(chat, input, req.command_id, native_acknowledged, result)
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
+        app.wake_queue();
+        Ok(receipt)
+    })
+    .await
+    .map_err(|e| Error::Closed(e.to_string()))??;
+    Ok(Json(receipt))
 }
 
 async fn attach(
@@ -134,6 +195,10 @@ async fn respond(
 
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
+        .route(
+            "/projects/{project}/chats/{chat}/queue/{input}/steer",
+            post(promote),
+        )
         .route(
             "/projects/{project}/chats/{chat}/turns/{turn}/interrupt",
             post(interrupt),
