@@ -64,7 +64,7 @@ impl Workbench {
 impl Workspace {
     // Resolve existing links before checking the target. A missing suffix can be created
     // under its nearest existing parent. Final operations use the pinned directory handle.
-    fn target(&self, relative: &Path, create: bool) -> Result<PathBuf> {
+    pub(super) fn target(&self, relative: &Path, create: bool) -> Result<PathBuf> {
         let requested = checked(relative)?;
         let path = self.root.join(&requested);
         let mut existing = path.as_path();
@@ -108,7 +108,12 @@ impl Workspace {
 
     pub fn read(&self, path: &Path) -> Result<String> {
         let path = self.target(path, false)?;
-        let dir = self.parent(&path, false)?;
+        preview(self.read_bytes(&path, READ_LIMIT)?)
+    }
+
+    /// The caller has resolved this path once. Never follow a replacement link.
+    pub(super) fn read_bytes(&self, path: &Path, limit: usize) -> Result<Vec<u8>> {
+        let dir = self.parent(path, false)?;
         let name = path.file_name().ok_or_else(denied)?;
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
@@ -119,27 +124,22 @@ impl Workspace {
         }
         let file = dir.open_with(name, &options)?;
         let meta = file.metadata()?;
-        if !meta.is_file() || meta.len() > READ_LIMIT as u64 {
-            return Err(Error::Refused(
-                "expected a regular text file of at most 1 MiB".into(),
-            ));
+        if !meta.is_file() || meta.len() > limit as u64 {
+            return Err(Error::Refused(format!(
+                "expected a regular file of at most {limit} bytes"
+            )));
         }
         let mut data = Vec::new();
-        file.take((READ_LIMIT + 1) as u64).read_to_end(&mut data)?;
-        if data.len() > READ_LIMIT || data.contains(&0) {
-            return Err(Error::Refused(
-                "file is too large or contains binary data".into(),
-            ));
+        file.take((limit as u64).saturating_add(1))
+            .read_to_end(&mut data)?;
+        if data.len() > limit {
+            return Err(Error::Refused(format!("file exceeds {limit} bytes")));
         }
-        String::from_utf8(data).map_err(|_| Error::Refused("file is not UTF-8 text".into()))
+        Ok(data)
     }
 
-    pub fn write(&self, path: &Path, text: &str) -> Result<()> {
-        if text.contains('\0') {
-            return Err(Error::Refused("expected text content".into()));
-        }
-        let path = self.target(path, true)?;
-        let dir = self.parent(&path, true)?;
+    pub(super) fn write_bytes(&self, path: &Path, data: &[u8]) -> Result<()> {
+        let dir = self.parent(path, true)?;
         let name = path.file_name().ok_or_else(denied)?;
         let permissions = match dir.symlink_metadata(name) {
             Ok(meta) if meta.is_file() => Some(meta.permissions()),
@@ -157,7 +157,7 @@ impl Workspace {
         }
         let mut file = dir.open_with(&tmp, &options)?;
         let result = (|| -> io::Result<()> {
-            file.write_all(text.as_bytes())?;
+            file.write_all(data)?;
             if let Some(mode) = permissions {
                 file.set_permissions(mode)?;
             }
@@ -173,4 +173,13 @@ impl Workspace {
         }
         Ok(result?)
     }
+}
+
+pub(super) fn preview(data: Vec<u8>) -> Result<String> {
+    if data.len() > READ_LIMIT || data.contains(&0) {
+        return Err(Error::Refused(
+            "file is too large or contains binary data".into(),
+        ));
+    }
+    String::from_utf8(data).map_err(|_| Error::Refused("file is not UTF-8 text".into()))
 }

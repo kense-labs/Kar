@@ -31,6 +31,9 @@ js-sys = "0.3.107"
 uuid = { version = "1", features = ["js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = "1"
+kar-documents = { path = "crates/kar-documents" }
+tower = { version = "0.5", features = ["util"] }
 getrandom = "0.3"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
@@ -109,3 +112,7 @@ harness = false
 name = "acp_deadlines"
 path = "tests/acp_deadlines.rs"
 harness = false
+
+[patch.crates-io]
+ironcalc = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
+ironcalc_base = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }

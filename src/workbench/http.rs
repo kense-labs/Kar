@@ -14,12 +14,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{io, path::PathBuf};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-struct ApiError(Error);
+pub(super) struct ApiError(Error);
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
         Self(e)
@@ -64,7 +64,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .route("/projects/{project}/chats/{chat}/events", get(events))
         .route("/projects/{project}/chats/{chat}/messages", post(send))
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
-        .route("/projects/{project}/file", get(read_file).put(write_file))
+        .merge(super::documents::routes())
         .route("/projects/{project}/search", get(search_project))
         .route("/search/chats", get(search_chats))
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
@@ -169,34 +169,6 @@ async fn events(
         return e.into_response();
     }
     crate::chat::feed::event_response(store, c, headers, uri).await
-}
-#[derive(Deserialize)]
-struct FileQuery {
-    path: PathBuf,
-}
-#[derive(Serialize, Deserialize)]
-struct Text {
-    text: String,
-}
-async fn read_file(
-    State(app): State<Workbench>,
-    Path(p): Path<Uuid>,
-    Query(q): Query<FileQuery>,
-) -> Reply<Text> {
-    blocking(move || {
-        Ok(Text {
-            text: app.workspace(&app.project(p)?)?.read(&q.path)?,
-        })
-    })
-    .await
-}
-async fn write_file(
-    State(app): State<Workbench>,
-    Path(p): Path<Uuid>,
-    Query(q): Query<FileQuery>,
-    Json(input): Json<Text>,
-) -> Reply<()> {
-    blocking(move || app.workspace(&app.project(p)?)?.write(&q.path, &input.text)).await
 }
 #[derive(Deserialize)]
 struct Search {

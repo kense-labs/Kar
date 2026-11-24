@@ -401,6 +401,19 @@ kar workbench --root "$PWD"
 | 读取或保存普通文本文件 | `GET` 或 `PUT /projects/{p}/file?path=relative/path`，正文使用 `{"text":"…"}`。 |
 | 搜索 | `GET /projects/{p}/search?q=关键词&kind=paths`，也可选 `content` 或 `messages`。跨可见项目查聊天用 `GET /search/chats?q=关键词`。 |
 
+### 工作台文档协作
+
+在项目中对已有的 `.txt`、`.md`、`.markdown`、`.docx`、`.xlsx` 或 `.pptx` 请求 `GET /projects/{p}/documents/state?path=相对路径`，即可取得文档 ID、修订号、游标和待处理冲突。以下接口沿用相同的项目、路径查询参数和访问令牌。
+
+| 操作 | 文档接口 |
+| --- | --- |
+| 下载某一修订或暂存的文件 | `GET /revisions/{revision}` 或 `GET /proposals/{sha256}`，返回原始文件字节。 |
+| 提交整文件提议 | 向 `POST /proposals` 发送文件字节，再向 `POST /operations` 提交 `author`、`operation_id`、`base_revision` 和 `{"type":"save","sha256":"…"}` 形式的 `action`。 |
+| 查看或解决冲突 | `GET /events?after=游标&wait_ms=毫秒` 获取持久事件。冲突回执为 HTTP 409；解决冲突使用 `POST /operations` 的 `resolve` 操作。 |
+| 普通文本保存 | 对已打开协作的文件，原项目 `GET /file` 在文本之外返回 `revision`。用 `PUT /file` 提交 `text`、`base_revision` 和 `operation_id`，客户端断开后可以原样重试。 |
+
+上表中的文档接口相对于 `/projects/{p}/documents`。普通文本保存和整文件提议共用一份修订历史。可兼容的改动会合并，竞争修改会留下冲突回执。访问限于工作台启动时指定的目录。
+
 ## 接入自己的 Rust 后端
 
 在同级项目的 `Cargo.toml` 中添加依赖：

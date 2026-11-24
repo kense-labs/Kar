@@ -1,4 +1,5 @@
 //! A local workbench that shares Kar's saved chats, their native sessions and event cursors.
+mod documents;
 mod files;
 mod http;
 mod search;
@@ -45,6 +46,7 @@ struct Inner {
     roots: Vec<Root>,
     catalog: Mutex<Catalog>,
     state: PathBuf,
+    documents: documents::Documents,
     _lease: File,
     controllers: Mutex<HashMap<Uuid, Controller>>,
 }
@@ -100,6 +102,7 @@ impl Workbench {
             roots: allowed,
             catalog: Mutex::new(catalog),
             state,
+            documents: Default::default(),
             _lease: lease,
             controllers: Default::default(),
         })))

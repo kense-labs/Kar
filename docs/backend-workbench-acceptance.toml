@@ -139,7 +139,7 @@ engine = "docs_engine::Document"
 source = "crates/docs_engine/src/document.rs"
 unit = "正文段落；段内编辑携带基准文本范围，涉及格式时携带对应属性。"
 merge = "不同段落独立合并。同段互不重叠的文字替换、互不影响的文字与格式修改可合并。竞争替换同一范围、删除与编辑同一段、段落拆分后选区归属不明时提示冲突。"
-test_command = "cargo test --locked --test workbench_coediting word::"
+test_command = "cargo test --locked --manifest-path crates/kar-documents/Cargo.toml --test word"
 accept = [
   "在含两个同文段落及加粗文字的样本中，让人改第三段、AI 改第五段，再在文首插段。按原目标恢复两处修改，核对同文的另一段、未选文字及加粗属性。",
   "在同段分别把「周一」改为「周三」、把「小李」改为「小林」，核对两处都保留。再让双方把同一处「周一」分别改成「周三」和「周五」，以及一方删段、另一方改段。冲突回执须能辨认段落、原选区和两种提议。"
@@ -151,7 +151,7 @@ engine = "sheets_engine::Workbook"
 source = "crates/sheets_engine/src/lib.rs"
 unit = "工作表中的逻辑单元格；输入值与公式共用内容字段，格式属性单独比较。"
 merge = "不同单元格独立合并，依据合并后的工作簿重算受影响的公式。同一格的内容与独立格式修改可合并。对同一格写不同值、写入值与公式相竞争或删除目标行列后仍要写入时提示冲突。插行或工作表重排后要映射回原单元格。"
-test_command = "cargo test --locked --test workbench_coediting excel::"
+test_command = "cargo test --locked --manifest-path crates/kar-documents/Cargo.toml --test office --test grid_history"
 accept = [
   "在「预算」表把 B3 从 10 改到 12，同时让 AI 把 D3 公式改为 =B3*3。重开后核对输入值、公式与计算结果 36，另一张表的 B3 保持原值。再测试先在上方插行，确认改动随逻辑单元格移动，公式引用正确。",
   "一方改 B3 的值，另一方只设置 B3 的填充色，两者均生效。两方分别写不同值或分别写公式与常量时，返回含工作表、单元格地址及双方原始输入的冲突。即使显示值相同，也要区分公式与常量。"
@@ -163,7 +163,7 @@ engine = "slides_engine::Presentation"
 source = "crates/slides_engine/src/presentation.rs"
 unit = "幻灯片中的对象；编辑携带基准对象身份和受影响的属性，分开比较文字、位置、尺寸及样式。"
 merge = "不同对象独立合并。同一对象的文字修改与独立的位置修改可合并。两方给同一属性写入不同值、删除对象与编辑对象相竞争，或重排后不能唯一识别对象时提示冲突。"
-test_command = "cargo test --locked --test workbench_coediting slides::"
+test_command = "cargo test --locked --manifest-path crates/kar-documents/Cargo.toml --test office slides"
 accept = [
   "在含标题框、两个同名形状和一张图片的样本中，人改标题，AI 移动其中一个形状。分别改变幻灯片顺序及对象层级后重放编辑，核对仍命中原对象；重开检查文字、坐标、图片及关系。",
   "对同一文本框一方改文字、另一方仅改横坐标，核对两项同时保留。再让两方给横坐标写不同值，以及一方删框、另一方改框。回执应指出幻灯片、对象及冲突属性，另一形状不受影响。"
