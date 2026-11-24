@@ -234,7 +234,7 @@ impl Core {
     fn close_watch(&self) {
         if let Some(id) = self.dispose.take() {
             self.journal
-                .control_outcome(id, json!({"type":"accepted"}), Event::Released);
+                .control_outcome(id, json!({"type":"accepted","release":crate::SessionRelease::new(crate::ReleaseReason::Dispose)}), Event::Released);
         }
         self.journal.close();
     }

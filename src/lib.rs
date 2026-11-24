@@ -58,7 +58,7 @@ pub use interaction::{PendingRequest, PermissionDecision, RequestControls, Reque
 #[cfg(not(target_arch = "wasm32"))]
 mod antigravity;
 mod placement;
-pub use placement::{Execution, Opening, PlacementRequest, SessionPlacement};
+pub use placement::{Execution, Opening, PlacementRequest, ReleaseReason, SessionPlacement, SessionRelease};
 mod capabilities;
 pub use capabilities::{
     CompactionDuringTurn, CompactionEvents, ContextUsageCapability, ManualCompactionCapability,

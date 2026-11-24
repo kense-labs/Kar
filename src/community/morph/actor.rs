@@ -552,16 +552,21 @@ impl Actor {
             let _ = done.send(Err(Error::Closed(reason.clone())));
         }
         let stopped = self.lease.release().await;
+        let exited = matches!(stopped,Ok(Some(_))) || exit.as_ref().is_some_and(|s|s.borrow().as_ref().is_some_and(|r|r.is_ok()));
+        let event = if exited {Event::Exited{reason}} else {Event::Released};
+        let release = crate::SessionRelease::new(if settle {crate::ReleaseReason::Dispose} else {crate::ReleaseReason::ConnectionLost});
         if let Some((id, _)) = &ack {
-            let outcome = match &stopped {
+            let mut outcome = match &stopped {
                 Ok(Some(status)) => json!({"type":"exited", "code":status.code()}),
                 Ok(None) => json!({"type":"accepted"}),
                 Err(err) => json!({"type":"rejected", "code":"error", "reason":err.to_string()}),
             };
-            self.journal
-                .control_outcome(*id, outcome, Event::Exited { reason });
+            if !exited {outcome["release"]=json!(release);}
+            self.journal.control_outcome(*id, outcome, event);
+        } else if exited {
+            self.journal.host_event(event);
         } else {
-            self.journal.host_event(Event::Exited { reason });
+            self.journal.push(Direction::Host,RecordKind::Response,None,vec![],json!({"type":"released","release":release}),vec![event]);
         }
         self.journal.close();
         crate::session::reachability::reject_pending(

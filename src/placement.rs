@@ -156,3 +156,39 @@ mod acp_admission_tests {
         }
     }
 }
+
+/// A controller released its lease. The native task may still be running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseReason {
+    Dispose,
+    AbortFallback,
+    ConnectionLost,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionRelease {
+    pub reason: ReleaseReason,
+    #[serde(alias = "nativeTurnMayContinue")]
+    pub native_turn_may_continue: bool,
+    #[serde(alias = "workStartedAfterCleanupMayContinue")]
+    pub work_started_after_cleanup_may_continue: bool,
+}
+impl SessionRelease {
+    pub(crate) fn new(reason: ReleaseReason) -> Self {
+        Self {
+            reason,
+            native_turn_may_continue: true,
+            work_started_after_cleanup_may_continue: true,
+        }
+    }
+}
+impl crate::Record {
+    pub fn session_release(&self) -> Option<SessionRelease> {
+        if !self.events.contains(&crate::Event::Released) {
+            return None;
+        }
+        let native = self.native.get("body").unwrap_or(&self.native);
+        serde_json::from_value(native.get("release").unwrap_or(native).clone()).ok()
+    }
+}

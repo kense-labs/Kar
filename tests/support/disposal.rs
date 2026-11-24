@@ -29,6 +29,20 @@ pub(crate) async fn check(session: &Session, expected: &str) -> kar::Result<()> 
     let answer = answers.next().expect("no correlated dispose response");
     assert!(answers.next().is_none(), "dispose answered twice");
     assert_eq!(answer.native["type"], expected);
+    if expected == "accepted" {
+        assert!(answer.events.contains(&kar::Event::Released));
+        assert!(
+            !answer
+                .events
+                .iter()
+                .any(|e| matches!(e, kar::Event::Exited { .. }))
+        );
+        let released = answer.session_release().expect("controller release facts");
+        assert_eq!(released.reason, kar::ReleaseReason::Dispose);
+        assert!(
+            released.native_turn_may_continue && released.work_started_after_cleanup_may_continue
+        );
+    }
     if expected == "exited" {
         assert!(
             answer

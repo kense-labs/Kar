@@ -799,17 +799,16 @@ impl ThreadActor {
                 .send(Err(Error::Closed("detached from Cybion thread".into())));
         }
         self.clear_queue("detached from Cybion thread");
-        let event = Event::Exited {
-            reason: "detached".into(),
-        };
+        let event = Event::Released;
+        let release=crate::SessionRelease::new(crate::ReleaseReason::Dispose);
         if let Some(id) = id {
             self.journal
-                .control_outcome(id, json!({"type":"accepted", "action":"detach"}), event);
+                .control_outcome(id, json!({"type":"accepted", "action":"detach","release":release}), event);
         } else {
             self.record(
                 Direction::Host,
                 RecordKind::Frame,
-                json!({"action":"detach"}),
+                json!({"action":"detach","release":release}),
                 vec![event],
             );
         }
