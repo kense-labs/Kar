@@ -32,9 +32,9 @@ fn run(cmd: &mut Command) -> Value {
     serde_json::from_slice(&o.stdout).unwrap()
 }
 #[test]
-#[ignore = "requires OAR_PI_BIN with Pi RPC 1.4+"]
+#[ignore = "requires KAR_PI_BIN with Pi RPC 1.4+"]
 fn pi_skills_and_commands() {
-    let program = std::env::var_os("OAR_PI_BIN").unwrap();
+    let program = std::env::var_os("KAR_PI_BIN").unwrap();
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let cwd = dir.path().join("project");
@@ -55,7 +55,7 @@ fn pi_skills_and_commands() {
     let query = |what: &str| {
         let mut cmd = process(Path::new(env!("CARGO_BIN_EXE_kar")), &home, &cwd);
         run(cmd
-            .env("OAR_PI_AGENT_DIR", &profile)
+            .env("KAR_PI_AGENT_DIR", &profile)
             .args([what, "pi", "--cwd"])
             .arg(&cwd)
             .arg("--bin")
@@ -95,17 +95,17 @@ fn pi_skills_and_commands() {
 }
 
 #[test]
-#[ignore = "requires OAR_PI_BIN with Pi npm package, its examples and a Node host supporting native addons"]
+#[ignore = "requires KAR_PI_BIN with Pi npm package, its examples and a Node host supporting native addons"]
 fn pi_registered_tools() {
-    let program = std::path::PathBuf::from(std::env::var_os("OAR_PI_BIN").unwrap());
+    let program = std::path::PathBuf::from(std::env::var_os("KAR_PI_BIN").unwrap());
     check_pi_registry(&program, None);
 }
 
 #[test]
-#[ignore = "requires standalone OAR_PI_BIN, a matching OAR_PI_SDK_DIR, and Node on PATH"]
+#[ignore = "requires standalone KAR_PI_BIN, a matching KAR_PI_SDK_DIR, and Node on PATH"]
 fn pi_standalone_registered_tools() {
-    let program = std::path::PathBuf::from(std::env::var_os("OAR_PI_BIN").unwrap());
-    let sdk = std::path::PathBuf::from(std::env::var_os("OAR_PI_SDK_DIR").unwrap());
+    let program = std::path::PathBuf::from(std::env::var_os("KAR_PI_BIN").unwrap());
+    let sdk = std::path::PathBuf::from(std::env::var_os("KAR_PI_SDK_DIR").unwrap());
     check_pi_registry(&program, Some(&sdk));
 }
 
@@ -146,14 +146,14 @@ fn check_pi_registry(program: &Path, sdk: Option<&Path>) {
         write(&trust_file, &trust);
         let mut query = process(Path::new(env!("CARGO_BIN_EXE_kar")), &home, &cwd);
         query
-            .env("OAR_PI_AGENT_DIR", &profile)
+            .env("KAR_PI_AGENT_DIR", &profile)
             .args(["tools", "pi", "--cwd"])
             .arg(&cwd)
             .arg("--bin")
             .arg(program);
         if let Some(dir) = sdk {
             assert_eq!(run(&mut query)["code"], "native_query_unavailable");
-            query.env("OAR_PI_SDK_DIR", dir);
+            query.env("KAR_PI_SDK_DIR", dir);
         }
         let result = run(&mut query);
         assert_eq!(result["kind"], "ok", "{result}");
@@ -208,9 +208,9 @@ fn walkdir_count(path: &Path) -> usize {
 }
 
 #[test]
-#[ignore = "requires OAR_ANTIGRAVITY_BIN; real catalog in isolated HOME"]
+#[ignore = "requires KAR_ANTIGRAVITY_BIN; real catalog in isolated HOME"]
 fn antigravity_skills() {
-    let program = std::env::var_os("OAR_ANTIGRAVITY_BIN").unwrap();
+    let program = std::env::var_os("KAR_ANTIGRAVITY_BIN").unwrap();
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().canonicalize().unwrap();
     let cwd = home.join("workspace");

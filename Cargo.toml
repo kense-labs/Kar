@@ -15,11 +15,6 @@ crate-type = ["rlib", "cdylib"]
 name = "kar"
 path = "src/main.rs"
 
-[[bin]]
-name = "oar"
-path = "src/legacy_oar.rs"
-test = false
-
 [dependencies]
 regex = "1"
 serde = { version = "1", features = ["derive"] }

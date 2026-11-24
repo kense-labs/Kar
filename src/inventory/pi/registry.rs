@@ -4,7 +4,7 @@ use serde_json::json;
 use std::{collections::HashSet, ffi::OsString, process::Stdio};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
-const PREFIX: &str = "OAR-PI-TOOLS ";
+const PREFIX: &str = "KAR-PI-TOOLS ";
 const LIMIT: u64 = 18 * 1024 * 1024;
 
 pub(in crate::inventory) async fn tools(
@@ -43,7 +43,7 @@ fn reader_command(
     version: Option<&str>,
 ) -> std::result::Result<tokio::process::Command, InventoryResult<ToolEntry>> {
     use crate::pi_sdk;
-    let configured = probe.get("OAR_PI_SDK_DIR").filter(|p| !p.is_empty());
+    let configured = probe.get("KAR_PI_SDK_DIR").filter(|p| !p.is_empty());
     if let Some(dir) = configured
         && pi_sdk::sdk(path).is_none()
     {
@@ -71,7 +71,7 @@ fn reader_command(
     if pi_sdk::standalone(path) {
         return Err(InventoryResult::unsupported(
             UnsupportedCode::NativeQueryUnavailable,
-            "This standalone Pi requires a matching official SDK in OAR_PI_SDK_DIR to read its registered tools",
+            "This standalone Pi requires a matching official SDK in KAR_PI_SDK_DIR to read its registered tools",
         ));
     }
     Ok(command(probe, path))

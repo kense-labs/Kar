@@ -35,7 +35,7 @@ cargo build --release --locked
 | `kar tools codex --cwd .` | 查看 MCP 服务提供的工具和输入参数 |
 | `kar commands claude --cwd .` | 查看 Claude 在该目录下公布的斜杠命令 |
 | `kar run claude '解释这个函数' --json --record run.jsonl` | 实时输出事件并创建新的 JSONL 记录 |
-| `kar import upstream.jsonl run.jsonl` | 导入旧版 v3 会话记录，保留原始事件并写入新的 JSONL 文件 |
+| `kar import voyage.jsonl run.jsonl` | 导入 `kar-voyage/3` 会话记录，保留原始事件并写入新的 JSONL 文件 |
 | `kar replay run.jsonl` | 验证事件顺序并重放记录。可传 `--stream <UUID> --after <序号>` |
 | `kar mcp --runtimes codex,claude --max-sessions 4 --cwd .` | 向支持 MCP 的宿主提供一组可委派的 agent |
 
@@ -86,7 +86,7 @@ OpenCode 1.x 用原生调试命令读取技能，较大的目录通过临时文�
 
 Pi RPC 从原生 `get_commands` 读取已加载的技能、提示模板和扩展命令。查询沿用所选账号目录和 Pi 保存的工作区信任设置。已用 Pi 1.6.0 验证同一个项目在已信任和未信任时的目录差异，并核对查询前后的信任文件及会话记录。
 
-`kar tools pi --cwd .` 会等工作区扩展完成启动，再从 Pi 注册表读取工具。已停用的工具带 `active: false`，受信任项目在启动时动态注册的工具也会出现。已在 macOS 用 Pi 的 npm 版 1.4.0、1.6.0 和 Node 24.15.0 核对参数、启用状态、工作区信任与会话目录。使用独立版时，按 [Pi SDK 路径配置](src/pi_sdk.rs) 指定官方 npm 包 `@earendil-works/pi-coding-agent` 的安装根目录，并在 PATH 中提供支持原生模块的 Node。Rust 会核对 CLI 和 SDK 版本，通过 SDK 自带的 CLI 入口读取同一工作区和账号目录的注册表。已在 macOS 用独立版 1.6.0 和同版本 SDK 验证。仅安装独立程序时返回 `native_query_unavailable`，指定的 SDK 版本不匹配时返回 `version_unsupported`。
+`kar tools pi --cwd .` 会等工作区扩展完成启动，再从 Pi 注册表读取工具。已停用的工具带 `active: false`，受信任项目在启动时动态注册的工具也会出现。已在 macOS 用 Pi 的 npm 版 1.4.0、1.6.0 和 Node 24.15.0 核对参数、启用状态、工作区信任与会话目录。使用独立版时，用 `KAR_PI_SDK_DIR` 指定官方 npm 包 `@earendil-works/pi-coding-agent` 的安装根目录，并在 PATH 中提供支持原生模块的 Node。Rust 会核对 CLI 和 SDK 版本，通过 SDK 自带的 CLI 入口读取同一工作区和账号目录的注册表。已在 macOS 用独立版 1.6.0 和同版本 SDK 验证。仅安装独立程序时返回 `native_query_unavailable`，指定的 SDK 版本不匹配时返回 `version_unsupported`。
 
 在 macOS 和 Linux 上，Antigravity 1.5.10 与 1.5.11 可在未登录时直接读取工作区和用户技能文件。结果始终带 `partial: true`，因为原生运行时还会按条件加载内置技能。其他受支持的版本和平台会先核对登录状态，再查询原生 `/skills`。已在 macOS 上用 1.5.10、1.5.11 和 1.5.15 逐项对照原生输出，包括插件技能和调用权限。
 
@@ -96,7 +96,7 @@ Cursor 按 SDK 1.4.0 的规则读取工作区和用户技能文件。Git 项目�
 
 ### 识别本机安装
 
-`kar list` 的 `installation.command` 给出选中的可执行文件。通过 PATH 找到多个安装时，`shadowed` 按搜索顺序列出其余路径。同一目录、重复 PATH 项和指向同一文件的别名只计算一次。显式指定可执行文件时，只检查指定的路径。GUI 宿主的 PATH 找不到 CLI 时，还会检查相应供应商的安装目录，包括 macOS 的 ChatGPT/Codex 应用包。创建持久化聊天时会保存实际选中的启动路径。
+`kar list` 的 `installation.command` 给出选中的可执行文件。通过 PATH 找到多个安装时，`shadowed` 按搜索顺序列出其余路径。同一目录、重复 PATH 项和指向同一文件的别名只计算一次。使用 `KAR_<运行时>_BIN`（例如 `KAR_CODEX_BIN`）指定可执行文件时，只检查指定的路径。GUI 宿主的 PATH 找不到 CLI 时，还会检查相应供应商的安装目录，包括 macOS 的 ChatGPT/Codex 应用包。创建持久化聊天时会保存实际选中的启动路径。
 
 在打开聊天之前，`kar list codex --cwd .` 可查看指定安装的 `session_capabilities`，也可以用 `--bin` 选择可执行文件。Rust 宿主先调用 `probe_installation(&options.installation_options())`，再把返回值传给 `runtime.session_capabilities(&installation)`。后一步只读取已有的探测结果。报告包含当前安装已知的图片输入、回合内追加、工具传输、子任务、压缩、上下文和设置限制。缺少字段表示尚未确认，显式 `false` 或空列表表示对应能力不可用。Kimi 在同一版本仍可能选择 ACP 或 KAP，打开前只展示两条路径共有的能力，连接后再由原生会话报告。缺失或未通过就绪检查的安装只返回安装状态。
 
@@ -126,7 +126,7 @@ OpenCode 2 的 Rust 入口是 `Runtime::opencode_provider_auth`。在 CLI 中，
 
 `kar providers opencode login <供应商> oauth` 支持设备码、浏览器回调和手动授权码，`api-key` 支持需要填写账号 ID 等附加信息的供应商。标准输出逐行给出 JSON 事件、提示和结果，宿主用标准输入逐行回答 JSON 字符串。远程客户端可在 `login` 子命令前传 `--refuse-loopback`，在展示授权链接前拒绝只能由服务端本机浏览器完成的方式。取消、过期或超时会清理已取得 ID 的授权尝试。Rust 服务绑定本机回环地址，空闲时关闭，宿主退出也会关闭其标准输入。OpenCode 2.3.2 的密钥替换、附加表单和登出已通过真实 CLI 验证。DigitalOcean 的原生 OAuth 也验证了展示链接后取消，以及远程模式在展示前拒绝本机回调。OAuth 的设备码、手动输入与浏览器竞速、取消和超时经过本地协议测试。
 
-Pi 1.6 的 `kar providers pi menu` 列出 43 个内置供应商，并合并当前 `models.json` 的自定义供应商和名称覆盖。每个条目包含 Pi 声明的登录方式、订阅标记和登录按钮文字。`list` 查询已保存的凭据类型，`list --resolve` 与 `status` 让 Pi 解析凭据。供应商操作与聊天默认使用同一配置目录。可以用 `PI_CODING_AGENT_DIR` 指定 Pi 的配置目录。
+Pi 1.6 的 `kar providers pi menu` 列出 43 个内置供应商，并合并当前 `models.json` 的自定义供应商和名称覆盖。每个条目包含 Pi 声明的登录方式、订阅标记和登录按钮文字。`list` 查询已保存的凭据类型，`list --resolve` 与 `status` 让 Pi 解析凭据。供应商操作与聊天默认使用同一配置目录。可以用 `KAR_PI_AGENT_DIR` 指定配置目录，未设置时读取 `PI_CODING_AGENT_DIR`。
 
 使用 Pi 的 npm 版或为独立版指定同版本的官方 SDK 后，Rust 原生模块从所选 SDK 读取登录菜单，调用 Pi 的供应商登录、凭据状态和退出接口。菜单读取不会创建凭据文件。`set-key <供应商>` 从管道读取字面密钥，保留 `$` 和开头的 `!`。`login <供应商> api-key` 支持 Cloudflare、Bedrock、Vertex 的多步表单。`login <供应商> oauth` 将 Pi 发出的授权链接、设备码、轮询间隔、有效期和手动输入提示传给宿主。原生回调完成时，Rust 会撤销仍在等待的手动输入。
 
@@ -156,7 +156,7 @@ kar chat resume --chat <聊天ID>
 
 Claude Code 可以为中断的根会话回合补回已写入的文本、推理、工具参数和结果。恢复时会核对原工作区、会话、请求 UUID 和原生消息的父子关系。这适用于宿主提交普通输入且执行期间没有追加指令的回合。客户端可以从原来的 SSE 游标收到补全记录；以同一个 UUID 重试会返回已有回合。只有模型内容块、缺少 SDK 最终回执时，该回合仍显示为 `interrupted`。连续发送相同文字、下一轮复用模型消息 ID，以及后台通知启动的后续活动都按各自的输入边界处理。
 
-聊天日志默认保存在用户状态目录下。需要固定存储位置时，可用 `kar chat --store <目录>`。一个聊天同一时间由一个进程续写，其他进程可以读取历史。若有以前通过 `kar run --record` 保存的单事件流 Rust JSONL，可用下面的命令导入，并通过输出的聊天 ID 继续原生会话。续聊需要原工作区和供应商保存的会话仍然可用。
+聊天日志使用 `.karchat` 扩展名和 `kar-chat/1` 文件头，默认目录为 `$XDG_STATE_HOME/kar/chats` 或 `~/.local/state/kar/chats`。可用 `KAR_CHAT_DIR` 或 `kar chat --store <目录>` 指定位置。升级后需新建聊天，旧日志不会自动导入。一个聊天同一时间由一个进程续写，其他进程可以读取历史。若有以前通过 `kar run --record` 保存的单事件流 Rust JSONL，可用下面的命令导入，并通过输出的聊天 ID 继续原生会话。续聊需要原工作区和供应商保存的会话仍然可用。
 
 ```sh
 kar chat import codex old.jsonl --cwd /path/to/original/workspace
@@ -601,7 +601,7 @@ await session.close();
 
 同一个浏览器 Harness 上的多个观察会话可同时订阅一个对话。后加入的客户端能从 Pi Durable 当前状态读取正在执行的工具及其参数、已有输出。根工具的最终结果可包含文字、图片等内容，嵌套工具按原生摘要报告成功或失败。`subscribeEvents(cursor)` 可从同一控制器已确认的事件位置续收；重新 `open` 会创建新的观察流。已在 Chromium 和 IndexedDB 上用真实 Harness 验证中途加入、嵌套工具失败和断线补收。
 
-浏览器集成测试需要 Node 24、上述三个宿主依赖、`esbuild@0.28.2` 和 `playwright-chromium@1.58.1`。构建 Wasm 后，安装该版本 Playwright 对应的 Chromium 并运行 `node tests/browser/live.mjs`。测试默认从项目的 `node_modules` 加载依赖。自定义路径见[浏览器测试入口](tests/browser/live.mjs)。测试只访问回环地址上的模拟模型。
+浏览器集成测试需要 Node 24、上述三个宿主依赖、`esbuild@0.28.2` 和 `playwright-chromium@1.58.1`。构建 Wasm 后，安装该版本 Playwright 对应的 Chromium 并运行 `node tests/browser/live.mjs`。测试默认从项目的 `node_modules` 加载依赖。可用 `KAR_BROWSER_DEPS` 指定依赖目录。测试只访问回环地址上的模拟模型。
 
 ### Mister Morph 本地会话
 
@@ -615,7 +615,7 @@ await session.close();
 
 ### Cybion 远端会话
 
-SDK 可通过 `kar::community::Cybion::new(base_url, api_key)?.open(options).await?` 获取同一个 `Session` 类型。CLI 从[连接配置](src/community/cybion.rs)读取部署地址和密钥，支持 `kar open cybion` 和 `kar run cybion '任务' --resume <thread-id>`。新建时可通过 SDK 的 `open_thread` 指定标题和推理强度。
+SDK 可通过 `kar::community::Cybion::new(base_url, api_key)?.open(options).await?` 获取同一个 `Session` 类型。CLI 从 `KAR_CYBION_BASE_URL` 和 `KAR_CYBION_API_KEY` 读取部署地址和密钥，支持 `kar open cybion` 和 `kar run cybion '任务' --resume <thread-id>`。新建时可通过 SDK 的 `open_thread` 指定标题和推理强度。
 
 工作目录和工具由远端 Worker 管理。文本、图片和运行中追加的输入均提交到 Thread；队列留在宿主进程，远端状态和新增历史通过轮询读取。函数调用和自定义工具调用均保留输入，非文本工具结果会完整保留原始值。追加输入仍在等待执行时，后续排队消息会等待当前回合结束。恢复后只记录这次连接观察到的新历史。`abort()` 会向远端请求取消，`close()` 只释放本地连接。回环测试覆盖这两种行为以及原生 HTTP 拒绝响应、请求鉴权、图像、队列撤回和 CLI 恢复。尚未在真实 Cybion 部署上联调。
 

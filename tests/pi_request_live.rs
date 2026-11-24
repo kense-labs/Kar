@@ -19,7 +19,7 @@ const SECRET: &str = "only-in-private-pi-request";
 const TRANSFORM: &str = r#"export default function(pi) {
     pi.on("before_provider_request", async ({ payload }) => {
         await Promise.resolve();
-        return { ...payload, oar_test_field: "private-pi-payload-marker", oar_secret: process.env.OAR_TEST_SECRET };
+        return { ...payload, kar_test_field: "private-pi-payload-marker", kar_secret: process.env.KAR_TEST_SECRET };
     });
 }"#;
 struct Fixture {
@@ -66,7 +66,7 @@ impl Fixture {
             axum::serve(listener, router).await.unwrap();
         });
         let mut runtime = kar::runtime("pi").unwrap();
-        runtime.program = std::env::var_os("OAR_PI_BIN").unwrap().into();
+        runtime.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
         let mut options = SessionOptions::new(&work);
         for key in [
             "HOME",
@@ -81,8 +81,8 @@ impl Fixture {
         options.env.insert("PI_OFFLINE".into(), "1".into());
         options
             .env
-            .insert("OAR_PI_AGENT_DIR".into(), agent.clone().into());
-        options.env.insert("OAR_TEST_SECRET".into(), SECRET.into());
+            .insert("KAR_PI_AGENT_DIR".into(), agent.clone().into());
+        options.env.insert("KAR_TEST_SECRET".into(), SECRET.into());
         options.settings.model_requests = Some(ModelRequests::Latest);
         options.model = Some("fixture/fixture".into());
         Self {
@@ -136,9 +136,9 @@ async fn final_root_body_for_three_apis() {
         assert_eq!(snapshot.model.as_deref(), Some("fixture"));
         assert_eq!(snapshot.provider.as_deref(), Some("fixture"));
         assert!(snapshot.at.parse::<jiff::Timestamp>().is_ok());
-        assert_eq!(actual["oar_test_field"], MARKER);
-        assert_eq!(actual["oar_secret"], SECRET);
-        actual["oar_secret"] = json!("[redacted]");
+        assert_eq!(actual["kar_test_field"], MARKER);
+        assert_eq!(actual["kar_secret"], SECRET);
+        actual["kar_secret"] = json!("[redacted]");
         assert_eq!(snapshot.body.as_ref(), Some(&actual));
         release.send(()).unwrap();
         let _ = turn.wait().await;
@@ -162,7 +162,7 @@ async fn startup_model_switch_and_nested_root_isolation() {
     import { writeFileSync } from "node:fs";
     export default function(pi) {
         pi.on("session_start",async (_,ctx) => {
-            if (process.env.OAR_TEST_SWITCH) {
+            if (process.env.KAR_TEST_SWITCH) {
                 writeFileSync("startup-hook-entered","true");
                 await pi.setModel(ctx.modelRegistry.find("other","fixture"));
                 return;
@@ -182,7 +182,7 @@ async fn startup_model_switch_and_nested_root_isolation() {
     f.models("anthropic-messages");
     let mut switched = f.options.clone();
     switched.model = None;
-    switched.env.insert("OAR_TEST_SWITCH".into(), "1".into());
+    switched.env.insert("KAR_TEST_SWITCH".into(), "1".into());
     // Explicitly select fixture first so the extension actually changes the API.
     let mut settings: Value =
         serde_json::from_slice(&fs::read(f.agent.join("settings.json")).unwrap()).unwrap();
@@ -259,7 +259,7 @@ async fn persistent_chat_two_subscribers() {
     let inspect = async {
         let (_, release) = f.request().await;
         let req = chat.last_model_request().await.unwrap().unwrap();
-        assert_eq!(req.body.unwrap()["oar_test_field"], MARKER);
+        assert_eq!(req.body.unwrap()["kar_test_field"], MARKER);
         let event = b.next().await;
         public(&event);
         second.apply(event).unwrap();
@@ -302,7 +302,7 @@ async fn later_unobservable_request_supersedes_previous_snapshot() {
         });
         pi.on("before_provider_request", ({payload}) => {
             if (JSON.stringify(payload).includes("make-circular")) {
-                payload.oar_cycle = payload;
+                payload.kar_cycle = payload;
                 return payload;
             }
         });

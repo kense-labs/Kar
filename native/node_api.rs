@@ -219,7 +219,7 @@ pub mod lines {
                     e.0,
                     cb,
                     null_mut(),
-                    e.text("oar-pi-auth-input")?,
+                    e.text("kar-pi-auth-input")?,
                     8,
                     1,
                     null_mut(),

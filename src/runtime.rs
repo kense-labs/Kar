@@ -265,7 +265,7 @@ pub fn runtimes() -> Vec<Runtime> {
     builtins()
         .iter()
         .map(|(id, bin, args, protocol)| {
-            let key = format!("OAR_{}_BIN", id.to_ascii_uppercase());
+            let key = format!("KAR_{}_BIN", id.to_ascii_uppercase());
             Runtime::new(
                 id,
                 std::env::var_os(key)
@@ -282,7 +282,7 @@ pub fn runtime(id: &str) -> Result<Runtime> {
     if id == "morph" {
         return Ok(Runtime::new(
             id,
-            std::env::var_os("OAR_MORPH_BIN").unwrap_or_else(|| "morph".into()),
+            std::env::var_os("KAR_MORPH_BIN").unwrap_or_else(|| "morph".into()),
             &[],
             Protocol::Morph,
         ));

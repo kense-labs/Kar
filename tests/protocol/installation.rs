@@ -64,8 +64,8 @@ pub(super) async fn exercise() {
         Some("first:alias:first:second:link-to-second".into()),
     );
     opts.env
-        .insert("OAR_TEST_INSTALLATION".into(), Some("1".into()));
-    opts.env.insert("OAR_CLAUDE_BIN".into(), None);
+        .insert("KAR_TEST_INSTALLATION".into(), Some("1".into()));
+    opts.env.insert("KAR_CLAUDE_BIN".into(), None);
     let rt = kar::runtime("claude").unwrap();
     let result = rt.probe_installation(&opts).await.unwrap();
     assert!(
@@ -83,7 +83,7 @@ pub(super) async fn exercise() {
             .arg(&root)
             .arg("--bin")
             .arg(bin)
-            .env("OAR_TEST_INSTALLATION", "1")
+            .env("KAR_TEST_INSTALLATION", "1")
             .env("HOME", &home)
             .output()
             .unwrap();
@@ -110,27 +110,27 @@ pub(super) async fn exercise() {
         "unchanged executable and environment should reuse the probe"
     );
     opts.env
-        .insert("OAR_EXTRA_PROBE_ENV".into(), Some("other".into()));
+        .insert("KAR_EXTRA_PROBE_ENV".into(), Some("other".into()));
     rt.probe_installation(&opts).await.unwrap();
     assert!(
         marker.exists(),
         "a different child environment needs its own probe"
     );
-    opts.env.remove(std::ffi::OsStr::new("OAR_EXTRA_PROBE_ENV"));
+    opts.env.remove(std::ffi::OsStr::new("KAR_EXTRA_PROBE_ENV"));
     opts.env
-        .insert("OAR_CLAUDE_BIN".into(), Some("claude".into()));
+        .insert("KAR_CLAUDE_BIN".into(), Some("claude".into()));
     assert!(
         matches!(rt.probe_installation(&opts).await.unwrap(),InstallationSnapshot::Available{shadowed,..} if shadowed.is_empty())
     );
     opts.env.insert(
-        "OAR_CLAUDE_BIN".into(),
+        "KAR_CLAUDE_BIN".into(),
         Some(root.join("missing").into_os_string()),
     );
     assert!(matches!(
         rt.probe_installation(&opts).await.unwrap(),
         InstallationSnapshot::Missing
     ));
-    opts.env.insert("OAR_CLAUDE_BIN".into(), None);
+    opts.env.insert("KAR_CLAUDE_BIN".into(), None);
     fs::write(root.join("first/version"), "1.2.3 (different program)").unwrap();
     fs::File::open(&primary)
         .unwrap()
@@ -155,7 +155,7 @@ pub(super) async fn exercise() {
     ));
 
     let q = Runtime::new("qoder", "qodercli", &[], Protocol::Qoder);
-    opts.env.insert("OAR_QODER_BIN".into(), None);
+    opts.env.insert("KAR_QODER_BIN".into(), None);
     install(
         &root.join("first"),
         "qodercli",

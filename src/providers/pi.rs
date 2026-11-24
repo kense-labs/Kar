@@ -128,7 +128,7 @@ impl Runtime {
         let home = profile_home(&probe)
             .ok_or_else(|| Error::Protocol("Missing Pi home directory".into()))?;
         let agent = match probe
-            .get("OAR_PI_AGENT_DIR")
+            .get("KAR_PI_AGENT_DIR")
             .filter(|v| !v.is_empty())
             .or_else(|| probe.get("PI_CODING_AGENT_DIR"))
             .filter(|v| !v.is_empty())

@@ -442,7 +442,7 @@ impl Session {
                     pi_mcp =
                         Some(crate::pi_mcp::prepare(sdk, &options, entries, &mut process).await?);
                 }
-                if let Some(root) = crate::options::env_path(&options, "OAR_PI_AGENT_DIR") {
+                if let Some(root) = crate::options::env_path(&options, "KAR_PI_AGENT_DIR") {
                     process.env("PI_CODING_AGENT_DIR", root);
                 }
                 let existing = options

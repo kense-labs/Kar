@@ -89,7 +89,7 @@ async fn open(
 ) -> kar::Result<kar::Session> {
     let mut opts = opts.clone();
     opts.env.insert(
-        "OAR_TEST_OPEN_SCRIPT".into(),
+        "KAR_TEST_OPEN_SCRIPT".into(),
         serde_json::to_string(&script)?.into(),
     );
     rt.open(opts).await
@@ -376,7 +376,7 @@ async fn cursor_models() -> kar::Result<()> {
         (-32603, ListingReason::Failed),
     ] {
         opts.env.insert(
-            "OAR_TEST_OPEN_SCRIPT".into(),
+            "KAR_TEST_OPEN_SCRIPT".into(),
             serde_json::to_string(&[
                 hello.clone(),
                 error(
@@ -424,7 +424,7 @@ async fn grok_forms() -> kar::Result<()> {
     ]});
     let script = |opts: &mut SessionOptions, steps: Vec<Value>| {
         opts.env.insert(
-            "OAR_TEST_OPEN_SCRIPT".into(),
+            "KAR_TEST_OPEN_SCRIPT".into(),
             serde_json::to_string(&steps).unwrap().into(),
         );
     };

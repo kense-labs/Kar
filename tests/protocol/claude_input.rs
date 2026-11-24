@@ -258,7 +258,7 @@ pub(super) async fn run() -> kar::Result<()> {
     std::fs::create_dir(&work)?;
     let store = ChatStore::open(temp.path().join("chats"))?;
     let mut opts = SessionOptions::new(&work);
-    opts.env.insert("OAR_TEST_CLAUDE_INPUT".into(), "1".into());
+    opts.env.insert("KAR_TEST_CLAUDE_INPUT".into(), "1".into());
     let chat = store
         .create("claude", Some(&std::env::current_exe()?), opts.clone())
         .await?;
@@ -442,7 +442,7 @@ pub(super) async fn run() -> kar::Result<()> {
         );
         let path = temp.path().join("crashed");
         let crashed = ChatStore::open(&path)?;
-        for suffix in ["oarchat", "lock"] {
+        for suffix in ["karchat", "lock"] {
             let file = format!("{id}.{suffix}");
             std::fs::copy(temp.path().join("chats").join(&file), path.join(&file))?;
         }
@@ -527,7 +527,7 @@ pub(super) async fn run() -> kar::Result<()> {
         let checkpoint = store.feed_snapshot(id)?;
         let path = temp.path().join("held-steer-crash");
         let crashed = ChatStore::open(&path)?;
-        for ext in ["oarchat", "lock"] {
+        for ext in ["karchat", "lock"] {
             let file = format!("{id}.{ext}");
             std::fs::copy(temp.path().join("chats").join(&file), path.join(file))?;
         }
@@ -695,7 +695,7 @@ pub(super) async fn run() -> kar::Result<()> {
     assert_eq!(b.notifications(), snapshot.history.notifications);
     assert_eq!(b.turns(), snapshot.history.turns);
     let history = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
-        .env("OAR_CHAT_DIR", temp.path().join("chats"))
+        .env("KAR_CHAT_DIR", temp.path().join("chats"))
         .args(["chat", "history", "--chat", &id.to_string()])
         .output()
         .await?;

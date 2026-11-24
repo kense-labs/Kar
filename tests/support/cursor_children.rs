@@ -155,7 +155,7 @@ pub async fn run() {
     fs::create_dir(&cwd).unwrap();
     let store = ChatStore::open(dir.path().join("chats")).unwrap();
     let setup = |opts: &mut SessionOptions| {
-        opts.env.insert("OAR_TEST_CURSOR_ACP".into(), "1".into());
+        opts.env.insert("KAR_TEST_CURSOR_ACP".into(), "1".into());
     };
     let mut opts = SessionOptions::new(&cwd);
     setup(&mut opts);
@@ -202,7 +202,7 @@ pub async fn run() {
     session.send(Uuid::new_v4(), "third").await.unwrap();
     session.close().await.unwrap();
     // Recover a crash between the durable task receipt and its turn binding.
-    let filename = format!("{id}.oarchat");
+    let filename = format!("{id}.karchat");
     let log = fs::read_to_string(dir.path().join("chats").join(&filename)).unwrap();
     let mut prefix = String::new();
     for line in log.lines() {

@@ -41,7 +41,7 @@ async fn replay_native_blocks_after_controller_crash() {
     let id = chat.info().id;
     let opening = store.feed_snapshot(id).unwrap().cursor;
     let key = Uuid::new_v4();
-    let prompt = "oar-claude-recover orange-original";
+    let prompt = "kar-claude-recover orange-original";
     let original = chat.send(key, prompt).await.unwrap();
     assert_eq!(original.status, TurnStatus::Completed);
     assert_eq!(
@@ -153,7 +153,7 @@ async fn replay_native_blocks_after_controller_crash() {
             assert_eq!(count, 1, "{label}");
             assert_eq!(replica.turns()[0].items, original.items);
         }
-        let durable = fs::read_to_string(root.join(label).join(format!("{id}.oarchat"))).unwrap();
+        let durable = fs::read_to_string(root.join(label).join(format!("{id}.karchat"))).unwrap();
         assert!(!durable.contains("should-stay-private"));
         web.abort();
     }

@@ -30,7 +30,7 @@ pub(super) struct Ui {
 impl Ui {
     pub fn open(probe: &Probe, path: &Path, end: Instant) -> Result<Self> {
         let directory = tempfile::Builder::new()
-            .prefix("oar-claude-limit-reset-")
+            .prefix("kar-claude-limit-reset-")
             .tempdir()?;
         let mut cmd = CommandBuilder::new(path);
         cmd.env_clear();

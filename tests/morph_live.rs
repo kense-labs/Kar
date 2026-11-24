@@ -79,7 +79,7 @@ async fn actual_morph_shared_console_turn_and_resume() {
     let state = dir.path().join("state");
     let cfg = dir.path().join("config.yaml");
     std::fs::write(&cfg,format!("llm:\n  inference_provider: openai_chat_compatible\n  endpoint: http://{address}/v1\n  api_key: fixture\n  model: fixture\n")).unwrap();
-    let program = std::env::var_os("OAR_MORPH_BIN")
+    let program = std::env::var_os("KAR_MORPH_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| "morph".into());
     let runtime = Morph::local(&program, &state).with_config(&cfg).unwrap();
@@ -228,12 +228,12 @@ async fn native_task_archive_recovers_two_chat_clients() {
     let cwd = dir.path().join("workspace");
     fs::create_dir(&cwd).unwrap();
     fs::write(&cfg,format!("llm:\n  inference_provider: openai_chat_compatible\n  endpoint: http://{address}/v1\n  api_key: fixture\n  model: fixture\n")).unwrap();
-    let program = std::env::var_os("OAR_MORPH_BIN").unwrap_or_else(|| "morph".into());
+    let program = std::env::var_os("KAR_MORPH_BIN").unwrap_or_else(|| "morph".into());
     let cli = |store: &Path| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_kar"));
         command
             .args(["chat", "--json"])
-            .env("OAR_CHAT_DIR", store)
+            .env("KAR_CHAT_DIR", store)
             .env("MISTER_MORPH_CONFIG", &cfg)
             .env("MISTER_MORPH_FILE_STATE_DIR", dir.path().join("state"));
         command
@@ -265,7 +265,7 @@ async fn native_task_archive_recovers_two_chat_clients() {
     assert_eq!(expected.status, TurnStatus::Completed);
     let before = calls.load(Ordering::Relaxed);
     assert!(before > 0);
-    let filename = format!("{id}.oarchat");
+    let filename = format!("{id}.karchat");
     let history = fs::read_to_string(original.join(&filename)).unwrap();
     let mut prefix = String::new();
     let mut cases = Vec::new();
@@ -402,7 +402,7 @@ async fn reattach_running_task_then_deliver_offline_queue() {
     let address = listener.local_addr().unwrap();
     let model = tokio::spawn(async move { axum::serve(listener, model).await.unwrap() });
     fs::write(&cfg,format!("llm:\n  inference_provider: openai_chat_compatible\n  endpoint: http://{address}/v1\n  api_key: fixture\n  model: fixture\n")).unwrap();
-    let program = std::env::var_os("OAR_MORPH_BIN").unwrap_or_else(|| "morph".into());
+    let program = std::env::var_os("KAR_MORPH_BIN").unwrap_or_else(|| "morph".into());
     let owner = Morph::local(&program, &state)
         .with_config(&cfg)
         .unwrap()
@@ -412,7 +412,7 @@ async fn reattach_running_task_then_deliver_offline_queue() {
     let cli = || {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_kar"));
         cmd.args(["chat", "--json"])
-            .env("OAR_CHAT_DIR", &chats)
+            .env("KAR_CHAT_DIR", &chats)
             .env("MISTER_MORPH_CONFIG", &cfg)
             .env("MISTER_MORPH_FILE_STATE_DIR", &state)
             .stdin(Stdio::null())

@@ -86,12 +86,12 @@ pub(super) async fn run() -> kar::Result<()> {
     let mut opts = SessionOptions::new(dir.path());
     let mut rt = kar::runtime("antigravity")?;
     rt.program = std::env::current_exe()?;
-    opts.env.insert("OAR_TEST_AGY_STEER".into(), "1.4.4".into());
+    opts.env.insert("KAR_TEST_AGY_STEER".into(), "1.4.4".into());
     let old = rt.open(opts.clone()).await?;
     assert!(!old.capabilities().steering);
     old.close().await?;
     opts.env
-        .insert("OAR_TEST_AGY_STEER".into(), "1.5.15".into());
+        .insert("KAR_TEST_AGY_STEER".into(), "1.5.15".into());
     let s = rt.open(opts.clone()).await?;
     assert_eq!(
         s.prompt("é".repeat(92_500)).await?.wait().await?,

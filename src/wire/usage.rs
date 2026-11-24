@@ -3,7 +3,7 @@ use crate::{Event, Protocol, TokenReading, TokenTotals};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub(crate) const CLAUDE_BASELINE: &str = "oar/claudeUsageBaseline";
+pub(crate) const CLAUDE_BASELINE: &str = "kar/claudeUsageBaseline";
 
 fn count(v: &Value, key: &str) -> Option<i64> {
     v[key].as_i64().filter(|n| *n >= 0)

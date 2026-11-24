@@ -175,7 +175,7 @@ impl Probe {
         let Some(default) = crate::runtime::registered_command(&rt.id) else {
             return (&rt.program, true);
         };
-        let key = format!("OAR_{}_BIN", rt.id.to_ascii_uppercase());
+        let key = format!("KAR_{}_BIN", rt.id.to_ascii_uppercase());
         // A custom Runtime or explicit --bin takes precedence over discovery options.
         if rt.program != Path::new(default)
             && std::env::var_os(&key).as_deref() != Some(rt.program.as_os_str())

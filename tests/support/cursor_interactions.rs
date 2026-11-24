@@ -95,7 +95,7 @@ pub async fn run() {
     std::fs::create_dir(&cwd).unwrap();
     let store = ChatStore::open(dir.path().join("chats")).unwrap();
     let mut opts = SessionOptions::new(&cwd);
-    opts.env.insert("OAR_TEST_CURSOR_ACP".into(), "1".into());
+    opts.env.insert("KAR_TEST_CURSOR_ACP".into(), "1".into());
     let program = std::env::current_exe().unwrap();
     let unattended = store
         .create("cursor", Some(&program), opts.clone())

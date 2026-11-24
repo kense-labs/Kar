@@ -203,7 +203,7 @@ fn opts(home: &Path, id: &str, mode: &str) -> AuthStatusOptions {
     }
     for (k, v) in [
         ("ACCOUNT_CASE", mode),
-        ("OAR_ACCOUNT_TEST", id),
+        ("KAR_ACCOUNT_TEST", id),
         ("CLAUDECODE", "1"),
     ] {
         env.insert(k.into(), Some(v.into()));

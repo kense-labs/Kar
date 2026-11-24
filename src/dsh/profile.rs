@@ -309,7 +309,7 @@ pub(crate) async fn lock(
         .truncate(false)
         .read(true)
         .write(true)
-        .open(dir.join(".oar-rs-startup.lock"))?;
+        .open(dir.join(".kar-rs-startup.lock"))?;
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(file),

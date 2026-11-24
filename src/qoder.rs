@@ -6,7 +6,7 @@ use std::{io::Write, path::Path, process::Stdio};
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 
-pub(crate) const PRIVATE: &str = "oar-qoder-";
+pub(crate) const PRIVATE: &str = "kar-qoder-";
 pub(crate) fn input(session: Option<&str>, text: &str) -> Value {
     json!({"type":"user","uuid":uuid::Uuid::new_v4(),"session_id":session,"priority":"next",
         "message":{"role":"user","content":[{"type":"text","text":text}]}})

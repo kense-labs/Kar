@@ -63,7 +63,7 @@ async fn fixture(retry: bool) -> Fixture {
     )
     .unwrap();
     let mut options = SessionOptions::new(&work);
-    options.env.insert("OAR_PI_AGENT_DIR".into(), agent.into());
+    options.env.insert("KAR_PI_AGENT_DIR".into(), agent.into());
     for k in [
         "HOME",
         "USERPROFILE",
@@ -85,12 +85,12 @@ async fn fixture(retry: bool) -> Fixture {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_PI_BIN; checks real Pi forks, workspace rollback and model input"]
+#[ignore = "requires KAR_PI_BIN; checks real Pi forks, workspace rollback and model input"]
 async fn fork_at_turn_restores_workspace_and_native_context() {
     let fixture = fixture(true).await;
     let base = fixture.temp.path();
     let store = ChatStore::open(base.join("chats")).unwrap();
-    let bin = std::env::var_os("OAR_PI_BIN").unwrap();
+    let bin = std::env::var_os("KAR_PI_BIN").unwrap();
     let chat = store
         .create("pi", Some(Path::new(&bin)), fixture.options.clone())
         .await
@@ -115,7 +115,7 @@ async fn fork_at_turn_restores_workspace_and_native_context() {
     chat.close().await.unwrap();
     // Recreate a pre-anchor chat: the native input receipt and final workspace
     // checkpoint are present, but no Pi fork cursor has been recorded.
-    let log = base.join("chats").join(format!("{parent}.oarchat"));
+    let log = base.join("chats").join(format!("{parent}.karchat"));
     let mut rows = String::new();
     for line in fs::read_to_string(&log).unwrap().lines() {
         let mut row: Value = serde_json::from_str(line).unwrap();
@@ -227,14 +227,14 @@ async fn fork_at_turn_restores_workspace_and_native_context() {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_PI_BIN; real Pi v3 transcript, native read tool and two HTTP clients"]
+#[ignore = "requires KAR_PI_BIN; real Pi v3 transcript, native read tool and two HTTP clients"]
 async fn restore_native_turn_and_reconnect_both_clients() {
     let fixture = fixture(false).await;
     let base = fixture.temp.path();
     let options = &fixture.options;
     let calls = &fixture.calls;
     let store = ChatStore::open(base.join("original")).unwrap();
-    let bin = std::env::var_os("OAR_PI_BIN").unwrap();
+    let bin = std::env::var_os("KAR_PI_BIN").unwrap();
     let chat = store
         .create("pi", Some(Path::new(&bin)), options.clone())
         .await
@@ -244,7 +244,7 @@ async fn restore_native_turn_and_reconnect_both_clients() {
     let start = initial.cursor;
     let initial = serde_json::to_value(initial).unwrap();
     let key = Uuid::new_v4();
-    let prompt = "oar-pi-recover";
+    let prompt = "kar-pi-recover";
     let original = chat.send(key, prompt).await.unwrap();
     assert_eq!(original.status, TurnStatus::Completed);
     assert!(original.pi_input_timestamp_ms.is_some());
@@ -400,12 +400,12 @@ async fn restore_native_turn_and_reconnect_both_clients() {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_PI_BIN; restores a retried turn from its real Pi v3 transcript"]
+#[ignore = "requires KAR_PI_BIN; restores a retried turn from its real Pi v3 transcript"]
 async fn recover_after_a_native_retry_without_resending() {
     let fixture = fixture(true).await;
     let base = fixture.temp.path();
     let store = ChatStore::open(base.join("original")).unwrap();
-    let bin = std::env::var_os("OAR_PI_BIN").unwrap();
+    let bin = std::env::var_os("KAR_PI_BIN").unwrap();
     let chat = store
         .create("pi", Some(Path::new(&bin)), fixture.options.clone())
         .await
@@ -415,7 +415,7 @@ async fn recover_after_a_native_retry_without_resending() {
         .follow(id, Some(store.feed_snapshot(id).unwrap().cursor))
         .unwrap();
     let key = Uuid::new_v4();
-    let prompt = "oar-retry-once";
+    let prompt = "kar-retry-once";
     assert_eq!(
         chat.send(key, prompt).await.unwrap().status,
         TurnStatus::Completed
@@ -447,16 +447,16 @@ async fn recover_after_a_native_retry_without_resending() {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_PI_BIN with native retry and settlement signals; loopback model only"]
+#[ignore = "requires KAR_PI_BIN with native retry and settlement signals; loopback model only"]
 async fn queue_waits_for_native_retry_to_settle() {
     use kar::Outcome;
     use tokio::time::{Duration, timeout};
     let fixture = fixture(true).await;
     let mut runtime = kar::runtime("pi").unwrap();
-    runtime.program = std::env::var_os("OAR_PI_BIN").unwrap().into();
+    runtime.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
     let session = runtime.open(fixture.options.clone()).await.unwrap();
     let mut stream = session.subscribe(None).unwrap();
-    let turn = session.prompt("oar-retry-once").await.unwrap();
+    let turn = session.prompt("kar-retry-once").await.unwrap();
     timeout(Duration::from_secs(20), async {
         while let Some(record) = stream.next().await {
             if record.native["type"] == "auto_retry_start" {

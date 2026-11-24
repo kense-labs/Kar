@@ -61,7 +61,7 @@ impl Drop for Owner {
 impl Owner {
     pub async fn new(launch: &crate::pi_sdk::Launch, options: &SessionOptions) -> Result<Self> {
         let mut builder = tempfile::Builder::new();
-        builder.prefix("oar-pi-sdk-");
+        builder.prefix("kar-pi-sdk-");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -100,13 +100,13 @@ impl Owner {
     pub fn configure(&self, cmd: &mut Command) {
         cmd.arg("--extension")
             .arg(&self.plugin)
-            .env("OAR_RS_PI_CAPTURE_PORT", self.port.to_string())
-            .env("OAR_RS_PI_CAPTURE_TOKEN", &self.token)
+            .env("KAR_RS_PI_CAPTURE_PORT", self.port.to_string())
+            .env("KAR_RS_PI_CAPTURE_TOKEN", &self.token)
             .env(
-                "OAR_RS_PI_CAPTURE_SDK",
+                "KAR_RS_PI_CAPTURE_SDK",
                 self.dist.join("core/agent-session.js"),
             )
-            .env("OAR_RS_PI_CAPTURE_PLUGIN", &self.plugin);
+            .env("KAR_RS_PI_CAPTURE_PLUGIN", &self.plugin);
     }
 }
 

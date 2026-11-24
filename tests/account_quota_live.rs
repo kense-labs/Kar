@@ -6,9 +6,9 @@ use serde_json::json;
 use std::{fs, path::PathBuf};
 
 #[tokio::test]
-#[ignore = "requires an installed OAR_FACTORY_BIN; synthetic Factory account and loopback only"]
+#[ignore = "requires an installed KAR_FACTORY_BIN; synthetic Factory account and loopback only"]
 async fn factory_limits_from_pinned_installation() {
-    let exe = PathBuf::from(std::env::var_os("OAR_FACTORY_BIN").unwrap());
+    let exe = PathBuf::from(std::env::var_os("KAR_FACTORY_BIN").unwrap());
     let home = tempfile::tempdir().unwrap();
     let server = Server::start().await;
     let mut opts = options(home.path());
@@ -29,9 +29,9 @@ async fn factory_limits_from_pinned_installation() {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_KIMI_BIN; managed Kimi provider with synthetic tokens and a loopback API"]
+#[ignore = "requires KAR_KIMI_BIN; managed Kimi provider with synthetic tokens and a loopback API"]
 async fn managed_kimi_quota_in_an_isolated_profile() {
-    let exe = PathBuf::from(std::env::var_os("OAR_KIMI_BIN").unwrap());
+    let exe = PathBuf::from(std::env::var_os("KAR_KIMI_BIN").unwrap());
     let home = tempfile::tempdir().unwrap();
     let server = Server::start().await;
     let mut opts = options(home.path());

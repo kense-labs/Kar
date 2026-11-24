@@ -257,9 +257,9 @@ async fn testbed(protocol: Protocol) -> Testbed {
     }
     opts.approvals = kar::ApprovalMode::Host;
     let key = if protocol == Protocol::Acp {
-        "OAR_DSH_ACP_BIN"
+        "KAR_DSH_ACP_BIN"
     } else {
-        "OAR_DSH_BIN"
+        "KAR_DSH_BIN"
     };
     let bin = PathBuf::from(std::env::var_os(key).expect(key));
     let store = ChatStore::open(dir.path().join("store")).unwrap();
@@ -277,7 +277,7 @@ async fn testbed(protocol: Protocol) -> Testbed {
 
 impl Testbed {
     fn partial_store(&self, id: Uuid, cut: kar::chat::ChatCursor, name: &str) -> ChatStore {
-        let log_name = format!("{id}.oarchat");
+        let log_name = format!("{id}.karchat");
         let log = std::fs::read(self.dir.path().join("store").join(&log_name)).unwrap();
         let partial = self.dir.path().join(name);
         let store = ChatStore::open(&partial).unwrap();
@@ -833,7 +833,7 @@ async fn legacy_cli_opens_using_acp() {
         .insert("DEEPSEEK_API_KEY".into(), "sk-local-test".into());
     opts.env
         .insert("DEEPSEEK_BASE_URL".into(), "http://127.0.0.1:1".into());
-    let bin = PathBuf::from(std::env::var_os("OAR_DSH_ACP_BIN").expect("set OAR_DSH_ACP_BIN"));
+    let bin = PathBuf::from(std::env::var_os("KAR_DSH_ACP_BIN").expect("set KAR_DSH_ACP_BIN"));
     let mut runtime = kar::runtime("dsh").unwrap();
     runtime.program = bin.clone();
     let session = runtime.open(opts.clone()).await.unwrap();
@@ -1463,8 +1463,8 @@ async fn acp_scoped_writable_directories() {
 async fn check_scoped_writable_directories(protocol: Protocol) {
     let mut tb = testbed(protocol).await;
     if protocol == Protocol::Acp {
-        tb.runtime.program = std::env::var_os("OAR_DSH_ACP_ROOTS_BIN")
-            .expect("OAR_DSH_ACP_ROOTS_BIN")
+        tb.runtime.program = std::env::var_os("KAR_DSH_ACP_ROOTS_BIN")
+            .expect("KAR_DSH_ACP_ROOTS_BIN")
             .into();
     }
     // The native process sandbox may allow its temporary directory globally.

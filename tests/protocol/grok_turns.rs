@@ -143,7 +143,7 @@ pub(super) async fn run() -> kar::Result<()> {
     std::fs::create_dir(&work)?;
     let store = ChatStore::open(temp.path().join("chats"))?;
     let mut opts = SessionOptions::new(&work);
-    opts.env.insert("OAR_TEST_GROK_TURNS".into(), "1".into());
+    opts.env.insert("KAR_TEST_GROK_TURNS".into(), "1".into());
     let chat = Arc::new(
         store
             .create("grok", Some(&std::env::current_exe()?), opts)

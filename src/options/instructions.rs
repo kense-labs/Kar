@@ -22,7 +22,7 @@ pub(crate) fn reserved_server(name: &str) -> bool {
 }
 
 pub(crate) fn agent_dir(opts: &SessionOptions, cwd: &Path) -> Result<PathBuf> {
-    let dir = env_path(opts, "OAR_PI_AGENT_DIR")
+    let dir = env_path(opts, "KAR_PI_AGENT_DIR")
         .or_else(|| env_path(opts, "PI_CODING_AGENT_DIR"))
         .or_else(|| opts.session_home().map(|p| p.join(".pi/agent")))
         .ok_or_else(|| Error::Protocol("Pi agent directory is unknown".into()))?;

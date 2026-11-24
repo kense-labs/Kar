@@ -160,10 +160,10 @@ async fn missing_attribution_times_out_and_close_wins_pending_reads() {
 fn only_sweeps_abandoned_marked_directories_and_validates_native_names() {
     let home = tempfile::tempdir().unwrap();
     let first = files::create_directory(home.path()).unwrap();
-    let stale = home.path().join("oar-rs-claude-requests-old");
+    let stale = home.path().join("kar-rs-claude-requests-old");
     fs::create_dir(&stale).unwrap();
     fs::copy(first.path().join(".owner"), stale.join(".owner")).unwrap();
-    let other = home.path().join("oar-rs-claude-requests-unrelated");
+    let other = home.path().join("kar-rs-claude-requests-unrelated");
     fs::create_dir(&other).unwrap();
     fs::write(other.join(".owner"), "another application").unwrap();
     let _second = files::create_directory(home.path()).unwrap();

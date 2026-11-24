@@ -19,7 +19,7 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-pub(crate) const CLAUDE_COMPACT_CATALOG: &str = "oar/claudeCompactCatalog";
+pub(crate) const CLAUDE_COMPACT_CATALOG: &str = "kar/claudeCompactCatalog";
 const GROK_COMPACT: &str = "_x.ai/compact_conversation";
 fn claude_private(method: &str) -> bool {
     matches!(
@@ -27,11 +27,11 @@ fn claude_private(method: &str) -> bool {
         wire::usage::CLAUDE_BASELINE | CLAUDE_COMPACT_CATALOG | crate::model_request::CONFIRM
     )
 }
-const PRIVATE_CLAUDE_PREFIX: &str = "oar-private-";
-const ANTIGRAVITY_STEER: &str = "oar/antigravitySupersedingPrompt";
-const OPENCODE_V1_STEER: &str = "oar/opencodeConcurrentPrompt";
-const OPENCODE_COMPACT: &str = "oar/opencodeCompact";
-const CONTEXT_QUERY_PREFIX: &str = "oar-context-";
+const PRIVATE_CLAUDE_PREFIX: &str = "kar-private-";
+const ANTIGRAVITY_STEER: &str = "kar/antigravitySupersedingPrompt";
+const OPENCODE_V1_STEER: &str = "kar/opencodeConcurrentPrompt";
+const OPENCODE_COMPACT: &str = "kar/opencodeCompact";
+const CONTEXT_QUERY_PREFIX: &str = "kar-context-";
 type RuntimeLines = tokio::io::Lines<BufReader<ChildStdout>>;
 type BufferedLines = VecDeque<std::io::Result<String>>;
 type Reply<T> = oneshot::Sender<Result<T>>;

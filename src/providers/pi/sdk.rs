@@ -49,7 +49,7 @@ impl Host {
         use crate::pi_sdk::{self, CompanionError};
         let (dist, paired) = if let Some(dist) = pi_sdk::sdk(&pi.command) {
             (dist, false)
-        } else if let Some(dir) = pi.probe.get("OAR_PI_SDK_DIR").filter(|p| !p.is_empty()) {
+        } else if let Some(dir) = pi.probe.get("KAR_PI_SDK_DIR").filter(|p| !p.is_empty()) {
             let companion = pi_sdk::companion(&pi.probe.cwd.join(dir), pi.version.as_deref())
                 .map_err(|error| {
                     let kind = match error {
@@ -74,7 +74,7 @@ impl Host {
             return unavailable();
         };
         let mut builder = tempfile::Builder::new();
-        builder.prefix("oar-pi-auth-");
+        builder.prefix("kar-pi-auth-");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -88,7 +88,7 @@ impl Host {
             .arg("--require")
             .arg(&library)
             .args(["-e", ""])
-            .env("OAR_RS_PI_AUTH_SDK", dist.join("index.js"))
+            .env("KAR_RS_PI_AUTH_SDK", dist.join("index.js"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -108,7 +108,7 @@ impl Host {
         // Before READY the SDK has received no operation and cannot have
         // changed credentials. Preserve the terminal adapter for other installs.
         match tokio::time::timeout(pi.timeout, host.output.next_line()).await {
-            Ok(Ok(Some(line))) if line == "OAR-AUTH READY " => Ok(Some(host)),
+            Ok(Ok(Some(line))) if line == "KAR-AUTH READY " => Ok(Some(host)),
             _ => {
                 host.child.stop().await;
                 unavailable()
@@ -124,7 +124,7 @@ impl Host {
     pub(super) async fn next(&mut self) -> Result<(String, String)> {
         let frame = self.output.next_line().await?.ok_or_else(protocol)?;
         let (tag, data) = frame
-            .strip_prefix("OAR-AUTH ")
+            .strip_prefix("KAR-AUTH ")
             .and_then(|s| s.split_once(' '))
             .ok_or_else(protocol)?;
         if tag == "ERROR" {

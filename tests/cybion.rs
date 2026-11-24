@@ -347,8 +347,8 @@ async fn refusal_and_cli_resume() {
     session.close().await.unwrap();
     let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
         .args(["run", "cybion", "quick", "--resume", "thread/42"])
-        .env("OAR_CYBION_BASE_URL", &url)
-        .env("OAR_CYBION_API_KEY", "local-fixture")
+        .env("KAR_CYBION_BASE_URL", &url)
+        .env("KAR_CYBION_API_KEY", "local-fixture")
         .output()
         .await
         .unwrap();

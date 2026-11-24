@@ -98,7 +98,7 @@ fn peer(protocol: &str) {
                 match v["method"].as_str() {
                     Some("initialize") => {
                         let mut capabilities = json!({"loadSession":true});
-                        if std::env::var_os("OAR_TEST_APPEND_CAPABILITY").is_some() {
+                        if std::env::var_os("KAR_TEST_APPEND_CAPABILITY").is_some() {
                             capabilities["sessionCapabilities"] = json!({"list":{}});
                             capabilities["_meta"] =
                                 json!({"antigravity":{"systemPrompt":{"append":true}}});
@@ -151,14 +151,14 @@ fn peer(protocol: &str) {
                         json!({"sessions":[{"sessionId":"session-1","cwd":std::env::current_dir().unwrap()}]}),
                     ),
                     Some("session/new" | "session/load") => {
-                        if std::env::var_os("OAR_TEST_APPEND_CAPABILITY").is_some() {
+                        if std::env::var_os("KAR_TEST_APPEND_CAPABILITY").is_some() {
                             assert_eq!(
                                 v.pointer("/params/_meta/antigravity/systemPrompt/append"),
                                 Some(&json!("custom"))
                             );
                         }
                         let mut info = json!({"sessionId":"session-1","models":{"currentModelId":"demo","availableModels":[{"modelId":"demo"}]}});
-                        if std::env::var_os("OAR_TEST_BUDDY_FLAGS").is_some() {
+                        if std::env::var_os("KAR_TEST_BUDDY_FLAGS").is_some() {
                             let file = &arg
                                 .windows(2)
                                 .find(|pair| pair[0] == "--system-prompt-file")
@@ -410,11 +410,11 @@ fn peer(protocol: &str) {
                     if v["request"]["subtype"] == "initialize"
                         && v["request_id"]
                             .as_str()
-                            .is_some_and(|s| s.starts_with("oar-private-"))
-                        && std::env::var_os("OAR_TEST_COMPACT_CATALOG").is_some() =>
+                            .is_some_and(|s| s.starts_with("kar-private-"))
+                        && std::env::var_os("KAR_TEST_COMPACT_CATALOG").is_some() =>
                 {
                     let mut commands = vec![json!({"name":"compact","builtin":true})];
-                    if std::env::var("OAR_TEST_COMPACT_CATALOG").as_deref() == Ok("shadow") {
+                    if std::env::var("KAR_TEST_COMPACT_CATALOG").as_deref() == Ok("shadow") {
                         commands.push(json!({"name":"compact","builtin":false}));
                     }
                     let packet = json!({"type":"control_response","response":{"subtype":"success","request_id":v["request_id"],
@@ -426,7 +426,7 @@ fn peer(protocol: &str) {
                     if v.pointer("/message/content/0/text")
                         .is_some_and(|t| t == "/compact") =>
                 {
-                    let mode = std::env::var("OAR_TEST_COMPACT_CATALOG").unwrap();
+                    let mode = std::env::var("KAR_TEST_COMPACT_CATALOG").unwrap();
                     assert_ne!(mode, "shadow", "overridden command was dispatched");
                     let uuid = &v["uuid"];
                     emit(
@@ -566,7 +566,7 @@ fn rig(protocol: Protocol, mode: ApprovalMode) -> (TempDir, Runtime, SessionOpti
     if protocol == Protocol::Pi {
         let root = dir.path().join("pi");
         opts.env
-            .insert("OAR_PI_AGENT_DIR".into(), root.clone().into_os_string());
+            .insert("KAR_PI_AGENT_DIR".into(), root.clone().into_os_string());
         let cwd = dir.path().canonicalize().unwrap();
         let slug = cwd
             .to_string_lossy()
@@ -1017,7 +1017,7 @@ async fn open_instruction_policies() -> kar::Result<()> {
     let mut advertised = opts.clone();
     advertised
         .env
-        .insert("OAR_TEST_APPEND_CAPABILITY".into(), "1".into());
+        .insert("KAR_TEST_APPEND_CAPABILITY".into(), "1".into());
     for resume in [None, Some("session-1".into())] {
         advertised.resume = resume;
         acp.open(advertised.clone()).await?.close().await?;
@@ -1027,7 +1027,7 @@ async fn open_instruction_policies() -> kar::Result<()> {
     buddy.settings.append_system_prompt.take();
     buddy.settings.system_prompt = Some("buddy-rules".into());
     buddy.settings.disallowed_tools = vec!["Read".into(), "Write".into()];
-    buddy.env.insert("OAR_TEST_BUDDY_FLAGS".into(), "1".into());
+    buddy.env.insert("KAR_TEST_BUDDY_FLAGS".into(), "1".into());
     let session = acp.open(buddy).await?;
     let path: std::path::PathBuf = session
         .records()
@@ -1132,7 +1132,7 @@ async fn manual_compaction_controls() -> kar::Result<()> {
     for mode in ["shadow", "changed", "failed", "missing"] {
         let (_dir, r, mut opts) = rig(Protocol::Claude, ApprovalMode::Deny);
         opts.env
-            .insert("OAR_TEST_COMPACT_CATALOG".into(), mode.into());
+            .insert("KAR_TEST_COMPACT_CATALOG".into(), mode.into());
         let claude = r.open(opts).await?;
         let before = claude.snapshot().cursor.unwrap().after_seq;
         let op = claude.start_compaction().await;
@@ -1168,37 +1168,37 @@ async fn main() {
         Some("peer") => environment::capture(),
         _ => {}
     }
-    if std::env::var_os("OAR_TEST_CLAUDE_INPUT").is_some() {
+    if std::env::var_os("KAR_TEST_CLAUDE_INPUT").is_some() {
         return claude_input::peer(&args);
     }
-    if let Ok(mode) = std::env::var("OAR_TEST_PI_REGISTRY") {
+    if let Ok(mode) = std::env::var("KAR_TEST_PI_REGISTRY") {
         return pi_registry::peer(&mode, &args);
     }
-    if let Ok(mode) = std::env::var("OAR_TEST_DSH_SKILLS") {
+    if let Ok(mode) = std::env::var("KAR_TEST_DSH_SKILLS") {
         return dsh_skills::peer(&mode, &args);
     }
-    if std::env::var_os("OAR_TEST_GROK_TURNS").is_some() {
+    if std::env::var_os("KAR_TEST_GROK_TURNS").is_some() {
         return grok_turns::peer();
     }
-    if let Ok(version) = std::env::var("OAR_TEST_AGY_STEER") {
+    if let Ok(version) = std::env::var("KAR_TEST_AGY_STEER") {
         return antigravity_steering::peer(&version);
     }
-    if let Ok(mode) = std::env::var("OAR_TEST_OPENCODE_STEERING") {
+    if let Ok(mode) = std::env::var("KAR_TEST_OPENCODE_STEERING") {
         return opencode_steering::peer(&mode, &args);
     }
-    if let Ok(script) = std::env::var("OAR_TEST_OPEN_SCRIPT") {
+    if let Ok(script) = std::env::var("KAR_TEST_OPEN_SCRIPT") {
         return opening::peer(&script);
     }
-    if std::env::var_os("OAR_QWEN_PROVIDER_TEST").is_some() {
+    if std::env::var_os("KAR_QWEN_PROVIDER_TEST").is_some() {
         return qwen_providers::peer(&args[1..]);
     }
-    if std::env::var_os("OAR_PROVIDER_TEST").is_some() {
+    if std::env::var_os("KAR_PROVIDER_TEST").is_some() {
         return provider::peer(&args[1..]).await;
     }
-    if let Ok(id) = std::env::var("OAR_ACCOUNT_TEST") {
+    if let Ok(id) = std::env::var("KAR_ACCOUNT_TEST") {
         return account::peer(&id, &args[1..]);
     }
-    if std::env::var_os("OAR_TEST_INSTALLATION").is_some() {
+    if std::env::var_os("KAR_TEST_INSTALLATION").is_some() {
         return installation::peer(&args);
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1211,7 +1211,7 @@ async fn main() {
         None => process_resources().await.unwrap(),
         _ => {}
     }
-    if let Ok(version) = std::env::var("OAR_FIXTURE_QODER_VERSION") {
+    if let Ok(version) = std::env::var("KAR_FIXTURE_QODER_VERSION") {
         if args.get(1).is_some_and(|a| a == "--version") {
             println!("qodercli {version}");
         } else {
@@ -1378,7 +1378,7 @@ async fn cli_contract() -> kar::Result<()> {
     let child = Command::new(bin)
         .args(["mcp", "--runtimes", "codex", "--max-sessions", "1", "--cwd"])
         .arg(dir.path())
-        .env("OAR_CODEX_BIN", &exe)
+        .env("KAR_CODEX_BIN", &exe)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .kill_on_drop(true)

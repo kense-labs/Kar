@@ -9,7 +9,7 @@ use std::{
 #[tokio::test]
 #[ignore = "requires Qoder worker 1.1.78; uses its native response replay in an empty home"]
 async fn real_worker_reopens_saved_conversation() {
-    let binary = std::env::var_os("OAR_QODER_WORKER_BIN").expect("set OAR_QODER_WORKER_BIN");
+    let binary = std::env::var_os("KAR_QODER_WORKER_BIN").expect("set KAR_QODER_WORKER_BIN");
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let cwd = tmp.path().join("project");
@@ -105,7 +105,7 @@ fn isolated_options(cwd: &Path, home: &Path) -> SessionOptions {
 #[tokio::test]
 #[ignore = "requires Qoder daemon 1.1.83 in an empty home"]
 async fn real_daemon_acknowledges_session_before_requesting_login() {
-    let binary = std::env::var_os("OAR_QODER_DAEMON_BIN").expect("set OAR_QODER_DAEMON_BIN");
+    let binary = std::env::var_os("KAR_QODER_DAEMON_BIN").expect("set KAR_QODER_DAEMON_BIN");
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("project");
     let home = tmp.path().join("home");

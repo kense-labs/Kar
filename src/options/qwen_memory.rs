@@ -33,8 +33,8 @@ pub(crate) struct Setup {
     pub effective: Option<NativeMemory>,
 }
 
-const PREFIX: &str = "oar-rs-qwen-defaults-";
-const SIGNATURE: &[u8] = b"oar-rs Qwen system defaults v1\n";
+const PREFIX: &str = "kar-rs-qwen-defaults-";
+const SIGNATURE: &[u8] = b"kar-rs Qwen system defaults v1\n";
 const KEYS: [(&str, bool); 3] = [
     ("enableManagedAutoMemory", true),
     ("enableManagedAutoDream", true),

@@ -149,7 +149,7 @@ async fn backend(root: &Path, backend: Arc<Backend>) -> String {
 #[tokio::test]
 #[ignore = "requires a native Claude Code with /limit-reset, all services use synthetic data locally"]
 async fn real_dialog_and_changed_remote_labels() {
-    let cli = std::env::var_os("OAR_CLAUDE_BIN").unwrap();
+    let cli = std::env::var_os("KAR_CLAUDE_BIN").unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let h = tmp.path();
     let config = h.join("config");

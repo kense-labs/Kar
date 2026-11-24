@@ -53,7 +53,7 @@ impl PiProviders {
         }
         // Ask Pi to validate the complete schema and compose models. An absent
         // provider returns before checkAuth, including key commands and refresh.
-        let absent = format!("oar-registry-{}", uuid::Uuid::new_v4());
+        let absent = format!("kar-registry-{}", uuid::Uuid::new_v4());
         let check = self
             .run(&[
                 "auth",

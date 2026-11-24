@@ -120,7 +120,7 @@ pub(super) async fn exercise() {
     let exe = std::env::current_exe().unwrap();
     let server = Server::start().await;
     let mut opts = options(h);
-    set(&mut opts, "OAR_ACCOUNT_TEST", "factory");
+    set(&mut opts, "KAR_ACCOUNT_TEST", "factory");
     set(&mut opts, "ACCOUNT_CASE", "quota_billing");
     let us = format!("{}/us", server.origin);
     let eu = format!("{}/eu", server.origin);
@@ -190,7 +190,7 @@ pub(super) async fn exercise() {
     fs::write(factory.join("auth.v2.file"), KEY).unwrap();
     let err = query("factory", &exe, &opts).await.unwrap_err();
     assert!(!err.to_string().contains(KEY));
-    set(&mut opts, "OAR_ACCOUNT_TEST", "kimi");
+    set(&mut opts, "KAR_ACCOUNT_TEST", "kimi");
     set(&mut opts, "ACCOUNT_CASE", "quota_unconfigured");
     assert_eq!(
         query("kimi", &exe, &opts).await.unwrap()["reason"],

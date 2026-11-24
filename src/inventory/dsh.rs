@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::{ffi::OsString, fs::File, path::Path, process::Stdio};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-const PREFIX: &str = "OAR-DSH-SKILLS ";
+const PREFIX: &str = "KAR-DSH-SKILLS ";
 
 pub(super) async fn skills(
     runtime: &Runtime,
@@ -78,7 +78,7 @@ fn launch(probe: &Probe, executable: &Path) -> Result<Running> {
         &patch,
         serde_json::to_vec(&json!([
             {"id":"acp","disabled":true},
-            {"insert":[{"id":"oar-rust-skills","name":uri.as_str(),"config":{"cwd":probe.cwd}}]}
+            {"insert":[{"id":"kar-rust-skills","name":uri.as_str(),"config":{"cwd":probe.cwd}}]}
         ]))?,
     )?;
     let mut options = probe

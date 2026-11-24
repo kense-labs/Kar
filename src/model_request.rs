@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const CONFIRM: &str = "oar/claudeRequestCapture";
+pub(crate) const CONFIRM: &str = "kar/claudeRequestCapture";
 const SETTING: &str = "OTEL_LOG_RAW_API_BODIES";
 const ATTRIBUTION_WAIT: Duration = Duration::from_secs(2);
 

@@ -6,7 +6,7 @@ use kar::{
 use serde_json::Value;
 use std::{collections::BTreeMap, ffi::OsString, fs};
 #[tokio::test]
-#[ignore = "requires OAR_QWEN_BIN with native qwen/providers/connect"]
+#[ignore = "requires KAR_QWEN_BIN with native qwen/providers/connect"]
 async fn qwen_settings_scope_and_stored_key_reuse() {
     let model = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", model.local_addr().unwrap());
@@ -41,7 +41,7 @@ async fn qwen_settings_scope_and_stored_key_reuse() {
         ] {
             env.insert(k.into(), Some(d.path().as_os_str().into()));
         }
-        for k in ["OAR_QWEN_BIN", "PATH", "SystemRoot"] {
+        for k in ["KAR_QWEN_BIN", "PATH", "SystemRoot"] {
             env.insert(k.into(), std::env::var_os(k));
         }
         env.insert("QWEN_HOME".into(), Some(profile.as_os_str().into()));
