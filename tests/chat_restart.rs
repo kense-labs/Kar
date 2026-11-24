@@ -2015,8 +2015,13 @@ mod workbench_server;
 mod worktree_chats;
 #[path = "support/workbench_devices.rs"]
 mod workbench_devices;
+#[path = "support/workbench_cloud_live.rs"]
+mod workbench_cloud_live;
 fn main() {
     let mode=std::env::args().nth(1);
+    if matches!(mode.as_deref(),Some("workbench-simlock-live"|"workbench-expo-live")){
+        workbench_cloud_live::run(mode.as_deref()==Some("workbench-expo-live"));return;
+    }
     if matches!(mode.as_deref(),Some("workbench-devices"|"workbench-devices-live")){
         workbench_devices::run(mode.as_deref()==Some("workbench-devices-live"));
         return;

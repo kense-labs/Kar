@@ -72,7 +72,7 @@ async fn rpc(client: &Client, l: &Lease, method: &str, params: Value) -> Result<
     }
     Ok(response["result"]["data"].clone())
 }
-async fn command(
+pub(super) async fn command(
     client: &Client,
     l: &Lease,
     name: &str,

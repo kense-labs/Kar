@@ -1,7 +1,10 @@
 //! Bounded cloud device leases with private durable ownership before any billable creation.
+mod agent;
 mod expo;
 pub(super) mod media;
 mod simlock;
+#[cfg(test)]
+mod tests;
 use super::*;
 use reqwest::{Client, RequestBuilder, Response};
 use std::{
@@ -195,6 +198,8 @@ struct Lease {
     version: String,
     created: i64,
     renew_at: i64,
+    #[serde(default)]
+    last_confirmed_at: Option<i64>,
     app: Option<String>,
     resource: Option<String>,
     device_key: Option<String>,
@@ -205,6 +210,8 @@ struct Lease {
     remote_device: Option<String>,
     ready: bool,
     stopping: bool,
+    #[serde(default)]
+    slot_freed: bool,
 }
 impl Lease {
     fn id(&self) -> &str {
@@ -337,16 +344,19 @@ impl Cloud {
         };
         let mut lease = {
             let ledger = self.db.lock().unwrap();
-            if let Some(old) = ledger
-                .values()
-                .find(|l| l.host.id == host.id && l.chat == chat && l.catalog == d.id)
-            {
+            if let Some(old) = ledger.values().find(|l| {
+                l.host.id == host.id && !l.slot_freed && l.chat == chat && l.catalog == d.id
+            }) {
                 if old.ready && !old.stopping && old.host == *host {
                     return Ok(old.id().into());
                 }
                 return Err(bad("a previous cloud opening is being reconciled"));
             }
-            if ledger.values().filter(|l| l.host.id == host.id).count() >= usize::from(host.limit())
+            if ledger
+                .values()
+                .filter(|l| l.host.id == host.id && !l.slot_freed)
+                .count()
+                >= usize::from(host.limit())
             {
                 return Err(bad("cloud host session limit reached"));
             }
@@ -361,6 +371,7 @@ impl Cloud {
                 version: d.version.clone(),
                 created: now(),
                 renew_at: now() + 120_000,
+                last_confirmed_at: None,
                 app,
                 resource: None,
                 device_key: None,
@@ -371,6 +382,7 @@ impl Cloud {
                 remote_device: None,
                 ready: false,
                 stopping: false,
+                slot_freed: false,
             }
         };
         let gate = self.gate(lease.key);
@@ -454,6 +466,22 @@ impl Cloud {
         }
         failure.map_or(Ok(()), Err)
     }
+    pub async fn agent_command(&self, d: &Device, q: &Value) -> Result<Value> {
+        let l = self.find(&d.host_id, &d.id)?;
+        let gate = self.gate(l.key);
+        let _guard = gate.lock().await;
+        let l = self
+            .record(l.key)
+            .filter(|l| l.ready && !l.stopping)
+            .ok_or_else(|| bad("cloud lease is inactive"))?;
+        agent::invoke(self, &l, q).await
+    }
+    pub fn public_leases(&self) -> Value {
+        let db = self.db.lock().unwrap();
+        json!(db.values().map(|l|json!({"host_id":l.host.id,"provider":l.host.kind_name(),"chat":l.chat,"device_id":l.resource,"catalog":l.catalog,
+        "last_confirmed_at_ms":l.last_confirmed_at,"counts_toward_limit":!l.slot_freed,"created_at_ms":l.created,"expires_at_ms":l.created+i64::from(l.host.age())*60_000,
+        "status":if l.stopping{"release_pending"}else if l.ready{"ready"}else{"opening"}})).collect::<Vec<_>>())
+    }
     pub async fn screenshot(&self, d: &Device) -> Result<Vec<u8>> {
         let l = self.find(&d.host_id, &d.id)?;
         if !l.ready || l.stopping {
@@ -493,6 +521,7 @@ impl Cloud {
                                 }
                                 .ok()?;
                                 if alive {
+                                    l.last_confirmed_at = Some(now());
                                     l.renew_at = now()
                                         + if l.host.kind == Provider::Expo {
                                             60_000

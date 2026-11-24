@@ -581,11 +581,36 @@ async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
             return Err(Error::Refused("device did not finish booting".into()).into());
         }
     }
-    app.binding(q.project, q.chat)?;
-    let grant = if s.settings.agent_access_enabled {
-        Some(svc.agents.grant(&app).await?)
-    } else {
-        None
+    let admission: Result<Option<agent::Grant>> = async {
+        app.binding(q.project, q.chat)?;
+        if app.archived(q.chat) {
+            return Err(Error::Refused(
+                "device chat was archived during open".into(),
+            ));
+        }
+        if s.settings.agent_access_enabled {
+            Ok(Some(svc.agents.grant(&app).await?))
+        } else {
+            Ok(None)
+        }
+    }
+    .await;
+    let grant = match admission {
+        Ok(grant) => grant,
+        Err(e) => {
+            if device.cloud
+                && device.booted
+                && !s
+                    .sessions
+                    .iter()
+                    .any(|v| v.host_id == host && v.device_id == device.id)
+            {
+                svc.shutdown_device(&device).await?;
+                s.devices.retain(|d| d.host_id != host || d.id != device.id);
+                svc.publish(&mut s);
+            }
+            return Err(e.into());
+        }
     };
     let session = Session {
         view_id: Uuid::new_v4(),
@@ -740,9 +765,13 @@ async fn events(State(app): State<Workbench>) -> Response {
         .keep_alive(KeepAlive::default())
         .into_response()
 }
+async fn leases(State(app): State<Workbench>) -> Json<Value> {
+    Json(app.0.devices.cloud.public_leases())
+}
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .route("/devices", get(list))
+        .route("/devices/leases", get(leases))
         .route("/devices/events", get(events))
         .route("/devices/configure", post(configure))
         .route("/devices/test-host", post(probe))

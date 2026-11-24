@@ -156,6 +156,9 @@ async fn use_device(weak: WeakApp, headers: HeaderMap, op: Operation) -> Respons
                         "agent action targets its bound device".into(),
                     ));
                 }
+                if d.cloud && q["type"] == "agentCommand" {
+                    return Ok(Json(svc.cloud.agent_command(&d, &q).await?).into_response());
+                }
                 svc.apply(&d, &q).await?;
                 Json(svc.detail(&d).await?).into_response()
             }

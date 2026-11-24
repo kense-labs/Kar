@@ -92,19 +92,46 @@ fn workspace_project(cwd: &Path) -> Result<Option<String>> {
     Ok((ids.len() == 1).then(|| ids.first().unwrap().to_string()))
 }
 pub(super) fn project(cwd: &Path, host: &Host) -> Result<String> {
-    workspace_project(cwd)?.or_else(||host.app_id.clone()).ok_or_else(||bad("choose an Expo app for this host or set a unique extra.eas.projectId in the workspace"))
+    match workspace_project(cwd){Ok(Some(id))=>Ok(id),Ok(None)=>host.app_id.clone().ok_or_else(||bad("choose an Expo app for this host or set a unique extra.eas.projectId in the workspace")),Err(e)=>host.app_id.clone().ok_or(e)}
 }
-async fn query(cloud: &Cloud, l: &Lease, doc: &str, variables: Value) -> Result<Value> {
-    let reply = json_response(
-        l.auth
-            .apply(cloud.client.post(&cloud.graph))
-            .json(&json!({"query":doc,"variables":variables})),
-    )
-    .await?;
-    if reply["errors"].as_array().is_some_and(|e| !e.is_empty()) || !reply["data"].is_object() {
-        return Err(bad("Expo did not confirm the simulator operation"));
+async fn query_result(
+    cloud: &Cloud,
+    l: &Lease,
+    doc: &str,
+    variables: Value,
+) -> std::result::Result<Value, (Error, bool)> {
+    let response = l
+        .auth
+        .apply(cloud.client.post(&cloud.graph))
+        .json(&json!({"query":doc,"variables":variables}))
+        .send()
+        .await
+        .map_err(|_| (bad("Expo request ended before a confirmed response"), false))?;
+    let status = response.status();
+    if matches!(status.as_u16(), 401 | 403) {
+        return Err((bad("Expo rejected the account credential"), true));
+    }
+    let bytes = bounded(response, 2 * 1024 * 1024)
+        .await
+        .map_err(|e| (e, false))?;
+    let reply: Value =
+        serde_json::from_slice(&bytes).map_err(|_| (bad("invalid Expo response"), false))?;
+    let errors = reply["errors"].as_array().filter(|e| !e.is_empty());
+    if errors.is_some() || !status.is_success() || !reply["data"].is_object() {
+        let rejected = !status.is_server_error()
+            && reply["data"].is_null()
+            && errors.is_some_and(|es| es.iter().all(|e| e["extensions"]["errorType"] == "USER"));
+        return Err((
+            bad("Expo did not confirm the simulator operation"),
+            rejected,
+        ));
     }
     Ok(reply["data"].clone())
+}
+async fn query(cloud: &Cloud, l: &Lease, doc: &str, variables: Value) -> Result<Value> {
+    query_result(cloud, l, doc, variables)
+        .await
+        .map_err(|(e, _)| e)
 }
 fn terminal(s: &Value) -> bool {
     matches!(s.as_str(), Some("STOPPED" | "ERRORED"))
@@ -128,8 +155,8 @@ pub(super) async fn alive(c: &Cloud, l: &Lease) -> Result<bool> {
     Ok(!terminal(&status(c, l, l.id()).await?["status"]))
 }
 pub(super) async fn start(c: &Cloud, l: &mut Lease) -> Result<()> {
-    let created=query(c,l,CREATE,json!({"input":{"appId":l.app,"platform":l.platform.to_ascii_uppercase(),"type":"AGENT_DEVICE","name":l.session(),
-        "maxRunTimeMinutes":l.host.age(),"maxIdleTimeMinutes":l.host.idle(),"corsOrigins":["http://localhost"]}})).await?;
+    let created=query_result(c,l,CREATE,json!({"input":{"appId":l.app,"platform":l.platform.to_ascii_uppercase(),"type":"AGENT_DEVICE","name":l.session(),
+        "maxRunTimeMinutes":l.host.age(),"maxIdleTimeMinutes":l.host.idle(),"corsOrigins":["http://localhost"]}})).await.map_err(|(e,rejected)|{l.slot_freed=rejected;e})?;
     l.resource = Some(required(
         &created["deviceRunSession"]["createDeviceRunSession"],
         "id",
@@ -163,9 +190,11 @@ pub(super) async fn start(c: &Cloud, l: &mut Lease) -> Result<()> {
     })
     .await
     .map_err(|_| bad("Expo simulator startup timed out"))??;
-    let preview = safe_url(&required(&config, "previewApiUrl")?)?
-        .origin()
-        .ascii_serialization();
+    let mut preview = url::Url::parse(&required(&config, "previewApiUrl")?)
+        .map_err(|_| bad("invalid Expo preview URL"))?;
+    preview.set_fragment(None);
+    preview.set_query(None);
+    let preview = safe_url(preview.as_str())?.origin().ascii_serialization();
     let token = required(&config, "webPreviewToken")?;
     l.agent_url = Some(safe_url(&required(&config, "agentDeviceRemoteSessionUrl")?)?.to_string());
     l.agent_token = Some(required(&config, "agentDeviceRemoteSessionToken")?);
@@ -208,7 +237,7 @@ async fn stop_id(c: &Cloud, l: &Lease, id: &str) -> Result<bool> {
     }
     Ok(terminal(&status(c, l, id).await?["status"]))
 }
-pub(super) async fn stop(c: &Cloud, l: &Lease) -> Result<bool> {
+pub(super) async fn stop(c: &Cloud, l: &mut Lease) -> Result<bool> {
     if let Some(id) = &l.resource {
         return stop_id(c, l, id).await;
     }
@@ -224,6 +253,10 @@ pub(super) async fn stop(c: &Cloud, l: &Lease) -> Result<bool> {
         {
             if edge["node"]["name"] == l.session() {
                 found = true;
+                if l.slot_freed {
+                    l.slot_freed = false;
+                    c.save(l)?;
+                }
                 if !stop_id(c, l, &required(&edge["node"], "id")?).await? {
                     return Ok(false);
                 }
@@ -239,6 +272,10 @@ pub(super) async fn stop(c: &Cloud, l: &Lease) -> Result<bool> {
         after = Some(next);
     }
     // An unacknowledged create can appear later. Keep checking by its exact name for the full provider horizon.
+    if !found && !l.slot_freed && now() >= l.created + 5 * 60_000 {
+        l.slot_freed = true;
+        c.save(l)?;
+    }
     Ok(found || now() >= l.created + 180 * 60_000)
 }
 pub(super) async fn screen(client: &Client, l: &Lease) -> Result<Vec<u8>> {
