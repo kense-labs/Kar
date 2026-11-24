@@ -44,6 +44,23 @@ async fn identity() -> Json<Value> {
 async fn user() -> Json<Value> {
     Json(json!({"login":"kar-test","id":5432}))
 }
+async fn stack_list(
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let pr = q.get("pull_request").expect("number");
+    if pr == "404" {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if pr == "403" {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    Json(json!([{"number":8,"node_id":"summary","base":"main","url":"https://example/8","pull_requests":[{"number":1,"head":{"ref":"topic"},"state":"open"}]}])).into_response()
+}
+async fn stack_full() -> Json<Value> {
+    Json(
+        json!({"number":8,"id":18,"base":{"ref":"main"},"url":"https://api.example/8","html_url":"https://example/8","pull_requests":[{"number":1,"head":{"ref":"topic","sha":"abc"},"draft":false,"title":"First","state":"closed","merged_at":"2026-01-01"}]}),
+    )
+}
 async fn pulls(State(mock): State<Mock>) -> Json<Value> {
     Json(json!(mock.lock().unwrap().pulls))
 }
@@ -184,6 +201,8 @@ async fn scenario() {
             "/orgs/{org}/repos",
             axum::routing::post(publication::create),
         )
+        .route("/repos/team/repo/stacks", get(stack_list))
+        .route("/repos/team/repo/stacks/8", get(stack_full))
         .route("/repos/team/repo", get(identity))
         .route("/repos/team/repo/pulls", get(pulls).post(create_pull))
         .route("/repos/team/repo/pulls/{n}", get(get_pull))
@@ -269,6 +288,25 @@ async fn scenario() {
     let input = json!({"id":Uuid::new_v4(),"chat":id,"op":"create_pull","head":"feature","base":"main","title":"notes","body":"changes"});
     let pr = ok(a.post(format!("{forge}/operations")).json(&input)).await;
     assert_eq!(pr["number"], 1);
+    let stack = ok(a.get(format!("{forge}/pulls/1/stack"))).await;
+    assert_eq!(stack["id"], "18");
+    assert_eq!(stack["layers"][0]["state"], "merged");
+    assert_eq!(stack["layers"][0]["headSha"], "abc");
+    let listed = ok(a.get(format!("{forge}/pulls/1/stack?include_details=false"))).await;
+    assert_eq!(listed["id"], "summary");
+    assert!(
+        ok(a.get(format!("{forge}/pulls/404/stack")))
+            .await
+            .is_null()
+    );
+    assert_eq!(
+        a.get(format!("{forge}/pulls/403/stack"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
     let stats = ok(a.get(format!("{forge}/pulls/1/change-breakdown"))).await;
     assert_eq!(
         stats,

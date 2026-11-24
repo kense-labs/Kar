@@ -9,6 +9,7 @@ pub(super) mod issue_directory;
 pub(super) mod linear;
 pub(super) mod rest;
 pub(super) mod reviews;
+pub(in crate::workbench::forge) mod stack;
 use super::{Context, ForgeError, Operation};
 use reqwest::Method;
 use serde_json::{Value, json};

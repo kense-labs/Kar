@@ -528,6 +528,10 @@ pub(super) fn routes() -> Router<Workbench> {
             "/projects/{project}/forge/pulls/{n}/change-breakdown",
             get(providers::file_stats::breakdown),
         )
+        .route(
+            "/projects/{project}/forge/pulls/{n}/stack",
+            get(providers::stack::stack),
+        )
         .route("/projects/{project}/forge/pulls/{n}/diff", get(diff))
         .route("/projects/{project}/forge/pulls/{n}/reviewed", put(mark))
         .route(

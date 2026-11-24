@@ -215,6 +215,15 @@ async fn peer(
     if let Some(r) = publication_peer(kind, path, &method, &b) {
         return Json(r).into_response();
     }
+    if kind == "gitcafe" && path.ends_with("/stack") {
+        return Json(json!({"stack":{"id":"ST","number":8,"revision":2,"landingBase":"release","members":[
+            {"position":2,"pullRequestNumber":2,"draft":true,"sourceBranch":"next","title":"Top","state":"open","headOid":"old"},
+            {"position":1,"pullRequestNumber":1,"draft":false,"sourceBranch":"base-feature","title":"Bottom","state":"merged","headOid":"original"}]}})).into_response();
+    }
+    if kind == "tanstack-source" && path.ends_with("/stack") {
+        return Json(json!({"members":[{"number":1,"title":"Bottom","headRef":"refs/heads/one","baseRef":"release","draft":false},
+        {"number":2,"title":"Top","headRef":"fork:two","baseRef":"one","draft":true}]})).into_response();
+    }
     let resource = if path == repo && method == Method::GET {
         match kind {
             "gitlab" => json!({"id":11,"path_with_namespace":"team/repo"}),
@@ -446,6 +455,20 @@ pub(super) async fn run() {
                 assert!(!response.status().is_success(), "{kind}");
             }
 
+            let stack = ok(client.get(format!("{url}/pulls/2/stack"))).await;
+            match kind {
+                "gitcafe" => {
+                    assert_eq!(stack["layers"][0]["number"], 1);
+                    assert_eq!(stack["layers"][0]["headSha"], "original");
+                    assert_eq!(stack["layers"][1]["headSha"], HEAD);
+                }
+                "tanstack-source" => {
+                    assert_eq!(stack["number"], 1);
+                    assert_eq!(stack["base"], "release");
+                    assert_eq!(stack["layers"][1]["headBranch"], "two");
+                }
+                _ => assert!(stack.is_null(), "{kind}"),
+            }
             let stats = ok(client.get(format!("{url}/pulls/2/change-breakdown"))).await;
             if matches!(kind, "gitlab" | "tanstack-source") {
                 assert_eq!(stats["docs"], json!({"additions":7,"deletions":3}));
