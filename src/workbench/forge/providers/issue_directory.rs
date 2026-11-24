@@ -3,7 +3,7 @@ use super::*;
 use crate::workbench::Workbench;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::get as route_get,
 };
 use uuid::Uuid;
@@ -26,8 +26,12 @@ fn member(v: &Value, login: &str, identifier: &str, name: &str, avatar: &str) ->
         json!({"id":id,"login":v[login].as_str().filter(|s|!s.is_empty())?,"name":v[name],"avatarUrl":v[avatar]}),
     )
 }
-async fn context(app: Workbench, p: Uuid) -> Result<Context, ForgeError> {
-    let mut c = linear::tracker(app, p).await?;
+#[derive(serde::Deserialize)]
+struct Scope {
+    issue_scope: Option<String>,
+}
+async fn context(app: Workbench, p: Uuid, requested: Option<&str>) -> Result<Context, ForgeError> {
+    let mut c = linear::tracker_scope(app, p, requested).await?;
     if let Some(t) = credentials::resolve(&c).await? {
         c.token = Some(t);
     }
@@ -47,14 +51,20 @@ pub(in crate::workbench::forge) fn routes() -> Router<Workbench> {
 async fn candidates(
     State(app): State<Workbench>,
     Path(p): Path<Uuid>,
+    Query(scope): Query<Scope>,
 ) -> Result<Json<Value>, ForgeError> {
-    directory(&context(app, p).await?, false).await.map(Json)
+    directory(&context(app, p, scope.issue_scope.as_deref()).await?, false)
+        .await
+        .map(Json)
 }
 async fn template_list(
     State(app): State<Workbench>,
     Path(p): Path<Uuid>,
+    Query(scope): Query<Scope>,
 ) -> Result<Json<Value>, ForgeError> {
-    directory(&context(app, p).await?, true).await.map(Json)
+    directory(&context(app, p, scope.issue_scope.as_deref()).await?, true)
+        .await
+        .map(Json)
 }
 
 async fn directory(c: &Context, want_templates: bool) -> Result<Value, ForgeError> {

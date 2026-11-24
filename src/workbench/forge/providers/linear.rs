@@ -16,17 +16,44 @@ pub(in crate::workbench::forge) async fn tracker(
     app: Workbench,
     project: Uuid,
 ) -> Result<Context, ForgeError> {
+    tracker_scope(app, project, None).await
+}
+pub(in crate::workbench::forge) async fn tracker_scope(
+    app: Workbench,
+    project: Uuid,
+    requested: Option<&str>,
+) -> Result<Context, ForgeError> {
+    let requested = requested.map(str::to_ascii_uppercase);
     let next = app.clone();
     let bound = tokio::task::spawn_blocking(move || -> Result<_, ForgeError> {
         let p = next.project(project)?;
         next.workspace(&p)?;
+        if let Some((c, workspace)) =
+            super::super::trackers::bound(&next, project, requested.as_deref())?
+        {
+            return Ok(Some((c, Some(workspace))));
+        }
         let mut trackers = super::super::Config::load()?
             .issue_trackers
             .into_iter()
             .filter(|t| t.project == project);
         let Some(team) = trackers.next() else {
+            if requested.is_some() {
+                return Err(ForgeError::bad(
+                    "project has no such standalone issue scope",
+                ));
+            }
             return Ok(None);
         };
+        if requested
+            .as_ref()
+            .is_some_and(|s| !s.eq_ignore_ascii_case(&team.team))
+        {
+            return Err(ForgeError::remote(
+                403,
+                "issue scope is not bound to this project",
+            ));
+        }
         if trackers.next().is_some() || team.team.is_empty() || team.team.contains('/') {
             return Err(ForgeError::bad(
                 "ambiguous or invalid Linear team configuration",
@@ -72,7 +99,7 @@ pub(in crate::workbench::forge) async fn tracker(
     c.repository = format!("{org}/{}", c.repository);
     Ok(c)
 }
-pub(super) async fn gql(
+pub(in crate::workbench::forge) async fn gql(
     c: &Context,
     query: &str,
     variables: Value,

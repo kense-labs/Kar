@@ -94,6 +94,7 @@ struct Inner {
     catalog: Mutex<Catalog>,
     thread_updates: tokio::sync::watch::Sender<u64>,
     clones: forge::clone_jobs::Tracker,
+    tracker_accounts:forge::trackers::Store,
     signin: forge::signin::Service,
     state: PathBuf,
     pump: chat_controls::QueuePump,
@@ -164,6 +165,7 @@ impl Workbench {
         let task_folders = task_folders::Store::new(state.join("task-folders"));
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
         let workflows = workflows::Engine::open(&state, clock)?;
+        let tracker_accounts=forge::trackers::Store::open(&state)?;
         let access = access::AccessStore::open(&state)?;
         let devices = devices::Service::open(&state)?;
         let app = Self(Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
@@ -183,6 +185,7 @@ impl Workbench {
                 roots: allowed,
                 thread_updates: tokio::sync::watch::channel(catalog.thread_state.sequence()).0,
                 catalog: Mutex::new(catalog),
+                tracker_accounts,
                 clones: Default::default(),
                 signin: Default::default(),
                 pump: Default::default(),

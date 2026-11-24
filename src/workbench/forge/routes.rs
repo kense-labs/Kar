@@ -19,6 +19,7 @@ struct Input {
     chat: Uuid,
     #[serde(default)]
     routing: Option<routing::Expected>,
+    issue_scope: Option<String>,
     #[serde(flatten)]
     operation: Operation,
 }
@@ -26,6 +27,7 @@ struct Input {
 struct ReadInput {
     #[serde(default)]
     routing: Option<routing::Expected>,
+    issue_scope: Option<String>,
     #[serde(flatten)]
     operation: Operation,
 }
@@ -42,7 +44,7 @@ async fn read(
     }
     providers::issue::validate(&op)?;
     actions::validate(&op)?;
-    let c = Context::for_operation(app.clone(), project, &op).await?;
+    let c = Context::for_operation(app.clone(), project, &op, input.issue_scope.as_deref()).await?;
     routing::verify(&c, input.routing.as_ref()).await?;
     if let Operation::Pull { number } = op {
         return review::refresh(&app, project, &c, number).await.map(Json);
@@ -95,7 +97,13 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
     }
     providers::issue::validate(&input.operation)?;
     actions::validate(&input.operation)?;
-    let c = Context::for_operation(app.clone(), project, &input.operation).await?;
+    let c = Context::for_operation(
+        app.clone(),
+        project,
+        &input.operation,
+        input.issue_scope.as_deref(),
+    )
+    .await?;
     routing::verify(&c, input.routing.as_ref()).await?;
     let identity = c.identity();
     let id = input.id;
@@ -109,6 +117,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
             if old.project != project
                 || old.repository != identity
                 || old.chat != input.chat
+                || old.issue_scope != input.issue_scope
                 || old.routing != input.routing
                 || old.operation != input.operation
             {
@@ -125,6 +134,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
                 chat: input.chat,
                 repository: identity,
                 operation: input.operation.clone(),
+                issue_scope: input.issue_scope.clone(),
                 routing: input.routing.clone(),
                 result: None,
             },
@@ -189,6 +199,7 @@ pub(in crate::workbench) async fn stacked_pull(
                 id,
                 chat,
                 routing: None,
+                issue_scope: None,
                 operation,
             },
         )
@@ -236,7 +247,8 @@ async fn reconcile(
     Json(input): Json<Reconcile>,
 ) -> Reply<Value> {
     let Json(m) = operation(State(app.clone()), Path((project, id))).await?;
-    let c = Context::for_operation(app.clone(), project, &m.operation).await?;
+    let c = Context::for_operation(app.clone(), project, &m.operation, m.issue_scope.as_deref())
+        .await?;
     routing::verify(&c, m.routing.as_ref()).await?;
     if c.identity() != m.repository {
         return Err(ForgeError::bad(
@@ -306,6 +318,7 @@ async fn reconcile(
 }
 #[derive(Deserialize)]
 struct Link {
+    issue_scope: Option<String>,
     id: Uuid,
     chat: Uuid,
     kind: String,
@@ -326,7 +339,7 @@ async fn link(
         },
         _ => return Err(ForgeError::bad("kind must be pull or issue")),
     };
-    let c = Context::for_operation(app.clone(), project, &op).await?;
+    let c = Context::for_operation(app.clone(), project, &op, input.issue_scope.as_deref()).await?;
     let object = c.execute(&op).await?;
     if checked_number(&object)? != input.number {
         return Err(ForgeError::bad("object identity mismatch"));
@@ -362,6 +375,7 @@ fn save_binding(app: &Workbench, id: Uuid, binding: Binding) -> Reply<Binding> {
 
 #[derive(Deserialize)]
 struct OpenIssue {
+    issue_scope: Option<String>,
     id: Uuid,
     runtime: String,
     model: Option<String>,
@@ -371,7 +385,8 @@ async fn issue_chat(
     Path((project, n)): Path<(Uuid, u64)>,
     Json(input): Json<OpenIssue>,
 ) -> Reply<Value> {
-    let c = providers::linear::tracker(app.clone(), project).await?;
+    let c = providers::linear::tracker_scope(app.clone(), project, input.issue_scope.as_deref())
+        .await?;
     let issue = c.execute(&Operation::Issue { number: n }).await?;
     if checked_number(&issue)? != n {
         return Err(ForgeError::remote(502, "issue identity mismatch"));
@@ -504,6 +519,7 @@ async fn issue_tracker(State(app): State<Workbench>, Path(project): Path<Uuid>) 
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .merge(routing::routes())
+        .merge(trackers::routes())
         .merge(signin::routes())
         .merge(repository::routes())
         .merge(clone_jobs::routes())

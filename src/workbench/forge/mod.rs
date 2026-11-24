@@ -21,6 +21,7 @@ pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<Stri
 }
 mod routing;
 pub(in crate::workbench) mod signin;
+pub(super) mod trackers;
 pub(super) fn routes() -> axum::Router<Workbench> {
     routes::routes()
 }
@@ -211,6 +212,8 @@ struct Mutation {
     chat: Uuid,
     repository: String,
     operation: Operation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issue_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     routing: Option<routing::Expected>,
     result: Option<Result<Value, ForgeError>>,
@@ -445,6 +448,7 @@ impl Context {
         app: Workbench,
         project: Uuid,
         op: &Operation,
+        scope: Option<&str>,
     ) -> Result<Self, ForgeError> {
         if matches!(
             op,
@@ -455,8 +459,13 @@ impl Context {
                 | Operation::CommentIssue { .. }
                 | Operation::IssueComments { .. }
         ) {
-            providers::linear::tracker(app, project).await
+            providers::linear::tracker_scope(app, project, scope).await
         } else {
+            if scope.is_some() {
+                return Err(ForgeError::bad(
+                    "issue scope is valid only for issue operations",
+                ));
+            }
             Self::open(app, project).await
         }
     }

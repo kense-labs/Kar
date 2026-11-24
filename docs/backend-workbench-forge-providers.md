@@ -42,3 +42,12 @@ token_env = "LINEAR_API_KEY"
 | macOS，第三方托管平台实机 | 各平台需有可访问仓库或团队及其授权。在隔离测试项目注册远端并配置上表凭据，使用普通工作台入口运行上述场景；记录平台 API 版本、原生 ID、远端返回和本地操作 ID | 本批没有执行远端创建，没有第三方实机通过结论。已编译可复跑的协议对端和纯 Rust 驱动。GitHub 的托管账户用例另见 `tests/workbench_forge/hosted.rs` |
 
 Linux、Windows 以及账户和权限实机组合本批均未运行。
+
+
+## Standalone issue tracker accounts
+
+`GET /forge/issue-trackers` probes the saved first Linear account and additional named accounts. Each status includes its scope directory and workspace. `POST /forge/issue-trackers/connect` accepts `tracker`, `token`, optional `account_id` and `add_account`. A credential is written after a successful native probe. Removing it with an explicit JSON null also clears the corresponding project bindings. A user-only, atomically replaced file under the Kar state directory holds the credentials and bindings together across restarts. The API endpoint is recorded with each credential. A host can set `KAR_LINEAR_API_BASE` to a dedicated GraphQL service before connecting.
+
+`PUT /projects/{project}/forge/issue-tracker/binding` accepts a binding with a primary team, optional account ID and up to 250 additional teams. Sending a null binding clears the matching account's binding. An older client without an account ID cannot detach a named account. The optional `issue_scope` on issue reads, writes, reconciliation through the recorded operation, candidates, templates, links and new issue chats selects a bound Linear team. Static `KAR_FORGE_CONFIG.issue_trackers` entries remain a fallback for projects without a dynamic binding.
+
+The macOS fixture command is `cargo test --locked --test workbench_issue_accounts`. It exercises two local test credentials, a rejected token, a duplicate credential, team pagination, scoped account routing, guarded unbinding, restart and cleanup at normal HTTP entry points. It is registered for centralized execution and has not been run against Linear.

@@ -37,6 +37,8 @@ pub(super) fn cases() -> Vec<Case> {
             "--test",
             "workbench_forge",
             "--test",
+            "workbench_issue_accounts",
+            "--test",
             "workbench_handoff",
             "--test",
             "workbench_agent_sessions",
@@ -48,6 +50,10 @@ pub(super) fn cases() -> Vec<Case> {
     local.switches.insert("KAR_HANDOFF_LIVE".into(), "0".into());
     cases.push(local);
     for (mode, requires) in [
+        (
+            "workbench-observability",
+            "macOS system CPU, memory, isolated child PTY signals and two HTTP subscribers",
+        ),
         (
             "workbench-projects",
             "two HTTP clients and scoped projects with a Codex protocol fixture",
