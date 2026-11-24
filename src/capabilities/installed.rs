@@ -318,11 +318,9 @@ fn declaration(
         },
         Morph | Cybion => {
             d.task_event_types = Some(&[]);
-            let reason = if protocol == Morph {
-                "Morph's shared Console owns its environment and tools"
-            } else {
-                "Cybion workers own their environment, tools and approvals"
-            };
+            let reason = protocol
+                .child_environment_refusal()
+                .expect("remote worker owns env");
             d.refused_session_options.insert("env", reason);
             d.refused_session_options.insert("mcp_servers", reason);
         }

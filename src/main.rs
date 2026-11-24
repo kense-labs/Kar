@@ -440,13 +440,13 @@ async fn execute(command: Action) -> Result<()> {
             log_dir,
             max_running,
         } => {
-            let selected = if ids.is_empty() {
-                runtimes()
-            } else {
-                ids.iter()
-                    .map(|id| runtime(id.trim()))
-                    .collect::<Result<Vec<_>>>()?
-            };
+            let mut selected = runtimes();
+            selected.push(runtime("morph")?);
+            if !ids.is_empty() {
+                // The Kar service adapter may also be selected explicitly.
+                selected.push(runtime("cybion")?);
+                selected.retain(|r| ids.iter().any(|id| id.trim() == r.id));
+            }
             let capacity = mcp::Limits::from_env(max_sessions, max_running, max_depth)?;
             mcp::serve(cwd, selected, capacity, log_dir).await?;
         }

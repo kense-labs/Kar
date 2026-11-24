@@ -59,7 +59,7 @@ impl Limits {
 fn tools() -> Value {
     let string = json!({"type":"string"});
     let id = json!({"type":"string","format":"uuid"});
-    let launch = json!({"runtime":{"type":"string","description":"Runtime ID returned by the runtimes tool."},"task":string,"name":string,"model":string,"resume":string});
+    let launch = json!({"runtime":{"type":"string","description":"Runtime ID returned by the runtimes tool."},"task":string,"name":string,"cwd":string,"model":string,"effort":string,"serviceTier":string,"resume":string});
     let specs = [
         (
             "runtimes",
@@ -112,6 +112,20 @@ fn argument<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
         .as_str()
         .ok_or_else(|| format!("{key} must be a string"))
 }
+fn optional_string(args: &Value, key: &str) -> Result<Option<String>, String> {
+    args.get(key)
+        .map(|v| {
+            v.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{key} must be a string"))
+        })
+        .transpose()
+}
+
+fn refused(code: &str, reason: impl Into<String>) -> Value {
+    json!({"kind":"refused","code":code,"reason":reason.into()})
+}
+
 impl Server {
     async fn tool(&self, params: &Value) -> Result<Value, String> {
         let a = &params["arguments"];
@@ -120,23 +134,20 @@ impl Server {
             "runtimes" => {
                 let mut rows = vec![];
                 for r in self.runtimes.values() {
-                    let (installation, refusal) =
-                        match r.probe_installation(&Default::default()).await {
-                            Ok(snapshot) => {
-                                let refusal = r
-                                    .session_capabilities(&snapshot)
-                                    .and_then(|c| c.refused_session_options.get("env").copied());
-                                (snapshot.summary(), refusal)
-                            }
-                            Err(error) => (
-                                kar::Installation::Failed {
-                                    reason: error.to_string(),
-                                },
-                                None,
-                            ),
-                        };
+                    let installation = match r
+                        .probe_installation(&kar::InstallationOptions {
+                            cwd: Some(self.cwd.clone()),
+                            ..Default::default()
+                        })
+                        .await
+                    {
+                        Ok(snapshot) => snapshot.summary(),
+                        Err(error) => kar::Installation::Failed {
+                            reason: error.to_string(),
+                        },
+                    };
                     let mut row = json!({"id":r.id, "installation":installation});
-                    if let Some(reason) = refusal {
+                    if let Some(reason) = r.protocol.child_environment_refusal() {
                         row["spawnable"] = false.into();
                         row["reason"] = reason.into();
                     }
@@ -148,18 +159,43 @@ impl Server {
                 json!({"agents":self.crew.list(),"unread":self.crew.unread().iter().map(|(id,turn)|json!({"id":id,"turn":turn})).collect::<Vec<_>>()}),
             ),
             name @ ("run" | "spawn") => {
-                let runtime = self
-                    .runtimes
-                    .get(argument(a, "runtime")?)
-                    .ok_or("runtime is not offered by this server")?;
-                let mut opts = SessionOptions::new(&self.cwd);
-                opts.model = a["model"].as_str().map(str::to_owned);
-                opts.resume = a["resume"].as_str().map(str::to_owned);
+                let runtime_id = argument(a, "runtime")?;
+                let prompt = argument(a, "task")?.to_owned();
+                if runtime_id.is_empty() || prompt.is_empty() {
+                    return Err("runtime and task are required".into());
+                }
+                let label = optional_string(a, "name")?;
+                let cwd = optional_string(a, "cwd")?
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.cwd.clone());
+                let mut opts = SessionOptions::new(cwd);
+                opts.model = optional_string(a, "model")?;
+                opts.resume = optional_string(a, "resume")?;
+                opts.settings.effort = optional_string(a, "effort")?;
+                opts.settings.service_tier = optional_string(a, "serviceTier")?;
+                let Some(runtime) = self.runtimes.get(runtime_id) else {
+                    return Ok(refused(
+                        "unknown_runtime",
+                        format!("runtime {runtime_id} is not offered by this server"),
+                    ));
+                };
+                if let Some(reason) = runtime.protocol.child_environment_refusal() {
+                    return Ok(refused(
+                        "open_failed",
+                        format!("{runtime_id} cannot be a subagent: {reason}"),
+                    ));
+                }
                 let limits = self.limits;
                 if limits.depth >= limits.max_depth {
-                    return Err(format!(
-                        "subagents may nest at most {} deep",
-                        limits.max_depth
+                    return Ok(refused(
+                        "depth_limit",
+                        format!("subagents may nest at most {} deep", limits.max_depth),
+                    ));
+                }
+                if !opts.cwd.is_dir() {
+                    return Ok(refused(
+                        "open_failed",
+                        format!("invalid working directory {}", opts.cwd.display()),
                     ));
                 }
                 opts.env.insert(
@@ -172,21 +208,35 @@ impl Server {
                 );
                 opts.remove_env("KAR_WORKBENCH_TOKEN")
                     .map_err(|e| e.to_string())?;
-                let label = a["name"].as_str().map(str::to_owned);
-                let prompt = argument(a, "task")?.to_owned();
-                if name == "spawn" {
+                let result = if name == "spawn" {
                     self.crew
                         .spawn(runtime, opts, label, prompt)
                         .await
                         .map(|info| json!(info))
-                        .map_err(|e| e.to_string())
                 } else {
                     self.crew
                         .run(runtime, opts, label, prompt)
                         .await
                         .map(|report| json!(report))
-                        .map_err(|e| e.to_string())
-                }
+                };
+                Ok(match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            kar::Error::Refused(s) if s == "active agent limit reached" => {
+                                "running_limit"
+                            }
+                            kar::Error::Refused(s) if s == "agent capacity reached" => {
+                                "session_limit"
+                            }
+                            kar::Error::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                "not_installed"
+                            }
+                            _ => "open_failed",
+                        };
+                        refused(code, error.to_string())
+                    }
+                })
             }
             "send" => {
                 let id = id()?;

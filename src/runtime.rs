@@ -20,6 +20,14 @@ pub enum Protocol {
 }
 
 impl Protocol {
+    /// Reason the adapter cannot carry caller-provided environment variables.
+    pub fn child_environment_refusal(self) -> Option<&'static str> {
+        match self {
+            Self::Morph => Some("Morph's shared Console owns its environment and tools"),
+            Self::Cybion => Some("Cybion workers own their environment, tools and approvals"),
+            _ => None,
+        }
+    }
     pub(crate) fn supports_output_schema(self, runtime: &str) -> bool {
         matches!(self, Self::Codex | Self::Claude) || (self == Self::Acp && runtime == "grok")
     }

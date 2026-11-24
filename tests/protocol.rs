@@ -25,6 +25,8 @@ mod claude_input;
 mod codex_catalog;
 #[path = "protocol/crew.rs"]
 mod crew;
+#[path = "protocol/crew_options.rs"]
+mod crew_options;
 #[path = "protocol/dsh_skills.rs"]
 mod dsh_skills;
 #[path = "protocol/environment.rs"]
@@ -1471,6 +1473,9 @@ async fn manual_compaction_controls() -> kar::Result<()> {
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if let Some(dir) = std::env::var_os("KAR_CREW_TRACE") {
+        return crew_options::peer(&args, std::path::Path::new(&dir));
+    }
     if args.get(1).is_some_and(|a| a == "peer")
         && let Some(path) = std::env::var_os("KAR_TEST_SESSION_ARGV")
     {
@@ -1624,6 +1629,7 @@ async fn main() {
         .unwrap()
         .unwrap();
     println!("CLI recording, cursor replay and MCP delegation passed");
+    crew_options::exercise();
     open_instruction_policies().await.unwrap();
     structured_output().await.unwrap();
     manual_compaction_controls().await.unwrap();
