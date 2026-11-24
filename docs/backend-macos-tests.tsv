@@ -1,6 +1,7 @@
 runtime	target	test	environment	requires
 antigravity	account_live	antigravity_usage_signed_out	KAR_ANTIGRAVITY_BIN	requires KAR_ANTIGRAVITY_BIN; uses an empty temporary profile
 antigravity	antigravity_live	steer_during_tool_loop_and_resume_both_clients	KAR_ANTIGRAVITY_BIN	requires KAR_ANTIGRAVITY_BIN; uses an isolated CLI and a local Gemini service
+antigravity	setup_cli	antigravity	KAR_ANTIGRAVITY_BIN	macOS arm64/x86_64 agy >=1.5.0 and access to the official platform release manifest; verifies read-only check and unchanged executable identity/version
 antigravity	skill_inventory_live	native_skill_catalog::antigravity_skills	KAR_ANTIGRAVITY_BIN	requires KAR_ANTIGRAVITY_BIN; real catalog in isolated HOME
 claude	abort_fallback_live	claude_unanswered_interrupt	KAR_CLAUDE_BIN	requires native Claude with a loopback Messages endpoint
 claude	account_live	claude_key_status	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
@@ -14,6 +15,7 @@ claude	native_live	actual_claude_turn_and_resume	KAR_CLAUDE_BIN	requires an inst
 claude	native_live	actual_claude_waits_for_host_approval	KAR_CLAUDE_BIN	requires a Claude Code binary; sends a tool request from a loopback fixture
 claude	native_live	claude_history::replay_native_blocks_after_controller_crash	KAR_CLAUDE_BIN	real Claude Code, isolated native transcript, local model and two HTTP clients
 claude	native_live	resume_prompts::claude_prompt_persistence	KAR_CLAUDE_BIN	requires Claude Code with a loopback model
+claude	setup_cli	claude	KAR_CLAUDE_BIN	vendor-managed macOS Claude Code native or npm installation with updates enabled and its configured stable/latest feed reachable; verifies read-only check and unchanged executable identity/version
 claude	skill_inventory_live	claude	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
 claude	skill_inventory_live	claude_commands_mcp_and_tools	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
 codex	abort_fallback_live	codex_unanswered_interrupt	KAR_CODEX_BIN	requires native Codex with a loopback Responses endpoint
@@ -30,6 +32,7 @@ codex	native_live	actual_codex_managed_worktree_across_processes	KAR_CODEX_BIN	i
 codex	native_live	actual_codex_turn_and_resume	KAR_CODEX_BIN	requires an installed Codex CLI; uses only a loopback model fixture
 codex	native_live	codex_startup::per_server_startup_precedes_the_first_model_request	KAR_CODEX_BIN	requires held HTTP and failing stdio MCP services with real Codex and a loopback model
 codex	native_live	resume_prompts::codex_prompt_persistence	KAR_CODEX_BIN	requires Codex CLI with a loopback model
+codex	setup_cli	codex	KAR_CODEX_BIN	vendor-managed macOS Codex CLI with updates.status in doctor --json (0.158.0+); official version feed reachable; verifies read-only check and unchanged executable identity/version
 codex	skill_inventory_live	codex	KAR_CODEX_BIN	requires KAR_CODEX_BIN
 codex	skill_inventory_live	codex_mcp_and_tools	KAR_CODEX_BIN	requires KAR_CODEX_BIN; isolated profile and a local Rust stdio MCP server
 cursor	account_device_live	cursor::native_cursor_login_and_cancellation	KAR_CURSOR_BIN	requires KAR_CURSOR_BIN with native file credential store
@@ -40,6 +43,7 @@ cursor	native_live	cursor::actual_cursor_missing_session_preserves_history_and_q
 cursor	native_live	cursor::actual_cursor_parameterized_models_and_legacy_variants	KAR_CURSOR_BIN	requires Cursor CLI with ACP and a parameterized model picker
 cursor	native_live	cursor::agent::actual_cursor_agent_turn	KAR_CURSOR_BIN	requires Cursor CLI with ACP; uses the local AgentService and native conversation store
 cursor	skill_inventory_live	cursor_skill_catalog::cursor_sdk_matches_native_discovery	KAR_CURSOR_OBSERVER_NODE,KAR_CURSOR_OBSERVER_TSX,KAR_CURSOR_SDK_OBSERVER	uses the upstream Cursor SDK observer, Node, tsx and the SDK's ripgrep
+devin	setup_cli	devin	KAR_DEVIN_BIN	standalone macOS Devin CLI with a recognized distribution marker next to the installation; corresponding release manifest reachable; verifies read-only check and unchanged executable identity/version
 devin	skill_inventory_live	devin	KAR_DEVIN_BIN	requires KAR_DEVIN_BIN
 dsh	dsh_live	acp_scoped_writable_directories	KAR_DSH_ACP_ROOTS_BIN,KAR_DSH_ACP_BIN	requires official DeepSeek Harness 0.2.2-rc.3 with a working native process sandbox
 dsh	dsh_live	cli_routing::cli_routes_to_the_selected_native_runtime	KAR_DSH_BIN,KAR_KIMI_ACP_BIN	requires official DSH Web and Kimi ACP; two isolated loopback model endpoints
@@ -86,6 +90,7 @@ factory	factory_live	queue_crash::kill_after_admission_before_host_receipt	KAR_F
 factory	factory_live	queue_crash::kill_after_native_tool_result_before_host_receipt	KAR_FACTORY_BIN	requires Factory Droid and POSIX process groups
 factory	factory_live	queue_crash::kill_after_outcome_before_host_receipt	KAR_FACTORY_BIN	requires Factory Droid and POSIX process groups
 factory	factory_live	unknown_effort_is_named_on_open_and_resume	KAR_FACTORY_BIN	requires Factory Droid; verifies public effort refusals without model traffic
+factory	setup_cli	factory	KAR_FACTORY_BIN	managed macOS Factory Droid >=1.12.1; droid update --check can reach its release source; verifies read-only check and unchanged executable identity/version
 factory	skill_inventory_live	factory	KAR_FACTORY_BIN	requires KAR_FACTORY_BIN
 grok	account_live	grok_usage_signed_out	KAR_GROK_BIN	requires KAR_GROK_BIN; uses an empty temporary profile
 grok	grok_live	abort_ends_the_hosted_terminal	KAR_GROK_BIN	real Grok command, native abort and two HTTP chat clients
@@ -94,6 +99,7 @@ grok	grok_live	host_tool_is_ready_on_the_first_turn	KAR_GROK_BIN	requires KAR_GR
 grok	grok_live	isolated_grok_lists_models_for_the_runtime_form_without_a_chat	KAR_GROK_BIN	requires the official Grok CLI with the ACP model listing extension
 grok	grok_live	native_image_reaches_the_model	KAR_GROK_BIN	requires KAR_GROK_BIN; a local chat-completions model observes the image bytes
 grok	grok_live	native_interjection_reaches_the_next_model_step_and_both_clients	KAR_GROK_BIN	requires KAR_GROK_BIN; exercises real Grok interjection against a loopback model
+grok	setup_cli	grok	KAR_GROK_BIN	managed macOS Grok >=1.0.46; grok update --check --json can reach its configured channel; verifies read-only check and unchanged executable identity/version
 grok	skill_inventory_live	grok	KAR_GROK_BIN	requires KAR_GROK_BIN
 grok	skill_inventory_live	grok_mcp	KAR_GROK_BIN	requires KAR_GROK_BIN
 kimi	account_device_live	kimi_native_device_login_status_and_logout	KAR_KIMI_BIN	requires KAR_KIMI_BIN with region-aware device login
@@ -101,6 +107,7 @@ kimi	account_live	kimi_empty_profile	KAR_KIMI_BIN	requires KAR_KIMI_BIN with nat
 kimi	account_quota_live	managed_kimi_quota_in_an_isolated_profile	KAR_KIMI_BIN	requires KAR_KIMI_BIN; managed Kimi provider with synthetic tokens and a loopback API
 kimi	kimi_live	kap_tool_turn_replay_and_native_resume	KAR_KIMI_BIN	requires Kimi KAP; uses an isolated home and a loopback model
 kimi	kimi_live	official_cli_falls_back_and_resumes_over_acp	KAR_KIMI_ACP_BIN	requires unpatched Kimi 2.7.2; uses the native ACP fallback and a loopback model
+kimi	setup_cli	kimi	KAR_KIMI_BIN	standalone macOS Kimi Code with mainland or global release pointer reachable; Homebrew-managed copies use the package manager; verifies read-only check and unchanged executable identity/version
 kimi	skill_inventory_live	kimi	KAR_KIMI_BIN	requires KAR_KIMI_BIN
 kimi-peer	kimi_controls	aborted_or_absent_followup_releases_held_input	KAR_UPSTREAM_SOURCE	requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer
 kimi-peer	kimi_controls	accepted_cancel_without_native_end_is_bounded_across_retries	KAR_UPSTREAM_SOURCE	requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer

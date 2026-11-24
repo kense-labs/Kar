@@ -84,8 +84,16 @@ enum Action {
         #[arg(long, default_value = "600000")]
         timeout_ms: std::num::NonZeroU64,
     },
-    /// Invoke the installed CLI's native updater.
-    Update { runtime: String },
+    /// Query or update installed CLIs. Omit the runtime to select all installed runtimes.
+    Update {
+        runtime: Option<String>,
+        /// Only query the release the installed native updater would select.
+        #[arg(long)]
+        check: bool,
+        /// Set the per-runtime deadline in milliseconds.
+        #[arg(long)]
+        timeout_ms: Option<std::num::NonZeroU64>,
+    },
     /// Serve a group of local agents to an MCP client over stdio.
     Mcp {
         #[arg(long, default_value = ".")]
@@ -448,8 +456,78 @@ async fn execute(command: Action) -> Result<()> {
                 )?;
             }
         }
-        Action::Update { runtime: id } => {
-            json_line(&runtime(&id)?.update().await?, std::io::stdout())?;
+        Action::Update {
+            runtime: id,
+            check,
+            timeout_ms,
+        } => {
+            let timeout =
+                Duration::from_millis(timeout_ms.map(|ms| ms.get()).unwrap_or(if check {
+                    20_000
+                } else {
+                    600_000
+                }));
+            if !check && let Some(id) = &id {
+                return json_line(&runtime(id)?.update_with(timeout).await?, std::io::stdout());
+            }
+            let providers = match id {
+                Some(id) => vec![runtime(&id)?],
+                None => runtimes()
+                    .into_iter()
+                    .chain([runtime("morph")?, runtime("cybion")?])
+                    .collect(),
+            };
+            let mut failed = false;
+            if check {
+                let checks = providers.iter().map(|rt| rt.check_update(timeout));
+                for (rt, result) in providers
+                    .iter()
+                    .zip(futures_util::future::join_all(checks).await)
+                {
+                    let row = match result {
+                        Ok(check) => json!({"id":rt.id, "check":check}),
+                        Err(error) => {
+                            failed = true;
+                            json!({"id":rt.id,"error":error.to_string()})
+                        }
+                    };
+                    json_line(&row, std::io::stdout())?;
+                }
+            } else {
+                for rt in providers {
+                    let installation = rt.probe_installation(&Default::default()).await?;
+                    let eligible = matches!(
+                        &installation,
+                        kar::InstallationSnapshot::Available {
+                            command: Some(_),
+                            ..
+                        } | kar::InstallationSnapshot::Failed {
+                            code: kar::InstallationIssue::VersionUnsupported,
+                            ..
+                        }
+                    );
+                    let row = if eligible {
+                        match rt.update_with(timeout).await {
+                            Ok(updated) => json!({"id":rt.id, "installation":updated}),
+                            Err(Error::Unsupported(detail)) => {
+                                json!({"id":rt.id, "unsupported":detail})
+                            }
+                            Err(error) => {
+                                failed = true;
+                                json!({"id":rt.id,"error":error.to_string()})
+                            }
+                        }
+                    } else {
+                        json!({"id":rt.id,"installation":installation})
+                    };
+                    json_line(&row, std::io::stdout())?;
+                }
+            }
+            if failed {
+                return Err(Error::Refused(
+                    "one or more update operations failed".into(),
+                ));
+            }
         }
         Action::List {
             runtime: id,
