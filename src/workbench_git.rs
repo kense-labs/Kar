@@ -50,6 +50,7 @@ fn base_command(cwd: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("KAR_WORKBENCH_TOKEN")
         .stdin(Stdio::null());
     // A Kar process launched by a Git hook may inherit another checkout's index.
     for key in [

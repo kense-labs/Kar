@@ -5,10 +5,16 @@ use serde_json::json;
 use std::time::Duration;
 use uuid::Uuid;
 
+#[path = "project_lifecycle.rs"]
+mod lifecycle;
+
 use super::workbench_server::{client, json, serve};
 
 #[tokio::main]
 pub(crate) async fn run() {
+    tokio::time::timeout(Duration::from_secs(120), lifecycle::run())
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(120), scenario())
         .await
         .unwrap();

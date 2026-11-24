@@ -71,7 +71,10 @@ impl Workbench {
                     continue;
                 }
             };
-            let Some(project) = projects.iter().find(|p| p.root == info.workspace) else {
+            let Some(project) = projects.iter().find(|p| {
+                self.owns_chat(&self.0.catalog.lock().unwrap(), p, &info)
+                    .unwrap_or(false)
+            }) else {
                 continue;
             };
             match self.0.chats.queued_inputs(id) {
@@ -309,11 +312,14 @@ async fn fork(
     let host = app.clone();
     let (destination, published) = tokio::task::spawn_blocking(move || -> Result<_> {
         let info = host.binding(p, chat)?;
-        host.workspace(&host.project(p)?)?;
+        host.workspace_at(&info.workspace)?;
         let destination = if project == p {
             None
         } else {
-            let target = host.workspace(&host.project(project)?)?.root;
+            let target = host
+                .saved_fork_directory(request.id, project)
+                .unwrap_or(host.project(project)?.root);
+            host.workspace_at(&target)?;
             // A project at a checkout subdirectory must map to precisely that
             // subdirectory in the target. The core also pins the managed checkout ID.
             let source_repo = Repository::open(&info.workspace)?;
@@ -337,6 +343,15 @@ async fn fork(
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => false,
             Err(e) => return Err(e),
         };
+        host.reserve_fork_directory(
+            chat,
+            p,
+            request.turn,
+            request.id,
+            project,
+            destination.as_deref().unwrap_or(&info.workspace),
+            destination.is_some(),
+        )?;
         Ok((destination, published))
     })
     .await
@@ -358,6 +373,7 @@ async fn fork(
         tokio::spawn(async move {
             let slot = app.controller(chat);
             let mut owner = slot.owner.try_lock().map_err(|_| Error::Busy)?;
+            app.binding(p, chat)?;
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }

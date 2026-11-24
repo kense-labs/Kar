@@ -9,6 +9,7 @@ mod git_actions;
 mod handoff;
 mod http;
 mod interactions;
+mod project_lifecycle;
 mod search;
 mod task_folders;
 mod terminal_preview;
@@ -36,6 +37,8 @@ pub struct Project {
     pub id: Uuid,
     pub name: String,
     pub root: PathBuf,
+    #[serde(flatten, default)]
+    pub metadata: project_lifecycle::Metadata,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -45,6 +48,8 @@ struct Catalog {
     #[serde(default)]
     git_actions: BTreeMap<Uuid, git_actions::Record>,
     projects: BTreeMap<Uuid, Project>,
+    #[serde(default)]
+    lifecycle: project_lifecycle::State,
     #[serde(default)]
     tracked_folders: BTreeMap<Uuid, Vec<task_folders::Tracked>>,
     archived: BTreeSet<Uuid>,
@@ -244,6 +249,7 @@ impl Workbench {
                 id: Uuid::new_v4(),
                 root,
                 name: name.trim().to_owned(),
+                metadata: Default::default(),
             };
             catalog.projects.insert(project.id, project.clone());
             Ok(project)
@@ -274,11 +280,11 @@ impl Workbench {
     fn binding(&self, project: Uuid, chat: Uuid) -> Result<ChatInfo> {
         let project = self.project(project)?;
         let info = self.0.chats.saved_info(chat)?;
-        if info.workspace != project.root
-            && self.0.task_folders.workspace(project.id, chat)?.as_ref() != Some(&info.workspace)
-        {
+        let catalog = self.0.catalog.lock().unwrap();
+        if !self.owns_chat(&catalog, &project, &info)? {
             return Err(missing());
         }
+        self.workspace_at(&info.workspace)?;
         Ok(info)
     }
 
@@ -297,31 +303,21 @@ impl Workbench {
     }
 
     pub fn chats(&self, project: Uuid, include_archived: bool) -> Result<Vec<ProjectChat>> {
-        let root = self.project(project)?.root;
+        let p = self.project(project)?;
         let infos = self.0.chats.list()?;
         let catalog = self.0.catalog.lock().unwrap();
-        Ok(infos
-            .into_iter()
-            .filter(|c| {
-                c.workspace == root
-                    || self
-                        .0
-                        .task_folders
-                        .workspace(project, c.id)
-                        .ok()
-                        .flatten()
-                        .as_ref()
-                        == Some(&c.workspace)
-            })
-            .filter_map(|info| {
-                let archived = catalog.archived.contains(&info.id);
-                (include_archived || !archived).then_some(ProjectChat {
+        let mut chats = Vec::new();
+        for info in infos {
+            let archived = catalog.archived.contains(&info.id);
+            if (include_archived || !archived) && self.owns_chat(&catalog, &p, &info)? {
+                chats.push(ProjectChat {
                     project,
                     info,
                     archived,
-                })
-            })
-            .collect())
+                });
+            }
+        }
+        Ok(chats)
     }
 
     pub async fn create_chat(
@@ -354,16 +350,12 @@ impl Workbench {
         forge::clone_jobs::ready(self, project)?;
         let slot = self.controller(id);
         let mut owner = slot.owner.lock().await;
-        let mut p = self.project(project)?;
-        if let Some(cwd) = self.0.task_folders.workspace(project, id)? {
-            p.root = cwd;
-        }
-        self.workspace(&p)?;
-        settings.additional_directories = self.chat_directories(&p.root, &settings)?;
+        let cwd = self.reserve_chat_directory(project, id)?;
+        settings.additional_directories = self.chat_directories(&cwd, &settings)?;
         match self.0.chats.initial_info(id) {
             Ok(info)
                 if info.forked_from.is_none()
-                    && info.workspace == p.root
+                    && info.workspace == cwd
                     && info.runtime == runtime
                     && info.approvals == approvals
                     && info.settings == settings
@@ -383,7 +375,7 @@ impl Workbench {
             Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
-        let mut opts = SessionOptions::new(p.root);
+        let mut opts = SessionOptions::new(cwd);
         opts.remove_env("KAR_WORKBENCH_TOKEN")?;
         opts.model = model;
         opts.approvals = approvals;
@@ -411,6 +403,7 @@ impl Workbench {
         tokio::spawn(async move {
             let controller = app.controller(chat);
             let mut owner = controller.owner.lock().await;
+            app.binding(project, chat)?;
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }

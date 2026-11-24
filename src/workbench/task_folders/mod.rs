@@ -12,7 +12,7 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
-pub(super) use folders::Tracked;
+pub(super) use folders::{Tracked, normalize};
 use serde::Deserialize;
 use std::path::PathBuf;
 pub(super) use task::{Store, single};

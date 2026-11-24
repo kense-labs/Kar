@@ -93,6 +93,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::files::routes())
         .merge(super::terminal_preview::routes())
         .merge(super::task_folders::routes())
+        .merge(super::project_lifecycle::routes())
         .route("/projects/{project}/search", get(search_project))
         .route("/search/chats", get(search_chats))
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))

@@ -278,6 +278,21 @@ pub(super) fn list(app: &Workbench, project: &Project) -> Result<Vec<Folder>> {
 }
 pub(super) fn track(app: &Workbench, p: Uuid, tracked: Vec<Tracked>) -> Result<Vec<Folder>> {
     let project = app.project(p)?;
+    let saved = normalize(app, &project, tracked)?;
+    app.update(|c| {
+        if c.projects.get(&p).map(|p| &p.root) != Some(&project.root) {
+            return Err(Error::Busy);
+        }
+        c.tracked_folders.insert(p, saved);
+        Ok(())
+    })?;
+    list(app, &project)
+}
+pub(in super::super) fn normalize(
+    app: &Workbench,
+    project: &Project,
+    tracked: Vec<Tracked>,
+) -> Result<Vec<Tracked>> {
     if tracked.len() > 128 {
         return Err(Error::Refused(
             "at most 128 tracked folders are supported".into(),
@@ -301,11 +316,7 @@ pub(super) fn track(app: &Workbench, p: Uuid, tracked: Vec<Tracked>) -> Result<V
             saved.push(entry);
         }
     }
-    app.update(|c| {
-        c.tracked_folders.insert(p, saved);
-        Ok(())
-    })?;
-    list(app, &project)
+    Ok(saved)
 }
 
 #[cfg(test)]

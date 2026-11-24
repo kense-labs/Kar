@@ -85,7 +85,7 @@ impl Share {
         !self.revoked
             && now() < self.expires_ms
             && !app.archived(self.chat)
-            && app.project(self.project).is_ok()
+            && app.binding(self.project, self.chat).is_ok()
     }
 }
 
@@ -651,7 +651,7 @@ fn reconcile(app: &Workbench, id: Uuid, msg: Uuid) -> AccessResult<()> {
                 };
                 item.files.clone()
             };
-            let workspace = app.workspace(&app.project(project)?)?;
+            let workspace = app.workspace_at(&info.workspace)?;
             for f in files {
                 let bytes = STANDARD
                     .decode(&f.base64)
