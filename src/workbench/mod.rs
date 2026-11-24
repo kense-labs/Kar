@@ -46,7 +46,7 @@ struct Catalog {
     git_actions: BTreeMap<Uuid, git_actions::Record>,
     projects: BTreeMap<Uuid, Project>,
     #[serde(default)]
-    tracked_folders:BTreeMap<Uuid,Vec<task_folders::Tracked>>,
+    tracked_folders: BTreeMap<Uuid, Vec<task_folders::Tracked>>,
     archived: BTreeSet<Uuid>,
 }
 
@@ -77,6 +77,7 @@ struct Inner {
     access: access::AccessStore,
     documents: documents::Documents,
     terminal_preview: terminal_preview::TerminalPreview,
+    task_folders: task_folders::Store,
     workflows: workflows::Engine,
     _lease: File,
     controllers: Mutex<HashMap<Uuid, Arc<Controller>>>,
@@ -136,10 +137,12 @@ impl Workbench {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Catalog::default(),
             Err(e) => return Err(e.into()),
         };
+        let task_folders = task_folders::Store::new(state.join("task-folders"));
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
         let app = Self(Arc::new(Inner {
             workflows: workflows::Engine::open(&state, clock)?,
             terminal_preview,
+            task_folders,
             chats,
             roots: allowed,
             catalog: Mutex::new(catalog),
@@ -257,7 +260,9 @@ impl Workbench {
     fn binding(&self, project: Uuid, chat: Uuid) -> Result<ChatInfo> {
         let project = self.project(project)?;
         let info = self.0.chats.saved_info(chat)?;
-        if info.workspace != project.root {
+        if info.workspace != project.root
+            && self.0.task_folders.workspace(project.id, chat)?.as_ref() != Some(&info.workspace)
+        {
             return Err(missing());
         }
         Ok(info)
@@ -283,7 +288,17 @@ impl Workbench {
         let catalog = self.0.catalog.lock().unwrap();
         Ok(infos
             .into_iter()
-            .filter(|c| c.workspace == root)
+            .filter(|c| {
+                c.workspace == root
+                    || self
+                        .0
+                        .task_folders
+                        .workspace(project, c.id)
+                        .ok()
+                        .flatten()
+                        .as_ref()
+                        == Some(&c.workspace)
+            })
             .filter_map(|info| {
                 let archived = catalog.archived.contains(&info.id);
                 (include_archived || !archived).then_some(ProjectChat {
@@ -322,11 +337,14 @@ impl Workbench {
         approvals: crate::ApprovalMode,
         mut settings: crate::SessionSettings,
     ) -> Result<ProjectChat> {
-        let p = self.project(project)?;
-        self.workspace(&p)?;
-        settings.additional_directories = self.chat_directories(&p.root, &settings)?;
         let slot = self.controller(id);
         let mut owner = slot.owner.lock().await;
+        let mut p = self.project(project)?;
+        if let Some(cwd) = self.0.task_folders.workspace(project, id)? {
+            p.root = cwd;
+        }
+        self.workspace(&p)?;
+        settings.additional_directories = self.chat_directories(&p.root, &settings)?;
         match self.0.chats.initial_info(id) {
             Ok(info)
                 if info.forked_from.is_none()

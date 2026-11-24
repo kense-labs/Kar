@@ -1939,6 +1939,8 @@ mod cursor_children;
 mod cursor_interactions;
 #[path = "support/workbench_fork.rs"]
 mod workbench_fork;
+#[path = "support/workbench_task_folders.rs"]
+mod workbench_task_folders;
 #[path = "support/workbench_projects.rs"]
 mod workbench_projects;
 #[path = "support/workbench_queue.rs"]
@@ -1967,8 +1969,13 @@ fn main() {
         worktree_chats::fork_with_id();
         return;
     }
+    if std::env::args().nth(1).as_deref() == Some("workbench-task-folders") {
+        workbench_task_folders::run();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("workbench-projects") {
         workbench_projects::run();
+        workbench_task_folders::run();
         return;
     }
     if std::env::var_os("KAR_TEST_CURSOR_ACP").is_some() {

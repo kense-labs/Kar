@@ -27,6 +27,8 @@ struct Record {
     tree: ManagedWorktree,
     start: String,
     phase: Phase,
+    #[serde(default)]
+    existing_branch: bool,
     // Original creation arguments remain immutable for retries. A switch records both
     // possible HEADs before Git writes any working files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,6 +37,55 @@ struct Record {
     pending_head: Option<String>,
 }
 
+// A task checkout may run long-lived native filters or post-checkout hooks. Own that
+// command's process group so cancellation reaches its workers as well as Git.
+fn checkout_while_requested(
+    cmd: &mut Command,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<()> {
+    use std::io::{Read, Seek};
+    use std::sync::atomic::Ordering;
+    if cancel.load(Ordering::SeqCst) {
+        return Err(refused("worktree setup cancelled"));
+    }
+    let mut log = tempfile::tempfile()?;
+    cmd.stdout(Stdio::null())
+        .stderr(log.try_clone()?)
+        .env_remove("KAR_WORKBENCH_TOKEN");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn()?;
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            #[cfg(unix)]
+            {
+                let _ = nix::sys::signal::killpg(
+                    nix::unistd::Pid::from_raw(child.id() as i32),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(refused("worktree setup cancelled"));
+        }
+        if let Some(status) = child.try_wait()? {
+            if status.success() {
+                return Ok(());
+            }
+            log.rewind()?;
+            let mut bytes = vec![];
+            log.take(16 * 1024).read_to_end(&mut bytes)?;
+            return Err(Error::Refused(format!(
+                "git ({status}): {}",
+                String::from_utf8_lossy(&bytes).trim_end()
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
 struct Registry {
     dir: PathBuf,
     _lock: File,
@@ -328,12 +379,31 @@ impl Repository {
         branch: &str,
         start: &str,
     ) -> Result<ManagedWorktree> {
+        self.create_worktree_for(id, directory, branch, start, false, None)
+    }
+
+    pub(crate) fn create_worktree_for(
+        &self,
+        id: Uuid,
+        directory: &Path,
+        branch: &str,
+        start: &str,
+        allow_existing: bool,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<ManagedWorktree> {
         let _pin = pin_saved_checkout(&self.root, self.worktree_id)?;
         let dir = destination(directory)?;
         let registry = Registry::open(self)?;
         let entries = self.registrations()?;
         let mut record = match registry.load(id)? {
-            Some(r) if r.tree.path == dir && r.tree.branch == branch && r.start == start => r,
+            Some(r)
+                if r.tree.path == dir
+                    && r.tree.branch == branch
+                    && r.start == start
+                    && (!r.existing_branch || allow_existing) =>
+            {
+                r
+            }
             Some(_) => return Err(refused("worktree ID already owns a different request")),
             None => {
                 registry.require_available(&dir, branch)?;
@@ -346,7 +416,9 @@ impl Repository {
                     &self.root,
                     &["check-ref-format", &format!("refs/heads/{branch}")],
                 )?;
-                if self.ref_exists(&format!("refs/heads/{branch}"))? {
+                let local_branch = format!("refs/heads/{branch}");
+                let existing_branch = self.ref_exists(&local_branch)?;
+                if existing_branch && !allow_existing {
                     return Err(refused("branch already exists"));
                 }
                 if exists(&dir)?
@@ -364,9 +436,14 @@ impl Repository {
                         id,
                         path: dir.clone(),
                         branch: branch.into(),
-                        start_commit: self.resolve(start)?,
+                        start_commit: self.resolve(if existing_branch {
+                            &local_branch
+                        } else {
+                            start
+                        })?,
                     },
                     start: start.into(),
+                    existing_branch,
                     phase: Phase::Preparing,
                     current_head: None,
                     pending_head: None,
@@ -386,7 +463,13 @@ impl Repository {
                     "registered checkout is missing or destination has been replaced",
                 ));
             }
-            self.reserve_branch(&record.tree)?;
+            if record.existing_branch {
+                if self.resolve(&format!("refs/heads/{branch}"))? != record.tree.start_commit {
+                    return Err(refused("the intended existing worktree branch moved"));
+                }
+            } else {
+                self.reserve_branch(&record.tree)?;
+            }
             let mut cmd = command(&self.root);
             cmd.args([
                 "-c",
@@ -398,7 +481,11 @@ impl Repository {
                 &reason(id),
             ]);
             cmd.arg("--").arg(&dir).arg(branch);
-            checked(cmd.output()?)?;
+            if let Some(cancel) = cancel {
+                checkout_while_requested(&mut cmd, cancel)?;
+            } else {
+                checked(cmd.output()?)?;
+            }
             let entry = self
                 .registrations()?
                 .into_iter()
@@ -423,7 +510,9 @@ impl Repository {
         } else if marker_id(&File::open(admin.join(ID_FILE))?)? != id {
             return Err(refused("worktree identity changed"));
         }
-        self.release_reservation(&record.tree)?;
+        if !record.existing_branch {
+            self.release_reservation(&record.tree)?;
+        }
         Ok(record.tree)
     }
 
@@ -471,7 +560,7 @@ impl Repository {
         Ok(())
     }
 
-    pub(super) fn ref_exists(&self, name: &str) -> Result<bool> {
+    pub(crate) fn ref_exists(&self, name: &str) -> Result<bool> {
         let out = command(&self.root)
             .args(["show-ref", "--verify", "--quiet", name])
             .output()?;
