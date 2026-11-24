@@ -233,7 +233,11 @@ impl Session {
             .current_dir(&cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(if runtime.protocol == Protocol::Qwen {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            });
         let mut id = options
             .resume
             .clone()

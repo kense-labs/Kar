@@ -1,4 +1,5 @@
 //! Scoped subprocesses used for private native management operations.
+pub(crate) mod diagnostic;
 use std::{
     io,
     process::{ExitStatus, Output},

@@ -1,6 +1,5 @@
 use crate::{SessionOptions, installation::Probe};
-use regex::Regex;
-use std::{io::SeekFrom, sync::LazyLock};
+use std::io::SeekFrom;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt},
@@ -17,16 +16,6 @@ pub(super) async fn excerpt(f: &std::fs::File, probe: &Probe) -> Option<String> 
         return None;
     }
     let raw = std::str::from_utf8(&bytes).ok()?;
-    static ESCAPES: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)").unwrap()
-    });
-    let mut text = ESCAPES.replace_all(raw, "").into_owned();
-    if text
-        .chars()
-        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-    {
-        return None;
-    }
     let mut opts = SessionOptions::new(&probe.cwd);
     opts.env.clone_from(&probe.env);
     let mut secrets = crate::options::session_secrets(&opts);
@@ -59,37 +48,5 @@ pub(super) async fn excerpt(f: &std::fs::File, probe: &Probe) -> Option<String> 
             }
         }
     }
-    const URI: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
-        .remove(b'-')
-        .remove(b'_')
-        .remove(b'.')
-        .remove(b'!')
-        .remove(b'~')
-        .remove(b'*')
-        .remove(b'\'')
-        .remove(b'(')
-        .remove(b')');
-    let mut forms = Vec::new();
-    for secret in secrets {
-        let escaped = serde_json::to_string(&secret).ok()?;
-        forms.push(escaped[1..escaped.len() - 1].to_owned());
-        forms.push(percent_encoding::utf8_percent_encode(&secret, URI).to_string());
-        forms.push(secret);
-    }
-    forms.sort_unstable_by_key(|s| std::cmp::Reverse(s.len()));
-    forms.dedup();
-    for s in forms.iter().filter(|s| !s.is_empty()) {
-        text = text.replace(s, "[redacted]");
-    }
-    static SHAPES: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?i)\b(?:[\w.-]*(?:key|token|secret|password|passwd|credential)s?|authorization|proxy-authorization|(?:set-)?cookie)["']?\s*[:=][^\r\n]*|\b(?:bearer|basic)\s+[\w+/=.\-]+|\b[a-z][a-z\d+.\-]*://[^\s<>"']+|\b(?:gh[pousr]_|github_pat_|AIza|ya29\.)[\w.\-]+|\bsk-[\w\-]{16,}|\beyJ[\w-]+\.[\w-]+\.[\w-]+"#).unwrap()
-    });
-    let redacted = SHAPES.replace_all(&text, "[redacted]");
-    let line = redacted.lines().map(str::trim).find(|s| !s.is_empty())?;
-    let mut chars = line.chars();
-    let mut result: String = chars.by_ref().take(500).collect();
-    if chars.next().is_some() {
-        result.push_str("...");
-    }
-    Some(result)
+    crate::process::diagnostic::excerpt(raw, &secrets)
 }

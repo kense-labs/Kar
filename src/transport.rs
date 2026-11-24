@@ -296,6 +296,7 @@ pub(crate) struct Actor {
     claude_steering: wire::claude_input::Steering,
     context_waiters: HashMap<u64, Vec<Reply<Value>>>,
     qwen_context: bool,
+    qwen_initialized: bool,
     qoder_daemon: bool,
     qoder_startup: Option<Vec<Value>>,
 }
@@ -312,6 +313,17 @@ impl Actor {
         let stdout = child.inner().stdout.take().expect("stdout configured");
         let stdin = child.inner().stdin.take().expect("stdin configured");
         let (tx, rx) = mpsc::channel(64);
+        let mut startup_stderr = tokio::task::JoinSet::new();
+        if let Some(stderr) = child.inner().stderr.take() {
+            let mut sensitive = secrets.clone();
+            for arg in &options.launch_args {
+                sensitive.push(arg.clone());
+                if let Some((_, value)) = arg.split_once('=') {
+                    sensitive.push(value.into());
+                }
+            }
+            startup_stderr.spawn(crate::process::diagnostic::startup_tail(stderr, sensitive));
+        }
         let actor = Self {
             close_ack: None,
             protocol: runtime.protocol,
@@ -381,10 +393,11 @@ impl Actor {
             claude_steering: Default::default(),
             context_waiters: HashMap::new(),
             qwen_context: false,
+            qwen_initialized: false,
             qoder_daemon: false,
             qoder_startup: (runtime.protocol == Protocol::Qoder).then(Vec::new),
         };
-        tokio::spawn(actor.run(stdout, rx));
+        tokio::spawn(actor.run(stdout, rx, startup_stderr));
         tx
     }
     fn awaiting_pi_admission(&self) -> bool {
@@ -2275,6 +2288,7 @@ impl Actor {
                     events.push(report)
                 }
                 if self.protocol == Protocol::Qwen && p.method == "initialize" {
+                    self.qwen_initialized = true;
                     self.qwen_context = body
                         .pointer("/capabilities/can_get_context_usage")
                         .is_some_and(|v| v == true);
@@ -2976,7 +2990,12 @@ impl Actor {
         }
         self.child.stop_with_status().await
     }
-    async fn run(mut self, stdout: ChildStdout, mut commands: mpsc::Receiver<Command>) {
+    async fn run(
+        mut self,
+        stdout: ChildStdout,
+        mut commands: mpsc::Receiver<Command>,
+        mut startup_stderr: tokio::task::JoinSet<Option<String>>,
+    ) {
         let mut lines = BufReader::new(stdout).lines();
         let mut buffered = BufferedLines::new();
         let reason = loop {
@@ -3129,6 +3148,22 @@ impl Actor {
         self.files.qwen_defaults.take();
         self.files.dsh_patch.take();
         self.files.prompts.clear();
+        let reason = if self.protocol == Protocol::Qwen
+            && !self.qwen_initialized
+            && self.close_ack.is_none()
+        {
+            let diagnostic =
+                tokio::time::timeout(Duration::from_millis(200), startup_stderr.join_next())
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|task| task.ok())
+                    .flatten();
+            let detail = diagnostic.map_or_else(String::new, |text| format!(": {text}"));
+            format!("Qwen exited before confirming the native session ({reason}){detail}")
+        } else {
+            reason
+        };
         let reason = self
             .secrets
             .iter()

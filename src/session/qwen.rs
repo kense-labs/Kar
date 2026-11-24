@@ -3,14 +3,24 @@ use crate::{Error, Result};
 use serde_json::{Value, json};
 
 pub(super) fn initialize_error(session: &Session, error: Error, effort: Option<&str>) -> Error {
-    if matches!(error, Error::Closed(_) | Error::Timeout(_))
-        && let Some(auth) = session
-            .records()
+    if matches!(error, Error::Closed(_) | Error::Timeout(_)) {
+        let records = session.records();
+        if let Some(auth) = records
             .iter()
             .filter(|r| r.direction == crate::Direction::FromRuntime)
             .find_map(|r| crate::opening::qwen_missing_auth(&r.native))
-    {
-        return auth.into();
+        {
+            return auth.into();
+        }
+        if let Some(reason) = records.iter().rev().flat_map(|r| &r.events).find_map(|e| {
+            if let crate::Event::Exited { reason } = e {
+                Some(reason.clone())
+            } else {
+                None
+            }
+        }) {
+            return Error::Closed(reason);
+        }
     }
     if let (Error::Refused(wire), Some(level)) = (&error, effort)
         && let Ok(response) = serde_json::from_str::<Value>(wire)

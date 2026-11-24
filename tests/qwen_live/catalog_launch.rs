@@ -118,3 +118,42 @@ async fn session_launch_arguments_are_per_process() {
     assert!(!saved.contains("--auth-type=openai"));
     f.http.abort();
 }
+
+#[tokio::test]
+#[ignore = "requires Qwen Code and its native extension store"]
+async fn missing_resume_and_busy_extension_store_report_native_failures() {
+    let f = fixture().await;
+    let rt = runtime("qwen").unwrap();
+    let mut missing = f.opts.clone();
+    missing.resume = Some(uuid::Uuid::new_v4().to_string());
+    let error = match rt.open(missing).await {
+        Err(error) => error.to_string(),
+        Ok(s) => {
+            s.close().await.unwrap();
+            panic!("Qwen opened a missing session");
+        }
+    };
+    let lower = error.to_lowercase();
+    assert!(
+        lower.contains("session") || lower.contains("resume"),
+        "{error}"
+    );
+    assert!(!error.contains("qwen-local-fixture"));
+    std::fs::create_dir_all(f.dir.path().join("home/.qwen/extension-store/lock.lock")).unwrap();
+    let session = rt.open(f.opts.clone()).await.unwrap();
+    let turn = session.prompt("QWEN_EXTENSION_STORE_LOCK").await.unwrap();
+    let report = tokio::time::timeout(Duration::from_secs(50), turn.report())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Failed);
+    let failure = report.failure.unwrap();
+    assert_eq!(failure.class, kar::FailureClass::Unknown);
+    assert!(
+        failure.reason.contains("Extension store is busy"),
+        "{failure:?}"
+    );
+    assert!(f.requests.lock().unwrap().is_empty());
+    session.close().await.unwrap();
+    f.http.abort();
+}

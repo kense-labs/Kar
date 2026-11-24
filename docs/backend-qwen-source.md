@@ -41,3 +41,9 @@ Qwen 的 `launch.ts`、`options.ts` 和公共 `shared/launch-args.ts` 定义了�
 固定版 `qwen/context-usage.ts` 与 `qwen.vendor.test.ts` 要求每次根回合结束前的主动查询有可追溯的请求和回执。Kar 以原生请求 ID 关联两端的记录，回执先于回合结束，原生报告的窗口和非估算的 token 数附在回执上。读取超时会记录 Kar 的读取失败，保留原回合的结果。补充断言在 `actual_qwen_turn_catalog_history_and_interrupt`。
 
 固定版 `tests/qwen/stream-content.test.ts` 定义了 Qwen 复用块索引、在块停止后重新分配快照 ID 的行为。Kar 按原生会话与父工具 ID 跟踪未完成消息，保留重复段落和独立回合，只合并由块边界确认的快照。纯推理快照和没有流式前缀的内容也能投影。Kar 的完整文本事件继续提供最终消息，供实时与持久化时间线使用。统一复验命令为 `cargo test --locked --lib wire::qwen_content::tests` 与 `cargo test --locked --test qwen_live actual_qwen_turn_catalog_history_and_interrupt -- --ignored --nocapture`。这批新增断言已通过 macOS 全目标编译，尚未执行。
+
+## 原生初始化失败
+
+Qwen 在答复 initialize 前退出时，Kar 会读取这个子进程的标准错误，清理已知凭据、启动参数、URL 和常见令牌形态后选取末尾的诊断。捕获上限为 128 KiB，超过上限则丢弃整段并继续排空管道。成功初始化后的 stderr 不加入会话记录。OpenCode 技能探测继续选择其原生诊断首行，和 Qwen 共用脱敏代码。
+
+`qwen.vendor.test.ts` 的缺失会话与扩展存储锁已有独立 Rust 复验入口。对隔离 HOME 中不存在的 UUID，预期从原生 CLI 得到开启失败；持有 `.qwen/extension-store/lock.lock` 后发起回合，预期 Qwen 返回带 `Extension store is busy` 的失败且没有模型请求。统一复验 `cargo test --locked --test qwen_live missing_resume_and_busy_extension_store -- --ignored --nocapture`。这两项尚未实跑。
