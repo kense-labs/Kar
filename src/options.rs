@@ -440,6 +440,9 @@ pub struct SessionSettings {
     /// Explicit Pi project-resource choice for this process. Does not edit its trust store.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pi_project_trusted: Option<bool>,
+    /// Permit the Pi RPC process to install or replace its configured packages.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub pi_allow_project_package_install: bool,
     #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub exclude_user_configuration: std::collections::BTreeSet<UserConfigurationCategory>,
     pub name: Option<String>,

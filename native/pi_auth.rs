@@ -2,6 +2,7 @@
 //! are supplied on stdin and are resolved and stored only by Pi.
 mod node_api;
 mod pi_catalog;
+mod pi_packages;
 mod pi_picker;
 mod pipe;
 use node_api::{Env, Handle, Read};
@@ -381,16 +382,28 @@ extern "C" fn napi_register_module_v1(env: Handle, exports: Handle) -> Handle {
             &[
                 e.call(process, c"cwd", &[])?,
                 e.get(cfg, c"agentDir")?,
-                jsparse(
-                    e,
-                    e.text(if op == br#""picker""# {
-                        r#"{"projectTrusted":true}"#
-                    } else {
-                        r#"{"projectTrusted":false}"#
-                    })?,
-                )?,
+                if op == br#""checkPackages""# {
+                    e.get(cfg, c"settingsOptions")?
+                } else {
+                    jsparse(
+                        e,
+                        e.text(if op == br#""picker""# {
+                            r#"{"projectTrusted":true}"#
+                        } else {
+                            r#"{"projectTrusted":false}"#
+                        })?,
+                    )?
+                },
             ],
         )?;
+        let state = obj(e)?;
+        e.set(state, c"config", cfg)?;
+        e.set(state, c"settings", settings)?;
+        e.set(state, c"package", package)?;
+        if op == br#""checkPackages""# {
+            pi_packages::check(e, state, true)?;
+            return Ok(exports);
+        }
         let global = e.call(settings, c"getGlobalSettings", &[])?;
         e.call(
             http,
@@ -402,13 +415,9 @@ extern "C" fn napi_register_module_v1(env: Handle, exports: Handle) -> Handle {
             c"configureHttpDispatcher",
             &[e.call(settings, c"getHttpIdleTimeoutMs", &[])?],
         )?;
-        let state = obj(e)?;
-        e.set(state, c"config", cfg)?;
-        e.set(state, c"settings", settings)?;
-        e.set(state, c"package", package)?;
         if op == br#""picker""# {
             e.set(state, c"piAi", load("@earendil-works/pi-ai")?)?;
-            pi_picker::start(e, state)?;
+            pi_packages::check(e, state, false)?;
             return Ok(exports);
         }
         let p = e.call(model, c"create", &[cfg])?;

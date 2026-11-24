@@ -62,6 +62,21 @@ impl Host {
         } else {
             return Ok(None);
         };
+        Self::launch(
+            pi.probe.command(&pi_sdk::node_for(&pi.command)),
+            &dist,
+            paired,
+            pi.timeout,
+        )
+        .await
+    }
+
+    pub(super) async fn launch(
+        mut command: tokio::process::Command,
+        dist: &std::path::Path,
+        paired: bool,
+        timeout: Duration,
+    ) -> Result<Option<Self>> {
         let unavailable = || {
             if paired {
                 Err(Kind::UnsupportedInstallation
@@ -83,7 +98,6 @@ impl Host {
         let files = builder.tempdir()?;
         let library = files.path().canonicalize()?.join("pi-auth.node");
         fs::write(&library, bytes)?;
-        let mut command = pi.probe.command(&pi_sdk::node_for(&pi.command));
         command
             .arg("--require")
             .arg(&library)
@@ -107,7 +121,7 @@ impl Host {
         };
         // Before READY the SDK has received no operation and cannot have
         // changed credentials. Preserve the terminal adapter for other installs.
-        match tokio::time::timeout(pi.timeout, host.output.next_line()).await {
+        match tokio::time::timeout(timeout, host.output.next_line()).await {
             Ok(Ok(Some(line))) if line == "KAR-AUTH READY " => Ok(Some(host)),
             _ => {
                 host.child.stop().await;

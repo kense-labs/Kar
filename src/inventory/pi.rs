@@ -6,7 +6,7 @@ fn command(probe: &Probe, path: &Path) -> tokio::process::Command {
 }
 
 fn rpc_command(probe: &Probe, mut cmd: tokio::process::Command) -> tokio::process::Command {
-    cmd.args(["--mode", "rpc", "--no-session"]);
+    cmd.args(["--mode", "rpc", "--no-session", "--offline"]);
     if let Some(dir) = probe.get("KAR_PI_AGENT_DIR").filter(|p| !p.is_empty()) {
         cmd.env("PI_CODING_AGENT_DIR", probe.cwd.join(dir));
     }

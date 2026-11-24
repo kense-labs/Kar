@@ -11,7 +11,7 @@ struct Setting {
     supplied: fn(&SessionSettings) -> bool,
 }
 
-fn rules(protocol: Protocol, id: &str) -> [Setting; 16] {
+fn rules(protocol: Protocol, id: &str) -> [Setting; 17] {
     use Protocol::*;
     let core = matches!(protocol, Codex | Claude | Pi | Qwen | Qoder);
     let acp = protocol == Acp;
@@ -41,6 +41,12 @@ fn rules(protocol: Protocol, id: &str) -> [Setting; 16] {
                 || (acp && id == "antigravity"),
             "system prompt append on this adapter",
             |s| s.append_system_prompt.is_some(),
+        ),
+        rule(
+            "pi_allow_project_package_install",
+            protocol == Pi,
+            "Pi package installation on this adapter",
+            |s| s.pi_allow_project_package_install,
         ),
         rule(
             "pi_project_trusted",

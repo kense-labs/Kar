@@ -172,6 +172,7 @@ pi	pi_provider_live	native_login_registry_and_keys	KAR_PI_BIN	requires native Pi
 pi	pi_provider_live	native_oauth_device	KAR_PI_BIN	requires native Pi 1.6 and uses a loopback Radius device flow
 pi	pi_provider_live	pi_metadata_resolution_and_native_logout	KAR_PI_BIN	requires KAR_PI_BIN with auth check --json
 pi	pi_provider_live	product_cli_roundtrip	KAR_PI_BIN	requires native Pi 1.6 provider CLI
+pi	pi_provider_live	packages::native_rpc_package_preflight_and_install_opt_in	KAR_PI_BIN	requires Pi 1.4+ with matching npm SDK, Node, npm and tar; uses isolated HOME and a loopback npm registry, no model turn
 pi	pi_provider_live	sdk_independent_configuration_files	KAR_PI_BIN	requires npm Pi with a native SDK host
 pi	pi_provider_live	standalone_independent_files_never_target_the_default_profile	KAR_PI_BIN	requires the standalone Pi distribution without an SDK
 pi	pi_provider_live	unusable_companion_leaves_credentials_intact	KAR_PI_BIN,KAR_PI_SDK_DIR	requires standalone Pi 1.6 and its matching KAR_PI_SDK_DIR

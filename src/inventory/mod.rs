@@ -243,6 +243,12 @@ impl Runtime {
                     ));
                 }
             };
+            if self.id == "pi" {
+                crate::providers::pi::packages::check(
+                    &probe, &path, version.as_deref(), None, false,
+                    end.saturating_duration_since(Instant::now()),
+                ).await?;
+            }
             query(&probe, &path, version.as_deref(), end).await
         })
         .await

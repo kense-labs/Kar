@@ -1,67 +1,7 @@
 //! A workspace model picker uses Pi's session services and registered extensions, without an agent session.
 use super::*;
 
-fn promise(e: &Env, v: Handle) -> Read<Handle> {
-    e.call(e.get(e.global()?, c"Promise")?, c"resolve", &[v])
-}
-
-pub(super) fn start(e: &Env, state: Handle) -> Read<()> {
-    let settings = e.get(state, c"settings")?;
-    let flags = std::env::var("PI_OFFLINE")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let mut packages = false;
-    for key in [c"getGlobalSettings", c"getProjectSettings"] {
-        let value = e.get(e.call(settings, key, &[])?, c"packages")?;
-        packages |= e.kind(value)? == 6 && node_api::arrays::len(e, value)? > 0;
-    }
-    if !packages || matches!(flags.as_str(), "1" | "true" | "yes") {
-        return services(e, state);
-    }
-    let cfg = e.get(state, c"config")?;
-    let options = obj(e)?;
-    e.set(
-        options,
-        c"cwd",
-        e.call(e.get(e.global()?, c"process")?, c"cwd", &[])?,
-    )?;
-    prop(e, cfg, options, c"agentDir")?;
-    e.set(options, c"settingsManager", settings)?;
-    let class = e.get(e.get(state, c"package")?, c"DefaultPackageManager")?;
-    let args = e.call(e.get(e.global()?, c"Array")?, c"of", &[options])?;
-    let manager = e.call(
-        e.get(e.global()?, c"Reflect")?,
-        c"construct",
-        &[class, args],
-    )?;
-    let p = e.call(
-        manager,
-        c"resolve",
-        &[bound(e, state, c"skipPackage", skip_missing)?],
-    )?;
-    on_promise(e, state, p, checked)?;
-    Ok(())
-}
-
-extern "C" fn skip_missing(env: Handle, info: Handle) -> Handle {
-    handle(env, |e| {
-        let (state, [_source]) = e.args(info)?;
-        e.set(state, c"missing", jsparse(e, e.text("true")?)?)?;
-        promise(e, e.text("skip")?)
-    })
-}
-extern "C" fn checked(env: Handle, info: Handle) -> Handle {
-    handle(env, |e| {
-        let (state, [_]) = e.args(info)?;
-        if e.kind(e.get(state, c"missing")?)? == 2 {
-            frame("ERROR", b"missingPackages");
-        } else {
-            services(e, state)?;
-        }
-        Ok(null_mut())
-    })
-}
-fn services(e: &Env, state: Handle) -> Read<()> {
+pub(super) fn services(e: &Env, state: Handle) -> Read<()> {
     let cfg = e.get(state, c"config")?;
     let g = e.global()?;
     let opts = obj(e)?;

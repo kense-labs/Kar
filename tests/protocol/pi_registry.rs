@@ -14,8 +14,11 @@ pub(super) fn peer(mode: &str, args: &[String]) {
         println!("1.6.0");
         return;
     }
-    assert_eq!(args[1..5], ["--mode", "rpc", "--no-session", "--extension"]);
-    assert!(std::path::Path::new(&args[5]).is_file());
+    assert_eq!(
+        args[1..6],
+        ["--mode", "rpc", "--no-session", "--offline", "--extension"]
+    );
+    assert!(std::path::Path::new(&args[6]).is_file());
     assert!(
         std::env::var("PI_CODING_AGENT_DIR")
             .unwrap()

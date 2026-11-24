@@ -29,6 +29,16 @@ pub(super) async fn run() -> kar::Result<()> {
         assert!(!args.iter().any(|a| a == "--fixture-label"));
         second.close().await?;
     }
+    let (temp, pi, mut opts) = rig(Protocol::Pi, ApprovalMode::Deny);
+    let capture = temp.path().join("argv.json");
+    opts.env
+        .insert("KAR_TEST_SESSION_ARGV".into(), capture.clone().into());
+    for allow in [false, true] {
+        opts.settings.pi_allow_project_package_install = allow;
+        pi.open(opts.clone()).await?.close().await?;
+        let argv: Vec<String> = serde_json::from_slice(&std::fs::read(&capture)?)?;
+        assert_eq!(argv.iter().any(|a| a == "--offline"), !allow, "{argv:?}");
+    }
     for (id, protocol, flag) in [
         ("codex", Protocol::Codex, "--listen=private-marker"),
         ("claude", Protocol::Claude, "-rprivate-marker"),

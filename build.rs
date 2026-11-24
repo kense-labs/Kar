@@ -18,6 +18,7 @@ fn main() {
         "pi_auth",
         "pi_catalog",
         "pi_picker",
+        "pi_packages",
     ] {
         println!("cargo:rerun-if-changed=native/{file}.rs");
     }

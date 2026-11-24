@@ -388,6 +388,8 @@ Pi 1.6 在回合结束时记录原生分支的末条记录 ID。选择最后一�
 
 如果宿主在分叉途中退出，再次运行同一条 `chat fork <回合UUID> --chat <原聊天UUID>` 即可继续未完成的操作。通过 `history --json` 的 `pending_fork` 可以找到待完成的回合。恢复期间，共用该工作区的其他聊天会拒绝新回合，完成这次分叉后可重新发送。
 
+Pi RPC 默认使用 `--offline` 启动。若用户或项目配置指定的包需要安装或替换，Kar 会在启动会话前列出 Pi 原生解析器报告的包。已有兼容版本可直接使用。设置 `PI_OFFLINE=1`、`true` 或 `yes` 可跳过缺失包继续启动，大小写均可，值两端的空白有意义。要允许 Pi 安装已配置的包，可在创建会话时传入 `--pi-allow-project-package-install`，或在工作台的 `settings` 设置 `pi_allow_project_package_install`。`PI_OFFLINE` 显式开启时，Pi 仍然保持离线。
+
 ## 本地工作台服务
 
 在 macOS 上从终端启动服务，向客户端提供项目、工作区文件和持久聊天。可以多次指定允许注册项目的根目录。默认使用现有 Kar 聊天存储，可用 `--state` 选择独立目录。

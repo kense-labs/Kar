@@ -6,6 +6,8 @@ use kar::{
 };
 use serde_json::json;
 use std::{collections::BTreeMap, ffi::OsString, fs, time::Duration};
+#[path = "pi_provider_live/packages.rs"]
+mod packages;
 #[path = "support/pi_model_catalog.rs"]
 mod model_catalog;
 fn options(home: &tempfile::TempDir) -> ProviderAuthOptions {

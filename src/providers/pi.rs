@@ -1,6 +1,7 @@
 mod catalog;
 mod login;
 mod models;
+pub(crate) mod packages;
 pub(crate) use models::picker as model_choices;
 mod sdk;
 mod terminal;
@@ -27,6 +28,22 @@ use std::{
     process::{Output, Stdio},
     time::{Duration, SystemTime},
 };
+
+fn agent_directory(probe: &Probe, home: &Path) -> std::path::PathBuf {
+    match probe
+        .get("KAR_PI_AGENT_DIR")
+        .filter(|v| !v.is_empty())
+        .or_else(|| probe.get("PI_CODING_AGENT_DIR"))
+        .filter(|v| !v.is_empty())
+        .map(Path::new)
+    {
+        Some(p) => match p.strip_prefix("~") {
+            Ok(rest) => home.join(rest),
+            Err(_) => probe.cwd.join(p),
+        },
+        None => home.join(".pi/agent"),
+    }
+}
 
 /// Files used by Pi's provider and model facades. Relative paths use the
 /// installation working directory. Agent settings keep their own directory.
@@ -128,19 +145,7 @@ impl Runtime {
         };
         let home = profile_home(&probe)
             .ok_or_else(|| Error::Protocol("Missing Pi home directory".into()))?;
-        let agent = match probe
-            .get("KAR_PI_AGENT_DIR")
-            .filter(|v| !v.is_empty())
-            .or_else(|| probe.get("PI_CODING_AGENT_DIR"))
-            .filter(|v| !v.is_empty())
-            .map(Path::new)
-        {
-            Some(p) => match p.strip_prefix("~") {
-                Ok(rest) => home.join(rest),
-                Err(_) => probe.cwd.join(p),
-            },
-            None => home.join(".pi/agent"),
-        };
+        let agent = agent_directory(&probe, &home);
         probe
             .env
             .insert("PI_CODING_AGENT_DIR".into(), agent.clone().into_os_string());

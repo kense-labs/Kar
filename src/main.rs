@@ -284,6 +284,9 @@ struct NativeSettings {
     /// Trust or exclude project-level Pi resources for this session.
     #[arg(long)]
     pi_project_trusted: Option<bool>,
+    /// Let native Pi install or replace configured packages on RPC startup.
+    #[arg(long)]
+    pi_allow_project_package_install: bool,
     /// JSON Schema object for native final output.
     #[arg(long, value_parser = parse_output_schema)]
     output_schema: Option<serde_json::Map<String, serde_json::Value>>,
@@ -329,6 +332,7 @@ impl NativeSettings {
             append_system_prompt: self.append_system_prompt,
             disallowed_tools: self.disallowed_tools,
             pi_project_trusted: self.pi_project_trusted,
+            pi_allow_project_package_install: self.pi_allow_project_package_install,
             name: self.name,
             effort: self.effort,
             acp_mode: self.acp_mode,

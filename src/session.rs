@@ -228,6 +228,16 @@ impl Session {
         let cwd_str = cwd
             .to_str()
             .ok_or_else(|| Error::Unsupported("wire protocol requires a UTF-8 cwd".into()))?;
+        if runtime.protocol == Protocol::Pi {
+            crate::providers::pi::packages::check(
+                &crate::installation::Probe::for_session(&options)?,
+                &runtime.program,
+                version,
+                options.settings.pi_project_trusted,
+                options.settings.pi_allow_project_package_install,
+                options.handshake_timeout,
+            ).await?;
+        }
         let pi_mcp_entries = if runtime.protocol == Protocol::Pi && !options.mcp_servers.is_empty()
         {
             Some(crate::pi_mcp::entries(&options)?)
@@ -507,6 +517,9 @@ impl Session {
                 }
             }
             Protocol::Pi => {
+                if !options.settings.pi_allow_project_package_install {
+                    process.arg("--offline");
+                }
                 process.arg("--no-mcp");
                 if options.pi_session_root.is_some() {
                     process.arg("--session-dir").arg(crate::options::pi_workspace_sessions(&cwd, &options)?);
