@@ -15,6 +15,9 @@ enum Mode {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(in crate::workbench) struct Policy {
     mode: Mode,
+    #[serde(default)]
+    issue_reads: bool,
+    #[serde(default)]
     issue_writes: bool,
     issue_scope: Option<String>,
     repository: Option<String>,
@@ -24,6 +27,9 @@ pub(in crate::workbench) struct Policy {
 #[serde(deny_unknown_fields)]
 struct Configure {
     mode: Mode,
+    #[serde(default)]
+    issue_reads: bool,
+    #[serde(default)]
     issue_writes: bool,
     issue_scope: Option<String>,
 }
@@ -32,22 +38,22 @@ impl Policy {
     fn get(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         db.model_tool_permissions.get(&project)?.get(&chat)
     }
-    fn writable(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
+    fn current(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         if db.archived.contains(&chat) || db.projects.get(&project)?.metadata.deleted {
             return None;
         }
-        Self::get(db, project, chat).filter(|p| p.allows())
+        Self::get(db, project, chat)
     }
-    fn allows(&self) -> bool {
+    pub(super) fn reads_issues(&self) -> bool {
+        (self.issue_reads || self.issue_writes) && self.repository.is_some()
+    }
+    pub(super) fn writes_issues(&self) -> bool {
         self.mode == Mode::Execute && self.issue_writes && self.repository.is_some()
     }
 }
 
-pub(super) fn authorized(app: &Workbench, grant: &Grant, plan: bool) -> Option<Policy> {
-    if plan {
-        return None;
-    }
-    Policy::writable(&app.0.catalog.lock().unwrap(), grant.project, grant.chat).cloned()
+pub(super) fn authorized(app: &Workbench, grant: &Grant) -> Option<Policy> {
+    Policy::current(&app.0.catalog.lock().unwrap(), grant.project, grant.chat).cloned()
 }
 
 async fn read(
@@ -68,19 +74,20 @@ async fn configure(
     Json(cfg): Json<Configure>,
 ) -> Result<Json<Policy>, forge::ForgeError> {
     app.binding(p, c)?;
-    let repository = if cfg.issue_writes && cfg.mode == Mode::Execute {
+    let repository = if cfg.issue_reads || cfg.issue_writes && cfg.mode == Mode::Execute {
         Some(forge::Context::issue_repository(app.clone(), p, cfg.issue_scope.as_deref()).await?)
     } else {
         None
     };
     let policy = Policy {
         mode: cfg.mode,
+        issue_reads: cfg.issue_reads,
         issue_writes: cfg.issue_writes,
         issue_scope: cfg.issue_scope,
         repository,
     };
     app.update(|db| {
-        if policy.allows()
+        if policy.reads_issues()
             && (db.archived.contains(&c)
                 || db
                     .projects
@@ -124,7 +131,7 @@ pub(super) async fn call(
     let obj = input
         .as_object_mut()
         .ok_or_else(|| crate::Error::Refused("expected tool arguments".into()))?;
-    let command: Uuid = serde_json::from_value(obj.remove("command_id").unwrap_or_default())?;
+
     for (k, expected) in [("project_id", grant.project), ("thread_id", grant.chat)] {
         if let Some(value) = obj.remove(k)
             && serde_json::from_value::<Uuid>(value)? != expected
@@ -132,9 +139,52 @@ pub(super) async fn call(
             return Err(forbidden());
         }
     }
+    let write = matches!(
+        name,
+        "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state"
+    );
+    if write && (caller.plan || !policy.writes_issues()) || !write && !policy.reads_issues() {
+        return Err(forbidden());
+    }
+    let scope = policy.issue_scope.clone();
+    let authorize = |db: &Catalog, repo: &str| {
+        if !grant.active()
+            || Policy::current(db, grant.project, grant.chat) != Some(&policy)
+            || policy.repository.as_deref() != Some(repo)
+        {
+            return Err(forbidden());
+        }
+        Ok(())
+    };
+    if !write {
+        return forge::model_issue_read(
+            &app,
+            grant.project,
+            scope.as_deref(),
+            name,
+            input,
+            !caller.plan && policy.writes_issues(),
+            authorize,
+        )
+        .await
+        .map_err(|e| crate::Error::Refused(format!("{}: {}", e.kind, e.detail)));
+    }
+    let command: Uuid = serde_json::from_value(obj.remove("command_id").unwrap_or_default())?;
     let op = match name {
         "kar_create_issue" => "create_issue",
         "kar_comment_on_issue" => "comment_issue",
+        "kar_set_issue_state"
+            if obj
+                .get("number")
+                .and_then(Value::as_u64)
+                .is_some_and(|n| n > 0)
+                && matches!(
+                    obj.get("state").and_then(Value::as_str),
+                    Some("open" | "closed")
+                ) =>
+        {
+            "set_issue_state"
+        }
         _ => return Err(forbidden()),
     };
     if obj.insert("op".to_owned(), Value::from(op)).is_some() {
@@ -152,7 +202,7 @@ pub(super) async fn call(
             operation,
             move |db, repo| {
                 if !grant.active()
-                    || Policy::writable(db, grant.project, grant.chat) != Some(&policy)
+                    || Policy::current(db, grant.project, grant.chat) != Some(&policy)
                     || policy.repository.as_deref() != Some(repo)
                 {
                     return Err(forbidden());

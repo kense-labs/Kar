@@ -55,7 +55,12 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
         )
         .route(
             "/repos/kar/demo/issues/7",
-            get(|| async { Json(json!({"number":7})) }),
+            get(|State(c): State<Calls>| async move {
+                let state = c.lock().unwrap().iter().rev().find_map(|v|v["state"].as_str().map(str::to_owned)).unwrap_or_else(||"open".into());
+                Json(json!({"number":7,"state":state}))
+            }).patch(|State(c): State<Calls>, Json(body): Json<Value>| async move {
+                c.lock().unwrap().push(body.clone()); Json(json!({"number":7,"state":body["state"]}))
+            }),
         )
         .route(
             "/repos/kar/demo/issues/7/comments",
@@ -66,6 +71,19 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
                 },
             ),
         )
+        .route("/graphql", post(|Json(input):Json<Value>| async move {
+            let mut node=json!({"id":"issue-7","number":7,"title":"From the model","repository":{"nameWithOwner":"kar/demo"},
+                "url":"https://models.example/kar/demo/issues/7","state":"OPEN","body":"Initial text","createdAt":"2026-01-01","updatedAt":"2026-01-01"});
+            for key in ["labels","assignees","closedByPullRequestsReferences","comments","timelineItems"] {
+                node[key]=json!({"nodes":[],"pageInfo":{"hasNextPage":false,"hasPreviousPage":false}});
+            }
+            if input["query"].as_str().unwrap().contains("KarIssueSearch") {
+                assert!(input["variables"]["q"].as_str().unwrap().contains("repo:kar/demo"));
+                Json(json!({"data":{"search":{"nodes":[node],"pageInfo":{"hasNextPage":false}}}}))
+            } else {
+                Json(json!({"data":{"repository":{"issue":node},"viewer":{"login":"kar-test"}}}))
+            }
+        }))
         .with_state(calls.clone());
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = socket.local_addr().unwrap();
@@ -188,6 +206,39 @@ pub(super) async fn exercise(
         assert_eq!(receipt["result"]["Ok"]["number"], 7, "{receipt}");
     }
 
+    for expected in ["closed", "open"] {
+        let command = Uuid::new_v4();
+        for _ in 0..2 {
+            let state = server::json(make(
+                "kar_set_issue_state",
+                json!({"command_id":command,"number":7,"state":expected}),
+            ))
+            .await;
+            assert_eq!(
+                state["result"]["structuredContent"]["state"], expected,
+                "{state}"
+            );
+        }
+    }
+    let read_only = json!({"mode":"plan","issue_reads":true});
+    server::json(host.put(&policy).json(&read_only)).await;
+    let list = server::json(make("kar_list_issues", json!({"query":"model","limit":1}))).await;
+    assert_eq!(
+        list["result"]["structuredContent"]["issues"][0]["key"], "7",
+        "{list}"
+    );
+    let detail = server::json(make("kar_read_issue", json!({"number":7}))).await;
+    assert_eq!(
+        detail["result"]["structuredContent"]["body"], "Initial text",
+        "{detail}"
+    );
+    assert!(denied(
+        &server::json(make(
+            "kar_read_issue",
+            json!({"number":7,"thread_id":Uuid::new_v4()})
+        ))
+        .await
+    ));
     for permissions in [plan, json!({"mode":"execute","issue_writes":false})] {
         server::json(host.put(&policy).json(&permissions)).await;
         let mut fresh = body.clone();
@@ -205,7 +256,7 @@ pub(super) async fn exercise(
         );
     }
     let sent = calls.lock().unwrap();
-    assert_eq!(sent.len(), 2);
+    assert_eq!(sent.len(), 4);
     assert_eq!(sent[0]["title"], "From the model");
     assert_eq!(sent[0]["labels"], json!(["integration"]));
     assert_eq!(sent[1]["body"], "Agent comment");

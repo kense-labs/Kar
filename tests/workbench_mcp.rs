@@ -265,6 +265,6 @@ async fn scenario() {
     let receipt =
         server::json(a.get(format!("{url}/projects/{p}/forge/operations/{comment}"))).await;
     assert_eq!(receipt["result"]["Ok"]["comment_id"], 31);
-    assert_eq!(writes.lock().unwrap().len(), 2);
+    assert_eq!(writes.lock().unwrap().len(), 4);
     restarted.kill().await.unwrap();
 }

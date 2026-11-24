@@ -93,6 +93,9 @@ pub(in crate::workbench::forge) async fn read(
         return Err(ForgeError::bad("invalid issue detail number or cursor"));
     }
     let (s, writable) = resolve(&app, p, &q).await?;
+    Ok(Json(detail(&s, n, writable).await?))
+}
+pub(super) async fn detail(s: &Source, n: u64, writable: bool) -> Result<Value, ForgeError> {
     let mut result = match s.ctx.kind.as_str() {
         "azure-devops" => azure::read(&s.ctx, &s.scope, n).await?,
         "gitlab" => gitlab::read(&s.ctx, n).await?,
@@ -106,14 +109,14 @@ pub(in crate::workbench::forge) async fn read(
             ));
         }
     };
-    result["projectId"] = json!(p);
+    result["projectId"] = json!(s.project);
     result["projectTitle"] = json!(s.title);
     result["scope"] = json!(s.scope);
     result["tracker"] = json!(s.ctx.kind);
     result["host"] = json!(s.ctx.host);
     result["writable"] = json!(writable);
     result["capabilities"] = capabilities(&s.ctx.kind).unwrap();
-    Ok(Json(result))
+    Ok(result)
 }
 pub(in crate::workbench::forge) async fn comments(
     State(app): State<Workbench>,

@@ -66,7 +66,25 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             required: &["query"],
         },
     ];
-    if caller.issue_policy.is_some() {
+    if caller.issue_policy.as_ref().is_some_and(Policy::reads_issues) {
+        tools.push(Tool {
+            name: "kar_list_issues",
+            description: "Search one page of issues in this chat's authorized tracker. Pass the returned cursor for another page.",
+            properties: json!({"project_id":id,"thread_id":id,"state":{"enum":["open","closed","all"]},"query":{"type":"string"},"limit":limit,"cursor":{"type":"string"}}),
+            required: &[],
+        });
+        tools.push(Tool {
+            name: "kar_read_issue", description: "Read an issue's details, comments and available states in this chat's authorized tracker.",
+            properties: json!({"project_id":id,"thread_id":id,"number":{"type":"integer","minimum":1}}),
+            required: &["number"],
+        });
+    }
+    if !caller.plan && caller.issue_policy.as_ref().is_some_and(Policy::writes_issues) {
+        tools.push(Tool {
+            name: "kar_set_issue_state", description: "Close or reopen an issue in this chat's authorized tracker. Reuse command_id on retries.",
+            properties: json!({"command_id":id,"project_id":id,"thread_id":id,"number":{"type":"integer","minimum":1},"state":{"enum":["open","closed"]}}),
+            required: &["command_id","number","state"],
+        });
         let text = json!({"type":"string"});
         let names = json!({"type":"array","items":text});
         tools.push(Tool {
@@ -221,7 +239,7 @@ pub(super) async fn call(
     name: &str,
     input: Value,
 ) -> Result<Value> {
-    if matches!(name, "kar_create_issue" | "kar_comment_on_issue") {
+    if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
         return issues::call(app, caller, name, input).await;
     }
     if name == "kar_background_wait" {
@@ -312,7 +330,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
             Ok(
                 json!({"server":"Kar","tools":tools(c).iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
                 "provider_session":c.grant.as_ref().map(|g|json!({"id":g.id,"project_id":g.project,"thread_id":g.chat,"runtime":g.runtime})),
-                "write_access":!c.plan && c.grant.is_none() || c.issue_policy.is_some(),"issue_write_access":c.issue_policy.is_some()}),
+                "write_access":!c.plan && (c.grant.is_none() || c.issue_policy.as_ref().is_some_and(Policy::writes_issues)),"issue_write_access":!c.plan && c.issue_policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.issue_policy.as_ref().is_some_and(Policy::reads_issues)}),
             )
         }
         "kar_project_list" => {

@@ -103,7 +103,7 @@ async fn scope(State(app): State<Workbench>, mut req: Request, next: Next) -> Re
     } else {
         false
     };
-    let issue_policy = grant.as_ref().and_then(|g| issues::authorized(&app, g, plan));
+    let issue_policy = grant.as_ref().and_then(|g| issues::authorized(&app, g));
     req.extensions_mut().insert(Caller {
         issue_policy,
         identity,

@@ -9,6 +9,7 @@ mod repository;
 mod review;
 pub(in crate::workbench) use publish::PullTarget;
 mod routes;
+pub(super) use providers::issue_listing::model_issue_read;
 pub(super) use routes::{model_issue_write, stacked_pull};
 pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<String, ForgeError> {
     Context::open(app, project)

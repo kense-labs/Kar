@@ -114,7 +114,7 @@ pub(in crate::workbench) async fn model_issue_write(
 ) -> Result<Value, ForgeError> {
     if !matches!(
         operation,
-        Operation::CreateIssue { .. } | Operation::CommentIssue { .. }
+        Operation::CreateIssue { .. } | Operation::CommentIssue { .. } | Operation::SetIssueState { .. }
     ) {
         return Err(ForgeError::bad("unsupported model issue operation"));
     }
