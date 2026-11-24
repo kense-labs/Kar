@@ -8,6 +8,7 @@ use uuid::Uuid;
 pub struct PromptRunOptions {
     pub input_id: Option<Uuid>,
     pub images: Vec<InputImage>,
+    pub origin: Option<crate::InputOrigin>,
     /// Measured from admission. After an accepted interrupt, wait for the native terminal event.
     pub timeout: Option<Duration>,
     pub signal: Option<CancellationToken>,
@@ -49,7 +50,14 @@ impl Session {
         options: PromptRunOptions,
     ) -> Result<PromptRun> {
         let turn = match self
-            .submit_prompt(options.input_id, text, options.images)
+            .submit_prompt_with_options(
+                text,
+                super::InputOptions {
+                    input_id: options.input_id,
+                    images: options.images,
+                    origin: options.origin,
+                },
+            )
             .await?
         {
             PromptDecision::Rejected { receipt, error } => {

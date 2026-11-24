@@ -1615,14 +1615,12 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<PromptDecision> {
-        let (id, input) = self.prepare_input(
-            text.into(),
-            InputOptions {
-                input_id,
-                images,
-                origin: None,
-            },
-        );
+        self.submit_prompt_with_options(text, InputOptions { input_id, images, origin: None }).await
+    }
+
+    /// Return the paired decision records for an input with caller-supplied metadata.
+    pub async fn submit_prompt_with_options(&self, text: impl Into<String>, options: InputOptions) -> Result<PromptDecision> {
+        let (id, input) = self.prepare_input(text.into(), options);
         self.submit_prepared(id, input).await
     }
 
