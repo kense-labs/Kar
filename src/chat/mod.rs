@@ -51,6 +51,9 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatInfo {
+    /// The provider can serve turns only while the original native process is alive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub process_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antigravity_profile: Option<AntigravityProfile>,
     pub id: Uuid,
@@ -536,13 +539,15 @@ impl ChatStore {
         let session = rt
             .open_selected_with_version(opts.before_chat_attach()?, version.as_deref())
             .await?;
-        if !session.capabilities().resume {
+        let process_only = !session.capabilities().resume;
+        if process_only && !crate::workbench::acp_registry::dynamic(runtime_id) {
             session.close().await?;
             return Err(Error::Unsupported(
                 "this agent did not advertise session recovery".into(),
             ));
         }
         let info = ChatInfo {
+            process_only,
             antigravity_profile: None,
             provider_instance: None,
             imported: None,

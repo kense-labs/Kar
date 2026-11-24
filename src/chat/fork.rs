@@ -473,6 +473,9 @@ impl ChatStore {
         mut opts: SessionOptions,
     ) -> Result<Session> {
         let info = &state.info;
+        if info.process_only {
+            return Err(Error::Unsupported("the original ACP process ended; this agent has no session/load or session/resume. The saved chat history is available".into()));
+        }
         opts.cwd = info.workspace.clone();
         let rt = info.launch_runtime(self, &mut opts).await?;
         // Claude persists the fork transcript on its first new prompt. Until then the
@@ -1052,6 +1055,7 @@ mod staged_route_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = ChatStore::open(dir.path().join("store")).unwrap();
         let parent = ChatInfo {
+            process_only: false,
             antigravity_profile: None,
             provider_instance: None,
             imported: None,

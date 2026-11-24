@@ -27,7 +27,9 @@ fn peer() {
         let req: Value = serde_json::from_str(&line.unwrap()).unwrap();
         let p = &req["params"];
         let result = match req["method"].as_str().unwrap() {
-            "initialize" => json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true}}),
+            "initialize" => {
+                json!({"protocolVersion":1,"agentCapabilities":{"loadSession":std::env::var_os("KAR_FIXTURE_NO_RESUME").is_none()}})
+            }
             "session/new" => {
                 assert!(!db.exists());
                 fs::write(&db, native).unwrap();
@@ -179,7 +181,12 @@ async fn exercise() {
     let mut unpinned = agent.clone();
     unpinned["id"] = "unpinned".into();
     unpinned["distribution"]["npx"]["package"] = "other@latest".into();
-    let mut agents = vec![other, wrong, agent.clone(), unpinned];
+    let mut once = agent.clone();
+    once["id"] = "once".into();
+    let env = &mut once["distribution"]["binary"][&platform]["env"];
+    env["KAR_FIXTURE_NO_RESUME"] = "1".into();
+    env["KAR_FIXTURE_KIND"] = "once".into();
+    let mut agents = vec![other, wrong, once, agent.clone(), unpinned];
     let payload = axum::body::Bytes::from(data);
     let mut app = Router::new().route("/agent.tgz", get(move || async move { payload }));
     for (id, name, bytes) in small_archives() {
@@ -215,7 +222,7 @@ async fn exercise() {
     assert_eq!(search["agents"][0]["id"], "demo");
     assert_eq!(search["agents"][0]["integrity"], "sha256");
     let list = server::json(client.get(format!("{base}/acp-registry/search"))).await;
-    assert_eq!(list["agents"].as_array().unwrap().len(), 6);
+    assert_eq!(list["agents"].as_array().unwrap().len(), 7);
     for agent in ["small-zip", "small-bzip2", "small-raw"] {
         let receipt = invoke(&client, &base, agent, "binary").await;
         let handle = receipt["runtime"].as_str().unwrap();
@@ -277,6 +284,28 @@ async fn exercise() {
     )
     .await;
     let project = project["id"].as_str().unwrap();
+    let once = invoke(&client, &base, "once", "binary").await;
+    let once_chat = Uuid::new_v4();
+    let once_create = server::json(
+        client
+            .post(format!("{base}/projects/{project}/chats"))
+            .json(&json!({"id":once_chat,"runtime":once["runtime"]})),
+    )
+    .await;
+    assert_eq!(once_create["info"]["process_only"], true);
+    let once_path = format!("/projects/{project}/chats/{once_chat}");
+    for text in ["one", "two"] {
+        assert!(
+            server::json(
+                client
+                    .post(format!("{base}{once_path}/messages"))
+                    .json(&json!({"id":Uuid::new_v4(),"text":text}))
+            )
+            .await
+            .to_string()
+            .contains(&format!("received {text}"))
+        );
+    }
     let mut endpoints = Vec::new();
     for kind in ["binary", "npx", "uvx"] {
         let inst = invoke(&client, &base, "demo", kind).await;
@@ -375,6 +404,22 @@ async fn exercise() {
     peer.abort();
     let _ = peer.await;
     let (mut kar, base) = server::serve_with_env(&state, &root, &db, &options).await;
+    let snapshot = server::json(client.get(format!("{base}{once_path}/snapshot"))).await;
+    assert_eq!(snapshot["history"]["turns"].as_array().unwrap().len(), 2);
+    let missing = client
+        .post(format!("{base}{once_path}/messages"))
+        .json(&json!({"id":Uuid::new_v4(),"text":"after restart"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(!missing.status().is_success());
+    assert!(
+        missing
+            .text()
+            .await
+            .unwrap()
+            .contains("original ACP process ended")
+    );
     for (endpoint, chat, handle, _) in endpoints {
         assert!(
             server::json(

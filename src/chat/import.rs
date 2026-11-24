@@ -45,6 +45,7 @@ impl ChatStore {
         }
         let worktree = crate::workbench_git::pin_checkout(&workspace)?;
         let info = ChatInfo {
+            process_only: false,
             antigravity_profile: None,
             provider_instance: None,
             imported: None,

@@ -62,6 +62,8 @@ impl ProviderSession {
         }
     }
     pub(super) fn activate(&self, info: &mut ChatInfo) {
+        // Handoff targets are admitted only after native recovery was confirmed.
+        info.process_only = false;
         info.antigravity_profile
             .clone_from(&self.antigravity_profile);
         info.provider_instance.clone_from(&self.instance);

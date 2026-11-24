@@ -116,6 +116,7 @@ impl ChatStore {
         let rt = crate::runtime(&data.origin.runtime)?;
         let pin = crate::workbench_git::pin_checkout(&data.workspace)?;
         let info = ChatInfo {
+            process_only: false,
             antigravity_profile: None,
             id,
             workspace: data.workspace.clone(),

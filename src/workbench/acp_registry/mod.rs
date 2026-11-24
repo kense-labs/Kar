@@ -26,6 +26,9 @@ fn bad(detail: &str) -> Error {
 fn root(store: &ChatStore) -> PathBuf {
     store.directory().join("workbench/acp-registry")
 }
+pub(crate) fn dynamic(id: &str) -> bool {
+    id.starts_with("acp:") || id.starts_with("acp-profile:")
+}
 fn kind_ok(k: &str) -> bool {
     matches!(k, "npx" | "uvx" | "binary")
 }
