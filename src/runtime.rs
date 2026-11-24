@@ -451,6 +451,8 @@ pub struct SessionOptions {
     pub retained_bytes: Option<usize>,
     pub handshake_timeout: Duration,
     pub acp_timeouts: AcpTimeouts,
+    /// Preferred advertised authentication method for a dynamic ACP launcher.
+    pub acp_auth_method: Option<String>,
 }
 impl SessionOptions {
     pub(crate) fn acp_timeout(&self, runtime: &str, method: &str) -> Duration {
@@ -496,6 +498,7 @@ impl SessionOptions {
             retained_bytes: None,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             acp_timeouts: AcpTimeouts::default(),
+            acp_auth_method: None,
         }
     }
 }

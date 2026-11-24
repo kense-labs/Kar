@@ -10,7 +10,8 @@ pub(crate) struct Terminal {
     pid: Option<u32>,
     pub output: mpsc::Receiver<io::Result<Vec<u8>>>,
     pub exit: watch::Receiver<Option<bool>>,
-    input: mpsc::UnboundedSender<String>,
+    input: mpsc::UnboundedSender<Vec<u8>>,
+    master: std::sync::Weak<std::sync::Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
 }
 impl Terminal {
     pub(crate) fn open(cmd: CommandBuilder, size: PtySize) -> std::io::Result<Self> {
@@ -24,14 +25,11 @@ impl Terminal {
         let pid = child.process_id();
         let killer = child.clone_killer();
         let (tx, output) = mpsc::channel(16);
-        let (input, mut replies) = mpsc::unbounded_channel::<String>();
+        let (input, mut replies) = mpsc::unbounded_channel::<Vec<u8>>();
         let errors = tx.clone();
         tokio::task::spawn_blocking(move || {
             while let Some(reply) = replies.blocking_recv() {
-                if let Err(e) = writer
-                    .write_all(reply.as_bytes())
-                    .and_then(|_| writer.flush())
-                {
+                if let Err(e) = writer.write_all(&reply).and_then(|_| writer.flush()) {
                     let _ = errors.blocking_send(Err(e));
                     break;
                 }
@@ -53,14 +51,17 @@ impl Terminal {
             }
         });
         let (done, exit) = watch::channel(None);
+        let master = std::sync::Arc::new(std::sync::Mutex::new(pair.master));
+        let resize = std::sync::Arc::downgrade(&master);
         tokio::task::spawn_blocking(move || {
             let ok = child.wait().is_ok_and(|s| s.success());
             done.send_replace(Some(ok));
             // Keep the master (and the Windows pseudoconsole) for the child lifetime.
-            drop(pair.master);
+            drop(master);
         });
         Ok(Self {
             killer,
+            master: resize,
             #[cfg(unix)]
             pid,
             input,
@@ -69,6 +70,18 @@ impl Terminal {
         })
     }
     pub fn write(&self, value: String) -> Result<()> {
+        self.write_bytes(value.into_bytes())
+    }
+    pub fn resize(&self, size: PtySize) -> Result<()> {
+        self.master
+            .upgrade()
+            .ok_or_else(|| Error::Closed("native terminal closed".into()))?
+            .lock()
+            .unwrap()
+            .resize(size)
+            .map_err(|e| std::io::Error::other(e.to_string()).into())
+    }
+    pub fn write_bytes(&self, value: Vec<u8>) -> Result<()> {
         self.input
             .send(value)
             .map_err(|_| Error::Closed("Native terminal input closed".into()))

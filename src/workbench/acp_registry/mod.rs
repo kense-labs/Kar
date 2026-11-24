@@ -1,6 +1,7 @@
 //! Workbench-owned, versioned ACP installations. A saved chat resolves its pinned
 //! executable from this store without npm, uv or registry network access.
 pub(crate) mod models;
+pub(crate) mod auth;
 mod archive;
 mod catalog;
 mod packages;
@@ -135,12 +136,15 @@ pub(crate) fn resolve(
     opts: &mut SessionOptions,
 ) -> Result<Runtime> {
     if runtime.starts_with("acp-profile:") {
-        return profiles::resolve(store, runtime, opts);
+        let rt=profiles::resolve(store, runtime, opts)?;
+        auth::bind(store,runtime,opts)?;
+        return Ok(rt);
     }
     let k = Key::parse(runtime)?;
     let r = Receipt::load(&k, store, runtime)?;
     let program = r.program(&k.dir(store))?;
     configure(&r.settings, opts);
+    auth::bind(store,runtime,opts)?;
     if k.kind != "binary"
         && let Some(path) = opts.env_value("PATH")
     {
@@ -173,7 +177,7 @@ fn configure(launch: &Launch, opts: &mut SessionOptions) {
     }
 }
 pub(super) fn owner_routes() -> Router<Workbench> {
-    profiles::owner_routes()
+    profiles::owner_routes().merge(auth::routes())
 }
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()

@@ -1,4 +1,6 @@
 //! Actual Kar HTTP/persistence and archive handling, with Rust registry, ACP and package-manager peers.
+#[path = "support/workbench_acp_auth.rs"]
+mod auth;
 #[allow(dead_code)]
 #[path = "support/workbench_server.rs"]
 mod server;
@@ -390,6 +392,7 @@ async fn exercise() {
     .await;
     let token = device["token"].as_str().unwrap();
     let exe = std::env::current_exe().unwrap();
+    auth::exercise(&client, &base, project, &exe, token).await;
     model_menu(&client, &base, project, &exe).await;
     let template = json!({"source":"local","name":"Local","command_path":exe,"command_args":["local-fixture","one argument with spaces"]});
     let mut profiled_chats = Vec::new();
@@ -700,6 +703,14 @@ fn main() {
     }
     if args == ["local-fixture", "one argument with spaces"] {
         peer(true);
+        return;
+    }
+    if args == ["auth-fixture"] {
+        auth::peer();
+        return;
+    }
+    if args == ["auth-fixture", "terminal"] {
+        auth::terminal();
         return;
     }
     if args.len() == 2 && args[0] == "menu-fixture" {

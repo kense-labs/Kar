@@ -992,9 +992,26 @@ impl Session {
                     ("session/new", OpenStep::Open)
                 };
                 let open_limit = options.acp_timeout(&runtime.id, method);
-                session.info = session
-                    .acp_rpc(method, params, Some(step), open_limit)
-                    .await?;
+                session.info = if crate::workbench::acp_registry::dynamic(&runtime.id) {
+                    let first = session
+                        .acp_rpc(method, params.clone(), Some(step.clone()), open_limit)
+                        .await;
+                    match first {
+                        Err(Error::Open(e)) if matches!(&*e, crate::OpenError::RuntimeFailure {
+                            cause: Some(c), .. } if c.native["code"] == -32000) => {
+                            let Some(id) = crate::workbench::acp_registry::auth::headless(
+                                &init, options.acp_auth_method.as_deref(),
+                            )? else {
+                                return Err(Error::Open(e));
+                            };
+                            session.open_rpc("authenticate", json!({"methodId":id}), OpenStep::Open).await?;
+                            session.acp_rpc(method, params, Some(step), open_limit).await?
+                        }
+                        opened => opened?,
+                    }
+                } else {
+                    session.acp_rpc(method, params, Some(step), open_limit).await?
+                };
                 if let Some(resume) = &options.resume
                     && fork.is_none()
                 {

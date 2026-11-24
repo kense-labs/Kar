@@ -32,7 +32,7 @@ pub(crate) fn qwen_missing_auth(result: &Value) -> Option<OpenError> {
     })
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum OpenStep {
     Open,
     Model,

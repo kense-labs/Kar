@@ -114,6 +114,7 @@ impl Controller {
 
 struct Inner {
     acp_registry: acp_registry::Catalog,
+    acp_auth: acp_registry::auth::Jobs,
     mcp: mcp::Registry,
     shell: shell::Service,
     suggestions: crate::PromptSuggestions,
@@ -214,6 +215,7 @@ impl Workbench {
             let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
             Inner {
                 acp_registry: Default::default(),
+                acp_auth: Default::default(),
                 mcp: Default::default(),
                 shell,
                 suggestions: crate::PromptSuggestions::new(catalog.prompt_suggestions),

@@ -92,6 +92,7 @@ pub(super) fn resolve(
     opts: &mut SessionOptions,
 ) -> Result<Runtime> {
     let p = load(store, runtime)?;
+    opts.acp_auth_method = p.auth_method_id;
     match p.launcher {
         Launcher::Local { program, launch } => {
             configure(&launch, opts);
