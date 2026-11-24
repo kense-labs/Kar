@@ -29,12 +29,15 @@ const server = createServer(async (req,res)=>{
         if (last.includes(probe)) prompts.set(probe, JSON.stringify(body.system));
     }
     if (JSON.stringify(body.messages.at(-1)).includes("slow")) await new Promise(ok=>setTimeout(ok,350));
+    const lookup = last.includes("run the nested lookup fixture");
+    const block = lookup ? {type:"tool_use",id:"root-lookup",name:"lookup_root",input:{}} : {type:"text",text:""};
+    const delta = lookup ? {type:"input_json_delta",partial_json:JSON.stringify({query:'quote " and newline\n',limit:3})} : {type:"text_delta",text:"browser answer"};
     const events=[
        {type:"message_start",message:{id:"message-"+calls,type:"message",role:"assistant",model:"local",content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:3,output_tokens:0}}},
-       {type:"content_block_start",index:0,content_block:{type:"text",text:""}},
-       {type:"content_block_delta",index:0,delta:{type:"text_delta",text:"browser answer"}},
+       {type:"content_block_start",index:0,content_block:block},
+       {type:"content_block_delta",index:0,delta},
        {type:"content_block_stop",index:0},
-       {type:"message_delta",delta:{stop_reason:"end_turn",stop_sequence:null},usage:{output_tokens:3}},
+       {type:"message_delta",delta:{stop_reason:lookup?"tool_use":"end_turn",stop_sequence:null},usage:{output_tokens:3}},
        {type:"message_stop"}
     ];
     res.writeHead(200,{"content-type":"text/event-stream"});

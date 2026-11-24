@@ -2,7 +2,7 @@ import init, { PiDurable } from "kar-test-bindings";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
-import { Harness, createRegistry } from "@earendil-works/pi-durable";
+import { Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { IndexedDbStorage } from "@earendil-works/pi-durable/storage/indexeddb";
 
 const check = (ok, reason) => { if (!ok) throw Error(reason); };
@@ -22,7 +22,24 @@ export async function exercise() {
     }));
     const database = "kar-rs-"+crypto.randomUUID();
     const storage = await IndexedDbStorage.open(database);
-    const options = {models,registry:createRegistry(),settings:{retry:{enabled:false},progress:{partialIntervalMs:0}}};
+    const registry = createRegistry();
+    const observed = [];
+    const parameters = {type:"object", properties:{query:{type:"string"},limit:{type:"number"}}, required:["query","limit"]};
+    const childTool = defineTool({name:"lookup_child", description:"Record the nested lookup",
+        parameters, async execute(args, api) {
+            observed.push(["child",args]);
+            api.output("nested lookup complete");
+            return {};
+        }});
+    const rootTool = defineTool({name:"lookup_root", description:"Start a nested lookup",
+        parameters, async execute(args, api, context) {
+            observed.push(["root",args]);
+            const result = await api.executeTool("lookup_child",{query:args.query + " / child",limit:args.limit + 1},context,{key:"child"});
+            check(!result.isError,"nested lookup failed");
+            return {};
+        }});
+    registry.install(defineExtension({name:"nested-fixture",tools:[rootTool,childTool]}));
+    const options = {models,registry,settings:{retry:{enabled:false},progress:{partialIntervalMs:0}}};
     const harness = await Harness.open(storage,options,ctx);
     const uninitialized = new PiDurable(null, null);
     const caps = uninitialized.sessionCapabilities();
@@ -109,6 +126,21 @@ export async function exercise() {
     check(saved.id===initial.id && saved.status==="done","receipt was not durable across Harness reopen");
     const retained = await recovered.prompt("probe saved instructions","saved-instructions");
     check((await recovered.wait(retained.id)).status==="done","saved-instruction probe failed");
+    const lookup = await recovered.prompt("run the nested lookup fixture","lookup");
+    check((await recovered.wait(lookup.id)).status==="done","nested tool run failed");
+    const rootArgs = {query:'quote " and newline\n',limit:3};
+    const childArgs = {query:rootArgs.query + " / child",limit:4};
+    check(observed.length===2 && observed[0][0]==="root" && observed[1][0]==="child","unexpected native invocation order");
+    const toolEvents = recovered.records().flatMap(r=>r.events);
+    for(const [i,id,args] of [[0,"root-lookup",rootArgs],[1,"root-lookup/child",childArgs]]) {
+        const inputs = toolEvents.filter(e=>e.kind==="tool_input" && e.id===id);
+        check(inputs.length===1 && toolEvents.filter(e=>e.kind==="tool_started" && e.id===id).length===1,
+            "expected one start and argument snapshot for "+id+": "+JSON.stringify(toolEvents.filter(e=>e.id===id)));
+        for(const actual of [inputs[0].input,observed[i][1]]) {
+            check(Object.keys(actual).length===2 && actual.query===args.query && actual.limit===args.limit,
+                "native and projected arguments differ for "+id);
+        }
+    }
     await recovered.close();await reopened.close(ctx);
     return {records:records.length,conversation:id};
 }
