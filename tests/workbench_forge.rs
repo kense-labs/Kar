@@ -457,6 +457,10 @@ fn main() {
             .unwrap()
             .block_on(hosted::run()),
         Some("clone-filter") => clone_jobs::filter(),
+        Some("clone-ssh-refused") => {
+            eprintln!("Permission denied (publickey).");
+            std::process::exit(1);
+        }
         Some("app-server") => codex_chat_peer::agent(),
         Some("--version") => println!("codex 0.169.0"),
         _ => tokio::runtime::Runtime::new().unwrap().block_on(async {

@@ -212,13 +212,16 @@ pub(super) struct CloneInput {
     #[serde(default)]
     protocol: Protocol,
 }
-fn clone_source(app: &Workbench, src: &str) -> Result<std::ffi::OsString, ForgeError> {
+fn clone_source(app: &Workbench, src: &str) -> Result<(String, Option<String>), ForgeError> {
+    if src.chars().any(char::is_control) {
+        return Err(ForgeError::bad("invalid clone address"));
+    }
     if std::path::Path::new(src).is_absolute() {
         let p = std::path::Path::new(src)
             .canonicalize()
             .map_err(Error::Io)?;
         app.allowed(&p)?;
-        return Ok(p.into_os_string());
+        return Ok((p.to_string_lossy().into_owned(), None));
     }
     if !src.contains("://") {
         let (prefix, path) = src
@@ -240,24 +243,26 @@ fn clone_source(app: &Workbench, src: &str) -> Result<std::ffi::OsString, ForgeE
         {
             return Err(ForgeError::bad("invalid SSH repository address"));
         }
-        return Ok(src.into());
+        return Ok((src.into(), None));
     }
     let mut u = Url::parse(src).map_err(|_| ForgeError::bad("invalid clone URL"))?;
     if !matches!(u.scheme(), "https" | "ssh")
         || u.host().is_none()
-        || u.password().is_some()
-        || u.query().is_some()
         || u.fragment().is_some()
+        || (u.scheme() == "ssh" && (u.password().is_some() || u.query().is_some()))
     {
-        return Err(ForgeError::bad(
-            "expected HTTPS or SSH clone URL without embedded credentials",
-        ));
+        return Err(ForgeError::bad("expected an HTTPS or SSH clone URL"));
     }
+    let transport = u.to_string();
     if u.scheme() == "https" {
+        u.set_password(None)
+            .map_err(|_| ForgeError::bad("invalid clone address"))?;
         u.set_username("")
-            .map_err(|_| ForgeError::bad("invalid HTTPS clone address"))?;
+            .map_err(|_| ForgeError::bad("invalid clone address"))?;
+        u.set_query(None);
     }
-    Ok(u.to_string().into())
+    let source = u.to_string();
+    Ok((source.clone(), (transport != source).then_some(transport)))
 }
 async fn lookup(State(app): State<Workbench>, Json(req): Json<Lookup>) -> Reply<CloneUrls> {
     let cwd = app
@@ -269,10 +274,15 @@ async fn lookup(State(app): State<Workbench>, Json(req): Json<Lookup>) -> Reply<
         .clone();
     resolve(&req.context(&app, cwd).await?).await.map(Json)
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Prepared {
     pub(super) dest: PathBuf,
     pub(super) source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) fallback: Option<String>,
+    // Inline transfer credentials have the lifetime of the host process, not the project record.
+    #[serde(skip)]
+    pub(super) credential_url: Option<String>,
     pub(super) repo: Option<CloneUrls>,
 }
 pub(super) async fn prepare(app: &Workbench, req: CloneInput) -> Result<Prepared, ForgeError> {
@@ -317,20 +327,104 @@ pub(super) async fn prepare(app: &Workbench, req: CloneInput) -> Result<Prepared
         })
         .or(req.source)
         .ok_or_else(|| ForgeError::bad("missing repository or URL"))?;
-    let selected = clone_source(&app, &source)?;
-    let source = selected.to_string_lossy().into_owned();
-    Ok(Prepared { dest, source, repo })
+    let (source, credential_url) = clone_source(app, &source)?;
+    let fallback = if matches!(req.protocol, Protocol::Ssh) {
+        None
+    } else if let Some(repo) = &repo {
+        (source == repo.ssh_url && repo.url != source).then(|| repo.url.clone())
+    } else {
+        ssh_to_https(&source)
+    };
+    let fallback = fallback
+        .map(|url| -> Result<String, ForgeError> {
+            let (candidate, credentials) = clone_source(app, &url)?;
+            if !candidate.starts_with("https://") || credentials.is_some() {
+                return Err(ForgeError::bad("invalid HTTPS clone fallback"));
+            }
+            Ok(candidate)
+        })
+        .transpose()?;
+    Ok(Prepared {
+        dest,
+        source,
+        credential_url,
+        fallback,
+        repo,
+    })
+}
+/// A named SSH port does not identify the HTTPS endpoint. Host-specific forms are mapped before general SCP/URI translation.
+fn ssh_to_https(source: &str) -> Option<String> {
+    let (host, path, is_scp) = if source.starts_with("ssh://") {
+        let u = Url::parse(source).ok()?;
+        if u.port().is_some() {
+            return None;
+        }
+        (
+            u.host_str()?.to_string(),
+            u.path().trim_start_matches('/').to_owned(),
+            false,
+        )
+    } else {
+        if source.contains("://") || std::path::Path::new(source).is_absolute() {
+            return None;
+        }
+        let (authority, path) = source.split_once(':')?;
+        (
+            authority.rsplit('@').next()?.to_ascii_lowercase(),
+            path.to_string(),
+            true,
+        )
+    };
+    if host == "ssh.dev.azure.com" {
+        let p: Vec<_> = path.split('/').collect();
+        return match p.as_slice() {
+            ["v3", org, project, repo] => {
+                Some(format!("https://dev.azure.com/{org}/{project}/_git/{repo}"))
+            }
+            _ => None,
+        };
+    }
+    let host = if matches!(host.as_str(), "ssh.bitbucket.org" | "altssh.bitbucket.org") {
+        "bitbucket.org"
+    } else {
+        &host
+    };
+    if is_scp {
+        let mut u = Url::parse(&format!("https://{host}/")).ok()?;
+        u.path_segments_mut()
+            .ok()?
+            .pop_if_empty()
+            .extend(path.split('/'));
+        Some(u.to_string())
+    } else {
+        Some(format!("https://{host}/{path}"))
+    }
 }
 async fn clone(State(app): State<Workbench>, Json(req): Json<CloneInput>) -> Reply<Value> {
-    let Prepared { dest, source, repo } = prepare(&app, req).await?;
-    let selected = std::ffi::OsString::from(&source);
-    let installed = tokio::task::spawn_blocking(move || {
-        Repository::clone_into(&selected, &dest).map(|r| r.root().to_owned())
-    })
+    let input = prepare(&app, req).await?;
+    let dest = &input.dest;
+    let parent = dest
+        .parent()
+        .ok_or_else(|| ForgeError::bad("invalid clone destination"))?;
+    let stage = tempfile::Builder::new()
+        .prefix(".kar-clone-")
+        .tempdir_in(parent)
+        .map_err(Error::Io)?;
+    let (_guard, mut stop) = tokio::sync::watch::channel(false);
+    let (checkout, selected) = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        clone_jobs::download(None, &input, stage.path(), &mut stop),
+    )
     .await
-    .map_err(|_| ForgeError::remote(500, "clone worker stopped"))??;
+    .map_err(|_| ForgeError::remote(504, "git clone timed out"))??;
+    if app.destination(dest)? != *dest || std::fs::symlink_metadata(dest).is_ok_and(|m| !m.is_dir())
+    {
+        return Err(ForgeError::bad("clone destination changed"));
+    }
+    // Rename preserves a concurrently populated destination. Both attempts write only inside our staging directory.
+    std::fs::rename(checkout, dest).map_err(Error::Io)?;
     Ok(Json(
-        json!({"cwd":installed,"remoteUrl":source,"repository":repo}),
+        json!({"cwd":dest,"remoteUrl":selected,"repository":input.repo}),
     ))
 }
 pub(super) fn routes() -> Router<Workbench> {

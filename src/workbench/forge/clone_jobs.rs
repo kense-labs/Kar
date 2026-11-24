@@ -12,12 +12,15 @@ use futures_util::stream;
 use std::{collections::HashMap, convert::Infallible, sync::Mutex, time::Duration};
 use tokio::sync::watch;
 mod worker;
+pub(in crate::workbench::forge) use worker::download;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Job {
     attempt: Uuid,
     project: Uuid,
     input: Prepared,
+    #[serde(default)]
+    actual_url: Option<String>,
     phase: String,
     stage: String,
     percent: Option<u8>,
@@ -30,7 +33,7 @@ pub(super) struct Job {
 }
 impl Job {
     fn snapshot(&self) -> Value {
-        json!({"projectId":self.project,"remoteUrl":self.input.source,"destinationPath":self.input.dest,"repository":self.input.repo,"phase":self.phase,"stage":self.stage,"percent":self.percent,"detail":self.detail,"stalled":self.stalled,"error":self.error,"startedAt":self.started,"endedAt":self.ended,"sequence":self.sequence})
+        json!({"projectId":self.project,"remoteUrl":self.actual_url.as_ref().unwrap_or(&self.input.source),"destinationPath":self.input.dest,"repository":self.input.repo,"phase":self.phase,"stage":self.stage,"percent":self.percent,"detail":self.detail,"stalled":self.stalled,"error":self.error,"startedAt":self.started,"endedAt":self.ended,"sequence":self.sequence})
     }
 }
 #[derive(Clone)]
@@ -151,6 +154,7 @@ pub(in crate::workbench) fn recover(app: &Workbench) -> crate::Result<()> {
             job.sequence = seq;
             job.stalled = false;
             if committed {
+                job.input.credential_url = None;
                 job.percent = Some(100)
             } else {
                 job.error = Some(
@@ -231,6 +235,7 @@ fn begin(
             attempt: Uuid::new_v4(),
             project: id,
             input: input.clone(),
+            actual_url: None,
             phase: "running".into(),
             stage: "connecting".into(),
             percent: None,

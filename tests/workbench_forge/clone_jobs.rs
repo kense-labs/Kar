@@ -56,8 +56,20 @@ pub(super) async fn run() {
             "true",
         ],
     );
+    let ssh = format!("'{exe}' clone-ssh-refused");
+    git(
+        &src,
+        &[
+            "config",
+            "--file",
+            cfg.to_str().unwrap(),
+            &format!("url.{}.insteadOf", src.display()),
+            "https://clone.example/org/repo.git",
+        ],
+    );
     let env = [
         ("GIT_CONFIG_GLOBAL", cfg.as_os_str()),
+        ("GIT_SSH_COMMAND", OsStr::new(&ssh)),
         ("KAR_TEST_CLONE_GATE", gate.as_os_str()),
     ];
     let (mut proc, base) = server::serve_with_env(&state, &root, &native, &env).await;
@@ -185,5 +197,43 @@ pub(super) async fn run() {
             .status()
             .is_success()
     );
+    fs::write(gate.join("release"), "go").unwrap();
+    let transport = format!("{base}/forge/repositories/clone");
+    let dest = root.join("retried");
+    let ssh = "git@clone.example:org/repo.git";
+    let done = ok(c
+        .post(&transport)
+        .json(&json!({"source":ssh,"directory":dest,"protocol":"auto"})))
+    .await;
+    assert_eq!(done["remoteUrl"], "https://clone.example/org/repo.git");
+    assert_eq!(
+        git(&dest, &["config", "remote.origin.url"]),
+        "https://clone.example/org/repo.git"
+    );
+    assert_eq!(
+        fs::read_to_string(dest.join("tracked")).unwrap(),
+        "same blob"
+    );
+    let strict = root.join("existing-empty");
+    fs::create_dir(&strict).unwrap();
+    let rejected = c
+        .post(&transport)
+        .json(&json!({"source":ssh,"directory":strict,"protocol":"ssh"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(!rejected.status().is_success());
+    assert_eq!(fs::read_dir(&strict).unwrap().count(), 0);
+    let with_secret = root.join("credential-clone");
+    let status=ok(c.post(&jobs).json(&json!({"id":Uuid::new_v4(),"title":"fixture","directory":with_secret,"source":"https://fixture-user:fixture-secret@127.0.0.1:1/name?access_token=hidden-fixture"}))).await;
+    assert_eq!(status["remoteUrl"], "https://127.0.0.1:1/name");
+    assert!(
+        !ok(c.get(&jobs))
+            .await
+            .to_string()
+            .contains("fixture-secret")
+    );
+    let catalog = fs::read_to_string(state.join("workbench/projects.json")).unwrap();
+    assert!(!catalog.contains("fixture-secret") && !catalog.contains("hidden-fixture"));
     proc.kill().await.unwrap();
 }
