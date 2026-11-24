@@ -1,5 +1,5 @@
 mod request;
-mod source;
+pub(super) mod source;
 mod worktree;
 use super::{ChatInfo, ChatSession, ChatStore, CheckpointPoint, Sink, TurnStatus, log};
 use crate::{Error, Protocol, Result, Session, SessionOptions};
@@ -150,6 +150,152 @@ fn isolated_codex_cut(state: &log::State, id: Uuid) -> bool {
         })
 }
 
+pub(super) fn trim_followups(prefix: &mut [super::ChatTurn], protocol: Protocol) {
+    // A submitted steer may have executed only after the selected anchor.
+    // Keep its link on a branch only when the actual input is inherited.
+    if protocol == Protocol::Claude {
+        let carried: std::collections::HashSet<Uuid> = prefix
+            .iter()
+            .flat_map(|t| &t.items)
+            .filter_map(|i| match &i.item {
+                super::Item::Message {
+                    role: super::Role::User,
+                    provider_id: Some(key),
+                    ..
+                } => Uuid::parse_str(key).ok(),
+                _ => None,
+            })
+            .collect();
+        for t in prefix {
+            t.steered_inputs.retain(|id, status| {
+                *status != crate::SteerStatus::FollowUp || carried.contains(id)
+            });
+        }
+    }
+}
+
+struct CutPlan {
+    runtime: crate::Runtime,
+    native: bool,
+    version: Option<String>,
+}
+
+impl CutPlan {
+    async fn prepare(
+        parent: &ChatInfo,
+        opts: &SessionOptions,
+        cut: &mut super::ChatTurn,
+        native_route: bool,
+        policy: ForkPolicy,
+    ) -> Result<Self> {
+        if native_route
+            && cut.fork_anchor.is_none()
+            && parent.protocol == Protocol::Pi
+            && cut.status == TurnStatus::Completed
+        {
+            let (local, root, opts) = (cut.clone(), parent.native_id.clone(), (*opts).clone());
+            cut.fork_anchor =
+                tokio::task::spawn_blocking(move || log::pi::saved_anchor(&local, &root, &opts))
+                    .await
+                    .map_err(|e| Error::Closed(e.to_string()))??;
+        }
+        let rt = parent.launch_runtime(&opts).await?;
+        let opencode = parent.protocol == Protocol::Acp && parent.runtime == "opencode";
+        let mut native = native_route && (cut.fork_anchor.is_some() || opencode);
+        let mut version = None;
+        if native
+            && policy == ForkPolicy::PreferNative
+            && (opencode || matches!(rt.protocol, Protocol::Codex | Protocol::Claude))
+        {
+            let reported = rt.launch_version(&opts).await?;
+            native = if opencode {
+                crate::account::release(&reported).is_some_and(|v| v.0 == 2)
+            } else {
+                rt.check_turn_fork_version(&reported, &opts).is_ok()
+            };
+            version = Some(reported);
+        }
+        if !native && policy == ForkPolicy::Native {
+            return Err(Error::Unsupported(
+                "selected turn has no native fork anchor".into(),
+            ));
+        }
+        Ok(Self {
+            runtime: rt,
+            native,
+            version,
+        })
+    }
+    async fn open(
+        self,
+        native_source: &str,
+        opts: &SessionOptions,
+        cut: &super::ChatTurn,
+        verify_cwd: bool,
+    ) -> Result<(crate::Session, Option<String>)> {
+        let Self {
+            runtime: rt,
+            native,
+            version,
+        } = self;
+
+        if !native {
+            let branch = rt.open_selected(opts.before_chat_attach()?).await?;
+            if !branch.capabilities().resume || branch.id() == native_source {
+                branch.close().await?;
+                return Err(Error::Refused(
+                    "portable fork needs an independent recoverable provider session".into(),
+                ));
+            }
+            return Ok((branch, None));
+        }
+        let (branch, anchor) = if let Some(anchor) = cut.fork_anchor.clone() {
+            let session = rt
+                .fork_selected_version(
+                    native_source,
+                    Some(&anchor),
+                    opts.clone(),
+                    None,
+                    version.as_deref(),
+                )
+                .await?;
+            (session, anchor)
+        } else {
+            use crate::providers::opencode_fork::{self, Target};
+            opencode_fork::open(&rt, opts.clone(), native_source, Target::Turn(cut)).await?
+        };
+        if verify_cwd {
+            worktree::confirm(&branch, &opts.cwd).await?;
+        }
+        Ok::<_, Error>((branch, Some(anchor)))
+    }
+}
+
+pub(super) async fn open_context_cut(
+    info: &ChatInfo,
+    cut: &mut super::ChatTurn,
+    opts: &SessionOptions,
+    allow_native: bool,
+    policy: ForkPolicy,
+) -> Result<(crate::Session, ForkMode)> {
+    let allowed = allow_native
+        && (matches!(
+            info.protocol,
+            Protocol::Codex | Protocol::Claude | Protocol::Pi | Protocol::Dsh
+        ) || info.runtime == "opencode");
+    let (session, anchor) = CutPlan::prepare(info, opts, cut, allowed, policy)
+        .await?
+        .open(&info.native_id, opts, cut, false)
+        .await?;
+    Ok((
+        session,
+        if anchor.is_some() {
+            ForkMode::Native
+        } else {
+            ForkMode::PortableContext
+        },
+    ))
+}
 impl ChatStore {
     pub(crate) fn fork_claimed(&self, id: Uuid) -> Result<bool> {
         Ok(Request::path(self, id).try_exists()?)
@@ -579,27 +725,7 @@ impl ChatStore {
             }
             log.state.turns[..=index].to_vec()
         };
-        // A submitted steer may have executed only after the selected anchor.
-        // Keep its link on a branch only when the actual input is inherited.
-        if parent.protocol == Protocol::Claude {
-            let carried: std::collections::HashSet<Uuid> = prefix
-                .iter()
-                .flat_map(|t| &t.items)
-                .filter_map(|i| match &i.item {
-                    super::Item::Message {
-                        role: super::Role::User,
-                        provider_id: Some(key),
-                        ..
-                    } => Uuid::parse_str(key).ok(),
-                    _ => None,
-                })
-                .collect();
-            for t in &mut prefix {
-                t.steered_inputs.retain(|id, status| {
-                    *status != crate::SteerStatus::FollowUp || carried.contains(id)
-                });
-            }
-        }
+        trim_followups(&mut prefix, parent.protocol);
         let mut recorded_repositories = std::collections::BTreeMap::new();
         for row in prefix
             .iter()
@@ -660,75 +786,18 @@ impl ChatStore {
                 self.fork_restore(&source, target, true).await?;
                 None
             };
-            if native_route
-                && cut.fork_anchor.is_none()
-                && parent.protocol == Protocol::Pi
-                && cut.status == TurnStatus::Completed
-            {
-                let (local, root, opts) = (cut.clone(), native_source.clone(), opts.clone());
-                cut.fork_anchor = tokio::task::spawn_blocking(move || {
-                    log::pi::saved_anchor(&local, &root, &opts)
-                })
-                .await
-                .map_err(|e| Error::Closed(e.to_string()))??;
-            }
-            let rt = parent.launch_runtime(&opts).await?;
-            let mut native = native_route && (cut.fork_anchor.is_some() || opencode);
-            let mut version = None;
-            if native
-                && policy == ForkPolicy::PreferNative
-                && (opencode || matches!(rt.protocol, Protocol::Codex | Protocol::Claude))
-            {
-                let reported = rt.launch_version(&opts).await?;
-                native = if opencode {
-                    crate::account::release(&reported).is_some_and(|v| v.0 == 2)
-                } else {
-                    rt.check_turn_fork_version(&reported, &opts).is_ok()
-                };
-                version = Some(reported);
-            }
-            if !native && policy == ForkPolicy::Native {
-                return Err(Error::Unsupported(
-                    "selected turn has no native fork anchor".into(),
-                ));
-            }
+            let plan = CutPlan::prepare(&parent, &opts, cut, native_route, policy).await?;
             if let Some(r) = &request {
                 r.begin(parent.id, turn, destination.as_deref())?;
             }
-            let opened = async {
-                if !native {
-                    let branch = rt.open_selected(opts.before_chat_attach()?).await?;
-                    if !branch.capabilities().resume || branch.id() == native_source {
-                        branch.close().await?;
-                        return Err(Error::Refused(
-                            "portable fork needs an independent recoverable provider session"
-                                .into(),
-                        ));
-                    }
-                    return Ok((branch, None));
-                }
-                let (branch, anchor) = if let Some(anchor) = cut.fork_anchor.clone() {
-                    let session = rt
-                        .fork_selected_version(
-                            &native_source,
-                            Some(&anchor),
-                            opts.clone(),
-                            None,
-                            version.as_deref(),
-                        )
-                        .await?;
-                    (session, anchor)
-                } else {
-                    use crate::providers::opencode_fork::{self, Target};
-                    opencode_fork::open(&rt, opts.clone(), &native_source, Target::Turn(cut))
-                        .await?
-                };
-                if changed_workspace || destination.is_some() {
-                    worktree::confirm(&branch, &opts.cwd).await?;
-                }
-                Ok::<_, Error>((branch, Some(anchor)))
-            }
-            .await;
+            let opened = plan
+                .open(
+                    &native_source,
+                    &opts,
+                    cut,
+                    changed_workspace || destination.is_some(),
+                )
+                .await;
             let (branch, anchor) = match opened {
                 Ok(result) => result,
                 Err(error) => {

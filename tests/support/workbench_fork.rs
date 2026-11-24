@@ -526,5 +526,33 @@ async fn scenario() {
         .error_for_status()
         .unwrap();
     assert_eq!(next_change(&mut late).await, expected);
+    let parent_url = format!("{url}{parent_path}");
+    let rewind = json!({"id":Uuid::new_v4(), "turn":first["id"], "expected_head":latest["id"], "policy":"native"});
+    let before_rewind = fs::read(main.join("shared")).unwrap();
+    let result = ok(a.post(format!("{parent_url}/rewinds")).json(&rewind)).await;
+    assert_eq!(result["mode"], "native");
+    assert_eq!(result["chat"], chat.to_string());
+    assert_eq!(result["removed_turns"], json!([cut["id"], latest["id"]]));
+    assert_eq!(fs::read(main.join("shared")).unwrap(), before_rewind);
+    assert_eq!(
+        ok(b.post(format!("{parent_url}/rewinds")).json(&rewind)).await,
+        result
+    );
+    let parent_snapshot = ok(b.get(format!("{parent_url}/snapshot"))).await;
+    assert_eq!(
+        parent_snapshot["history"]["turns"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        parent_snapshot["history"]["chat"]["native_id"],
+        result["native_id"]
+    );
+    assert_eq!(
+        ok(b.get(format!("{url}{child_path}/snapshot"))).await["history"]["turns"][1]["id"],
+        cut["id"]
+    );
     next.kill().await.unwrap();
 }

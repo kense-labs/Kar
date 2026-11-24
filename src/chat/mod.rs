@@ -8,6 +8,8 @@ pub use native_profile::{AntigravityProfile, NativeChildOrigin};
 pub(crate) mod checkpoint;
 pub(crate) mod feed;
 mod handoff;
+mod rewind;
+pub use rewind::{ContextRewind, RewindRequest};
 mod http_feed;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
 pub use handoff::{Handoff, HandoffRequest, HandoffStatus, ProviderSession};
@@ -180,6 +182,8 @@ pub struct ChatNotification {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatHistory {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rewinds: Vec<ContextRewind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handoffs: Vec<Handoff>,
     pub chat: ChatInfo,
@@ -429,6 +433,7 @@ impl ChatStore {
     }
     fn history_from_state(&self, id: Uuid, state: log::State) -> Result<ChatHistory> {
         Ok(ChatHistory {
+            rewinds: state.rewinds.clone(),
             cursor: state.cursor(),
             workspace_position: state.position,
             pending_rollback: state.restoring,
@@ -692,6 +697,7 @@ impl ChatSession {
         let log = self.sender.sink.0.lock().unwrap();
         log.healthy()?;
         Ok(ChatHistory {
+            rewinds: log.state.rewinds.clone(),
             handoffs: log.state.handoffs.clone(),
             chat: self.sender.info.clone(),
             workspace_position: log.state.position,

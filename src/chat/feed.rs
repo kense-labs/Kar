@@ -326,6 +326,17 @@ impl ChatFeed {
                     self.may_have_steering = true;
                 }
                 match &event.update {
+                    ChatUpdate::ContextRewound { binding, .. } => {
+                        if let Some(target) = binding.as_ref().and_then(|h| h.target.as_ref()) {
+                            target.activate(&mut self.info);
+                        }
+                        self.may_be_running = false;
+                        self.may_have_background = false;
+                        self.may_have_requests = false;
+                        self.may_have_compaction = false;
+                        self.may_have_notification = false;
+                        self.may_have_steering = false;
+                    }
                     ChatUpdate::HandoffReady { target, .. } => {
                         target.activate(&mut self.info);
                     }

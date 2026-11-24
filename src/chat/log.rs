@@ -27,6 +27,10 @@ struct Header {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChatUpdate {
+    ContextRewound {
+        rewind: Box<super::ContextRewind>,
+        binding: Option<Box<super::Handoff>>,
+    },
     HandoffPrepared {
         handoff: Box<super::Handoff>,
     },
@@ -176,6 +180,9 @@ pub enum ChatUpdate {
     },
 }
 pub(super) struct State {
+    pub rewinds: Vec<super::ContextRewind>,
+    pub(super) archived_turns: HashMap<Uuid, ChatTurn>,
+    pub(super) inherited_len: usize,
     pub handoffs: Vec<super::Handoff>,
     pub notifications: Vec<super::ChatNotification>,
     pub info: ChatInfo,
@@ -208,6 +215,9 @@ impl State {
     }
     fn new(info: ChatInfo) -> Self {
         Self {
+            rewinds: Vec::new(),
+            archived_turns: HashMap::new(),
+            inherited_len: 0,
             handoffs: Vec::new(),
             info,
             notifications: vec![],
@@ -241,6 +251,9 @@ impl State {
             .map(|c| (c.stream_id, c.after_seq))
             .collect();
         Self {
+            rewinds: history.rewinds,
+            archived_turns: HashMap::new(),
+            inherited_len: 0,
             handoffs: history.handoffs,
             info: history.chat,
             notifications: history.notifications,
@@ -261,7 +274,10 @@ impl State {
         }
     }
     pub fn find(&self, id: Uuid) -> Option<&ChatTurn> {
-        self.ids.get(&id).map(|i| &self.turns[*i])
+        self.ids
+            .get(&id)
+            .map(|i| &self.turns[*i])
+            .or_else(|| self.archived_turns.get(&id))
     }
     pub fn active(&self) -> Option<Uuid> {
         self.turns
@@ -283,6 +299,11 @@ impl State {
             || self.waiting_steering()
     }
     pub(super) fn check_new_prompt_id(&self, id: Uuid) -> Result<()> {
+        if self.rewinds.iter().any(|r| r.removed_inputs.contains(&id)) {
+            return Err(Error::Refused(
+                "input UUID belongs to an earlier conversation revision".into(),
+            ));
+        }
         if self
             .turns
             .iter()
@@ -361,7 +382,10 @@ impl State {
         before_tree: Option<String>,
         repositories: Vec<RepositoryCheckpoint>,
     ) -> Result<()> {
-        if self.active().is_some() || self.ids.contains_key(&id) {
+        if self.active().is_some()
+            || self.ids.contains_key(&id)
+            || self.archived_turns.contains_key(&id)
+        {
             return Err(Error::Protocol(
                 "duplicate or overlapping stored turn".into(),
             ));
@@ -451,6 +475,10 @@ impl State {
     }
     pub(super) fn apply(&mut self, row: ChatUpdate) -> Result<()> {
         match row {
+            ChatUpdate::ContextRewound { rewind, binding } => {
+                self.apply_rewind(*rewind, binding.map(|h| *h))?;
+                self.ids.retain(|_, index| *index < self.turns.len());
+            }
             ChatUpdate::HandoffPrepared { handoff } => self.handoffs.push(*handoff),
             ChatUpdate::HandoffReady { id, target } => {
                 let h = self
@@ -580,6 +608,7 @@ impl State {
                         return Err(Error::Protocol("invalid inherited turn".into()));
                     }
                 }
+                self.inherited_len = turns.len();
                 self.position = Some(CheckpointPoint {
                     turn: origin.turn,
                     before: false,
@@ -1151,6 +1180,9 @@ pub(super) fn visit_info_changes(
     #[derive(Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case")]
     enum Change {
+        ContextRewound {
+            binding: Option<Box<super::Handoff>>,
+        },
         Opened {
             #[serde(default)]
             antigravity_profile: Option<super::AntigravityProfile>,
@@ -1172,6 +1204,15 @@ pub(super) fn visit_info_changes(
             break;
         }
         match serde_json::from_slice(&line)? {
+            Change::ContextRewound { binding } => {
+                let Some(binding) = binding else {
+                    continue;
+                };
+                binding
+                    .target
+                    .ok_or_else(|| Error::Protocol("rewind has no provider binding".into()))?
+                    .activate(info);
+            }
             Change::HandoffReady { target } => target.activate(info),
             Change::HandoffTargetReopened { native_id } => info.native_id = native_id,
             Change::Opened {
@@ -1207,6 +1248,15 @@ pub(super) fn read(file: &mut File, id: Uuid) -> Result<(State, u64)> {
     with_lock(file, false, |file| read_locked(file, id))
 }
 pub(super) fn read_locked(file: &mut File, id: Uuid) -> Result<(State, u64)> {
+    read_before_archive(file, id, None)
+}
+
+/// An existing child keeps its immutable parent's prefix even after the parent rewinds past it.
+pub(super) fn read_before_archive(
+    file: &mut File,
+    id: Uuid,
+    keep: Option<Uuid>,
+) -> Result<(State, u64)> {
     file.seek(SeekFrom::Start(0))?;
     let len = file.metadata()?.len();
     let mut reader = BufReader::new(file.take(len));
@@ -1218,7 +1268,13 @@ pub(super) fn read_locked(file: &mut File, id: Uuid) -> Result<(State, u64)> {
         if line.last() != Some(&b'\n') {
             break;
         }
-        state.apply(serde_json::from_slice(&line)?)?;
+        let update = serde_json::from_slice(&line)?;
+        if let (Some(keep), ChatUpdate::ContextRewound { rewind, .. }) = (keep, &update)
+            && rewind.removed_turns.contains(&keep)
+        {
+            break;
+        }
+        state.apply(update)?;
         valid += line.len() as u64;
     }
     Ok((state, valid))

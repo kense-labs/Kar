@@ -301,6 +301,7 @@ async fn withdraw(
     .await
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Rollback {
     turn: Uuid,
     #[serde(default)]
@@ -325,6 +326,51 @@ async fn rollback(
     }
     blocking(move || app.0.chats.rollback(c, point, q.dry_run)).await
 }
+async fn rewind(
+    State(app): State<Workbench>,
+    Path((project, chat)): Path<(Uuid, Uuid)>,
+    Json(request): Json<crate::chat::RewindRequest>,
+) -> std::result::Result<Json<crate::chat::ContextRewind>, ApiError> {
+    let result = tokio::spawn(async move {
+        app.binding(project, chat)?;
+        let controller = app.controller(chat);
+        let history = app.0.chats.history(chat)?;
+        if let Some(old) = history.rewinds.into_iter().find(|r| r.id == request.id) {
+            old.check(&request)?;
+            return Ok(old);
+        }
+        let mut owner = controller.owner.try_lock().map_err(|_| Error::Busy)?;
+        if app.archived(chat) {
+            return Err(Error::Refused("chat is archived".into()));
+        }
+        if owner
+            .as_ref()
+            .is_some_and(|s| s.needs_controller().unwrap_or(true))
+            || app.0.chats.queued_inputs(chat)?.iter().any(|i| {
+                matches!(
+                    i.status,
+                    crate::chat::InputStatus::Pending | crate::chat::InputStatus::Sending
+                )
+            })
+        {
+            return Err(Error::Busy);
+        }
+        if let Some(session) = owner.take() {
+            session.close().await?;
+        }
+        app.0
+            .chats
+            .rewind_configured(chat, request, |_, opts| {
+                isolate_host_token(opts);
+                Ok(())
+            })
+            .await
+    })
+    .await
+    .map_err(|e| Error::Closed(e.to_string()))??;
+    Ok(Json(result))
+}
+
 #[derive(Deserialize)]
 struct DiffRange {
     #[serde(default)]
@@ -510,6 +556,7 @@ pub(super) fn routes() -> Router<Workbench> {
             "/projects/{project}/chats/{chat}/checkpoints/diff",
             get(turn_diff),
         )
+        .route("/projects/{project}/chats/{chat}/rewinds", post(rewind))
         .route("/projects/{project}/chats/{chat}/rollback", post(rollback))
         .route("/projects/{project}/chats/{chat}/forks", post(fork))
 }

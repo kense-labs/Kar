@@ -119,9 +119,11 @@ fn tree_at<'r>(
         }
     }
     // The repository was first tracked after this point. Undo to its first captured baseline.
-    let first = state
-        .turns
-        .iter()
+    let first = ancestry(state, state.position)?
+        .into_iter()
+        .rev()
+        .filter_map(|p| state.find(p.turn))
+        .chain(state.turns.iter())
         .filter_map(|t| t.checkpoint.as_ref())
         .flat_map(|cp| &cp.repositories)
         .find(|r| r.scope.repository_path == key)

@@ -136,6 +136,19 @@ enum Action {
         #[arg(long)]
         chat: Option<Uuid>,
     },
+    /// Continue the original chat after a selected turn, keeping the current workspace files.
+    Rewind {
+        turn: Uuid,
+        #[arg(long)]
+        chat: Option<Uuid>,
+        /// Stable command ID for a retry.
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        expected_head: Option<Uuid>,
+        #[arg(long)]
+        native: bool,
+    },
     /// Restore the workspace after a turn (or before it with --before).
     Rollback {
         turn: Uuid,
@@ -527,6 +540,40 @@ impl Chat {
                     for f in &cp.files {
                         println!("{:?}  {}", f.kind, f.path.display());
                     }
+                }
+                return Ok(());
+            }
+            Action::Rewind {
+                turn,
+                chat,
+                id,
+                expected_head,
+                native,
+            } => {
+                let receipt = store
+                    .rewind(
+                        selected(&store, chat)?,
+                        kar::chat::RewindRequest {
+                            id: id.unwrap_or_else(Uuid::new_v4),
+                            turn,
+                            expected_head,
+                            policy: if native {
+                                kar::chat::ForkPolicy::Native
+                            } else {
+                                kar::chat::ForkPolicy::PreferNative
+                            },
+                        },
+                    )
+                    .await?;
+                if self.json {
+                    super::json_line(&receipt, std::io::stdout())?;
+                } else {
+                    println!(
+                        "Chat {} is at turn {} ({} later turns archived)",
+                        receipt.chat,
+                        receipt.turn,
+                        receipt.removed_turns.len()
+                    );
                 }
                 return Ok(());
             }

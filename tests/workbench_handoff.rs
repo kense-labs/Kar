@@ -390,6 +390,78 @@ async fn protocol() {
     workflow_stop(&mut f).await;
     f.stop().await;
 }
+async fn same_chat_rewind() {
+    let mut f = Fixture::new(false).await;
+    f.chat = Uuid::new_v4();
+    let created = body(
+        f.client
+            .post(format!("{}/projects/{}/chats", f.base, f.project))
+            .json(&json!({"id":f.chat,"runtime":"qwen"})),
+    )
+    .await;
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let third = Uuid::new_v4();
+    f.send(first, "portable-write-first").await;
+    f.send(second, "portable-write-second").await;
+    f.send(third, "portable-write-future").await;
+    let request = json!({"id":Uuid::new_v4(),"turn":second,"expected_head":third});
+    let stale = json!({"id":Uuid::new_v4(),"turn":first,"expected_head":second});
+    assert!(
+        !f.post("rewinds", &stale)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let receipt = body(f.post("rewinds", &request)).await;
+    assert_eq!(receipt["chat"], f.chat.to_string());
+    assert_eq!(receipt["mode"], "portable_context");
+    assert_ne!(receipt["native_id"], created["info"]["native_id"]);
+    assert_eq!(receipt["removed_turns"], json!([third]));
+    assert_eq!(
+        fs::read_to_string(f.workspace.join("portable-state")).unwrap(),
+        "portable-write-future"
+    );
+    f.restart().await;
+    assert_eq!(body(f.post("rewinds", &request)).await, receipt);
+    let history = f.history().await;
+    assert_eq!(history["chat"]["id"], f.chat.to_string());
+    assert_eq!(history["turns"].as_array().unwrap().len(), 2);
+    assert_eq!(history["turns"][1]["id"], second.to_string());
+    assert_eq!(history["rewinds"][0], receipt);
+    assert_eq!(history["workspace_position"]["turn"], third.to_string());
+    let calls = f.calls().len();
+    f.send(third, "portable-write-future").await;
+    assert_eq!(f.calls().len(), calls, "redelivery of an archived input");
+    let next = Uuid::new_v4();
+    f.send(next, "continue here").await;
+    let seen = f.calls();
+    let text = seen.last().unwrap()["text"].as_str().unwrap();
+    assert!(text.contains("portable-write-first") && text.contains("portable-write-second"));
+    assert!(!text.contains("portable-write-future"));
+    assert_eq!(seen.len(), calls + 1);
+    f.restart().await;
+    assert_eq!(body(f.post("rewinds", &request)).await, receipt);
+    f.send(Uuid::new_v4(), "one more").await;
+    assert_eq!(f.calls().last().unwrap()["text"], "one more");
+    assert_eq!(
+        fs::read_to_string(f.workspace.join("portable-state")).unwrap(),
+        "portable-write-future"
+    );
+    let reused = json!({"id":request["id"],"turn":first});
+    assert!(
+        !f.post("rewinds", &reused)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    f.stop().await;
+}
+
 async fn portable_fork() {
     let mut f = Fixture::new(false).await;
     f.chat = Uuid::new_v4();
@@ -623,11 +695,14 @@ fn main() {
         tokio::time::timeout(
             Duration::from_secs(if live_mode { 600 } else { 120 }),
             async {
-                if live_mode {
+                if std::env::args().nth(1).as_deref() == Some("rewind") {
+                    same_chat_rewind().await;
+                } else if live_mode {
                     live().await
                 } else {
                     protocol().await;
                     portable_fork().await;
+                    same_chat_rewind().await;
                     named_instances().await
                 }
             },

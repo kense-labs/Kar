@@ -396,6 +396,15 @@ impl super::ChatStore {
         original: Error,
     ) -> Result<crate::Session> {
         let Some(h) = log.state.current_handoff().filter(|h| {
+            // An empty replacement cannot stand in for a native branch carrying the retained turns.
+            if log
+                .state
+                .rewinds
+                .iter()
+                .any(|r| r.id == h.request.id && r.mode == Some(super::ForkMode::Native))
+            {
+                return false;
+            }
             !h.resumed_target && h.input.is_none() && log.state.turns.len() == h.through_turn
         }) else {
             return Err(original);
@@ -431,6 +440,16 @@ impl super::ChatStore {
         configure: impl FnOnce(&mut crate::SessionOptions),
     ) -> Result<(Handoff, Option<super::ChatSession>)> {
         let mut log = self.open_controller(id).await?;
+        if log
+            .state
+            .rewinds
+            .iter()
+            .any(|r| r.id == request.id || r.retired_handoffs.contains(&request.id))
+        {
+            return Err(Error::Refused(
+                "command UUID belongs to a prior conversation revision".into(),
+            ));
+        }
         if let Some(existing) = log
             .state
             .handoffs
@@ -475,7 +494,7 @@ impl super::ChatStore {
                 destination,
                 &log.state.info,
                 &log.state.turns,
-                &log.state.handoffs,
+                log.state.resumable_handoffs(),
             )?;
             self.prepare_handoff(&mut log, h)?;
         }

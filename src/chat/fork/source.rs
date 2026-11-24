@@ -3,7 +3,7 @@ use super::*;
 use crate::chat::{HandoffStatus, ProviderSession};
 use std::collections::HashSet;
 
-pub(super) struct Launch {
+pub(in crate::chat) struct Launch {
     pub owner: ChatInfo,
     pub options: SessionOptions,
     pub staged: Option<Uuid>,
@@ -89,11 +89,16 @@ impl Launch {
             let index = position(current, turn)?;
             let selected = &current.turns[index];
             if let Some(origin) = &current.info.forked_from
-                && index <= position(current, origin.turn)?
+                && (index < current.inherited_len
+                    || current
+                        .turns
+                        .iter()
+                        .position(|t| t.id == origin.turn)
+                        .is_some_and(|end| index <= end))
             {
                 // An inherited timeline retains its original native IDs. Reconstruct
                 // launch settings from the actual owner, not from the child header.
-                let file = File::open(store.path(origin.chat)).map_err(|error| {
+                let mut file = File::open(store.path(origin.chat)).map_err(|error| {
                     if error.kind() == std::io::ErrorKind::NotFound {
                         Error::Refused(format!(
                             "original chat {} is missing for this inherited turn",
@@ -103,7 +108,10 @@ impl Launch {
                         error.into()
                     }
                 })?;
-                let ancestor = store.read_state(file, origin.chat)?;
+                let ancestor = log::with_lock(&mut file, false, |file| {
+                    log::read_before_archive(file, origin.chat, Some(origin.turn))
+                        .map(|(state, _)| state)
+                })?;
                 let cut = position(&ancestor, origin.turn)?;
                 let original = ancestor
                     .turns

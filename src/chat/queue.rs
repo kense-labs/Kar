@@ -71,6 +71,14 @@ struct Entry {
 impl Entry {
     fn status(&self, state: &super::log::State) -> InputStatus {
         let info = &state.info;
+        if let Some(status) = state
+            .rewinds
+            .iter()
+            .rev()
+            .find_map(|r| r.queue_status.get(&self.id))
+        {
+            return *status;
+        }
         let turn = state.find(self.id);
         if turn.is_none()
             && let Some(status) = self
@@ -210,6 +218,19 @@ impl ChatStore {
         log: &mut super::log::Log,
         handoff: super::Handoff,
     ) -> Result<()> {
+        self.commit_idle_transition(
+            log,
+            super::ChatUpdate::HandoffPrepared {
+                handoff: Box::new(handoff),
+            },
+        )
+    }
+
+    pub(super) fn commit_idle_transition(
+        &self,
+        log: &mut super::log::Log,
+        mut update: super::ChatUpdate,
+    ) -> Result<()> {
         let _lock = self.inbox_lock(log.state.info.id)?;
         let inbox = self.read_inbox(&log.state.info)?;
         if inbox.entries.iter().any(|e| {
@@ -220,9 +241,16 @@ impl ChatStore {
         }) {
             return Err(Error::Busy);
         }
-        log.commit(super::ChatUpdate::HandoffPrepared {
-            handoff: Box::new(handoff),
-        })
+        if let super::ChatUpdate::ContextRewound { rewind, .. } = &mut update {
+            for entry in &inbox.entries {
+                if rewind.removed_inputs.contains(&entry.id) {
+                    rewind
+                        .queue_status
+                        .insert(entry.id, entry.status(&log.state));
+                }
+            }
+        }
+        log.commit(update)
     }
     /// Persist before returning. Multiple producers are ordered by admission under the file lock.
     pub fn enqueue(&self, chat: Uuid, id: Uuid, text: impl Into<String>) -> Result<QueuedInput> {
