@@ -748,3 +748,95 @@ async fn abort_active_then_idle_preserves_the_original_outcome() {
     assert_eq!(f.calls.lock().unwrap().len(), 2);
     s.close().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires KAR_PI_BIN with native settlement-triggered manual compaction and extension callbacks"]
+async fn compaction_on_settlement_keeps_queued_refusals_correlated() {
+    let f = fixture(true).await;
+    let agent = f.temp.path().join("agent");
+    fs::write(
+        agent.join("settings.json"),
+        json!({"compaction":{"enabled":true,"keepRecentTokens":10},"retry":{"enabled":false}})
+            .to_string(),
+    )
+    .unwrap();
+    let ext = agent.join("extensions");
+    fs::create_dir(&ext).unwrap();
+    fs::write(
+        ext.join("compact-after-third.ts"),
+        r#"
+        import {setTimeout as delay} from 'node:timers/promises';
+        export default pi => {
+            let settled=0;
+            pi.on("session_before_compact", async () => { await delay(500); });
+            pi.on("agent_settled", (_event, context) => { if (++settled===3) context.compact(); });
+        };
+    "#,
+    )
+    .unwrap();
+    let mut rt = kar::runtime("pi").unwrap();
+    rt.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
+    let s = rt.open(f.options.clone()).await.unwrap();
+    for n in 1..=2 {
+        let seed = format!("history {n} {}", "padding ".repeat(400));
+        assert_eq!(
+            s.prompt(seed).await.unwrap().wait().await.unwrap(),
+            Outcome::Completed
+        );
+    }
+    let active = s.prompt(HELD).await.unwrap();
+    wait_for(|| f.options.cwd.join("requested").is_file()).await;
+    let marker = "kar-held-input-must-never-reach-model";
+    let (id, b) = s.queue(marker).await.unwrap();
+    let (_, c) = s
+        .queue("kar-following-queued-compaction-input")
+        .await
+        .unwrap();
+    fs::write(f.options.cwd.join("release"), []).unwrap();
+    assert_eq!(
+        timeout(LIMIT, active.wait()).await.unwrap().unwrap(),
+        Outcome::Completed
+    );
+    assert!(matches!(
+        timeout(LIMIT, b.wait()).await.unwrap(),
+        Err(kar::Error::Refused(_))
+    ));
+    let _following = timeout(LIMIT, c.wait()).await.unwrap();
+    wait_for(|| {
+        s.records()
+            .iter()
+            .any(|r| r.native["type"] == "compaction_end")
+    })
+    .await;
+    assert!(
+        !timeout(LIMIT, s.await_idle())
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+            .is_running()
+    );
+    let rows = s.records();
+    let refusals:Vec<_>=rows.iter().filter(|r|r.events.iter().any(|e|matches!(e,Event::NativeInput{input_id,receipt:kar::InputReceipt::Refused} if *input_id==id))).collect();
+    assert_eq!(refusals.len(), 1);
+    assert!(refusals[0].events.contains(&Event::InputDropped {
+        input_id: id.to_string()
+    }));
+    assert!(
+        f.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|body| !body["messages"].to_string().contains(marker))
+    );
+    assert_eq!(
+        s.prompt("continue after compaction")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        Outcome::Completed
+    );
+    s.close().await.unwrap();
+}

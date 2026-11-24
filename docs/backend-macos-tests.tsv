@@ -123,6 +123,7 @@ pi	native_live	pi_history::explicit_native_refusal_and_handled_input_drain_in_or
 pi	native_live	pi_history::extension_runs::abort_active_then_idle_preserves_the_original_outcome	KAR_PI_BIN	requires real KAR_PI_BIN; holds a real model request open during abort
 pi	native_live	pi_history::extension_runs::abort_during_preflight_reaches_the_native_run_when_it_starts	KAR_PI_BIN	requires real KAR_PI_BIN with an abortable native extension command
 pi	native_live	pi_history::extension_runs::clients_replay_independent_activity_without_attaching_it_to_the_command	KAR_PI_BIN	requires real KAR_PI_BIN; restarts Kar and reconnects HTTP clients across a native extension run
+pi	native_live	pi_history::extension_runs::compaction_on_settlement_keeps_queued_refusals_correlated	KAR_PI_BIN	requires native settlement-triggered manual compaction and extension callbacks
 pi	native_live	pi_history::extension_runs::handled_command_preserves_native_extension_error_without_a_model_turn	KAR_PI_BIN	requires real KAR_PI_BIN; native command handler raises its own error
 pi	native_live	pi_history::extension_runs::handled_middle_entry_has_one_bubble_and_advances_the_queue	KAR_PI_BIN	requires real KAR_PI_BIN; extension handles the middle FIFO entry
 pi	native_live	pi_history::extension_runs::handled_steer_preserves_the_running_prompt	KAR_PI_BIN	requires real KAR_PI_BIN; checks the native handled receipt for a mid-turn steer
