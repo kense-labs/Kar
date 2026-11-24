@@ -54,7 +54,7 @@ pub(in crate::workbench) fn repositories(
         let catalog = app.0.catalog.lock().unwrap();
         let mut project = None;
         for p in catalog.projects.values() {
-            if p.root == chat.workspace || app.owns_chat(&catalog, p, chat)? {
+            if app.owns_chat(&catalog, p, chat)? {
                 project = Some(super::super::Project {
                     root: chat.workspace.clone(),
                     ..p.clone()
@@ -74,6 +74,19 @@ pub(in crate::workbench) fn repositories(
                     worktree_path: f.path,
                 }),
         );
+    }
+    for dir in app.chat_directories(&chat.workspace, &chat.settings)? {
+        if dir.join(".git").exists() && !scopes.iter().any(|s| s.worktree_path == dir) {
+            scopes.push(RepositoryScope {
+                name: dir
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                repository_path: dir.clone(),
+                worktree_path: dir,
+            });
+        }
     }
     // The superproject records a gitlink, while the user can edit an initialized submodule's files.
     // Capture that checkout separately and retain its logical path across linked worktrees.
