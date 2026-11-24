@@ -47,7 +47,10 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
     let detail = pull.clone();
     let ci = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let api = Router::new()
-        .route("/repos/kar/demo/pulls",get(move||async move{Json(json!([pull]))}))
+        .route("/repos/kar/demo/pulls",get(move||async move{Json(json!([pull]))}).post(|Json(body):Json<Value>|async move{
+            assert_eq!(body["head"],"main");assert_eq!(body["base"],"release");assert_eq!(body["draft"],true);
+            Json(json!({"number":20,"title":body["title"],"body":body["body"],"state":"open","html_url":"https://models.example/kar/demo/pull/20","head":{"ref":"main","repo":{"full_name":"kar/demo"}},"base":{"ref":"release"}}))
+        }))
         .route("/repos/kar/demo/pulls/19",get(move||async move{Json(detail)}).patch(|Json(body):Json<Value>|async move{assert_eq!(body["title"],"Changed");Json(json!({"number":19}))}))
         .route("/repos/kar/demo/pulls/19/merge",axum::routing::put(|Json(body):Json<Value>|async move{assert_eq!(body["sha"],"abc");Json(json!({"merged":true,"sha":"merged"}))}))
         .route("/repos/kar/demo/commits/abc/status",get(||async{Json(json!({"sha":"abc","statuses":[{"context":"legacy","state":"success","id":8}]}))}))
@@ -207,6 +210,17 @@ pub(super) async fn exercise(
             true
         );
     }
+    let bare=root.join(".git/workbench-publication-fixture.git");
+    git(root,&["init","--bare",bare.to_str().unwrap()]);
+    git(root,&["remote","set-url","--push","origin",bare.to_str().unwrap()]);
+    let publication=json!({"command_id":Uuid::new_v4(),"action":"create","title":"Current checkout","draft":true,"base":"release"});
+    let published=server::json(make("kar_pull_request",publication.clone())).await;
+    assert_eq!(published["result"]["structuredContent"]["pull"]["number"],20,"{published}");
+    let oid=Command::new("git").current_dir(&bare).args(["rev-parse","refs/heads/main"]).output().unwrap();
+    assert_eq!(published["result"]["structuredContent"]["head_sha"],String::from_utf8(oid.stdout).unwrap().trim());
+    assert_eq!(published["result"],server::json(make("kar_pull_request",publication)).await["result"]);
+    let links=server::json(make("kar_pull_request_links",json!({"action":"list"}))).await;
+    assert!(links["result"]["structuredContent"]["links"].as_array().unwrap().iter().any(|b|b["number"]==20));
     let guide=server::json(make("kar_pull_request",json!({"action":"read_guide","number":19}))).await;
     assert_eq!(guide["result"]["structuredContent"]["current_head_sha"],"abc");
     assert!(guide["result"]["structuredContent"]["guide"].is_null());

@@ -1,5 +1,5 @@
 use super::*;
-use crate::workbench_git::{PublishTarget, StackCheckout};
+use crate::workbench_git::{PublishTarget, Repository};
 
 pub(in crate::workbench) struct PullTarget {
     pub head: String,
@@ -37,7 +37,7 @@ impl PullTarget {
     pub async fn resolve(
         app: Workbench,
         project: Uuid,
-        checkout: &StackCheckout,
+        checkout: &Repository,
         local: &str,
         target: &PublishTarget,
         requested_base: Option<&str>,

@@ -126,7 +126,7 @@ pub(in crate::workbench) async fn links(
         if let Some(result) = previous(db)? {
             return Ok(result);
         }
-        if db.forge.operations.contains_key(&id) || db.forge.bindings.contains_key(&id) {
+        if db.forge.model_publications.contains_key(&id) || db.forge.operations.contains_key(&id) || db.forge.bindings.contains_key(&id) {
             return Err(Error::Refused(
                 "command ID already belongs to another forge request".into(),
             ));

@@ -50,7 +50,7 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         }
         if !c.plan && p.writes_pulls() && p.review_guides.is_some(){acts.push("write_guides");}
         let string = json!({"type":"string"});
-        tools.push(Tool{name:PULL,description:"Use this chat's granted pull-request repository. Read and review changes, open a pull for an existing branch, reply to a review thread or resolve it. Reuse command_id for mutations.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"command_id":id,"number":{"type":"integer","minimum":1},"until":{"enum":["checks","merged"]},"numbers":{"type":"array","maxItems":20,"items":{"type":"integer","minimum":1}},"cursor":string,"review_thread_id":string,"head":string,"head_repository":string,"base":string,"title":string,"body":string,"verdict":{"enum":["comment","approve","request-changes"]},"comments":{"type":"array","items":{"type":"object"}},"resolved":{"type":"boolean"},"ready":{"type":"boolean"},"auto":{"type":"boolean"},"expected_head_sha":string,"method":{"enum":["merge","squash","rebase"]},"state":{"enum":["open","closed"]},"add_labels":{"type":"array","items":string},"remove_labels":{"type":"array","items":string},"request_reviewers":{"type":"array","items":string}}),required:&["action"]});
+        tools.push(Tool{name:PULL,description:"Use this chat's granted pull-request repository. Read and review changes, publish this chat’s current branch and open or reuse its pull, reply to a review thread or resolve it. Reuse command_id for mutations.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"command_id":id,"number":{"type":"integer","minimum":1},"until":{"enum":["checks","merged"]},"numbers":{"type":"array","maxItems":20,"items":{"type":"integer","minimum":1}},"cursor":string,"review_thread_id":string,"head":string,"head_repository":string,"draft":{"type":"boolean"},"private":{"type":"boolean"},"base":string,"title":string,"body":string,"verdict":{"enum":["comment","approve","request-changes"]},"comments":{"type":"array","items":{"type":"object"}},"resolved":{"type":"boolean"},"ready":{"type":"boolean"},"auto":{"type":"boolean"},"expected_head_sha":string,"method":{"enum":["merge","squash","rebase"]},"state":{"enum":["open","closed"]},"add_labels":{"type":"array","items":string},"remove_labels":{"type":"array","items":string},"request_reviewers":{"type":"array","items":string}}),required:&["action"]});
     }
     if p.reads_pulls() {
         let acts = if !c.plan && p.writes_pulls() {
@@ -129,6 +129,10 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(|_| forge::ForgeError::bad("invalid command ID"))?;
+            if name==PULL && action=="create" && !fields.contains_key("head"){
+                let req=serde_json::from_value(input).map_err(|e|forge::ForgeError::bad(e.to_string()))?;
+                return forge::model_publish::run(app,project,chat,id.ok_or_else(||forge::ForgeError::bad("publication requires command ID"))?,req,authorize).await;
+            }
             if name==PULL && action=="read_guide"{
                 #[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Read{number:u64}
                 let q:Read=serde_json::from_value(input).map_err(|e|forge::ForgeError::bad(e.to_string()))?;

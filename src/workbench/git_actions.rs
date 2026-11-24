@@ -181,7 +181,7 @@ impl Operation {
             let name = branch
                 .as_deref()
                 .ok_or_else(|| Error::Refused("no branch to publish".into()))?;
-            Some(checkout.publish_target(name)?)
+            Some(checkout.repo.publish_target(name)?)
         } else {
             None
         };
@@ -191,7 +191,7 @@ impl Operation {
                 forge::PullTarget::resolve(
                     self.app.clone(),
                     project,
-                    &checkout,
+                    &checkout.repo,
                     branch.as_deref().unwrap(),
                     target,
                     input.base.as_deref(),

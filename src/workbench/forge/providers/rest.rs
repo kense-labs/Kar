@@ -298,7 +298,10 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
             base,
             title,
             body,
+            draft,
         } => {
+            if *draft && matches!(c.kind.as_str(),"bitbucket"|"forgejo"){return Err(ForgeError::unsupported("this driver does not expose draft creation"));}
+            let title=if *draft && gitlab {format!("Draft: {title}")}else{title.clone()};
             let source = head_repository
                 .as_ref()
                 .filter(|s| !s.eq_ignore_ascii_case(&c.repository));

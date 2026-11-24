@@ -298,8 +298,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
             base,
             title,
             body,
+            draft,
         } => {
-            let body = json!({"sourceRefName":format!("refs/heads/{head}"),"targetRefName":format!("refs/heads/{base}"),"title":title,"description":body});
+            let body = json!({"sourceRefName":format!("refs/heads/{head}"),"targetRefName":format!("refs/heads/{base}"),"isDraft":draft,"title":title,"description":body});
             let r = send(
                 c,
                 Method::POST,

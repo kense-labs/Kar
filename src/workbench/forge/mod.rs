@@ -7,6 +7,7 @@ pub(in crate::workbench) mod model;
 mod providers;
 pub(in crate::workbench) use providers::pull_tools::Request as PullCommand;
 mod publish;
+pub(in crate::workbench) mod model_publish;
 mod repository;
 mod review;
 pub(in crate::workbench) use publish::PullTarget;
@@ -72,6 +73,8 @@ pub(crate) enum Operation {
         base: String,
         title: String,
         body: String,
+        #[serde(default,skip_serializing_if="std::ops::Not::not")]
+        draft: bool,
     },
     SubmitReview {
         number: u64,
@@ -235,6 +238,8 @@ pub(super) struct ForgeState {
     watch_commands:BTreeMap<Uuid,watches::Command>,
     #[serde(default)]
     model_link_receipts:BTreeMap<Uuid,model::LinkReceipt>,
+    #[serde(default)]
+    model_publications:BTreeMap<Uuid,model_publish::Receipt>,
     #[serde(default)]
     activity: signals::Activity,
     #[serde(default)]

@@ -153,7 +153,7 @@ async fn execute_checked(
     let id = input.id;
     let remembered = app.update(|db| {
         authorize(db, &identity)?;
-        if db.forge.model_link_receipts.contains_key(&id) || db.forge.bindings.contains_key(&id) && !db.forge.operations.contains_key(&id) {
+        if db.forge.model_publications.contains_key(&id) || db.forge.model_link_receipts.contains_key(&id) || db.forge.bindings.contains_key(&id) && !db.forge.operations.contains_key(&id) {
             return Err(Error::Refused(
                 "operation ID already belongs to a binding".into(),
             ));
@@ -248,6 +248,7 @@ pub(in crate::workbench) async fn stacked_pull(
     let mut operation = Operation::CreatePull {
         head,
         head_repository: repository,
+        draft:false,
         base,
         title,
         body,

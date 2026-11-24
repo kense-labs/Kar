@@ -188,9 +188,11 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
             base,
             title,
             body,
+            draft,
         } => {
             parts.push("pulls");
             let mut payload = json!({"head":head,"base":base,"title":title,"body":body});
+            if *draft {payload["draft"]=json!(true);}
             if let Some(source) = head_repository
                 .as_ref()
                 .filter(|s| !s.eq_ignore_ascii_case(&c.repository))

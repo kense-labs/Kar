@@ -282,6 +282,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
             base,
             title,
             body,
+            draft,
         } => {
             let payload = if cafe {
                 let source = Context {
@@ -294,9 +295,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
                 let id = repo["id"]
                     .as_str()
                     .ok_or_else(|| invalid("head repository ID"))?;
-                json!({"repo":id,"source":head,"target":base,"description":body,"title":title})
+                json!({"repo":id,"source":head,"target":base,"description":body,"title":title,"draft":draft})
             } else {
-                json!({"head":head,"base":base,"title":title,"body":body,"draft":false})
+                json!({"head":head,"base":base,"title":title,"body":body,"draft":draft})
             };
             let reply = send(
                 c,

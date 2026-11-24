@@ -10,9 +10,9 @@ pub(crate) struct PublishTarget {
     independent: bool,
 }
 
-impl StackCheckout {
+impl Repository {
     fn config(&self, key: &str) -> Result<Option<String>> {
-        let out = command(self.repo.root())
+        let out = command(self.root())
             .args(["config", "--get", key])
             .output()?;
         match out.status.code() {
@@ -21,7 +21,7 @@ impl StackCheckout {
             _ => checked(out).map(|_| None),
         }
     }
-    pub fn publish_target(&self, branch: &str) -> Result<PublishTarget> {
+    pub(crate) fn publish_target(&self, branch: &str) -> Result<PublishTarget> {
         let branch_key = |field| format!("branch.{branch}.{field}");
         let push_remote = self
             .config(&branch_key("pushRemote"))?
@@ -36,7 +36,7 @@ impl StackCheckout {
                     || (branch.ends_with(&format!("/{b}"))
                         && format!("{r}/{b}").ends_with(&format!("/{branch}"))))
         });
-        let remotes = git(self.repo.root(), &["remote"])?;
+        let remotes = git(self.root(), &["remote"])?;
         let remotes: Vec<_> = utf8(&remotes)?.lines().collect();
         let remote = push_remote
             .as_deref()
@@ -64,7 +64,6 @@ impl StackCheckout {
         };
         let set_upstream = own.is_none()
             || self
-                .repo
                 .resolve(&format!("{branch}@{{upstream}}"))
                 .is_err();
         let independent = own.is_some_and(|(r, _)| r != &remote);
@@ -81,15 +80,15 @@ impl StackCheckout {
             independent,
         })
     }
-    pub fn comparison_branch(&self, local: &str, target: &PublishTarget) -> Result<Option<String>> {
+    pub(crate) fn comparison_branch(&self, local: &str, target: &PublishTarget) -> Result<Option<String>> {
         if let Some(reference) = self.config(&format!("branch.{local}.kar-merge-base-ref"))?
-            && self.repo.resolve(&reference).is_ok()
+            && self.resolve(&reference).is_ok()
         {
             if let Some(name) = reference.strip_prefix("refs/heads/") {
                 return Ok(Some(name.to_owned()));
             }
             if let Some(remote_ref) = reference.strip_prefix("refs/remotes/") {
-                let remotes = git(self.repo.root(), &["remote"])?;
+                let remotes = git(self.root(), &["remote"])?;
                 let found = utf8(&remotes)?
                     .lines()
                     .filter_map(|r| {
@@ -109,13 +108,13 @@ impl StackCheckout {
             .or_else(|| target.comparison.as_ref().map(|(_, b)| b.clone())))
     }
     /// A non-network push URL can serve as the local transport for a registered hosted remote.
-    pub fn publish_urls(&self, target: &PublishTarget) -> Result<(String, Vec<String>)> {
+    pub(crate) fn publish_urls(&self, target: &PublishTarget) -> Result<(String, Vec<String>)> {
         let fetch = git(
-            self.repo.root(),
+            self.root(),
             &["remote", "get-url", "--", &target.remote],
         )?;
         let push = git(
-            self.repo.root(),
+            self.root(),
             &["remote", "get-url", "--push", "--all", "--", &target.remote],
         )?;
         Ok((
@@ -123,6 +122,16 @@ impl StackCheckout {
             utf8(&push)?.lines().map(str::to_owned).collect(),
         ))
     }
+    /// Publish exactly the admitted commit without touching the active checkout or its upstream.
+    pub(crate) fn publish_commit(&self, commit:&str, branch:&str, url:&str)->Result<()> {
+        self.check_branch(branch)?;
+        if commit.len()!=40 && commit.len()!=64 || !commit.bytes().all(|c|c.is_ascii_hexdigit()){
+            return Err(Error::Refused("invalid publication commit".into()));
+        }
+        checked(command(self.root()).args(["-c","core.hooksPath=/dev/null","push","--porcelain","--",url,&format!("{commit}:refs/heads/{branch}")]).output()?).map(drop)
+    }
+}
+impl StackCheckout {
     pub fn push(&self, local: &str, target: &PublishTarget) -> Result<(&'static str, bool)> {
         if self.repo.branch()? != local {
             return Err(Error::Refused("checkout branch changed before push".into()));
@@ -131,7 +140,7 @@ impl StackCheckout {
         let status = self.repo.status()?;
         let refname = format!("refs/heads/{}", target.branch);
         if target.independent && !target.set_upstream && status.ahead == 0 && status.behind == 0 {
-            let (fetch_url, push_urls) = self.publish_urls(target)?;
+            let (fetch_url, push_urls) = self.repo.publish_urls(target)?;
             let tracking = format!("refs/remotes/{}/{}", target.remote, target.branch);
             // A cached tracking ref may predate a deletion/rewind on the fork.
             if push_urls == [fetch_url]
@@ -158,14 +167,14 @@ impl StackCheckout {
         }
         if let Some((base_remote, base)) = &target.comparison {
             let key = format!("branch.{local}.kar-merge-base");
-            if self.config(&key)?.is_none() {
+            if self.repo.config(&key)?.is_none() {
                 let reference = if base_remote == "." {
                     format!("refs/heads/{base}")
                 } else {
                     format!("refs/remotes/{base_remote}/{base}")
                 };
                 let ref_key = format!("branch.{local}.kar-merge-base-ref");
-                if self.config(&ref_key)?.is_none() {
+                if self.repo.config(&ref_key)?.is_none() {
                     git(cwd, &["config", "--local", &ref_key, &reference])?;
                 }
                 git(cwd, &["config", "--local", &key, base])?;
@@ -184,9 +193,9 @@ impl StackCheckout {
         )?;
         let unchanged = utf8(&out)?.lines().any(|s| s.starts_with("=\t"));
         let recorded = target.set_upstream
-            && self.config(&format!("branch.{local}.remote"))?.as_deref()
+            && self.repo.config(&format!("branch.{local}.remote"))?.as_deref()
                 == Some(target.remote.as_str())
-            && self.config(&format!("branch.{local}.merge"))?.as_deref() == Some(refname.as_str());
+            && self.repo.config(&format!("branch.{local}.merge"))?.as_deref() == Some(refname.as_str());
         Ok((
             if unchanged {
                 "skipped_up_to_date"
