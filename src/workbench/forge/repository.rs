@@ -34,7 +34,7 @@ fn hosted(kind: &str) -> Result<&'static str, ForgeError> {
     }
 }
 impl Lookup {
-    async fn context(&self, cwd: PathBuf) -> Result<Context, ForgeError> {
+    async fn context(&self, app: &Workbench, cwd: PathBuf) -> Result<Context, ForgeError> {
         let default_host = hosted(&self.provider)?;
         let (host, path) = if self.repository.contains("://") || self.repository.starts_with("git@")
         {
@@ -70,6 +70,7 @@ impl Lookup {
         if c.kind != self.provider {
             return Err(ForgeError::bad("provider does not match this forge host"));
         }
+        signin::attach(app, &mut c).await?;
         if let Some(t) = providers::credentials::resolve(&c).await? {
             c.token = Some(t);
         }
@@ -266,7 +267,7 @@ async fn lookup(State(app): State<Workbench>, Json(req): Json<Lookup>) -> Reply<
         .ok_or_else(|| ForgeError::bad("missing workspace root"))?
         .path
         .clone();
-    resolve(&req.context(cwd).await?).await.map(Json)
+    resolve(&req.context(&app, cwd).await?).await.map(Json)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Prepared {
@@ -299,9 +300,14 @@ pub(super) async fn prepare(app: &Workbench, req: CloneInput) -> Result<Prepared
 
     let repo = match req.lookup {
         None => None,
-        Some(request) => {
-            Some(resolve(&request.context(dest.parent().unwrap().to_owned()).await?).await?)
-        }
+        Some(request) => Some(
+            resolve(
+                &request
+                    .context(&app, dest.parent().unwrap().to_owned())
+                    .await?,
+            )
+            .await?,
+        ),
     };
     let source = repo
         .as_ref()

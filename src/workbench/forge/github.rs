@@ -55,6 +55,9 @@ pub(super) async fn request(
         }
     })?;
     let status = response.status();
+    if status.as_u16() == 401 {
+        super::signin::reject(c);
+    }
     if !status.is_success() {
         if status == StatusCode::TOO_MANY_REQUESTS
             || (status == StatusCode::FORBIDDEN

@@ -20,6 +20,7 @@ pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<Stri
         .ok_or_else(|| ForgeError::bad("forge returned no default branch"))
 }
 mod routing;
+pub(in crate::workbench) mod signin;
 pub(super) fn routes() -> axum::Router<Workbench> {
     routes::routes()
 }
@@ -133,6 +134,7 @@ pub(crate) struct Context {
     api_base: Url,
     token: Option<String>,
     client: Client,
+    signin: Option<std::sync::Weak<crate::workbench::Inner>>,
     cwd: PathBuf,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -459,7 +461,8 @@ impl Context {
         }
     }
     async fn open(app: Workbench, project: Uuid) -> Result<Self, ForgeError> {
-        tokio::task::spawn_blocking(move || {
+        let service = app.clone();
+        let mut c = tokio::task::spawn_blocking(move || {
             let repo = app.repository(project)?;
             let names = crate::workbench_git::git(repo.root(), &["remote"])?;
             let names =
@@ -482,7 +485,9 @@ impl Context {
             Self::located(host, repository, repo.root().into())
         })
         .await
-        .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))?
+        .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))??;
+        signin::attach(&service, &mut c).await?;
+        Ok(c)
     }
     fn located(host: String, repository: String, cwd: PathBuf) -> Result<Self, ForgeError> {
         let config = Config::load()?;
@@ -529,6 +534,7 @@ impl Context {
             api_base,
             token,
             client,
+            signin: None,
             cwd,
         })
     }

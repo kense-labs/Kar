@@ -70,7 +70,7 @@ async fn run(app: Workbench, project: Uuid, req: Request) -> Result<Value, Forge
         host: req.host.clone(),
         repository: req.repository.clone(),
     };
-    let c = lookup.context(cwd.clone()).await?;
+    let c = lookup.context(&app, cwd.clone()).await?;
     let id = req.id;
     let record = app.update(|db| {
         if let Some(r) = db.forge.publications.get(&id) {

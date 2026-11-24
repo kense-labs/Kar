@@ -26,6 +26,7 @@ pub(in crate::workbench::forge) async fn resolve(
             "cafe",
             vec!["auth", "http", "credential", "--host", &cafe, "get"],
         ),
+        "github" => ("gh", vec!["auth", "token", "--hostname", host]),
         "gitlab" => ("glab", vec!["auth", "token", "--hostname", host]),
         _ => return Ok(None),
     };

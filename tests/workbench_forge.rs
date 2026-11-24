@@ -463,6 +463,7 @@ fn main() {
             tokio::time::timeout(Duration::from_secs(120), async {
                 scenario().await;
                 providers::run().await;
+                signin::run().await;
                 clone_jobs::run().await;
             })
             .await
@@ -473,3 +474,6 @@ fn main() {
 
 #[path = "workbench_forge/publication.rs"]
 mod publication;
+
+#[path = "workbench_forge/signin.rs"]
+mod signin;

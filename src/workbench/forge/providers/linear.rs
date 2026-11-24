@@ -42,6 +42,7 @@ pub(in crate::workbench::forge) async fn tracker(
             .filter(|v| !v.is_empty())
             .ok_or_else(|| ForgeError::remote(401, "Linear API key is unavailable"))?;
         let context = Context {
+            signin: None,
             kind: "linear".into(),
             host: url.authority().to_owned(),
             repository: team.team,

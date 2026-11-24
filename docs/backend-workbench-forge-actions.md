@@ -53,3 +53,11 @@ PR 在主仓库中查询和创建，匹配源仓库和源分支。同名的外�
 创建返回的仓库身份和地址会记入 Kar 状态。空仓返回 `remote_added`，已有提交成功推送后返回 `pushed`。名称冲突时保留原远端，选择可用名称。auto 首选 SSH，发生认证或主机密钥拒绝时改用仓库提供的 HTTPS 地址。若推送失败，修复 Git 访问条件后可用同 UUID 重试；已确认创建的远端不会被重复创建。创建请求回执不确定时，Kar 返回 `needs_reconciliation`，仓库可用 `POST /forge/repositories/lookup` 核实。
 
 GitCafe 的创建需等待 admission；Cursor Origin 仅允许私有仓库，先创建、再修改可见性，若修改失败会报告仓库可能仍对团队可见。macOS 的 `cargo test --locked --test workbench_forge` 覆盖八种驱动的 HTTP 请求、空仓、独立本地 Git 裸仓、失去创建回执，以及远端创建完成后重启续推。上述场景已编译，统一验收和实际托管发布另行记录。
+
+## GitHub App 登录
+
+Kar 使用主机配置的 `KAR_GITHUB_APP_CLIENT_ID` 启动自己的 GitHub App 设备码流程。四个 POST 入口为 `/forge/sign-in/start`、`/forge/sign-in/wait`、`/forge/sign-in/cancel` 和 `/forge/app-access`。输入包含 `provider: github` 和 `host: github.com`，安装范围查询另加 `repository`。启动返回用户码、验证链接和毫秒过期时间。等待返回 GitHub 登录账号，或明确的 not-started、cancelled、denied、expired、failed、unsupported 错误。
+
+Kar 将已授权的应用会话保存在工作台私有状态目录下的用户专用文件，绑定应用客户端与 API 地址。未完成的设备码轮询随进程结束；已授权的会话可重启读取。即将到期或被 GitHub 拒绝的令牌由主机串行刷新。环境凭据优先；独立的安装范围查询始终使用应用令牌。上游在安装查询暂时失败时对 UI 返回 covered，Kar 保留这一显示行为，实际调用仍由 GitHub 核验。
+
+`cargo test --locked --test workbench_forge` 的本地设备协议场景覆盖取消、拒绝、过期、pending、slow_down、授权账号、安装范围、重启使用、401 后刷新。已做 macOS 编译检查，尚待统一实跑。实际授权需要启用设备流程的 Kar GitHub App 和交互式用户批准。

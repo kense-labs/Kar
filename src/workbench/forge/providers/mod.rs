@@ -91,6 +91,9 @@ async fn send_with_headers(
         .await
         .map_err(|_| classify("forge did not return a response"))?;
     let status = res.status();
+    if status.as_u16() == 401 {
+        super::signin::reject(c);
+    }
     if !status.is_success() {
         if c.kind == "github"
             && status.as_u16() == 403

@@ -504,6 +504,7 @@ async fn issue_tracker(State(app): State<Workbench>, Path(project): Path<Uuid>) 
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .merge(routing::routes())
+        .merge(signin::routes())
         .merge(repository::routes())
         .merge(clone_jobs::routes())
         .merge(providers::issue_directory::routes())
