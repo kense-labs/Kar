@@ -1941,12 +1941,29 @@ impl Log {
                     && r.native.get("input").is_some()))
         {
             self.dispatched = true;
-            if r.events
-                .iter()
-                .any(|e| matches!(e, Event::PromptDispatched))
+            if self.state.info.protocol != Protocol::Codex
+                && r.events
+                    .iter()
+                    .any(|e| matches!(e, Event::PromptDispatched))
             {
                 self.input_sent(id)?;
             }
+        }
+        if self.state.info.protocol == Protocol::Codex
+            && r.kind == RecordKind::Frame
+            && r.direction == Direction::FromRuntime
+            && r.frame_type() == Some("turn/start")
+            && r.prompt.as_ref().is_some_and(|p| {
+                p.input_id == id.to_string()
+                    && p.request_id.is_some()
+                    && p.request_id == r.response_to
+            })
+            && r.native
+                .pointer("/result/turn/id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|turn| !turn.is_empty())
+        {
+            self.input_sent(id)?;
         }
         if !self.dispatched {
             return Ok(());

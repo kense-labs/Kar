@@ -330,6 +330,7 @@ fn durable_inputs() {
         );
         std::thread::sleep(Duration::from_millis(15));
     }
+    assert_eq!(run(&["queue", "--chat", chat])[0]["status"], "sending");
     let skip = Uuid::new_v4().to_string();
     args("withdraw this", &skip);
     assert_eq!(
@@ -382,24 +383,20 @@ fn durable_inputs() {
     host.kill().unwrap();
     host.wait().unwrap();
     let saved = run(&["queue", "--chat", chat]);
-    assert_eq!(saved[0]["status"], "sent");
-    // Recreate the other possible crash boundary: the provider consumed this exact prompt,
-    // but the WAL ends at Begin plus a torn receipt. It never returned a native turn ID.
+    assert_eq!(saved[0]["status"], "uncertain");
+    // The provider read the packet but gave no admission receipt. An incomplete WAL
+    // tail cannot promote this attempt to sent or cause it to be dispatched again.
     let journal = base.join("store").join(format!("{chat}.karchat"));
     let data = fs::read_to_string(&journal).unwrap();
-    let receipt = data
-        .split_inclusive('\n')
-        .find(|row| {
-            let row: Value = serde_json::from_str(row).unwrap();
-            row["kind"] == "input_sent" && row["id"] == held
-        })
-        .unwrap();
-    let receipt_offset = data.find(receipt).unwrap();
+    assert!(!data.lines().any(|line| {
+        let row: Value = serde_json::from_str(line).unwrap();
+        row["kind"] == "input_sent" && row["id"] == held
+    }));
     fs::OpenOptions::new()
-        .write(true)
+        .append(true)
         .open(&journal)
         .unwrap()
-        .set_len((receipt_offset + 4) as u64)
+        .write_all(br#"{"kind":"input_s"#)
         .unwrap();
     assert_eq!(run(&["queue", "--chat", chat])[0]["status"], "uncertain");
     assert_eq!(args("hold without reply", &held)["status"], "uncertain");

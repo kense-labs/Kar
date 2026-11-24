@@ -1046,7 +1046,17 @@ async fn controls(p: Protocol) -> kar::Result<()> {
         assert!(queued.wait().await.is_err());
     }
     assert!(!session.await_idle().await?.status.is_running());
-    assert!(session.prompt("refuse").await?.wait().await.is_err());
+    if p == Protocol::Codex {
+        let denied = session.submit_prompt(None, "refuse", vec![]).await?;
+        let kar::PromptDecision::Rejected { receipt, .. } = denied else {
+            panic!("Codex refused the native admission")
+        };
+        assert_eq!(receipt.response.native["type"], "rejected");
+        assert_eq!(receipt.response.native["native"]["code"], -32602);
+        assert!(!session.status().is_running());
+    } else {
+        assert!(session.prompt("refuse").await?.wait().await.is_err());
+    }
     session.close().await
 }
 async fn failures() -> kar::Result<()> {

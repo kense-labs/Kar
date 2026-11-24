@@ -1,3 +1,4 @@
+mod codex_admission;
 mod codex_processes;
 mod codex_queue;
 mod interrupt_timeout;
@@ -290,6 +291,7 @@ struct Pending {
     reply: Option<Reply<Value>>,
     prompt_ack: Option<Reply<()>>,
     prompt_request: Option<uuid::Uuid>,
+    codex_prompt_input: Option<uuid::Uuid>,
     control_request: Option<uuid::Uuid>,
     starts_turn: bool,
     steer: Option<SteeringReceipt>,
@@ -745,9 +747,14 @@ impl Actor {
                 },
                 reply,
                 prompt_ack: None,
+                codex_prompt_input: (starts_turn && self.protocol == Protocol::Codex)
+                    .then(|| self.turn.as_ref()?.chat_input)
+                    .flatten(),
                 prompt_request: if starts_turn
-                    && matches!(self.protocol, Protocol::Pi | Protocol::Factory)
-                {
+                    && matches!(
+                        self.protocol,
+                        Protocol::Pi | Protocol::Factory | Protocol::Codex
+                    ) {
                     self.turn.as_ref().map(|t| t.prompt_request)
                 } else {
                     None
@@ -892,7 +899,7 @@ impl Actor {
                 .await?;
             }
             Protocol::Codex => {
-                let mut args = json!({"threadId":id,"input":prompt.blocks(self.protocol)});
+                let mut args = json!({"threadId":id,"input":prompt.blocks(self.protocol),"clientUserMessageId":input_id});
                 if let Some(schema) = &self.output_schema {
                     args["outputSchema"] = Value::Object(schema.clone());
                 }
@@ -927,7 +934,10 @@ impl Actor {
                     .await?
             }
         }
-        if !matches!(self.protocol, Protocol::Pi | Protocol::Factory) {
+        if !matches!(
+            self.protocol,
+            Protocol::Pi | Protocol::Factory | Protocol::Codex
+        ) {
             self.journal.control_decision(request, None);
         }
         Ok(())
@@ -1143,7 +1153,10 @@ impl Actor {
                 if let Some(turn) = &mut self.turn {
                     turn.process_baseline = baseline;
                 }
-                if matches!(self.protocol, Protocol::Pi | Protocol::Factory) {
+                if matches!(
+                    self.protocol,
+                    Protocol::Pi | Protocol::Factory | Protocol::Codex
+                ) {
                     self.pending
                         .get_mut(&self.next)
                         .expect("native prompt admission is pending")
@@ -2242,6 +2255,9 @@ impl Actor {
         let mut reply = None;
         let mut prompt_ack = None;
         let mut prompt_decision = None;
+        let mut codex_prompt_decision = None;
+        let mut codex_request = None;
+        let mut invalid_codex_admission = false;
         let mut queue_reply = None;
         let native_method = response.as_ref().map(|p| p.method.clone());
         if let Some(p) = response {
@@ -2352,7 +2368,36 @@ impl Actor {
                     _ => {}
                 }
             }
-            if let Some(request) = p.prompt_request {
+            if let (Some(request), Some(input)) = (p.prompt_request, p.codex_prompt_input) {
+                codex_request = Some(request);
+                received = received.with_prompt_request(input, false, request, None);
+                if let Some(native) = v.get("error") {
+                    let mut decision = codex_admission::refusal(native);
+                    redact(&mut decision, &self.secrets);
+                    result = Err(Error::Refused(
+                        decision["reason"].as_str().unwrap().to_owned(),
+                    ));
+                    events.push(Event::NativeInput {
+                        input_id: input,
+                        receipt: crate::InputReceipt::Refused,
+                    });
+                    codex_prompt_decision = Some((request, decision));
+                } else if let Some(native) = v.get("result").filter(|value| {
+                    value
+                        .pointer("/turn/id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| !id.is_empty())
+                }) {
+                    codex_prompt_decision =
+                        Some((request, json!({"type":"accepted","native":native})));
+                } else {
+                    // No evidence identifies the native turn. An uncertain write is not a native refusal.
+                    result = Err(Error::Protocol(
+                        "Codex turn/start returned no turn id".into(),
+                    ));
+                    invalid_codex_admission = true;
+                }
+            } else if let Some(request) = p.prompt_request {
                 let refusal = result.as_ref().err().map(|error| {
                     let mut reason = v["error"]
                         .as_str()
@@ -2401,10 +2446,11 @@ impl Actor {
             if let Some(tx) = p.prompt_ack {
                 prompt_ack = Some((
                     tx,
-                    result
-                        .as_ref()
-                        .map(|_| ())
-                        .map_err(|e| Error::Refused(e.to_string())),
+                    result.as_ref().map(|_| ()).map_err(|e| match e {
+                        Error::Protocol(reason) => Error::Protocol(reason.clone()),
+                        Error::Refused(reason) => Error::Refused(reason.clone()),
+                        e => Error::Refused(e.to_string()),
+                    }),
                 ));
             }
             if p.method == GROK_COMPACT {
@@ -2523,7 +2569,8 @@ impl Actor {
                     outcome_error = end.publish(&mut events);
                 }
             } else if p.starts_turn
-                && !(self.protocol == Protocol::Pi && p.prompt_request.is_some())
+                && !((self.protocol == Protocol::Pi || self.protocol == Protocol::Codex)
+                    && p.prompt_request.is_some())
                 && let Err(e) = &result
             {
                 outcome_error = Some(Error::Refused(e.to_string()));
@@ -2578,6 +2625,11 @@ impl Actor {
             && self.codex_queue.active(reported_turn).is_some();
         let mut current_turn = is_root
             && !queued_turn
+            && codex_request.is_none_or(|request| {
+                self.turn
+                    .as_ref()
+                    .is_some_and(|t| t.prompt_request == request)
+            })
             && independent.is_none()
             && (self.protocol != Protocol::Codex
                 || self
@@ -2847,6 +2899,9 @@ impl Actor {
             self.codex_queue
                 .reply(&self.journal, id, result, &self.secrets);
         }
+        if let Some((request, decision)) = codex_prompt_decision {
+            codex_admission::publish(&self.journal, request, decision, &self.secrets);
+        }
         if let Some((request, refusal)) = prompt_decision {
             self.journal.control_decision(
                 request,
@@ -2919,6 +2974,11 @@ impl Actor {
         }
         if let Some((tx, result)) = prompt_ack {
             let _ = tx.send(result);
+        }
+        if invalid_codex_admission {
+            return Err(Error::Protocol(
+                "Codex turn/start returned no turn id".into(),
+            ));
         }
         if let Some((tx, result, request)) = reply {
             if let Some(request) = request {
@@ -3399,7 +3459,7 @@ impl Actor {
             .fold(reason, |msg, key| msg.replace(key, "[redacted]"));
         let closed = Error::Closed(reason.clone());
         for p in self.pending.values() {
-            if p.method == codex_queue::ADD {
+            if p.method == codex_queue::ADD || p.codex_prompt_input.is_some() {
                 continue;
             }
             if let Some(request) = p
