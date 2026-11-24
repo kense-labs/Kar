@@ -14,6 +14,7 @@ mod project_lifecycle;
 mod search;
 mod task_folders;
 mod terminal_preview;
+mod thread_find;
 pub mod workflows;
 pub use search::{Hit, SearchKind};
 

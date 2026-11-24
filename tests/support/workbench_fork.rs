@@ -109,6 +109,42 @@ async fn scenario() {
     assert_eq!(fs::read(target.join("shared")).unwrap(), b"shared-next");
     server.kill().await.unwrap();
     let (mut next, url) = serve(&state, &allowed, &native).await;
+    let child_find = format!("{url}{child_path}/find");
+    let find = ok(b.post(&child_find).json(&json!({"query":"ha","index":1}))).await;
+    // Two distinct native replies have identical text. Both remain searchable after a fork.
+    assert!(find["total_matches"].as_u64().unwrap() >= 4);
+    let occurrence = &find["match"];
+    let detail = ok(b.get(format!(
+        "{url}{child_path}/items/{}",
+        occurrence["entry_id"].as_str().unwrap()
+    )))
+    .await;
+    assert_eq!(detail["item"]["turn"], occurrence["turn"]);
+    let next = ok(b
+        .post(&child_find)
+        .json(&json!({"query":"HA","start":occurrence,"offset":1})))
+    .await;
+    assert_eq!(next["active_index"], 2);
+    let raw = b
+        .post(format!("{child_find}/events"))
+        .json(&json!({"query":"ha"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let frames: Vec<Value> = raw
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|text| serde_json::from_str(text).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["complete"], false);
+    assert_eq!(frames[0]["cursor"], frames[1]["cursor"]);
+    assert_eq!(frames[1]["total_matches"], find["total_matches"]);
     let root_diff = format!("{url}{parent_path}/checkpoints/diff");
     let full = ok(b.get(format!("{root_diff}?to=3"))).await;
     assert!(full["diff"].as_str().unwrap().contains("+shared-next"));
