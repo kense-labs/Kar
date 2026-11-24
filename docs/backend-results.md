@@ -151,6 +151,19 @@ macOS 同一公共用例通过 Pi 1.6.0、Claude 2.1.330、Qwen 0.28.4、Factory
 
 macOS 的格式检查、全目标 Clippy 和默认 Rust 测试套件通过。Ubuntu 的原生 `protocol` 和 `cybion` 回归通过。Linux x86_64 和 Windows x86_64 的 release 检查通过编译。打开会话时的执行位置声明及前两条记录、普通输入接纳回执的完整关联仍待核销。
 
+## 普通输入、繁忙拒绝与 Pi 原生回执
+
+提交 `875c707` 给每次普通输入尝试分配请求 ID。慢回合期间重复两次同一输入 UUID，两个拒绝回执各自对应一个请求，原回合继续运行。macOS 与 Ubuntu 上的 Pi、Qwen 和 Factory 均完成原回合、回到空闲并成功接受下一条输入。两端的 Pi、Factory、Claude 和 DSH Web 还验证了已空闲时调用 `steer` 返回拒绝。测试使用真实供应商进程与本地模型服务。
+
+| 操作 | 结果及复验 |
+| --- | --- |
+| Pi 扩展处理输入 | 使用发行包自带的 `examples/extensions/input-transform.ts`，设置 `KAR_PI_BIN` 和 `KAR_PI_INPUT_EXTENSION`。连续发送两次 `ping`，模型收到零个请求，两个等待都凭各自的 handled 回执结束，没有模型开始或结束事件。随后发送普通输入可正常结束。 |
+| Pi 重启后首条遭拒、后续输入由扩展接收 | 建立有原生历史的会话后关闭。移除隔离的测试模型凭据，依次排队普通输入和 `ping`，再打开原工作区与会话。第一条保留缺少凭据的原文与 refused 状态，第二条为 handled。恢复测试凭据，再次入队原来的两个 UUID 并重启，模型调用次数保持不变。新 UUID 可以继续聊。 |
+| Pi 强杀与双客户端续收 | macOS arm64 的 1.6.0、Ubuntu arm64 的 1.4.0 和 1.6.0 分别运行 `cargo test --locked --test native_live pi_history:: -- --ignored --nocapture`，每组 9 项通过。强杀后两端均逐条核对了全部 53 条持久事件，模型观察到三个队列输入各一次且顺序一致。 |
+| 浏览器 | macOS Chromium、Pi Durable 1.6.0 和 Rust Wasm 验证重复输入复用原生回执，每次尝试可独立关联。构建 Wasm 后执行 `node tests/browser/live.mjs`，会话探针输出 29 条记录，整个测试中模型共被调用 8 次。 |
+
+Pi 上游 handled 系列还包含预先取消的调用者、扩展独立启动模型及压缩与排队竞争等断言，本表所列测试仅覆盖相应输入和重启路径。公共用例的完整打开记录和执行位置也仍待核销。每项对应的版本、命令与限制见 `backend-evidence.tsv`。
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。

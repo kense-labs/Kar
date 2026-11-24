@@ -302,7 +302,7 @@ kar chat resume --chat "$CHAT_ID"
 
 同一聊天中，使用相同请求 UUID 和文本重试会返回已有回执。多个进程同时入队时，队列以持久写入的先后为准。`kar chat withdraw <请求UUID> --chat "$CHAT_ID"` 可以撤回待发消息。分叉聊天有独立队列。
 
-`queue` 显示每条输入的投递状态。`pending` 等待投递，`sending` 表示已开始尝试，`sent` 表示传输层已写出或原生会话已确认，`withdrawn` 表示已撤回。如果进程在记录发送尝试之后、取得发送凭据之前退出，该条显示为 `uncertain`。恢复时会跳过这条并继续处理后续待发消息，避免重复触发工具或文件修改。模型回复和回合终态可用同一个 UUID 在 `history` 中查看。
+`queue` 显示每条输入的投递状态。`pending` 等待投递，`sending` 表示已开始尝试，`sent` 表示传输层已写出或原生会话已确认，`refused` 表示原生会话明确拒收，`withdrawn` 表示已撤回。Pi 明确拒收一条输入后，队列继续投递下一条。重启后再次提交同一队列 UUID 可取回该状态。如果进程在记录发送尝试之后、取得发送凭据之前退出，该条显示为 `uncertain`。恢复时会跳过这条并继续处理后续待发消息，避免重复触发工具或文件修改。模型回复和回合终态可用同一个 UUID 在 `history` 中查看。
 
 Claude 持久化聊天把这个 UUID 一起发给原生进程。重启时，Rust 控制器在原工作区和会话里核对 UUID 与消息正文，找到唯一匹配的原生输入后将投递状态补为 `sent`。客户端从聊天事件流收到这次状态更新。若丢失的是模型回复的结束事件，回合仍显示为 `interrupted`。历史输入缺少匹配 UUID 时保留 `uncertain`。
 
@@ -377,7 +377,7 @@ async fn main() -> kar::Result<()> {
 }
 ```
 
-Rust 宿主可以用 `session.prompt_with_id(uuid, text)` 或 `prompt_images_with_id` 指定普通输入的 UUID。`prompt` 自动生成 UUID，返回的 `Turn::input_id()` 和发往供应商的请求记录 `Record::prompt` 可用于核对同一输入。Pi RPC 记录原生输入接纳方式。浏览器 Pi Durable 保留宿主传入的字符串请求 ID。`model_readback()`、`usage_readback()` 和 `context_usage_readback()` 从同一份状态快照返回该查询的值和已消费的最后一个 `seq`。空记录流的序号为 `None`。
+Rust 宿主可以用 `session.prompt_with_id(uuid, text)` 或 `prompt_images_with_id` 指定普通输入的 UUID。`prompt` 自动生成 UUID，返回的 `Turn::input_id()` 和发往供应商的请求记录 `Record::prompt` 可用于核对同一输入。`Record::prompt.request_id` 标识单次普通输入请求，对应宿主回执的 `requestId`。用同一输入 UUID 再试时，每次尝试都有独立的请求 ID。旧日志可能没有这个字段。Pi RPC 等待原生程序答复是否接纳。扩展处理了输入时，`turn.report().await?.native_input_receipt` 返回 `Some(InputReceipt::Handled)`，即使没有模型回合也会结束等待。浏览器 Pi Durable 保留宿主传入的字符串请求 ID。`model_readback()`、`usage_readback()` 和 `context_usage_readback()` 从同一份状态快照返回该查询的值和已消费的最后一个 `seq`。空记录流的序号为 `None`。
 
 UI 可以同时通过 `session.subscribe(None)` 读取历史和后续记录。传入上一条记录的 `cursor()` 时，从下一条继续。子进程退出后订阅会结束，等待中的调用会返回错误。适配器重新打开原生会话时会分配新的 `stream_id`，序号从零开始。持久化时请保留两个字段。`observe::SessionView` 可以把实时或保存的记录还原为按 agent 分组的消息、工具状态和用量视图。
 
