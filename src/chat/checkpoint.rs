@@ -209,6 +209,18 @@ impl ChatStore {
             let stage: PathBuf = serde_json::from_reader(File::open(&marker)?)?;
             if !stage.try_exists()? {
                 fs::remove_file(&marker)?;
+            } else if Some(stage.as_path()) != recovering && stage.extension().and_then(|s| s.to_str()) == Some("karrewind") {
+                if super::rewind::completed_reservation(&stage)? {
+                    // Other repository leases can refer to the same completed operation.
+                    match fs::remove_file(&stage) {
+                        Ok(()) => {},
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                        Err(e) => return Err(e.into()),
+                    }
+                    fs::remove_file(&marker)?;
+                } else {
+                    return Err(Error::Refused(format!("workspace rewind is pending: {}", stage.display())));
+                }
             } else if Some(stage.as_path()) != recovering {
                 let info = super::log::staged_info(File::open(&stage)?)?;
                 let origin = info.forked_from.ok_or_else(|| err("missing fork origin"))?;
@@ -476,6 +488,14 @@ impl WorkspaceLease {
     pub fn finish_fork(&self) {
         // Publication already committed. An interrupted cleanup is retried by the next lease.
         let _ = fs::remove_file(&self.marker);
+    }
+    pub(super) fn reserve_rewind(&self, stage: &Path) -> Result<()> {
+        if self.marker.try_exists()? {
+            let current: PathBuf = serde_json::from_reader(File::open(&self.marker)?)?;
+            if current == stage { return Ok(()); }
+            return Err(Error::Busy);
+        }
+        self.reserve_fork(stage)
     }
     pub fn reserve_fork(&self, stage: &Path) -> Result<()> {
         let dir = self.marker.parent().expect("workspace lock directory");

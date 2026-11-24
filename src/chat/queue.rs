@@ -237,7 +237,7 @@ impl ChatStore {
     ) -> Result<()> {
         let _lock = self.inbox_lock(log.state.info.id)?;
         let inbox = self.read_inbox(&log.state.info)?;
-        let rewinding = matches!(&update, super::ChatUpdate::ContextRewound { .. });
+        let rewinding = matches!(&update, super::ChatUpdate::ContextRewound { .. } | super::ChatUpdate::RewindPrepared { .. });
         if inbox.entries.iter().any(|e| match e.status(&log.state) {
             InputStatus::Pending | InputStatus::Sending => true,
             InputStatus::Uncertain => rewinding,
@@ -245,7 +245,12 @@ impl ChatStore {
         }) {
             return Err(Error::Busy);
         }
-        if let super::ChatUpdate::ContextRewound { rewind, .. } = &mut update {
+        let rewind = match &mut update {
+            super::ChatUpdate::ContextRewound { rewind, .. } => Some(rewind.as_mut()),
+            super::ChatUpdate::RewindPrepared { pending } => Some(&mut pending.receipt),
+            _ => None,
+        };
+        if let Some(rewind) = rewind {
             for entry in &inbox.entries {
                 if rewind.removed_inputs.contains(&entry.id) {
                     rewind
@@ -283,6 +288,9 @@ impl ChatStore {
         let file = File::open(self.path(chat))?;
         let _lock = self.inbox_lock(chat)?;
         let state = self.read_state(file, chat)?;
+        if state.pending_rewind.is_some() {
+            return Err(Error::Busy);
+        }
         let turn = state.find(id);
         let mut inbox = self.read_inbox(&state.info)?;
         let receipt = if let Some((text, attachments)) = text {

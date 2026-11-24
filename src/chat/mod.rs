@@ -10,7 +10,7 @@ pub(crate) mod checkpoint;
 pub(crate) mod feed;
 mod handoff;
 mod rewind;
-pub use rewind::{ContextRewind, RewindRequest};
+pub use rewind::{ContextRewind, PreparedRewind, RewindRequest};
 mod workspace_handoff;
 mod http_feed;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
@@ -192,6 +192,8 @@ pub struct ChatNotification {
 pub struct ChatHistory {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rewinds: Vec<ContextRewind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_rewind: Option<PreparedRewind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handoffs: Vec<Handoff>,
     pub chat: ChatInfo,
@@ -469,6 +471,7 @@ impl ChatStore {
     fn history_from_state(&self, id: Uuid, state: log::State) -> Result<ChatHistory> {
         Ok(ChatHistory {
             rewinds: state.rewinds.clone(),
+            pending_rewind: state.pending_rewind.clone(),
             cursor: state.cursor(),
             workspace_position: state.position,
             pending_rollback: state.restoring,
@@ -739,6 +742,7 @@ impl ChatSession {
         log.healthy()?;
         Ok(ChatHistory {
             rewinds: log.state.rewinds.clone(),
+            pending_rewind: log.state.pending_rewind.clone(),
             handoffs: log.state.handoffs.clone(),
             chat: self.sender.info.clone(),
             workspace_position: log.state.position,

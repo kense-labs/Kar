@@ -1,5 +1,8 @@
 //! Rewind the conversation under its existing Kar chat ID. Checkpoint position belongs
 //! to the working files and can therefore point to an archived turn after this operation.
+mod workspace;
+pub(in crate::chat) use workspace::completed_reservation;
+
 use super::{
     ChatStore, ChatTurn, ChatUpdate, ForkMode, ForkPolicy, Handoff, HandoffStatus, InputStatus,
     ProviderSession, TurnStatus, fork, log::State,
@@ -20,6 +23,8 @@ pub struct RewindRequest {
     pub expected_head: Option<Uuid>,
     #[serde(default)]
     pub policy: ForkPolicy,
+    #[serde(default)]
+    pub restore_files: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -28,8 +33,12 @@ pub struct ContextRewind {
     pub chat: Uuid,
     pub turn: Uuid,
     pub previous_head: Uuid,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<super::FileChange>,
     pub expected_head: Option<Uuid>,
     pub policy: ForkPolicy,
+    #[serde(default)]
+    pub restore_files: bool,
     /// None when the selected turn already was the head.
     pub mode: Option<ForkMode>,
     pub native_id: String,
@@ -43,11 +52,18 @@ pub struct ContextRewind {
     pub retired_handoffs: Vec<Uuid>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PreparedRewind {
+    pub receipt: ContextRewind,
+    pub binding: Option<Box<Handoff>>,
+}
+
 impl ContextRewind {
     pub(crate) fn check(&self, request: &RewindRequest) -> Result<()> {
         if self.turn == request.turn
             && self.expected_head == request.expected_head
             && self.policy == request.policy
+            && self.restore_files == request.restore_files
         {
             Ok(())
         } else {
@@ -128,6 +144,17 @@ impl State {
             self.goal = None;
             self.context_usage = None;
         }
+        if receipt.restore_files {
+            let Some(pending) = &self.pending_rewind else {
+                return Err(Error::Protocol("missing prepared workspace rewind".into()));
+            };
+            if pending.receipt.id != receipt.id || pending.receipt.turn != receipt.turn {
+                return Err(Error::Protocol("workspace rewind identity changed".into()));
+            }
+            self.position = Some(super::CheckpointPoint { turn: receipt.turn, before: false });
+            self.restoring = None;
+            self.pending_rewind = None;
+        }
         self.rewinds.push(receipt);
         Ok(())
     }
@@ -149,6 +176,13 @@ impl ChatStore {
         if let Some(previous) = state.rewinds.iter().find(|r| r.id == request.id) {
             previous.check(&request)?;
             return Ok(previous.clone());
+        }
+        if let Some(pending) = state.pending_rewind.clone() {
+            if pending.receipt.id != request.id {
+                return Err(Error::Refused(format!("retry workspace rewind {}", pending.receipt.id)));
+            }
+            pending.receipt.check(&request)?;
+            return self.finish_workspace_rewind(&mut log, pending);
         }
         self.require_no_pending_fork(chat)?;
         if state.needs_controller()
@@ -210,7 +244,9 @@ impl ChatStore {
             turn: request.turn,
             expected_head: request.expected_head,
             previous_head: head,
+            files: Vec::new(),
             policy: request.policy,
+            restore_files: request.restore_files,
             mode: None,
             native_id: state.info.native_id.clone(),
             omitted_items: 0,
@@ -220,6 +256,10 @@ impl ChatStore {
             retired_handoffs: Vec::new(),
         };
         let _checkout = state.info.pin_worktree()?;
+        if request.restore_files {
+            self.preflight_workspace_rewind(&mut log, request.turn)?;
+        }
+        let state = &log.state;
         let mut opened = None;
         let binding = if receipt.removed_turns.is_empty() {
             None
@@ -285,19 +325,21 @@ impl ChatStore {
             opened = Some(session);
             Some(Box::new(h))
         };
-        let outcome = self.commit_idle_transition(
-            &mut log,
-            ChatUpdate::ContextRewound {
-                rewind: Box::new(receipt),
-                binding,
-            },
-        );
+        let update = if request.restore_files {
+            ChatUpdate::RewindPrepared { pending: Box::new(PreparedRewind { receipt, binding }) }
+        } else {
+            ChatUpdate::ContextRewound { rewind: Box::new(receipt), binding }
+        };
+        let outcome = self.commit_idle_transition(&mut log, update);
         // A lost connection while closing this disposable process cannot undo the durable decision.
         // The next owner resumes the recorded target with fresh workbench credentials.
         if let Some(session) = opened {
             let _ = session.close().await;
         }
         outcome?;
+        if let Some(pending) = log.state.pending_rewind.clone() {
+            return self.finish_workspace_rewind(&mut log, pending);
+        }
         Ok(log.state.rewinds.last().unwrap().clone())
     }
 }

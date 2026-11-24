@@ -146,6 +146,9 @@ enum Action {
         id: Option<Uuid>,
         #[arg(long)]
         expected_head: Option<Uuid>,
+        /// Restore the selected checkpoint as part of the rewind.
+        #[arg(long)]
+        restore_files: bool,
         #[arg(long)]
         native: bool,
     },
@@ -548,6 +551,7 @@ impl Chat {
                 chat,
                 id,
                 expected_head,
+                restore_files,
                 native,
             } => {
                 let receipt = store
@@ -557,6 +561,7 @@ impl Chat {
                             id: id.unwrap_or_else(Uuid::new_v4),
                             turn,
                             expected_head,
+                            restore_files,
                             policy: if native {
                                 kar::chat::ForkPolicy::Native
                             } else {

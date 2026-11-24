@@ -27,6 +27,7 @@ struct Header {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChatUpdate {
+    RewindPrepared { pending: Box<super::PreparedRewind> },
     ContextRewound {
         rewind: Box<super::ContextRewind>,
         binding: Option<Box<super::Handoff>>,
@@ -185,6 +186,7 @@ pub enum ChatUpdate {
 }
 pub(super) struct State {
     pub rewinds: Vec<super::ContextRewind>,
+    pub pending_rewind: Option<super::PreparedRewind>,
     pub(super) archived_turns: HashMap<Uuid, ChatTurn>,
     pub(super) inherited_len: usize,
     pub handoffs: Vec<super::Handoff>,
@@ -220,6 +222,7 @@ impl State {
     fn new(info: ChatInfo) -> Self {
         Self {
             rewinds: Vec::new(),
+            pending_rewind: None,
             archived_turns: HashMap::new(),
             inherited_len: 0,
             handoffs: Vec::new(),
@@ -256,6 +259,7 @@ impl State {
             .collect();
         Self {
             rewinds: history.rewinds,
+            pending_rewind: history.pending_rewind,
             archived_turns: HashMap::new(),
             inherited_len: 0,
             handoffs: history.handoffs,
@@ -479,6 +483,16 @@ impl State {
     }
     pub(super) fn apply(&mut self, row: ChatUpdate) -> Result<()> {
         match row {
+            ChatUpdate::RewindPrepared { pending } => {
+                if self.restoring.is_some() || !pending.receipt.restore_files
+                    || pending.receipt.chat != self.info.id
+                    || self.turns.last().map(|t| t.id) != Some(pending.receipt.previous_head)
+                {
+                    return Err(Error::Protocol("invalid prepared workspace rewind".into()));
+                }
+                self.restoring = Some(CheckpointPoint { turn: pending.receipt.turn, before: false });
+                self.pending_rewind = Some(*pending);
+            }
             ChatUpdate::ContextRewound { rewind, binding } => {
                 self.apply_rewind(*rewind, binding.map(|h| *h))?;
                 self.ids.retain(|_, index| *index < self.turns.len());

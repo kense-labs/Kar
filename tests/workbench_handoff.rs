@@ -390,6 +390,55 @@ async fn protocol() {
     workflow_stop(&mut f).await;
     f.stop().await;
 }
+async fn combined_rewind() {
+    let mut f = Fixture::new(false).await;
+    f.chat = Uuid::new_v4();
+    body(f.client.post(format!("{}/projects/{}/chats", f.base, f.project))
+        .json(&json!({"id":f.chat,"runtime":"qwen"}))).await;
+    f.send(Uuid::new_v4(), "portable-write-first").await;
+    let cut = Uuid::new_v4();
+    let head = Uuid::new_v4();
+    f.send(cut,"portable-write-second").await;
+    f.send(head,"portable-write-future").await;
+    let request = json!({"id":Uuid::new_v4(),"turn":cut,"expected_head":head,"restore_files":true});
+    let file = f.workspace.join("portable-state");
+    fs::write(&file,"local edit").unwrap();
+    assert!(!f.post("rewinds",&request).send().await.unwrap().status().is_success());
+    assert_eq!(fs::read_to_string(&file).unwrap(),"local edit");
+    let history = f.history().await;
+    assert!(history["pending_rewind"].is_null());
+    assert_eq!(history["turns"].as_array().unwrap().len(),3);
+    fs::write(&file,"portable-write-future").unwrap();
+    let receipt = body(f.post("rewinds",&request)).await;
+    assert_eq!(receipt["chat"], f.chat.to_string());
+    assert_eq!(receipt["restore_files"], true);
+    assert!(receipt["files"].as_array().unwrap().iter().any(|item| item["path"] == "portable-state"));
+    assert_eq!(fs::read_to_string(&file).unwrap(), "portable-write-second");
+
+    // Replay a durable prepared decision with one file left to restore. The provider
+    // binding in the completed receipt must survive this simulated crash boundary.
+    f.stop().await;
+    let journal = f.dir.join("state").join(format!("{}.karchat",f.chat));
+    let mut prefix = Vec::new();
+    for row in fs::read(&journal).unwrap().split_inclusive(|b| *b == b'\n') {
+        prefix.extend_from_slice(row);
+        if serde_json::from_slice::<Value>(row).unwrap()["kind"] == "rewind_prepared" { break; }
+    }
+    assert!(prefix.len() < fs::metadata(&journal).unwrap().len() as usize);
+    fs::write(&journal, prefix).unwrap();
+    fs::write(&file,"portable-write-future").unwrap();
+    f.start().await;
+    let recovered = body(f.post("rewinds",&request)).await;
+    assert_eq!(recovered,receipt);
+    assert_eq!(fs::read_to_string(&file).unwrap(), "portable-write-second");
+    assert_eq!(f.history().await["workspace_position"]["turn"], cut.to_string());
+    f.send(Uuid::new_v4(),"continue after combined rewind").await;
+    let calls = f.calls();
+    let prompt = calls.last().unwrap()["text"].as_str().unwrap();
+    assert!(prompt.contains("portable-write-second") && !prompt.contains("portable-write-future"));
+    assert_eq!(body(f.post("rewinds",&request)).await,receipt);
+    f.stop().await;
+}
 async fn same_chat_rewind() {
     let mut f = Fixture::new(false).await;
     f.chat = Uuid::new_v4();
@@ -708,12 +757,14 @@ fn main() {
             async {
                 if std::env::args().nth(1).as_deref() == Some("rewind") {
                     same_chat_rewind().await;
+                    combined_rewind().await;
                 } else if live_mode {
                     live().await
                 } else {
                     protocol().await;
                     portable_fork().await;
                     same_chat_rewind().await;
+                    combined_rewind().await;
                     named_instances().await
                 }
             },

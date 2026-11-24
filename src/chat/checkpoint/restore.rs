@@ -403,6 +403,9 @@ impl ChatStore {
         target: CheckpointPoint,
         dry_run: bool,
     ) -> Result<RollbackReport> {
+        if log.state.pending_rewind.is_some() {
+            return Err(Error::Refused("retry the pending combined workspace rewind first".into()));
+        }
         if !dry_run
             && (log.state.pending_handoff().is_some()
                 || log.state.compacting()
@@ -445,10 +448,12 @@ impl ChatStore {
                 destination_base,
             )?,
         )];
+        let reservation = log.state.pending_rewind.as_ref()
+            .map(|p| self.rewind_reservation(log.state.info.id, p.receipt.id));
         let mut leases = Vec::new();
         for (key, scope) in self.restore_scopes(&log.state, target, destination_base.is_some())? {
             let cwd = &scope.worktree_path;
-            leases.push(self.workspace_lease(cwd)?);
+            leases.push(Self::workspace_lease_for(cwd, reservation.as_deref())?);
             let base = if destination_base.is_some() {
                 let saved = log
                     .state
@@ -490,11 +495,20 @@ impl ChatStore {
         if dry_run || !report.conflicts.is_empty() {
             return Ok(report);
         }
+        if let Some(stage) = reservation.as_deref() {
+            for lease in &leases { lease.reserve_rewind(stage)?; }
+        }
         log.start_restore(target)?;
         for (_, step) in prepared {
             self.apply_restore(&repo, step)?;
         }
-        log.finish_restore(target)?;
+        if let Some(pending) = log.state.pending_rewind.clone() {
+            let mut receipt = pending.receipt;
+            receipt.files.clone_from(&report.files);
+            log.commit(crate::chat::ChatUpdate::ContextRewound { rewind: Box::new(receipt), binding: pending.binding })?;
+        } else {
+            log.finish_restore(target)?;
+        }
         report.applied = true;
         Ok(report)
     }

@@ -379,7 +379,9 @@ kar chat rewind <目标回合UUID> --chat <聊天UUID> --id <命令UUID> --expec
 
 下一条消息仍发往同一个 Kar 聊天，工作区文件保留当前内容。较晚的回合会移出当前时间线。回执列出移出的回合、原生会话 ID，以及采用原生分叉还是传递裁剪后的历史。只接受原生分叉时可加 `--native`。重试沿用相同命令 UUID 和参数。`--expected-head` 可避免另一客户端发出新回合后回退到过时的位置。
 
-工作台调用 `POST /projects/{project}/chats/{chat}/rewinds`，请求体使用 `id`、`turn` 和可选的 `expected_head`。快照及事件订阅均能读到这次回退。
+加上 `--restore-files` 会在同一次操作中恢复该回合的文件。服务先检查各仓库的文件冲突，记录目标原生会话，再恢复工作区并发布新的聊天时间线。若中途重启，使用原命令 UUID 和相同参数即可继续。
+
+工作台调用 `POST /projects/{project}/chats/{chat}/rewinds`，请求体使用 `id`、`turn` 和可选的 `expected_head`、`restore_files`。快照及事件订阅均能读到这次回退。
 
 ### 从选中的回合继续聊
 
