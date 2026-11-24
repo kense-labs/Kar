@@ -362,7 +362,7 @@ struct ThreadActor {
     reported: Value,
     model: Option<String>,
     turn: Option<Active>,
-    queue: VecDeque<(Uuid, String, Report)>,
+    queue: VecDeque<(Uuid, Input, Report)>,
 }
 
 impl ThreadActor {
@@ -370,9 +370,15 @@ impl ThreadActor {
         &self,
         direction: impl Into<crate::stream::RecordStamp>,
         kind: RecordKind,
-        native: Value,
+        mut native: Value,
         events: Vec<Event>,
     ) {
+        let direction = direction.into();
+        if direction.direction == Direction::ToRuntime && native.get("input").is_some()
+            || native["kind"] == "input"
+        {
+            crate::input::omit_image_bytes(&mut native);
+        }
         self.journal
             .push(direction, kind, None, Vec::new(), native, events);
     }
@@ -674,7 +680,7 @@ impl ThreadActor {
                 self.journal.queue_request(id, &input, &[]);
                 self.journal
                     .queue_accepted(input.request_id, id, true, None);
-                self.queue.push_back((id, input.text, done));
+                self.queue.push_back((id, input, done));
                 let _ = ack.send(Ok(()));
             }
             Command::Withdraw(id, ack) => {
@@ -822,9 +828,9 @@ impl ThreadActor {
     async fn run(mut self, mut inbox: mpsc::Receiver<Command>) {
         loop {
             if self.turn.is_none()
-                && let Some((id, text, done)) = self.queue.pop_front()
+                && let Some((id, input, done)) = self.queue.pop_front()
             {
-                let _ = self.start(id, Input::from_queue(text, id), done).await;
+                let _ = self.start(id, input.dispatch_queued(id), done).await;
                 self.journal.host_event(Event::InputRemoved {
                     input_id: id.to_string(),
                 });

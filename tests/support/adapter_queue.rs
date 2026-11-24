@@ -38,13 +38,44 @@ fn ends(rows: &[Arc<Record>]) -> Vec<u64> {
         .collect()
 }
 
+#[allow(dead_code)] // Qwen checks the same queue contract on its text-only transport.
+pub(crate) fn assert_model_image(content: &serde_json::Value) {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let png = STANDARD.encode(include_bytes!("../fixtures/vision.png"));
+    let parts = content.as_array().unwrap();
+    assert!(parts.iter().any(|p| p["text"] == "queue then run"));
+    assert!(parts.iter().any(|p| {
+        p["source"]["data"] == png
+            || p["image_url"]["url"]
+                .as_str()
+                .is_some_and(|u| u.strip_prefix("data:image/png;base64,") == Some(&png))
+    }));
+}
+
 pub(crate) async fn check(s: &Session, slow: &str, hold: impl Fn(), release: impl Fn()) {
     hold();
     let from = s.records().len();
     let first = s.prompt(slow).await.unwrap();
-    let (id, queued) = s.queue("queue then run").await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("queue image.png");
+    let id = Uuid::new_v4();
+    let images = s.capabilities().image_input;
+    let queued = if images {
+        std::fs::write(&path, include_bytes!("../fixtures/vision.png")).unwrap();
+        let queued = s
+            .queue_image_paths_with_id(id, "queue then run", std::slice::from_ref(&path))
+            .await
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        queued
+    } else {
+        s.queue_with_id(id, "queue then run").await.unwrap()
+    };
     let rows = s.records();
-    let (_, accepted) = control(&rows, "queue", id);
+    let (attempt, accepted) = control(&rows, "queue", id);
+    if images {
+        assert_eq!(attempt.native["images"], serde_json::json!([{"path":path}]));
+    }
     assert_eq!(accepted.native["type"], "accepted");
     assert_eq!(accepted.native["queued"], "adapter");
     assert_eq!(
@@ -67,6 +98,17 @@ pub(crate) async fn check(s: &Session, slow: &str, hold: impl Fn(), release: imp
         .unwrap();
     assert_eq!(completed.len(), 2);
     assert_eq!(dispatch.carries, [id.to_string()]);
+    if images {
+        let submission = dispatch
+            .prompt
+            .as_ref()
+            .unwrap()
+            .submission
+            .as_ref()
+            .unwrap();
+        assert_eq!(submission.input, "queue then run");
+        assert_eq!(submission.images[0].path.as_deref(), path.to_str());
+    }
     assert!(
         accepted.seq < completed[0] && completed[0] < dispatch.seq && dispatch.seq < completed[1]
     );

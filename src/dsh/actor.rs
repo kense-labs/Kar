@@ -202,6 +202,7 @@ impl Actor {
                 return Err(error);
             }
         };
+        crate::input::omit_image_bytes(&mut req);
         redact(&mut req, &self.secrets);
         let text = super::projection::text(&req["content"], "text");
         let mut events = vec![];
@@ -452,6 +453,11 @@ impl Actor {
         let parent = s.session.clone();
         let mut path = s.path.clone();
         let mut raw = value;
+        if raw["event"]["type"] == "user/message"
+            && let Some(content) = raw.pointer_mut("/event/data/content")
+        {
+            crate::input::omit_image_bytes(content);
+        }
         if !key.is_null() {
             raw["itemId"] = key;
         }

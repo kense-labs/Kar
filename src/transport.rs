@@ -195,7 +195,7 @@ pub(crate) struct Identity {
 }
 struct Queued {
     id: uuid::Uuid,
-    text: String,
+    input: crate::input::Input,
     done: Reply<crate::TurnReport>,
 }
 struct Turn {
@@ -532,6 +532,9 @@ impl Actor {
         let session = self.source(&v).or_else(|| self.session());
         if direction == Direction::ToRuntime {
             crate::options::instructions::redact_open(self.protocol, &mut v);
+        }
+        if self.protocol == Protocol::Codex {
+            crate::input::omit_codex_input_bytes(&mut v);
         }
         if self.protocol == Protocol::Factory {
             crate::factory::redact_frame(&mut v);
@@ -1229,11 +1232,7 @@ impl Actor {
                 }
                 self.journal
                     .queue_accepted(input.request_id, id, true, None);
-                self.queue.push_back(Queued {
-                    id,
-                    text: input.text,
-                    done,
-                });
+                self.queue.push_back(Queued { id, input, done });
                 let _ = tx.send(Ok(()));
             }
             Command::Withdraw(input, tx) => {
@@ -3351,11 +3350,7 @@ impl Actor {
                     vec![],
                 );
                 if let Err(e) = self
-                    .dispatch(
-                        crate::input::Input::from_queue(input.text, input.id),
-                        input.id,
-                        input.done,
-                    )
+                    .dispatch(input.input.dispatch_queued(input.id), input.id, input.done)
                     .await
                 {
                     break e.to_string();

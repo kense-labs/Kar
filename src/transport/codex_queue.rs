@@ -113,6 +113,9 @@ impl NativeQueue {
                 ))
             }
             Ok(mut native) => {
+                if let Some(submission) = native.get_mut("queuedSubmission") {
+                    crate::input::omit_image_bytes(submission);
+                }
                 super::redact(&mut native, secrets);
                 let response = json!({"type":"accepted","requestId":request,"native":native});
                 let events = if entry.turn.is_none() {

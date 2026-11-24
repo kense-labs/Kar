@@ -18,6 +18,11 @@ impl Journal {
         native: bool,
     ) {
         let mut body = json!({"type":"queue","id":input.request_id,"inputId":id,"text":input.text});
+        if let Some(submission) =
+            crate::ImageSubmission::loaded(&input.text, &input.images, secrets)
+        {
+            body["images"] = json!(submission.images);
+        }
         if native {
             body["admission"] = "native".into();
         }
@@ -64,7 +69,7 @@ impl Journal {
 
     pub(crate) fn withdraw_held(
         &self,
-        queue: &mut VecDeque<(Uuid, String, oneshot::Sender<Result<TurnReport>>)>,
+        queue: &mut VecDeque<(Uuid, Input, oneshot::Sender<Result<TurnReport>>)>,
         id: Uuid,
     ) -> Result<()> {
         let request = self.withdraw_request(id);

@@ -14,16 +14,39 @@ impl Session {
     ) -> Result<Turn> {
         let id = Uuid::new_v4();
         let text = text.into();
+        let images = self.load_image_paths("prompt", id, &text, paths).await?;
+        self.prompt_images_with_id(id, text, images).await
+    }
+
+    /// Read all files at queue admission so later file changes cannot alter this input.
+    pub async fn queue_image_paths_with_id(
+        &self,
+        id: Uuid,
+        text: impl Into<String>,
+        paths: &[PathBuf],
+    ) -> Result<Turn> {
+        let text = text.into();
+        let images = self.load_image_paths("queue", id, &text, paths).await?;
+        self.queue_images_with_id(id, text, images).await
+    }
+
+    async fn load_image_paths(
+        &self,
+        control: &str,
+        id: Uuid,
+        text: &str,
+        paths: &[PathBuf],
+    ) -> Result<Vec<InputImage>> {
         if paths.is_empty() {
-            return self.prompt_with_id(id, text).await;
+            return Ok(Vec::new());
         }
         let refused = |error| {
             let submission = ImageSubmission::new(
-                &text,
+                text,
                 paths.iter().map(|p| Some(p.as_path())),
                 &self.preflight_secrets,
             );
-            self.refuse_input("prompt", id, Uuid::new_v4(), submission, error)
+            self.refuse_input(control, id, Uuid::new_v4(), submission, error)
         };
         if !self.image_input {
             return Err(refused(Error::Unsupported(
@@ -31,13 +54,12 @@ impl Session {
             )));
         }
         let files = paths.to_vec();
-        let images = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             files.iter().map(|p| load(p)).collect::<Result<Vec<_>>>()
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))?
-        .map_err(refused)?;
-        self.prompt_images_with_id(id, text, images).await
+        .map_err(refused)
     }
 
     pub(super) fn check_input(

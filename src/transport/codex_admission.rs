@@ -37,6 +37,9 @@ pub(super) fn refusal(native: &Value) -> Value {
 }
 
 pub(super) fn publish(journal: &Journal, request: Uuid, mut decision: Value, secrets: &[String]) {
+    if let Some(turn) = decision.pointer_mut("/native/turn") {
+        crate::input::omit_codex_turn_input(turn);
+    }
     super::redact(&mut decision, secrets);
     decision["requestId"] = request.to_string().into();
     journal.push(

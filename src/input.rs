@@ -25,6 +25,25 @@ pub(crate) fn omit_image_bytes(packet: &mut Value) {
                     obj.remove("url");
                 }
             }
+            if matches!(
+                obj.get("type").and_then(Value::as_str),
+                Some("input_image" | "image_url")
+            ) {
+                if obj
+                    .get("image_url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|u| u.starts_with("data:image/"))
+                {
+                    obj.remove("image_url");
+                } else if let Some(url) = obj.get_mut("image_url").and_then(Value::as_object_mut)
+                    && url
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .is_some_and(|u| u.starts_with("data:image/"))
+                {
+                    url.remove("url");
+                }
+            }
             if let Some(images) = obj.get_mut("images").and_then(Value::as_array_mut) {
                 for image in images {
                     if image.as_str().is_some_and(|u| u.starts_with("data:image/")) {
@@ -36,6 +55,58 @@ pub(crate) fn omit_image_bytes(packet: &mut Value) {
         }
         Value::Array(items) => items.iter_mut().for_each(omit_image_bytes),
         _ => {}
+    }
+}
+
+/// Remove images only from the public copy of native inputs, echoes and thread history.
+pub(crate) fn omit_codex_input_bytes(packet: &mut Value) {
+    match packet["method"].as_str() {
+        Some("thread/queue/add" | "turn/steer" | "turn/start") => {
+            if let Some(items) = packet.pointer_mut("/params/input") {
+                omit_image_bytes(items);
+            }
+        }
+        Some("item/started" | "item/completed")
+            if packet["params"]["item"]["type"] == "userMessage" =>
+        {
+            if let Some(content) = packet.pointer_mut("/params/item/content") {
+                omit_image_bytes(content);
+            }
+        }
+        Some("codex/event/user_message" | "codex/event")
+            if packet["params"]["msg"]["type"] == "user_message" =>
+        {
+            if let Some(message) = packet.pointer_mut("/params/msg") {
+                omit_image_bytes(message);
+            }
+        }
+        _ => {}
+    }
+    if let Some(submission) = packet.pointer_mut("/result/queuedSubmission") {
+        omit_image_bytes(submission);
+    }
+    for pointer in ["/params/turn", "/result/turn"] {
+        if let Some(turn) = packet.pointer_mut(pointer) {
+            omit_codex_turn_input(turn);
+        }
+    }
+    if let Some(turns) = packet
+        .pointer_mut("/result/thread/turns")
+        .and_then(Value::as_array_mut)
+    {
+        turns.iter_mut().for_each(omit_codex_turn_input);
+    }
+}
+
+pub(crate) fn omit_codex_turn_input(turn: &mut Value) {
+    if let Some(items) = turn.get_mut("items").and_then(Value::as_array_mut) {
+        for item in items {
+            if item["type"] == "userMessage"
+                && let Some(content) = item.get_mut("content")
+            {
+                omit_image_bytes(content);
+            }
+        }
     }
 }
 
@@ -59,7 +130,7 @@ pub(crate) fn check_text(text: &str, limit: Option<usize>) -> Result<()> {
 #[derive(Clone, Debug)]
 pub struct InputImage {
     mime: &'static str,
-    data: String,
+    data: std::sync::Arc<str>,
     uri: Option<url::Url>,
     path: Option<PathBuf>,
 }
@@ -83,7 +154,7 @@ impl InputImage {
         };
         Ok(Self {
             mime,
-            data: STANDARD.encode(bytes),
+            data: STANDARD.encode(bytes).into(),
             uri: None,
             path: None,
         })
@@ -100,19 +171,24 @@ impl InputImage {
         match protocol {
             Protocol::Cybion => self.data_url().into(),
             Protocol::KimiKap => {
-                json!({"type":"image","source":{"kind":"base64","media_type":self.mime,"data":self.data}})
+                json!({"type":"image","source":{"kind":"base64","media_type":self.mime,"data":self.data.as_ref()}})
             }
             Protocol::Morph => unreachable!("Morph has no image input"),
             Protocol::Codex => {
                 json!({"type":"image","url":format!("data:{};base64,{}",self.mime,self.data)})
             }
             Protocol::Claude | Protocol::Qoder | Protocol::Qwen => {
-                json!({"type":"image","source":{"type":"base64","media_type":self.mime,"data":self.data}})
+                json!({"type":"image","source":{"type":"base64","media_type":self.mime,"data":self.data.as_ref()}})
             }
-            Protocol::Factory => json!({"type":"base64","mediaType":self.mime,"data":self.data}),
-            Protocol::Dsh => json!({"type":"image","mediaType":self.mime,"data":self.data}),
+            Protocol::Factory => {
+                json!({"type":"base64","mediaType":self.mime,"data":self.data.as_ref()})
+            }
+            Protocol::Dsh => {
+                json!({"type":"image","mediaType":self.mime,"data":self.data.as_ref()})
+            }
             Protocol::Acp | Protocol::Pi => {
-                let mut block = json!({"type":"image","mimeType":self.mime,"data":self.data});
+                let mut block =
+                    json!({"type":"image","mimeType":self.mime,"data":self.data.as_ref()});
                 if protocol == Protocol::Acp
                     && let Some(uri) = &self.uri
                 {
@@ -169,14 +245,14 @@ impl Input {
             images,
         }
     }
+    #[cfg(test)]
     pub fn text(text: String) -> Self {
         Self::new(text, Vec::new())
     }
-    pub(crate) fn from_queue(text: String, id: uuid::Uuid) -> Self {
-        Self {
-            carried: Some(id),
-            ..Self::text(text)
-        }
+    pub(crate) fn dispatch_queued(mut self, id: uuid::Uuid) -> Self {
+        self.request_id = uuid::Uuid::new_v4();
+        self.carried = Some(id);
+        self
     }
     pub fn blocks(&self, protocol: Protocol) -> Vec<Value> {
         if matches!(
@@ -189,7 +265,9 @@ impl Input {
             }
             return parts;
         }
-        std::iter::once(json!({"type":"text","text":self.text}))
+        (protocol != Protocol::Codex || !self.text.is_empty() || self.images.is_empty())
+            .then(|| json!({"type":"text","text":self.text}))
+            .into_iter()
             .chain(self.images.iter().map(|i| i.block(protocol)))
             .collect()
     }
@@ -224,5 +302,36 @@ impl Input {
                 .into();
         }
         params
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_history_suppresses_user_image_bytes_and_preserves_tool_output() {
+        let image = json!({"type":"image","url":"data:image/png;base64,example"});
+        let user = json!({"type":"userMessage","clientId":"input","content":[image]});
+        let tool = json!({"type":"mcpToolCall","result":{"content":[image]}});
+        let turn = json!({"id":"turn","items":[user,tool]});
+        let mut history = json!({"result":{"thread":{"turns":[turn]}}});
+        omit_codex_input_bytes(&mut history);
+        let items = &history["result"]["thread"]["turns"][0]["items"];
+        assert_eq!(items[0]["content"][0], json!({"type":"image"}));
+        assert_eq!(items[0]["clientId"], "input");
+        assert_eq!(items[1], tool);
+
+        let mut queue =
+            json!({"result":{"queuedSubmission":{"clientUserMessageId":"input","input":[image]}}});
+        omit_codex_input_bytes(&mut queue);
+        assert_eq!(
+            queue["result"]["queuedSubmission"]["input"][0],
+            json!({"type":"image"})
+        );
+        assert_eq!(
+            queue["result"]["queuedSubmission"]["clientUserMessageId"],
+            "input"
+        );
     }
 }

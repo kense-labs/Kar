@@ -69,11 +69,32 @@ pub(crate) async fn empty_controls(session: &Session) {
 }
 
 pub(crate) async fn refused_files(session: &Session, text: &str, paths: &[PathBuf], code: &str) {
-    let start = session.records().len();
-    let result = session.prompt_image_paths(text, paths).await;
-    match code {
-        "error" => assert!(matches!(result, Err(Error::Io(_)))),
-        _ => assert!(matches!(result, Err(Error::Unsupported(_)))),
+    for control in ["prompt", "queue"] {
+        let start = session.records().len();
+        let id = uuid::Uuid::new_v4();
+        let result = if control == "queue" {
+            session.queue_image_paths_with_id(id, text, paths).await
+        } else {
+            session.prompt_image_paths(text, paths).await
+        };
+        match code {
+            "error" => assert!(matches!(result, Err(Error::Io(_)))),
+            _ => assert!(matches!(result, Err(Error::Unsupported(_)))),
+        }
+        assert!(!rejection(session, start, control, text, paths, code).is_empty());
+        if control == "queue" {
+            let records = session.records();
+            assert!(
+                records[start..]
+                    .iter()
+                    .any(|r| r.native["type"] == "queue" && r.native["inputId"] == id.to_string())
+            );
+            assert!(
+                !records[start..]
+                    .iter()
+                    .flat_map(|r| &r.events)
+                    .any(|e| matches!(e, Event::InputQueued { .. }))
+            );
+        }
     }
-    assert!(!rejection(session, start, "prompt", text, paths, code).is_empty());
 }

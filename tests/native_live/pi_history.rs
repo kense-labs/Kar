@@ -1318,6 +1318,10 @@ async fn queued_inputs_and_two_http_clients_survive_controller_kill() {
 #[ignore = "requires real KAR_PI_BIN to verify queue dispatch and withdrawal"]
 async fn public_adapter_queue_and_withdraw() {
     let f = fixture(true).await;
+    let config = f.temp.path().join("agent/models.json");
+    let mut models: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    models["providers"]["fixture"]["models"][0]["input"] = json!(["text", "image"]);
+    fs::write(&config, serde_json::to_vec(&models).unwrap()).unwrap();
     let mut rt = kar::runtime("pi").unwrap();
     rt.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
     let s = rt.open(f.options.clone()).await.unwrap();
@@ -1333,5 +1337,14 @@ async fn public_adapter_queue_and_withdraw() {
         || fs::write(&release, "").unwrap(),
     )
     .await;
-    assert_eq!(f.calls.lock().unwrap().len(), 3);
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    let last_user = calls[1]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "user")
+        .unwrap();
+    adapter_queue::assert_model_image(&last_user["content"]);
 }

@@ -1600,14 +1600,32 @@ impl Session {
     }
     /// Queue an input, using the backend's native or adapter queue.
     pub async fn queue(&self, text: impl Into<String>) -> Result<(Uuid, Turn)> {
+        self.queue_images(text, Vec::new()).await
+    }
+    pub async fn queue_images(
+        &self,
+        text: impl Into<String>,
+        images: Vec<crate::InputImage>,
+    ) -> Result<(Uuid, Turn)> {
         let id = Uuid::new_v4();
-        self.queue_with_id(id, text).await.map(|turn| (id, turn))
+        self.queue_images_with_id(id, text, images)
+            .await
+            .map(|turn| (id, turn))
     }
     pub async fn queue_with_id(&self, id: Uuid, text: impl Into<String>) -> Result<Turn> {
+        self.queue_images_with_id(id, text, Vec::new()).await
+    }
+    /// Keep the loaded attachment bytes and logical input identity through native or adapter queuing.
+    pub async fn queue_images_with_id(
+        &self,
+        id: Uuid,
+        text: impl Into<String>,
+        images: Vec<crate::InputImage>,
+    ) -> Result<Turn> {
         let (done, receiver) = oneshot::channel();
-        let input = crate::input::Input::text(text.into());
+        let input = crate::input::Input::new(text.into(), images);
         let request = input.request_id;
-        self.check_input("queue", id, request, &input.text, &[])?;
+        self.check_input("queue", id, request, &input.text, &input.images)?;
         crate::input::check_text(&input.text, self.text_limit)?;
         self.call(|tx| Command::Queue(id, input, tx, done)).await?;
         Ok(Turn {
@@ -1629,6 +1647,15 @@ impl Session {
         input_id: Uuid,
         text: impl Into<String>,
     ) -> Result<Delivery> {
+        self.deliver_images_with_id(input_id, text, Vec::new())
+            .await
+    }
+    pub async fn deliver_images_with_id(
+        &self,
+        input_id: Uuid,
+        text: impl Into<String>,
+        images: Vec<crate::InputImage>,
+    ) -> Result<Delivery> {
         let text = text.into();
         let running_since = || match self.status() {
             crate::observe::AgentStatus::Running { since_seq, .. } => Some(since_seq),
@@ -1636,7 +1663,10 @@ impl Session {
         };
         for _ in 0..4 {
             if running_since().is_none() {
-                match self.prompt_with_id(input_id, text.clone()).await {
+                match self
+                    .prompt_images_with_id(input_id, text.clone(), images.clone())
+                    .await
+                {
                     Ok(turn) => return Ok(Delivery::Started(turn)),
                     Err(Error::Busy) => {}
                     Err(error) => return Err(error),
@@ -1646,7 +1676,10 @@ impl Session {
                 continue;
             };
             if self.capabilities().steering {
-                match self.steer_with_id(input_id, text.clone()).await {
+                match self
+                    .steer_images_with_id(input_id, text.clone(), images.clone())
+                    .await
+                {
                     Ok(()) => return Ok(Delivery::Steered),
                     Err(Error::Refused(_) | Error::Unsupported(_))
                         if running_since() != Some(target) =>
@@ -1664,7 +1697,7 @@ impl Session {
                     Err(error) => return Err(error),
                 }
             }
-            let turn = self.queue_with_id(input_id, text).await?;
+            let turn = self.queue_images_with_id(input_id, text, images).await?;
             return Ok(Delivery::Queued { input_id, turn });
         }
         Err(Error::Busy)

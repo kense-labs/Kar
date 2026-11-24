@@ -989,4 +989,18 @@ async fn public_adapter_queue_and_withdraw() {
         },
     )
     .await;
+    let requests = f.model.requests.lock().unwrap();
+    let queued = requests
+        .iter()
+        .filter_map(|r| {
+            r["messages"]
+                .as_array()?
+                .iter()
+                .rev()
+                .find(|m| m["role"] == "user")
+                .map(|m| &m["content"])
+        })
+        .find(|content| content.to_string().contains("queue then run"))
+        .unwrap();
+    adapter_queue::assert_model_image(queued);
 }

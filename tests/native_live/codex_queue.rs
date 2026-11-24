@@ -1,5 +1,6 @@
 //! Installed app-server, isolated configuration, controlled HTTP Responses API provider.
 use super::{SessionOptions, Value, json};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use kar::{Event, Outcome, RecordKind};
 use std::{
     sync::{
@@ -72,9 +73,57 @@ async fn native_queue_receipt_idle_interruption_and_restart_of_admission() {
         session.prompt(FIRST).await.unwrap().wait().await.unwrap(),
         Outcome::Completed
     );
+    let png = include_bytes!("../fixtures/vision.png");
+    let path = root.path().join("vision.png");
+    std::fs::write(&path, png).unwrap();
+    let image_url = format!("data:image/png;base64,{}", STANDARD.encode(png));
+    let image_only = session
+        .prompt_image_paths("", std::slice::from_ref(&path))
+        .await
+        .unwrap();
+    let submission = image_only
+        .admission()
+        .unwrap()
+        .request
+        .prompt
+        .as_ref()
+        .unwrap()
+        .submission
+        .as_ref()
+        .unwrap();
+    assert!(submission.input.is_empty());
+    assert_eq!(submission.images[0].path.as_deref(), path.to_str());
+    assert_eq!(image_only.wait().await.unwrap(), Outcome::Completed);
+    let has_user_image = |request: &Value, marker: Option<&str>| {
+        request["input"]
+            .as_array()
+            .and_then(|rows| rows.iter().rev().find(|m| m["role"] == "user"))
+            .and_then(|m| m["content"].as_array())
+            .is_some_and(|content| {
+                let image = content.iter().any(|p| {
+                    p["type"] == "input_image"
+                        && p["image_url"] == image_url
+                        && p["detail"] == "high"
+                });
+                let text = marker.is_none_or(|word| content.iter().any(|p| p["text"] == word));
+                image && text && !content.iter().any(|part| part["text"] == "")
+            })
+    };
+    assert!(
+        received
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| has_user_image(request, None))
+    );
     let last = session.records().last().unwrap().seq;
     let id = Uuid::new_v4();
-    let turn = session.queue_with_id(id, QUEUED).await.unwrap();
+    let image = kar::InputImage::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let turn = session
+        .queue_images_with_id(id, QUEUED, vec![image])
+        .await
+        .unwrap();
     let receipt = turn.admission().unwrap().clone();
     assert_eq!(
         receipt.response.native["native"]["queuedSubmission"]["clientUserMessageId"],
@@ -82,6 +131,7 @@ async fn native_queue_receipt_idle_interruption_and_restart_of_admission() {
     );
     assert_eq!(receipt.request.native["type"], "queue");
     assert_eq!(receipt.request.native["inputId"], id.to_string());
+    assert_eq!(receipt.request.native["images"], json!([{"path":path}]));
     let result = tokio::time::timeout(LIMIT, turn.report())
         .await
         .unwrap()
@@ -111,6 +161,18 @@ async fn native_queue_receipt_idle_interruption_and_restart_of_admission() {
             .iter()
             .any(|r| r.to_string().contains(QUEUED))
     );
+    assert!(
+        received
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| has_user_image(request, Some(QUEUED)))
+    );
+    assert!(records.iter().all(|row| {
+        !serde_json::to_string(row.as_ref())
+            .unwrap()
+            .contains(&STANDARD.encode(png))
+    }));
     let result = session
         .await_input_end(Some(&receipt.request.cursor()), &id.to_string())
         .await

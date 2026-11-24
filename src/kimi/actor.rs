@@ -48,7 +48,7 @@ pub(super) struct Actor {
     mode: ApprovalMode,
     projection: Projection,
     turn: Option<Turn>,
-    queue: VecDeque<(Uuid, String, Reply<TurnReport>)>,
+    queue: VecDeque<(Uuid, Input, Reply<TurnReport>)>,
     steers: Vec<Steer>,
     pending_abort: Option<PendingAbort>,
     sent: HashSet<String>,
@@ -121,6 +121,17 @@ impl Actor {
         {
             // Retain only this host input's snapshot. Replaying an entire history
             // would publish old messages and token totals on the new stream.
+            let mut turn = turn.clone();
+            for item in turn
+                .get_mut("items")
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                if item["type"] == "user_message" {
+                    crate::input::omit_image_bytes(item);
+                }
+            }
             self.record(
                 Direction::FromRuntime,
                 RecordKind::Frame,
@@ -156,6 +167,7 @@ impl Actor {
             return Err(error);
         }
         let mut public = body;
+        crate::input::omit_image_bytes(&mut public);
         redact(&mut public, &self.secrets);
         let text = crate::observe::sent_prompt_text(&public).unwrap_or_default();
         let mut events = vec![];
@@ -244,6 +256,11 @@ impl Actor {
         redact(&mut v, &self.secrets);
         for mut frame in self.projection.frames(v) {
             let finished = self.observe(&mut frame);
+            if frame.raw["item"]["type"] == "user_message"
+                && let Some(user) = frame.raw.get_mut("item")
+            {
+                crate::input::omit_image_bytes(user);
+            }
             self.journal.append(
                 Direction::FromRuntime,
                 RecordKind::Frame,
@@ -572,7 +589,7 @@ impl Actor {
                 self.journal.queue_request(id, &input, &self.secrets);
                 self.journal
                     .queue_accepted(input.request_id, id, true, None);
-                self.queue.push_back((id, input.text, done));
+                self.queue.push_back((id, input, done));
                 let _ = ack.send(Ok(()));
             }
             Command::Withdraw(id, ack) => {
@@ -724,15 +741,12 @@ impl Actor {
         let mut close_ack = None;
         let reason = loop {
             if !self.busy()
-                && let Some((id, text, done)) = self.queue.pop_front()
+                && let Some((id, input, done)) = self.queue.pop_front()
             {
                 self.journal.host_event(Event::InputRemoved {
                     input_id: id.to_string(),
                 });
-                if let Err(e) = self
-                    .submit(Input::from_queue(text, id), id, Some(done))
-                    .await
-                {
+                if let Err(e) = self.submit(input.dispatch_queued(id), id, Some(done)).await {
                     break e.to_string();
                 }
             }

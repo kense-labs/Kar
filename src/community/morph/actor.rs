@@ -42,7 +42,7 @@ pub(super) struct Actor {
     approvals: ApprovalMode,
     journal: Journal,
     tasks: VecDeque<Follow>,
-    queue: VecDeque<(Uuid, String, Report)>,
+    queue: VecDeque<(Uuid, Input, Report)>,
     pending: HashMap<String, String>,
     answered: HashMap<String, String>,
     updates: mpsc::Sender<Update>,
@@ -415,7 +415,7 @@ impl Actor {
                 self.journal.queue_request(id, &input, &[]);
                 self.journal
                     .queue_accepted(input.request_id, id, false, None);
-                self.queue.push_back((id, input.text, done));
+                self.queue.push_back((id, input, done));
                 let _ = ack.send(Ok(()));
             }
             Command::Withdraw(id, ack) => {
@@ -507,9 +507,9 @@ impl Actor {
         let mut exit = self.lease.exit();
         let (ack, reason, settle) = loop {
             if self.tasks.is_empty()
-                && let Some((id, text, done)) = self.queue.pop_front()
+                && let Some((id, input, done)) = self.queue.pop_front()
             {
-                let _ = self.start(id, Input::from_queue(text, id), done).await;
+                let _ = self.start(id, input.dispatch_queued(id), done).await;
                 self.journal.host_event(Event::InputRemoved {
                     input_id: id.to_string(),
                 });
