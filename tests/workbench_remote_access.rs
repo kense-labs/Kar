@@ -1,6 +1,8 @@
 //! Scheduled for the unified macOS run. Native model turns here use the stdio protocol fixture.
 #[path = "support/codex_chat_peer.rs"]
 mod codex_chat_peer;
+#[path = "support/workbench_guest_recovery.rs"]
+mod guest_cases;
 #[path = "support/workbench_server.rs"]
 mod server;
 use reqwest::{Client, StatusCode};
@@ -64,6 +66,14 @@ async fn scenario() {
         ok(remote.get(format!("{base}/projects")).bearer_auth(token)).await[0]["id"],
         p
     );
+    for surface in ["terminals", "previews"] {
+        let url = format!("{base}/projects/{p}/{surface}");
+        assert_eq!(code(remote.get(&url)).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            code(remote.get(&url).bearer_auth(token)).await,
+            StatusCode::OK
+        );
+    }
     let mut chats = Vec::new();
     for _ in 0..2 {
         let id = Uuid::new_v4();
@@ -263,6 +273,8 @@ async fn scenario() {
     for path in [
         "/projects".to_owned(),
         format!("/projects/{p}/chats/{}/snapshot", chats[0]),
+        format!("/projects/{p}/terminals"),
+        format!("/projects/{p}/previews"),
     ] {
         assert_eq!(
             code(remote.get(format!("{base}{path}")).bearer_auth(token)).await,
@@ -283,6 +295,15 @@ fn main() {
         Some("--version") => println!("codex 0.169.0"),
         _ => tokio::runtime::Runtime::new().unwrap().block_on(async {
             tokio::time::timeout(Duration::from_secs(90), scenario())
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(200), guest_cases::recovery())
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(90), guest_cases::legacy_registry())
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(200), guest_cases::retention())
                 .await
                 .unwrap();
         }),
