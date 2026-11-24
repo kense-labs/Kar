@@ -24,3 +24,6 @@
 `kar workbench` 的 `/projects/{p}/documents` 直接使用无界面文档服务。普通文件保存和整文件提议共用一个写入器、修订、冲突和游标。已登记的文档跨服务重启保留协作状态。工作文件通过工作区目录句柄读取与发布。
 
 统一验收时运行 `cargo test --locked --test workbench_coediting`。用两个独立 HTTP 客户端和实际 Kar 进程核对 Markdown 普通保存、旧基准整文件合并、冲突、进程重启后的操作去重和冲突解决。各 Office 格式的实际文件样本、外部保存及双客户端订阅另运行 `cargo test --locked --manifest-path crates/kar-documents/Cargo.toml`。本次开发仅做 macOS 编译检查。
+
+
+macOS 的原生文档入口已接入 Codex app-server。统一验收命令为 `cargo test --locked --test workbench_coediting actual_codex_merges_a_native_file_edit_with_a_concurrent_owner_save -- --ignored`。场景使用本机 Codex CLI、隔离的供应商配置和回环模型，由原生文件工具改写副本，同时在工作台保存人的修改。重启工作台后用原操作 ID 核对同一回执与工具调用次数。该场景已编译，尚待实际执行。写入策略与恢复读取参考 Codex 0.169.0 的 [thread/start 返回契约](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server-protocol/schema/json/v2/ThreadStartResponse.json) 和 [分页历史契约](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server-protocol/schema/json/v2/ThreadTurnsListParams.json)。

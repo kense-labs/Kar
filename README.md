@@ -412,6 +412,8 @@ kar workbench --root "$PWD"
 | 查看或解决冲突 | `GET /events?after=游标&wait_ms=毫秒` 获取持久事件。冲突回执为 HTTP 409；解决冲突使用 `POST /operations` 的 `resolve` 操作。 |
 | 普通文本保存 | 对已打开协作的文件，原项目 `GET /file` 在文本之外返回 `revision`。用 `PUT /file` 提交 `text`、`base_revision` 和 `operation_id`，客户端断开后可以原样重试。 |
 
+在 macOS 上，向 `POST /projects/{p}/documents/native?path=notes.md` 发送 `{"runtime":"codex","base_revision":0,"operation_id":"edit-1","instructions":"修改第三段"}`，让 Codex 在独立工作目录编辑该修订的副本。工作台在提交输入前检查原生写入权限，再把已完成回合的文件作为整文件提议合并。原样重试可以取回既有回执。进程重启后，工作台会用已存的原生会话 ID 和实际提示核对回合；供应商记录还不能确认结果时，返回 `interrupted` 状态。
+
 上表中的文档接口相对于 `/projects/{p}/documents`。普通文本保存和整文件提议共用一份修订历史。可兼容的改动会合并，竞争修改会留下冲突回执。访问限于工作台启动时指定的目录。
 
 ## 接入自己的 Rust 后端

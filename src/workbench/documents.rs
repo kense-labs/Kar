@@ -1,4 +1,7 @@
 //! Route ordinary saves and collaborative document operations through the same writer.
+#[cfg(target_os = "macos")]
+mod native;
+
 use super::{
     Workbench,
     files::{self, Workspace},
@@ -84,6 +87,20 @@ impl IntoResponse for FileError {
 }
 
 impl Workbench {
+    async fn document_service(
+        &self,
+        project: Uuid,
+        path: PathBuf,
+    ) -> std::result::Result<DocumentService, FileError> {
+        match self
+            .file_access(project, path, true, false, |_, _| Ok(()))
+            .await?
+        {
+            Access::Document(service) => Ok(service),
+            Access::Ordinary(_) => unreachable!("registration always opens a writer"),
+        }
+    }
+
     async fn file_access<T: Send + 'static>(
         &self,
         project: Uuid,
@@ -135,12 +152,7 @@ async fn document(
     Query(q): Query<FileQuery>,
     request: Request,
 ) -> std::result::Result<Response, FileError> {
-    let access = app
-        .file_access(project, q.path, true, false, |_, _| Ok(()))
-        .await?;
-    let Access::Document(service) = access else {
-        unreachable!("registration always opens a writer")
-    };
+    let service = app.document_service(project, q.path).await?;
     // Axum has stripped the project prefix. The inner router has its own path parameters.
     let (mut parts, body) = request.into_parts();
     parts.extensions = Extensions::new();
@@ -220,10 +232,10 @@ async fn write_file(
 }
 
 pub(super) fn routes() -> Router<Workbench> {
+    let docs = Router::new().fallback(document);
+    #[cfg(target_os = "macos")]
+    let docs = docs.route("/native", axum::routing::post(native::propose));
     Router::new()
         .route("/projects/{project}/file", get(read_file).put(write_file))
-        .nest(
-            "/projects/{project}/documents",
-            Router::new().fallback(document),
-        )
+        .nest("/projects/{project}/documents", docs)
 }

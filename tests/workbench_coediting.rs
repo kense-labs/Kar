@@ -9,11 +9,20 @@ use tokio::{
 };
 
 async fn launch(state: &Path, root: &Path) -> Result<(Child, String)> {
+    launch_with_env(state, root, &[]).await
+}
+
+async fn launch_with_env(
+    state: &Path,
+    root: &Path,
+    vars: &[(&str, &std::ffi::OsStr)],
+) -> Result<(Child, String)> {
     let mut server = Command::new(env!("CARGO_BIN_EXE_kar"))
         .args(["workbench", "--state"])
         .arg(state)
         .arg("--root")
         .arg(root)
+        .envs(vars.iter().copied())
         .env("KAR_WORKBENCH_TOKEN", "document-fixture")
         .stdout(Stdio::piped())
         .kill_on_drop(true)
@@ -127,3 +136,7 @@ async fn file_save_merges_an_old_whole_file_and_recovers_its_conflict_after_rest
     restarted.kill().await?;
     Ok(())
 }
+
+#[cfg(target_os = "macos")]
+#[path = "support/native_document_edit.rs"]
+mod native_document_edit;

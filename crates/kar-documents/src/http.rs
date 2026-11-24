@@ -69,7 +69,14 @@ impl DocumentService {
     }
 
     pub async fn submit(&self, command: Command) -> Result<Receipt, Failure> {
-        let receipt = self.run(move |s| s.submit(command)).await?;
+        self.publish(move |s| s.submit(command)).await
+    }
+
+    pub async fn publish(
+        &self,
+        f: impl FnOnce(&mut DocumentStore) -> Result<Receipt> + Send + 'static,
+    ) -> Result<Receipt, Failure> {
+        let receipt = self.run(f).await?;
         self.changed.send_replace(receipt.cursor);
         Ok(receipt)
     }

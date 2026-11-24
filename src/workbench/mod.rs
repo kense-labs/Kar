@@ -254,6 +254,7 @@ impl Workbench {
             Err(e) => return Err(e),
         }
         let mut opts = SessionOptions::new(p.root);
+        opts.remove_env("KAR_WORKBENCH_TOKEN")?;
         opts.model = model;
         let session = self.0.chats.create_with_id(id, runtime, None, opts).await?;
         let info = session.info().clone();
@@ -281,7 +282,14 @@ impl Workbench {
                 return Err(Error::Refused("chat is archived".into()));
             }
             if owner.is_none() {
-                *owner = Some(app.0.chats.resume(chat).await?);
+                *owner = Some(
+                    app.0
+                        .chats
+                        .resume_with(chat, |opts| {
+                            opts.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
+                        })
+                        .await?,
+                );
             }
             owner
                 .as_ref()
