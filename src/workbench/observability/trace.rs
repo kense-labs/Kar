@@ -33,7 +33,7 @@ impl Trace {
             format!("workbench.jsonl.{backup}")
         })
     }
-    fn append(&self, record: &Value) -> Result<()> {
+    pub(super) fn append(&self, record: &Value) -> Result<()> {
         let _guard = self.write.lock().unwrap();
         std::fs::create_dir_all(&self.dir)?;
         let path = self.path(0);
@@ -125,7 +125,7 @@ pub(in crate::workbench) async fn observe(
     else {
         return next.run(req).await;
     };
-    if matches!(route, "/diagnostics/otlp" | "/diagnostics/traces") {
+    if matches!(route, "/diagnostics/otlp" | "/diagnostics/traces" | "/telemetry/v1/traces") {
         return next.run(req).await;
     }
     let mut span = Span {

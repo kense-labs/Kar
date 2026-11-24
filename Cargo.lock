@@ -2938,6 +2938,7 @@ dependencies = [
  "getrandom 0.3.4",
  "gix",
  "hmac 0.13.0",
+ "httpdate",
  "hyper",
  "hyper-util",
  "icu_collator",

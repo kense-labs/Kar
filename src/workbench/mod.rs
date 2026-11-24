@@ -3,6 +3,7 @@ mod access;
 pub(crate) mod acp_registry;
 mod agent_sessions;
 mod assets;
+mod http_content;
 mod background;
 pub use background::BackgroundTasks;
 mod chat_controls;

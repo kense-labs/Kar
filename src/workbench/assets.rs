@@ -13,8 +13,8 @@ use axum::{
     Json, Router,
     body::{Body, to_bytes},
     extract::{Path, State},
-    http::{StatusCode, header},
-    response::{IntoResponse, Response},
+    http::header,
+    response::Response,
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
@@ -293,6 +293,7 @@ async fn sign_view(app:Workbench,p:Uuid,c:Uuid,id:Uuid,as_html:bool)->Reply<Valu
 async fn download(
     State(app): State<Workbench>,
     Path((id, key)): Path<(Uuid, String)>,
+    method: axum::http::Method, headers: axum::http::HeaderMap,
 ) -> std::result::Result<Response, ApiError> {
     let read = app
         .0
@@ -309,34 +310,30 @@ async fn download(
     let (a, data) = tokio::task::spawn_blocking(move || -> Result<_> {
         app.binding(read.project, read.chat)?;
         let a = app.0.chats.visible_attachment(read.chat, read.attachment)?;
-        let data = fs::read(app.0.chats.attachment_path(&a))?;
+        let data = app.0.chats.verified_bytes(&a)?;
         Ok((a, data))
     })
     .await
     .map_err(|e| Error::Closed(e.to_string()))??;
     // File downloads share the service origin. Keep arbitrary documents outside the browser execution context.
+    let mut response=super::http_content::attachment(&method,&headers,data,&a.sha256);
     if as_html && a.kind==AttachmentKind::File && a.mime=="text/html" {
-        return Ok(([
+        for (name,value) in [
             (header::CONTENT_TYPE,"text/html; charset=utf-8"),(header::X_CONTENT_TYPE_OPTIONS,"nosniff"),
             (header::CACHE_CONTROL,"private, no-store"),(header::REFERRER_POLICY,"no-referrer"),
             (header::CONTENT_SECURITY_POLICY,"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'")
-        ],data).into_response());
+        ] {response.headers_mut().insert(name,axum::http::HeaderValue::from_static(value));}
+        return Ok(response);
     }
     let mime = if a.kind == AttachmentKind::Image {
         a.mime.as_str()
     } else {
         "application/octet-stream"
     };
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, mime),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (header::CACHE_CONTROL, "private, no-store"),
-        ],
-        data,
-    )
-        .into_response())
+    response.headers_mut().insert(header::CONTENT_TYPE, mime.parse().map_err(|_| Error::Protocol("invalid attachment MIME".into()))?);
+    response.headers_mut().insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, axum::http::HeaderValue::from_static("nosniff"));
+    Ok(response)
 }
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()

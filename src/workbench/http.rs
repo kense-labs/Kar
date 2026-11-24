@@ -125,6 +125,10 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(access)
         .merge(mcp)
         .merge(hooks);
+    let router = match super::http_content::static_site()? {
+        Some(site) => router.merge(site),
+        None => router,
+    };
     if let Some(app) = lazy_start {
         return Ok(router.layer(middleware::from_fn(
             move |req: axum::extract::Request, next: middleware::Next| {

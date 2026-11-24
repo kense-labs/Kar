@@ -20,6 +20,7 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
         .route("/usage/summary", post(usage::summary))
         .route("/usage/rates/refresh", post(usage::rates))
         .route("/diagnostics/otlp", post(otlp::check))
+        .route("/telemetry/v1/traces", post(otlp::browser_traces))
         .route("/diagnostics/triage", post(triage::prepare))
         .route("/diagnostics/traces", get(trace::read))
         .route("/diagnostics/host-resources", get(host))

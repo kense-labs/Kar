@@ -39,7 +39,7 @@ getrandom = "0.3"
 hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 subtle = "2"
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["io"] }
 portable-pty = "0.9"
 vt100 = "0.16"
 vte = "0.15"
@@ -65,6 +65,7 @@ eventsource-stream = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 semver = "1"
 percent-encoding = "2"
+httpdate = "1"
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "std", "serde"] }
 json_comments = "0.2"
