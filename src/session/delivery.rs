@@ -95,7 +95,7 @@ impl DeliverReceipt {
 }
 
 pub(super) struct Batch {
-    root: Option<(String, String)>,
+    root: Option<(Uuid, Uuid)>,
     since: u64,
     merge: Option<Merger>,
     deadline: Mutex<Instant>,
@@ -253,7 +253,20 @@ impl Session {
                 completed(active).await?;
                 continue;
             }
-            let since = self.running_since();
+            let (since, root) = match self.status() {
+                crate::observe::AgentStatus::Running {
+                    since_seq,
+                    input_id,
+                    request_id,
+                    ..
+                } => {
+                    let owner = input_id.zip(request_id).and_then(|(id, request)| {
+                        Some((Uuid::parse_str(&id).ok()?, Uuid::parse_str(&request).ok()?))
+                    });
+                    (Some(since_seq), owner)
+                }
+                _ => (None, None),
+            };
             if let DeliverWhen::Interrupt { max_wait } = options.when
                 && (batch.is_some() || (since.is_some() && !self.capabilities().steering))
             {
@@ -264,7 +277,7 @@ impl Session {
                     Some(existing) => existing,
                     None => {
                         let b = Arc::new(Batch {
-                            root: self.journal.active_prompt(),
+                            root,
                             since: since.unwrap(),
                             merge: options.merge.clone(),
                             deadline: Mutex::new(deadline),
@@ -325,7 +338,7 @@ impl Session {
                 self.await_idle().await?;
                 continue;
             }
-            let first_seq = self.records().last().map_or(0, |r| r.seq + 1);
+            let first_seq = self.journal.latest_record().map_or(0, |r| r.seq + 1);
             let (delivery, control) =
                 match self.deliver_single(id, input.clone(), options.when).await {
                     Ok(result) => result,
@@ -494,14 +507,17 @@ impl Session {
                 false,
             );
         }
-        if !ended
-            && let Some((input, request)) = &batch.root
-            && let (Ok(id), Ok(req)) = (Uuid::parse_str(input), Uuid::parse_str(request))
-            && self.journal.active_prompt().as_ref() == Some(&(input.clone(), request.clone()))
-            && let Err(e) = self.abort_turn(id, Some(req)).await
-            && self.journal.active_prompt() == batch.root
-        {
-            return DeliverReceipt::failure(merged_id, e.to_string(), ids, false);
+        if !ended && let Some((id, request)) = batch.root {
+            let target = crate::transport::TurnTarget {
+                input_id: id,
+                request_id: Some(request),
+            };
+            if target.pin(&self.journal).is_some()
+                && let Err(error) = self.abort_turn(id, Some(request)).await
+                && target.pin(&self.journal).is_some()
+            {
+                return DeliverReceipt::failure(merged_id, error.to_string(), ids, false);
+            }
         }
         if !ended && batch.root.is_none() {
             return DeliverReceipt::failure(
