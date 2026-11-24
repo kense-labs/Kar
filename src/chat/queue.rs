@@ -1,6 +1,7 @@
 //! Producers can add inputs while another process owns the native session. The queue
 //! stores admission order. The chat journal is authoritative about dispatch attempts.
 mod commands;
+mod workspace_move;
 mod promotion;
 use super::{ChatInfo, ChatSession, ChatStore, Sender, Sink, TurnStatus};
 use crate::{Error, Result};
@@ -133,6 +134,8 @@ impl Entry {
 }
 #[derive(Serialize, Deserialize)]
 struct Inbox {
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    workspace_gate: Option<workspace_move::WorkspaceGate>,
     chat: Uuid,
     native_id: String,
     entries: Vec<Entry>,
@@ -167,6 +170,7 @@ impl ChatStore {
             Ok(file) => file,
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 return Ok(Inbox {
+                    workspace_gate:None,
                     chat: chat.id,
                     native_id: self.initial_info(chat.id)?.native_id,
                     entries: vec![],
@@ -420,6 +424,7 @@ impl Admission {
             return Err(Error::Refused("input dispatch has already started".into()));
         }
         let inbox = self.store.read_inbox(&log.state.info)?;
+        if inbox.workspace_gate.is_some() {return Err(Error::Busy);}
         if let Some(entry) = inbox.entries.iter().find(|e| e.id == self.id) {
             if entry.text != self.text || entry.attachments != self.attachments {
                 return Err(different_prompt());
@@ -518,6 +523,7 @@ impl Sender {
         let next = {
             let log = self.sink.0.lock().unwrap();
             log.healthy()?;
+            if inbox.workspace_gate.is_some() {return Ok(false);}
             inbox
                 .next(&log.state)
                 .map(|e| (e.id, e.text.clone(), e.attachments.clone()))

@@ -42,6 +42,7 @@ pub(super) struct SavedCommand {
 
 impl Inbox {
     pub(super) fn next<'a>(&'a self, state: &State) -> Option<&'a Entry> {
+        if self.workspace_gate.is_some() {return None;}
         self.entries.iter().find(|entry| {
             (!self.held || self.released == Some(entry.id))
                 && entry.status(state) == InputStatus::Pending

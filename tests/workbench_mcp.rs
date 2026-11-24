@@ -46,7 +46,7 @@ fn main() {
         _ => {}
     }
     tokio::runtime::Runtime::new().unwrap().block_on(async {
-        tokio::time::timeout(Duration::from_secs(60), scenario())
+        tokio::time::timeout(Duration::from_secs(120), scenario())
             .await
             .unwrap();
     })
@@ -262,6 +262,7 @@ async fn scenario() {
             .any(|w| w == provider.as_bytes())
     );
     let moved=worktree::exercise(&url,&a,&observer,p,&checkouts,&db).await;
+    let interrupted=worktree::Interrupted::prepare(&a,&url,p,&observer,&checkouts,&db).await;
     kar.kill().await.unwrap();
     let (mut restarted, url) = server::serve_with_env(&state,&authorized,&db,&[("KAR_TEST_MCP_OBSERVER",address.as_ref())]).await;
     let policy = server::json(a.get(format!(
@@ -275,5 +276,6 @@ async fn scenario() {
     assert_eq!(receipt["result"]["Ok"]["comment_id"], 31);
     assert_eq!(writes.lock().unwrap().len(), 4);
     moved.check(&a,&url,p).await;
+    interrupted.check(&a,&url,p,&db).await;
     restarted.kill().await.unwrap();
 }

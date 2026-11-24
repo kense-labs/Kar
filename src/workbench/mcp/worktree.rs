@@ -67,6 +67,24 @@ pub(in crate::workbench) fn pending(app: &Workbench, chat: Uuid) -> bool {
         .values()
         .any(|r| r.chat == chat && r.status == Phase::Pending)
 }
+pub(in crate::workbench) fn recover_queue_reservations(app: &Workbench) -> Result<()> {
+    let db = app.0.catalog.lock().unwrap();
+    let pending = db
+        .model_worktree_moves
+        .values()
+        .filter(|m| m.status == Phase::Pending)
+        .map(|m| m.request.command_id)
+        .collect();
+    app.0.chats.recover_workspace_inputs(&pending)
+}
+fn reserve_inputs(app: &Workbench, row: &Move) -> Result<()> {
+    app.0.chats.reserve_workspace_inputs(
+        row.chat,
+        row.request.command_id,
+        row.continuation_id
+            .zip(row.request.continuation_prompt.as_deref()),
+    )
+}
 pub(in crate::workbench) fn recover(app: &Workbench) {
     let ids: Vec<_> = app
         .0
@@ -104,7 +122,7 @@ fn launch(app: Workbench, id: Uuid) {
             // A committed chat move always wins. In particular, a failure publishing the project
             // catalog must be repaired after restart rather than turning the receipt into a refusal.
             if !matches!(e, Error::Busy) && !committed(&app, &row).unwrap_or(true) {
-                let _ = app.update(|db| {
+                let saved = app.update(|db| {
                     if let Some(r) = db
                         .model_worktree_moves
                         .get_mut(&id)
@@ -115,6 +133,10 @@ fn launch(app: Workbench, id: Uuid) {
                     }
                     Ok(())
                 });
+                if saved.is_ok() {
+                    let _ = app.0.chats.release_workspace_inputs(row.chat, id);
+                    app.wake_queue();
+                }
             }
         }
     });
@@ -156,6 +178,7 @@ async fn finish(
                 "worktree handoff permission was revoked".into(),
             ));
         }
+        reserve_inputs(app, row)?;
         let info = app.binding(row.project, row.chat)?;
         if info.workspace != row.source {
             return Err(Error::Refused("workspace has changed".into()));
@@ -165,6 +188,43 @@ async fn finish(
             .is_some_and(|s| !s.is_closed() && s.needs_controller().unwrap_or(true))
         {
             return Err(Error::Busy);
+        }
+    }
+    if !already {
+        let unresolved = || -> Result<Vec<Uuid>> {
+            Ok(app
+                .0
+                .chats
+                .queued_inputs(row.chat)?
+                .into_iter()
+                .filter(|q| {
+                    matches!(
+                        q.status,
+                        crate::chat::InputStatus::Sending | crate::chat::InputStatus::Uncertain
+                    )
+                })
+                .map(|q| q.id)
+                .collect())
+        };
+        if !unresolved()?.is_empty() {
+            // Resume the original native binding, which knows where its receipt journal lives.
+            if let Some(old) = owner.take() {
+                old.close().await?;
+            }
+            app.attach_bound(row.project, row.chat, owner).await?;
+            let remaining = unresolved()?;
+            if !remaining.is_empty() {
+                if owner
+                    .as_ref()
+                    .is_some_and(|s| s.needs_controller().unwrap_or(true))
+                {
+                    return Err(Error::Busy);
+                }
+                return Err(Error::Refused(format!(
+                    "unconfirmed inputs remain in original native session {}: {remaining:?}",
+                    app.0.chats.saved_info(row.chat)?.native_id
+                )));
+            }
         }
     }
     let service = app.clone();
@@ -263,6 +323,7 @@ async fn finish(
         r.detail = None;
         Ok(())
     })?;
+    app.0.chats.release_workspace_inputs(row.chat, id)?;
     app.wake_queue();
     Ok(())
 }
@@ -418,9 +479,22 @@ fn dispatch(
             status: Phase::Pending,
             detail: None,
         };
+        reserve_inputs(app, &row)?;
         db.model_worktree_moves.insert(id, row.clone());
         Ok(row)
-    })?;
+    });
+    if receipt.is_err()
+        && !app
+            .0
+            .catalog
+            .lock()
+            .unwrap()
+            .model_worktree_moves
+            .contains_key(&id)
+    {
+        app.0.chats.release_workspace_inputs(chat, id)?;
+    }
+    let receipt = receipt?;
     Ok((
         json!({"handoff":receipt}),
         (receipt.status == Phase::Pending).then_some(id),

@@ -143,11 +143,34 @@ pub(super) async fn exercise(
     while !db.join("parent-turn-running").is_file() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    let queue = format!("{base}/{chat}/queue");
+    let before = Uuid::new_v4();
+    let after = Uuid::new_v4();
+    server::json(
+        host.post(&queue)
+            .json(&json!({"id":before,"text":"admitted before move"})),
+    )
+    .await;
     let first = server::json(handoff()).await;
     let record = &first["result"]["structuredContent"]["handoff"];
     assert_eq!(record["status"], "pending");
     let continuation = record["continuation_id"].as_str().unwrap().to_owned();
     assert_ne!(continuation, id.to_string());
+    server::json(
+        host.post(&queue)
+            .json(&json!({"id":after,"text":"admitted after move"})),
+    )
+    .await;
+    let q = server::json(host.get(&queue)).await;
+    assert_eq!(
+        q["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["id"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(before), json!(continuation), json!(after)]
+    );
     assert_eq!(
         &server::json(handoff()).await["result"]["structuredContent"]["handoff"],
         record
@@ -172,7 +195,7 @@ pub(super) async fn exercise(
                 let h = &snap["history"];
                 if h["turns"].as_array().is_some_and(|ts| {
                     ts.iter()
-                        .any(|t| t["id"] == continuation && t["finished_ms"].is_number())
+                        .any(|t| t["id"] == json!(after) && t["finished_ms"].is_number())
                 }) {
                     break h.clone();
                 }
@@ -227,10 +250,12 @@ pub(super) async fn exercise(
         .map(|s| serde_json::from_str(s).unwrap())
         .collect();
     let delivered: Vec<_> = calls.iter().filter(|v| v["id"] == native).collect();
-    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered.len(), 3);
     assert_eq!(delivered[0]["cwd"], json!(workspace));
     let text = delivered[0]["text"].as_str().unwrap();
-    assert!(text.contains("shared-next") && text.contains("continue in checkout"));
+    assert!(text.contains("shared-next") && text.contains("admitted before move"));
+    assert_eq!(delivered[1]["text"], "continue in checkout");
+    assert_eq!(delivered[2]["text"], "admitted after move");
     let result = Moved {
         chat,
         command: id,
@@ -241,4 +266,104 @@ pub(super) async fn exercise(
     };
     result.check(host, url, project).await;
     result
+}
+
+pub(super) struct Interrupted {
+    chat: Uuid,
+    input: Uuid,
+    continuation: Value,
+    original: Value,
+    cwd: Value,
+}
+impl Interrupted {
+    pub(super) async fn prepare(
+        host: &Client,
+        url: &str,
+        project: &str,
+        observer: &UdpSocket,
+        checkouts: &Path,
+        db: &Path,
+    ) -> Self {
+        let chat = Uuid::new_v4();
+        let base = format!("{url}/projects/{project}/chats");
+        let opened =
+            server::json(host.post(&base).json(&json!({"id":chat,"runtime":"codex"}))).await;
+        let original = opened["info"]["native_id"].clone();
+        let cwd = opened["info"]["workspace"].clone();
+        let token = bearer(observer).await;
+        let client = Client::new();
+        let sid = open(&client, url, &token).await;
+        server::json(
+            host.put(format!("{base}/{chat}/model-tools/permissions"))
+                .json(&json!({"mode":"execute","worktree_directory":checkouts})),
+        )
+        .await;
+        let input = Uuid::new_v4();
+        server::json(
+            host.post(format!("{base}/{chat}/queue"))
+                .json(&json!({"id":input,"text":"hold without reply"})),
+        )
+        .await;
+        while !fs::read_to_string(db.join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|s| serde_json::from_str::<Value>(s).ok())
+            .any(|v| v["id"] == original && v["text"] == "hold without reply")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let value=server::json(rpc(&client,url,&token,"tools/call",json!({"name":"kar_worktree_handoff","arguments":{"command_id":Uuid::new_v4(),"branch":"kar-uncertain","continuation_prompt":"only in new checkout"}})).header("mcp-session-id",&sid)).await;
+        let row = &value["result"]["structuredContent"]["handoff"];
+        assert_eq!(row["status"], "pending");
+        Self {
+            chat,
+            input,
+            continuation: row["continuation_id"].clone(),
+            original,
+            cwd,
+        }
+    }
+    pub(super) async fn check(self, host: &Client, url: &str, project: &str, db: &Path) {
+        let base = format!("{url}/projects/{project}/chats/{}", self.chat);
+        // The source provider has no native receipt. The new workspace must not receive a retry.
+        tokio::time::timeout(Duration::from_secs(35), async {
+            loop {
+                let q = server::json(host.get(format!("{base}/queue"))).await;
+                let entries = q["inputs"].as_array().unwrap();
+                if entries
+                    .iter()
+                    .any(|v| v["id"] == self.continuation && v["status"] == "withdrawn")
+                {
+                    assert!(
+                        entries
+                            .iter()
+                            .any(|v| v["id"] == json!(self.input) && v["status"] == "uncertain")
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let snapshot = server::json(host.get(format!("{base}/snapshot"))).await;
+        let info = &snapshot["history"]["chat"];
+        assert_eq!(info["native_id"], self.original);
+        assert_eq!(info["workspace"], self.cwd);
+        assert!(
+            snapshot["history"]["handoffs"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let calls = fs::read_to_string(db.join("calls")).unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|s| s.contains("hold without reply"))
+                .count(),
+            1
+        );
+        assert!(!calls.contains("only in new checkout"));
+    }
 }

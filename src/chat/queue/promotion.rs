@@ -90,6 +90,7 @@ impl ChatStore {
                 "queue command ID belongs to a different request".into(),
             ));
         }
+        let workspace_pending=inbox.workspace_gate.is_some();
         let entry = inbox
             .entries
             .iter_mut()
@@ -115,6 +116,7 @@ impl ChatStore {
             }
             return Ok(Claim::Prior(entry.receipt(&state)));
         }
+        if workspace_pending {return Err(Error::Busy);}
         if !online || state.active() != Some(target.turn) {
             return Err(crate::transport::AbortRequest::stale());
         }

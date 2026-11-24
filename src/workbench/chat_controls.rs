@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 #[derive(Default)]
 pub(super) struct QueuePump {
+    recovered_workspaces: Mutex<bool>,
     started: Once,
     wake: Arc<Notify>,
     errors: Mutex<HashMap<Uuid, (Instant, String)>>,
@@ -139,6 +140,13 @@ impl Workbench {
     }
 
     pub(super) fn start_services(&self) -> Result<()> {
+        {
+            let mut recovered=self.0.pump.recovered_workspaces.lock().unwrap();
+            if !*recovered {
+                super::mcp::worktree::recover_queue_reservations(self)?;
+                *recovered=true;
+            }
+        }
         self.0.shell.start(self);
         self.start_workflows()?;
         self.0.devices.maintain(self);
