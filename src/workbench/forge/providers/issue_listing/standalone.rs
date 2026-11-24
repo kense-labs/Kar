@@ -22,8 +22,7 @@ pub(super) async fn linear(
     }
     let mut filter = json!({"team":{"key":{"eq":team}}});
     if r.state != "all" {
-        filter["state"] =
-            json!({"type":{(if r.state=="closed"{"in"}else{"nin"}):["completed","canceled"]}});
+        filter["state"] = json!({"type":{(if r.state=="closed"{"in"}else{"nin"}):["completed","canceled","duplicate"]}});
     }
     if let Some(v) = viewer {
         let actor = json!({"displayName":{"eq":v}});
@@ -63,7 +62,7 @@ pub(super) async fn linear(
         }
         filter["or"] = json!(terms);
     }
-    let q = "query KarIssueList($n:Int!,$after:String,$filter:IssueFilter!,$order:PaginationOrderBy!){organization{urlKey} issues(first:$n,after:$after,filter:$filter,orderBy:$order){pageInfo{hasNextPage endCursor} nodes{number identifier team{key} title url createdAt updatedAt completedAt canceledAt creator{displayName name avatarUrl} botActor{name userDisplayName avatarUrl} assignee{displayName name avatarUrl} labels{nodes{name color}} state{name type}}}}";
+    let q = "query KarIssueList($n:Int!,$after:String,$filter:IssueFilter!,$order:PaginationOrderBy!){organization{urlKey} issues(first:$n,after:$after,filter:$filter,orderBy:$order){pageInfo{hasNextPage endCursor} nodes{number identifier team{key} title url createdAt updatedAt completedAt canceledAt creator{id displayName name avatarUrl} botActor{name userDisplayName avatarUrl} assignee{id displayName name avatarUrl} labels{nodes{name color}} state{name type}}}}";
     let data=super::super::linear::gql(c,q,json!({"n":r.limit(),"after":cursor,"filter":filter,"order":if r.sort==Sort::Created{"createdAt"}else{"updatedAt"}}),false).await?;
     if let Some((org, _)) = c.repository.split_once('/')
         && data["organization"]["urlKey"] != org
@@ -74,41 +73,53 @@ pub(super) async fn linear(
         ));
     }
     let page = &data["issues"];
-    let mut items = Vec::new();
-    for row in page["nodes"]
+    let items = page["nodes"]
         .as_array()
         .ok_or_else(|| invalid("Linear issue page"))?
-    {
-        if row["team"]["key"] != team {
-            return Err(invalid("Linear team returned by issue search"));
-        }
-        let key = row["identifier"]
-            .as_str()
-            .ok_or_else(|| invalid("Linear issue identifier"))?;
-        let category = if matches!(
-            row["state"]["type"].as_str(),
-            Some("completed" | "canceled")
-        ) {
-            "closed"
-        } else {
-            "open"
-        };
-        let author = actor(&row["creator"], "displayName").or_else(|| {
-            actor(&row["botActor"], "name").map(|mut v| {
-                v["isBot"] = json!(true);
-                v
-            })
-        });
-        items.push(json!({"key":key,"displayKey":key,"number":row["number"],"url":row["url"],"title":row["title"],"createdAt":row["createdAt"],"updatedAt":row["updatedAt"],
-            "closedAt":row["completedAt"].as_str().or_else(||row["canceledAt"].as_str()),"author":author,"assignees":actor(&row["assignee"],"displayName").into_iter().collect::<Vec<_>>(),
-            "state":{"category":category,"name":row["state"]["name"]},"labels":labels(&row["labels"]["nodes"]),"commentCount":0}));
-    }
+        .iter()
+        .map(|row| linear_row(row, team))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Page {
         items,
         next: after(&page["pageInfo"], cursor)?,
     })
 }
 
+pub(super) fn linear_state(v: &Value) -> Value {
+    let closed = matches!(
+        v["type"].as_str(),
+        Some("completed" | "canceled" | "duplicate")
+    );
+    let mut state = json!({"name":v["name"],"category":if closed{"closed"}else{"open"}});
+    if closed {
+        state["closeReason"] = v["type"].clone();
+    }
+    state
+}
+pub(super) fn linear_actor(user: &Value, bot: &Value) -> Option<Value> {
+    if let Some(user) = actor(user, "displayName").or_else(|| actor(user, "id")) {
+        return Some(user);
+    }
+    let name = bot["userDisplayName"]
+        .as_str()
+        .or_else(|| bot["name"].as_str())?;
+    Some(
+        json!({"login":bot["name"].as_str().unwrap_or(name),"name":name,"avatarUrl":bot["avatarUrl"],"isBot":true}),
+    )
+}
+pub(super) fn linear_row(row: &Value, team: &str) -> Result<Value, ForgeError> {
+    if row["team"]["key"] != team {
+        return Err(invalid("Linear team returned by issue search"));
+    }
+    let key = row["identifier"]
+        .as_str()
+        .ok_or_else(|| invalid("Linear issue identifier"))?;
+    Ok(
+        json!({"key":key,"displayKey":key,"number":row["number"],"url":row["url"],"title":row["title"],"createdAt":row["createdAt"],"updatedAt":row["updatedAt"],
+        "closedAt":row["completedAt"].as_str().or_else(||row["canceledAt"].as_str()),"author":linear_actor(&row["creator"],&row["botActor"]),"assignees":linear_actor(&row["assignee"],&Value::Null).into_iter().collect::<Vec<_>>(),
+        "state":linear_state(&row["state"]),"labels":labels(&row["labels"]["nodes"]),"commentCount":0}),
+    )
+}
 #[derive(Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct Position {
@@ -118,7 +129,7 @@ struct Position {
 fn key(row: &Value) -> Option<(i64, u64)> {
     Some((row["createdAt"].as_i64()?, row["number"].as_u64()?))
 }
-fn source_actor(c: &Context, name: Option<&str>) -> Option<Value> {
+pub(super) fn source_actor(c: &Context, name: Option<&str>) -> Option<Value> {
     let name = name?.trim();
     if name.is_empty() {
         return None;
@@ -127,7 +138,7 @@ fn source_actor(c: &Context, name: Option<&str>) -> Option<Value> {
     url.path_segments_mut().ok()?.extend(["avatars", name]);
     Some(json!({"login":name,"name":null,"avatarUrl":url.as_str(),"isBot":name.ends_with("[bot]")}))
 }
-fn source_row(c: &Context, row: &Value) -> Result<Value, ForgeError> {
+pub(super) fn source_row(c: &Context, row: &Value) -> Result<Value, ForgeError> {
     let (at, n) = key(row).ok_or_else(|| invalid("Source issue timestamp or number"))?;
     let created = jiff::Timestamp::from_millisecond(at)
         .map_err(|_| invalid("Source issue timestamp"))?

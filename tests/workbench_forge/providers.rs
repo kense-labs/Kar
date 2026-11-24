@@ -563,6 +563,16 @@ fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Res
         .into_owned()
         .collect::<HashMap<_, _>>();
     let date = "2026-11-01T00:00:00Z";
+    if kind == "tanstack-source" && path.ends_with("/issues/72") {
+        let notes = if params.contains_key("cursor") {
+            json!([{"id":1,"author":"viewer","comment":"old","at":1000}])
+        } else {
+            json!([
+            {"id":2,"author":"viewer","comment":"new","at":2000},{"id":3,"comment":"hidden","moderation":"hidden","at":3000},{"event":"renamed","actor":"bot","at":3100}])
+        };
+        return Some(Json(json!({"number":72,"title":"Detail","kind":"issue","state":"open","locked":true,"author":"viewer","createdAt":1000,"body":"Hello","timeline":notes,
+            "fixedBy":[{"number":9,"title":"Fix","state":"merged"}],"next":if params.contains_key("cursor"){None}else{Some("older")}})).into_response());
+    }
     if kind == "azure-devops" {
         if path.ends_with("/workitemtypes") {
             return Some(Json(json!({"value":[{"name":"Task","states":[{"name":"ResolvedQA","category":"Resolved"}]}]})).into_response());
@@ -617,6 +627,20 @@ fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Res
     Some(res)
 }
 async fn verify_search(c: &reqwest::Client, base: &str, project: &str, kind: &str) {
+    if kind == "tanstack-source" {
+        let issue = format!("{base}/projects/{project}/forge/issues/72");
+        let detail = ok(c.get(format!("{issue}/detail"))).await;
+        assert_eq!(detail["viewerPermissions"]["comment"], false);
+        assert_eq!(detail["events"][0]["kind"], "renamed");
+        assert_eq!(detail["linkedPullRequests"][0]["closesIssue"], true);
+        assert_eq!(detail["comments"].as_array().unwrap().len(), 1);
+        assert!(detail["comments"][0].get("reactions").is_none());
+        let older = ok(c
+            .get(format!("{issue}/comments"))
+            .query(&[("cursor", detail["commentsCursor"].as_str().unwrap())]))
+        .await;
+        assert_eq!(older["comments"][0]["id"], "1");
+    }
     let target = format!("{base}/forge/issues/list");
     let mut input = json!({"projectId":project,"state":"open","query":"Issue 'search'","labels":["red","blue"],"limit":1});
     let first = ok(c.post(&target).json(&input)).await;

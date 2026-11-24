@@ -23,6 +23,19 @@ async fn peer(headers: HeaderMap, Json(input): Json<Value>) -> Result<Json<Value
         json!({"viewer":{"id":name,"name":name},"organization":{"urlKey":"org"},"teams":{
             "nodes":[{"key":if second{"OPS"}else{"ENG"},"name":if second{"Operations"}else{"Engineering"}}],
             "pageInfo":{"hasNextPage":!second,"endCursor":"next"}}})
+    } else if query.contains("KarLinearFullIssue") || query.contains("KarLinearIssueComments") {
+        let full = query.contains("KarLinearFullIssue");
+        let after = &input["variables"]["after"];
+        let comment = json!({"id":if full{"new"}else{"old"},"body":"message","createdAt":"2026-10-03T00:00:00Z","url":"https://linear.app/message","user":{"id":"author","displayName":"leo"},"reactions":[{"emoji":"heart","user":{"id":"viewer","displayName":name}},{"emoji":"❤️","user":{"id":"author","displayName":"leo"}}]});
+        if !full {
+            assert_eq!(after, "older")
+        }
+        json!({"organization":{"urlKey":"org"},"issue":{"number":7,"identifier":"ENG-7","team":{"key":"ENG","states":{"nodes":[{"name":"Clone","type":"duplicate","position":1},{"name":"New","type":"unstarted","position":3}]}},
+            "title":"Detail","url":"https://linear.app/org/issue/ENG-7","description":"Body","state":{"name":"Clone","type":"duplicate"},"createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-02T00:00:00Z",
+            "comments":{"nodes":[comment],"pageInfo":{"hasNextPage":full,"endCursor":"older"}},"attachments":{"nodes":[{"url":"https://gitlab.com/group/sub/repo/-/merge_requests/8","title":"Fix","metadata":{"status":"merged"}}]},
+            "history":{"nodes":[{"id":"h","createdAt":"2026-10-02T00:00:00Z","fromState":{"id":"new","type":"unstarted"},"toState":{"id":"done","type":"duplicate","name":"Clone"},"addedLabels":[],"removedLabels":[]}]}}})
+    } else if query.contains("KarIssueDetailsViewer") {
+        json!({"viewer":{"id":"viewer","displayName":name}})
     } else if query.contains("KarIssueListViewer") {
         json!({"viewer":{"displayName":name}})
     } else if query.contains("KarIssueList(") {
@@ -113,6 +126,29 @@ async fn accounts_and_team_bindings_survive_restart_without_cross_account_fallba
     assert_eq!(existing["account_bindings"][p]["account_id"], *account);
     assert!(existing["bindings"].get(p).is_none());
     assert!(!existing.to_string().contains("sample-work"));
+    let rich = format!("{base}/projects/{p}/forge/issues/7");
+    let detail = ok(http
+        .get(format!("{rich}/detail"))
+        .query(&[("tracker", "linear"), ("scope", "ENG")]))
+    .await;
+    assert_eq!(detail["viewer"], "work");
+    assert_eq!(detail["state"]["closeReason"], "duplicate");
+    assert_eq!(detail["states"][0]["name"], "New");
+    assert_eq!(detail["events"][0]["kind"], "closed");
+    assert_eq!(
+        detail["linkedPullRequests"][0]["repository"],
+        "group/sub/repo"
+    );
+    let older = ok(http.get(format!("{rich}/comments")).query(&[
+        ("scope", "ENG"),
+        ("cursor", detail["commentsCursor"].as_str().unwrap()),
+    ]))
+    .await;
+    assert_eq!(older["comments"][0]["id"], "old");
+    assert_eq!(
+        older["comments"][0]["reactions"][0],
+        json!({"count":2,"actors":["leo"],"viewerHasReacted":true,"content":"heart"})
+    );
     let endpoint = format!("{base}/forge/issues/list");
     let mut filters =
         json!({"state":"open","involvement":"authored","labels":["bug"],"projectId":p,"limit":1});

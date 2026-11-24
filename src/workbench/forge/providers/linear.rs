@@ -172,7 +172,7 @@ fn issue(row: &Value, key: &str) -> Result<Value, ForgeError> {
     }
     let n = number(&row["number"])?;
     Ok(
-        json!({"number":n,"identifier":row["identifier"],"native_id":row["id"],"title":row["title"],"body":row["description"],"url":row["url"],"updated_at":row["updatedAt"],"state":row["state"]["name"],"category":if matches!(row["state"]["type"].as_str(),Some("completed"|"canceled")){"closed"}else{"open"}}),
+        json!({"number":n,"identifier":row["identifier"],"native_id":row["id"],"title":row["title"],"body":row["description"],"url":row["url"],"updated_at":row["updatedAt"],"state":row["state"]["name"],"category":if matches!(row["state"]["type"].as_str(),Some("completed"|"canceled"|"duplicate")){"closed"}else{"open"}}),
     )
 }
 async fn detail(c: &Context, key: &str, n: u64) -> Result<Value, ForgeError> {
@@ -213,7 +213,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         ),
         Operation::Issues => {
             let q = format!(
-                "query KarIssues($team:String!,$after:String){{issues(first:100,after:$after,filter:{{team:{{key:{{eq:$team}}}},state:{{type:{{nin:[\"completed\",\"canceled\"]}}}}}}){{nodes{{{FIELDS}}} pageInfo{{hasNextPage endCursor}}}}}}"
+                "query KarIssues($team:String!,$after:String){{issues(first:100,after:$after,filter:{{team:{{key:{{eq:$team}}}},state:{{type:{{nin:[\"completed\",\"canceled\",\"duplicate\"]}}}}}}){{nodes{{{FIELDS}}} pageInfo{{hasNextPage endCursor}}}}}}"
             );
             let mut cursor = Value::Null;
             let mut result = vec![];

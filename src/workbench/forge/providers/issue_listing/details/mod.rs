@@ -2,6 +2,8 @@
 use super::*;
 use axum::extract::{Path, Query};
 mod github;
+mod linear;
+mod source;
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +92,8 @@ pub(in crate::workbench::forge) async fn read(
     let (s, writable) = resolve(&app, p, &q).await?;
     let mut result = match s.ctx.kind.as_str() {
         "github" => github::read(&s.ctx, n).await?,
+        "linear" => linear::read(&s.ctx, &s.scope.to_ascii_uppercase(), n).await?,
+        "tanstack-source" => source::read(&s.ctx, n, None, false).await?,
         _ => {
             return Err(ForgeError::unsupported(
                 "expanded issue details are unavailable for this tracker",
@@ -119,6 +123,17 @@ pub(in crate::workbench::forge) async fn comments(
     }
     let (s, _) = resolve(&app, p, &q).await?;
     match s.ctx.kind.as_str() {
+        "linear" => linear::comments(
+            &s.ctx,
+            &s.scope.to_ascii_uppercase(),
+            n,
+            q.cursor.as_deref(),
+        )
+        .await
+        .map(Json),
+        "tanstack-source" => source::read(&s.ctx, n, q.cursor.as_deref(), true)
+            .await
+            .map(Json),
         "github" => github::comments(&s.ctx, n, q.cursor.as_deref())
             .await
             .map(Json),

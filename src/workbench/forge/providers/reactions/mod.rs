@@ -17,6 +17,20 @@ pub(crate) enum Content {
     Eyes,
 }
 impl Content {
+    pub(super) fn from_linear(value: &str) -> Option<Self> {
+        [
+            Self::ThumbsUp,
+            Self::ThumbsDown,
+            Self::Laugh,
+            Self::Hooray,
+            Self::Confused,
+            Self::Heart,
+            Self::Rocket,
+            Self::Eyes,
+        ]
+        .into_iter()
+        .find(|c| c.linear() == value || c.linear_name() == value)
+    }
     fn standard(self) -> &'static str {
         [
             "+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes",
