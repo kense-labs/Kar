@@ -432,6 +432,14 @@ struct Replay {
     after: Option<ChatCursor>,
 }
 async fn events(State((store, chat)): State<Endpoint>, headers: HeaderMap, uri: Uri) -> Response {
+    event_response(store, chat, headers, uri).await
+}
+pub(crate) async fn event_response(
+    store: ChatStore,
+    chat: Uuid,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
     let after = match headers.get("last-event-id") {
         Some(id) if !id.is_empty() => match id.to_str().ok().and_then(|s| s.parse().ok()) {
             Some(id) => Some(id),

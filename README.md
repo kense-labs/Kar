@@ -352,6 +352,26 @@ Pi 1.6 在回合结束时记录原生分支的末条记录 ID。选择最后一�
 
 如果宿主在分叉途中退出，再次运行同一条 `chat fork <回合UUID> --chat <原聊天UUID>` 即可继续未完成的操作。通过 `history --json` 的 `pending_fork` 可以找到待完成的回合。恢复期间，共用该工作区的其他聊天会拒绝新回合，完成这次分叉后可重新发送。
 
+## 本地工作台服务
+
+在 macOS 上从终端启动服务，向客户端提供项目、工作区文件和持久聊天。可以多次指定允许注册项目的根目录。默认使用现有 Kar 聊天存储，可用 `--state` 选择独立目录。
+
+```sh
+kar workbench --root "$PWD"
+```
+
+启动时输出的 JSON 包含回环地址和访问令牌。客户端在请求中发送 `Authorization: Bearer <token>`。设置 `KAR_WORKBENCH_TOKEN` 可在服务重启后继续使用同一令牌。
+
+| 操作 | HTTP 接口 |
+| --- | --- |
+| 注册、列出项目 | `POST /projects` 接受 `{"root":"/absolute/project","name":"Kar"}`。`GET /projects` 返回有权访问的项目。 |
+| 新建或列出聊天 | `POST /projects/{p}/chats` 接受 `runtime`、可选的 `model` 和用于重试的聊天 UUID `id`。`GET /projects/{p}/chats?include_archived=true` 可包含已归档的聊天。 |
+| 发送消息 | `POST /projects/{p}/chats/{c}/messages` 接受输入 UUID `id` 与 `text`。重启后发送会恢复原生会话。 |
+| 时间线与续收 | `GET /projects/{p}/chats/{c}/snapshot` 和 `/events` 使用 Kar 的聊天快照与 SSE，支持 `Last-Event-ID`。 |
+| 归档或重新打开 | `PUT /projects/{p}/chats/{c}/archive` 接受 `{"archived":true}` 或 `false`。 |
+| 读取或保存普通文本文件 | `GET` 或 `PUT /projects/{p}/file?path=relative/path`，正文使用 `{"text":"…"}`。 |
+| 搜索 | `GET /projects/{p}/search?q=关键词&kind=paths`，也可选 `content` 或 `messages`。跨可见项目查聊天用 `GET /search/chats?q=关键词`。 |
+
 ## 接入自己的 Rust 后端
 
 在同级项目的 `Cargo.toml` 中添加依赖：

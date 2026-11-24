@@ -2244,7 +2244,14 @@ async fn manual_compaction_replay() {
 mod cursor_children;
 #[path = "support/cursor_interactions.rs"]
 mod cursor_interactions;
+#[path = "support/workbench_projects.rs"]
+mod workbench_projects;
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("workbench-projects") {
+        workbench_projects::run();
+        return;
+    }
     if std::env::var_os("KAR_TEST_CURSOR_ACP").is_some() {
         cursor_children::peer();
         return;

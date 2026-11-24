@@ -49,6 +49,17 @@ impl WorkspaceInventory {
 enum Action {
     /// Save, reopen and continue chats in their original workspaces.
     Chat(chat_cli::Chat),
+    /// Serve local projects, workspace files and saved chats to workbench clients.
+    Workbench {
+        /// Directories in which clients may register projects.
+        #[arg(long = "root", required = true)]
+        roots: Vec<PathBuf>,
+        /// Chat storage directory. Defaults to the normal Kar chat store.
+        #[arg(long)]
+        state: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
     /// Report installed executables, versions and pre-open session capabilities.
     List {
         /// Only inspect this runtime.
@@ -373,6 +384,28 @@ fn json_line(value: &impl serde::Serialize, mut out: impl Write) -> Result<()> {
 async fn execute(command: Action) -> Result<()> {
     match command {
         Action::Chat(chat) => chat.run().await?,
+        Action::Workbench { roots, state, port } => {
+            let store = match state {
+                Some(path) => kar::chat::ChatStore::open(path)?,
+                None => kar::chat::ChatStore::local()?,
+            };
+            let app = kar::workbench::Workbench::open(store, &roots)?;
+            let token = std::env::var("KAR_WORKBENCH_TOKEN")
+                .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+            let router = app.router(token.clone())?;
+            let listener =
+                tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
+            let address = listener.local_addr()?;
+            json_line(
+                &json!({"url":format!("http://{address}"),"token":token}),
+                std::io::stdout().lock(),
+            )?;
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = tokio::signal::ctrl_c().await;
+                })
+                .await?;
+        }
         Action::Mcp {
             cwd,
             runtimes: ids,

@@ -1,6 +1,6 @@
 //! Persistent native chats. A per-chat file lock gives one process ownership of the provider session.
 mod checkpoint;
-mod feed;
+pub(crate) mod feed;
 mod http_feed;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
 pub use http_feed::HttpChatFeed;
@@ -209,6 +209,12 @@ impl ChatStore {
             .ok_or_else(|| Error::Protocol("set KAR_CHAT_DIR to a writable directory".into()))?;
         Self::open(state.join("kar/chats"))
     }
+    pub(crate) fn directory(&self) -> &Path {
+        &self.dir
+    }
+    pub(crate) fn saved_info(&self, id: Uuid) -> Result<ChatInfo> {
+        log::info(File::open(self.path(id))?, id)
+    }
     fn path(&self, id: Uuid) -> PathBuf {
         self.dir.join(format!("{id}.karchat"))
     }
@@ -325,6 +331,17 @@ impl ChatStore {
         &self,
         runtime_id: &str,
         program: Option<&Path>,
+        opts: SessionOptions,
+    ) -> Result<ChatSession> {
+        self.create_with_id(Uuid::new_v4(), runtime_id, program, opts)
+            .await
+    }
+
+    pub(crate) async fn create_with_id(
+        &self,
+        id: Uuid,
+        runtime_id: &str,
+        program: Option<&Path>,
         mut opts: SessionOptions,
     ) -> Result<ChatSession> {
         opts.cwd = opts.cwd.canonicalize()?;
@@ -350,7 +367,7 @@ impl ChatStore {
             ));
         }
         let info = ChatInfo {
-            id: Uuid::new_v4(),
+            id,
             workspace: opts.cwd.clone(),
             runtime: rt.id,
             protocol: session.protocol(),

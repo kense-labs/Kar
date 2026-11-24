@@ -25,7 +25,7 @@ id = "projects"
 name = "统一项目、聊天与工作区服务"
 hours = [32, 64]
 reference = ["packages/contracts/src/rpc.ts", "apps/server/src/project/ProjectService.ts", "apps/server/src/workspace/WorkspaceFileSystem.ts", "apps/server/src/workspace/WorkspaceSearchIndex.ts", "apps/server/src/orchestration-v2/ThreadSearch.ts"]
-test_command = "cargo test --locked --test workbench_projects"
+test_command = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = [
   "创建两个含同名文件的项目，各建两个聊天。两个客户端经同一服务列出项目、打开聊天、发消息和重新订阅，核对项目和聊天 ID、消息归属及重连游标。",
   "写入带已知关键词的文件和消息，分别执行项目文件名搜索、内容搜索和跨聊天搜索。结果须定位到正确的文件、消息及聊天，按请求作用域返回；普通工作区文件可经 API 读取和保存，越过授权目录的请求被拒绝。",
