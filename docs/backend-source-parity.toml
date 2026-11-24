@@ -637,10 +637,11 @@ id = "chat-shell-read"
 phase = 2
 name = "聊天目录、历史窗口、变更流及侧栏查询"
 upstream = ["apps/server/src/orchestration-v2/ProjectionStore.ts", "apps/server/src/orchestration-v2/ThreadSearch.ts", "apps/server/src/ws.ts"]
-kar = ["src/workbench/thread_state/queries.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart -- workbench-fork"
+kar = ["src/workbench/thread_state/queries.rs", "src/workbench/shell/mod.rs"]
+status = "工作台目录批次游标已接入。两客户端、到期唤醒、挂起问题与重启补发已入候选；侧聊天与较早已结项目仍须逐项核对。"
+test_target = "cargo test --locked --test chat_restart -- workbench-shell"
 accept = "查父子及跨项目分叉、归档、批量标题和链接、较早已结项目分页与工作树。大历史分页，重启从旧游标补发；单独核对侧聊天、原生子任务和完整 shell 事件。"
+implementation_ref = "856b508"
 
 [[gap]]
 id = "native-child-work"
@@ -668,10 +669,11 @@ id = "prompt-suggestion"
 phase = 2
 name = "供应商预测的下一条提示实时流"
 upstream = ["apps/server/src/orchestration-v2/ProviderSessionManager.ts", "packages/contracts/src/orchestrationV2.ts"]
-kar = ["src/workbench/interactions.rs"]
-status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
-test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+kar = ["src/prompt_suggestions.rs","src/transport/suggestions.rs","src/workbench/suggestions.rs"]
+status = "Claude 原生推送与 Codex 回合采样、设置、重置和双订阅已接入。待同一候选验证，原生 CLI 用例与协议用例分列。"
+test_target = "cargo test --locked --test chat_restart -- workbench-suggestions"
 accept = "先订阅得到当前值，供应商发布时携带产生建议的回合，下一回合清空；重启后无过期建议。"
+implementation_ref = "dd70848"
 
 [[gap]]
 id = "thread-launch"
@@ -688,10 +690,11 @@ id = "attachment-text"
 phase = 2
 name = "文件正文提取及按问题传递附件"
 upstream = ["apps/server/src/provider/userInputAttachments.ts", "apps/server/src/provider/DocumentText.ts", "apps/server/src/provider/documentTextWorker.ts"]
-kar = ["src/chat/attachments.rs", "src/workbench/interactions.rs"]
-status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+kar = ["src/chat/attachments.rs", "src/workbench/interactions.rs", "crates/kar-documents/src/extract"]
+status = "原件与提取文本均校验摘要并按问题传递。待统一复验，包括 ODF 重复内容、EPUB 特殊实体、RTF 字符编码和损坏包保留原件。"
 test_target = "cargo test --locked --test chat_restart -- workbench-requests"
 accept = "DOCX/XLSX/PPTX、ODF、EPUB、RTF、笔记本分别读取可见文本；损坏、过大、超时保留原件；按问题追加可读路径与提取文件，跨聊天、未知问题须拒绝。"
+implementation_ref = "a72a9ce,628f27a"
 
 [[gap]]
 id = "workflow-sources"
@@ -1010,3 +1013,24 @@ operation_mapping = "backend-workbench-http-map.tsv"
 status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
 test_target = "cargo test --locked --test workbench_terminal_preview"
 accept = "两个客户连接同一标签页，核对帧、输入、文件选择、过期请求、断线后重新订阅。"
+
+[[gap]]
+id = "runtime-dsh-image-upload"
+phase = 1
+name = "按当前模型和服务端图片限制上传并引用图片"
+upstream = ["sdk:src/runtimes/dsh/bridge-input.ts", "sdk:src/runtimes/dsh/list-models.ts"]
+kar = ["src/dsh", "src/input.rs"]
+status = "已发现具体差异，待开发。"
+test_target = "cargo test --locked --test native_live -- dsh"
+accept = "模型声明可读图片且后台允许对应 MIME 时上传并在原生 prompt 引用返回的附件。模型切换、缺失图片模态、过大或不支持的 MIME 提前拒绝。原生连接和协议样本分别留证。"
+
+[[gap]]
+id = "native-background-wait"
+phase = 2
+name = "显式等待后台任务与终止指定工作流"
+upstream = ["apps/server/src/orchestration-v2/ThreadManagementService.ts", "apps/server/src/mcp/toolkits/orchestrator/tools.ts", "apps/server/src/mcp/toolkits/orchestrator/handlers.ts"]
+kar = ["src/workbench/interactions.rs"]
+status = "停止原 Claude 工作流已接入。正在补按所在聊天等待后台任务、撤销等待及 matched/unmatched 回执。"
+implementation_ref = "91c518d"
+test_target = "cargo test --locked --test workbench_handoff"
+accept = "对同一聊天 1 到 20 个任务标记等待和撤销，分列 matched/unmatched；工作台保留忙碌指示，普通回合按真实 result 完成。重启、任务结束、ID 复用或切换供应商时不得操作另一个任务。"
