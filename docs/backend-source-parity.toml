@@ -7,6 +7,8 @@ runtime_inventory = "backend-source-index.tsv"
 workbench_rpc_inventory = "backend-workbench-source-index.tsv"
 sdk_member_mapping = "backend-sdk-map.tsv"
 workbench_command_mapping = "backend-workbench-command-map.tsv"
+workbench_http_mapping = "backend-workbench-http-map.tsv"
+workbench_mcp_mapping = "backend-workbench-mcp-map.tsv"
 forge_driver_mapping = "backend-workbench-forge-source-map.tsv"
 path_convention = "upstream 路径相对相应固定提交的仓库根；sdk: 相对运行时发布包根目录，由导出 ./agents 且含 src/contracts 的包定位。kar 路径相对 Kar 仓库根。"
 
@@ -655,8 +657,9 @@ id = "command-output"
 phase = 2
 name = "命令输出的实时尾部、替换及终态"
 upstream = ["apps/server/src/orchestration-v2/CommandOutputHub.ts"]
-kar = ["src/workbench/thread_find/mod.rs"]
-status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+kar = ["src/workbench/thread_find/output/mod.rs", "src/workbench/thread_find/output/terminal.rs"]
+status = "已接入工作台和候选场景，待统一 macOS 验收"
+implementation_ref = "bcd26eb"
 test_target = "cargo test --locked --test chat_restart -- workbench-fork"
 accept = "两个客户端订阅同一工具项，检查首个替换、增量、尾部截断和慢端重置；断线后恢复，结束时只取本命令的最终输出。"
 
@@ -696,7 +699,8 @@ phase = 2
 name = "具名工作流定义的编辑、验证、重新加载"
 upstream = ["apps/server/src/workflows/WorkflowRuntime.ts", "apps/server/src/orchestration-v2/workflowScriptQuery.ts", "apps/server/src/orchestration-v2/workflowFileRead.ts"]
 kar = ["src/workbench/workflows/mod.rs"]
-status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+status = "已接入工作台和候选场景，待统一 macOS 验收"
+implementation_ref = "aaeccfc"
 test_target = "cargo test --locked --test workbench_workflows"
 accept = "列出文件名、原文、工作流、诊断与最新修订。校验失败保留可运行版，外部编辑、删除、重启、未完成运行所用的定义均可核对。单独验证 Claude 目录中的脚本扩展、边界和 256 KiB 截断。"
 
@@ -709,3 +713,300 @@ kar = ["src/workbench/interactions.rs"]
 status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
 test_target = "cargo test --locked --test chat_restart -- workbench-requests"
 accept = "发起请求后由两端竞争应答，拒绝旧请求与跨会话提交。秘密不出现在持久历史、订阅或诊断；反馈的确认、拒绝和重复请求分别留证。"
+
+[[gap]]
+id = "agent-tool-attachment"
+phase = 2
+name = "工作台 MCP 附件上传及聊天发送"
+upstream = ["apps/server/src/mcp/toolkits/attachment/tools.ts", "apps/server/src/mcp/toolkits/attachment/handlers.ts"]
+kar = ["src/workbench/assets"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "从同一对话准备临时上传并提交附件，重试、撤销、过期、跨聊天读取均核对文件与回合。"
+
+[[gap]]
+id = "agent-tool-device"
+phase = 2
+name = "工作台 MCP 设备控制"
+upstream = ["apps/server/src/mcp/toolkits/device/tools.ts", "apps/server/src/mcp/toolkits/device/handlers.ts"]
+kar = ["src/workbench/devices"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "分别对同一宿主和其他宿主列举、打开、取截图及关闭，检查租约和截图产物归属。"
+
+[[gap]]
+id = "agent-tool-environment"
+phase = 2
+name = "工作台 MCP 环境与偏好"
+upstream = ["apps/server/src/mcp/toolkits/environment/tools.ts", "apps/server/src/mcp/toolkits/environment/handlers.ts"]
+kar = ["src/workbench/access"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "读取环境、更改允许的偏好，再从授权客户端读取，越权请求不得写入。"
+
+[[gap]]
+id = "agent-tool-feedback"
+phase = 2
+name = "工作台 MCP 代理反馈"
+upstream = ["apps/server/src/mcp/toolkits/feedback/tools.ts", "apps/server/src/mcp/toolkits/feedback/handlers.ts"]
+kar = ["src/workbench/interactions.rs"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "按反馈配置生成卡片，用另一客户端核对经同意的内容、拒绝和限额。"
+
+[[gap]]
+id = "agent-tool-html"
+phase = 2
+name = "工作台 MCP HTML 渲染及预览"
+upstream = ["apps/server/src/mcp/toolkits/html/tools.ts", "apps/server/src/mcp/toolkits/html/handlers.ts"]
+kar = ["src/workbench/terminal_preview"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "预览返回图片与实际高度，渲染产物出现于来源回合；并发两回合及超时分别核对归属和清理。"
+
+[[gap]]
+id = "agent-tool-issues"
+phase = 2
+name = "工作台 MCP 议题关联和操作"
+upstream = ["apps/server/src/mcp/toolkits/issues/tools.ts", "apps/server/src/mcp/toolkits/issues/handlers.ts"]
+kar = ["src/workbench/forge"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "逐工具核对仓库、远端账号和聊天范围、绑定与解绑；写后直接向托管端读取。"
+
+[[gap]]
+id = "agent-tool-message"
+phase = 2
+name = "工作台 MCP 向用户发送回合内消息"
+upstream = ["apps/server/src/mcp/toolkits/message/tools.ts", "apps/server/src/mcp/toolkits/message/handlers.ts"]
+kar = ["src/workbench/interactions.rs"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "同回合显示一次代理消息；越过活动回合及超长内容被拒绝且不产生新项。"
+
+[[gap]]
+id = "agent-tool-orchestrator"
+phase = 2
+name = "工作台 MCP 编排、委派、定时、秘密和环境链接"
+upstream = ["apps/server/src/mcp/toolkits/orchestrator/tools.ts", "apps/server/src/mcp/toolkits/orchestrator/handlers.ts"]
+kar = ["src/workbench/workflows"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "逐行检查目标、权限、运行模式上限、取消和超时；跨实例任务由对应实例应答，取消不会影响其他任务。"
+
+[[gap]]
+id = "agent-tool-preview"
+phase = 2
+name = "工作台 MCP 代理操作浏览器预览"
+upstream = ["apps/server/src/mcp/toolkits/preview/tools.ts", "apps/server/src/mcp/toolkits/preview/handlers.ts"]
+kar = ["src/workbench/terminal_preview"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "对实际标签页按表内工具检查图像、导航、用户动作、等待、对话框及录制，断开客户端后检查挂起操作结束情况。"
+
+[[gap]]
+id = "agent-tool-previewControls"
+phase = 2
+name = "工作台 MCP 预览列表与关闭"
+upstream = ["apps/server/src/mcp/toolkits/previewControls/tools.ts", "apps/server/src/mcp/toolkits/previewControls/handlers.ts"]
+kar = ["src/workbench/terminal_preview"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "两个聊天各打开预览；返回授权范围，关闭指定预览，另一聊天继续可用。"
+
+[[gap]]
+id = "agent-tool-project"
+phase = 2
+name = "工作台 MCP 项目读写、克隆与聊天启动"
+upstream = ["apps/server/src/mcp/toolkits/project/tools.ts", "apps/server/src/mcp/toolkits/project/handlers.ts"]
+kar = ["src/workbench/project_lifecycle"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "检查可见项目、同名冲突、异步克隆及首轮回执，分别以只读和可写调用方复验。"
+
+[[gap]]
+id = "agent-tool-pullRequests"
+phase = 2
+name = "工作台 MCP 拉取请求、指南、监听和 CI"
+upstream = ["apps/server/src/mcp/toolkits/pullRequests/tools.ts", "apps/server/src/mcp/toolkits/pullRequests/handlers.ts"]
+kar = ["src/workbench/forge"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "逐项检查单个及批量关联、向导读写、订阅、审批、合并和 CI 操作归属及真实托管端回执。"
+
+[[gap]]
+id = "agent-tool-theme"
+phase = 2
+name = "工作台 MCP 主题的读取与设置"
+upstream = ["apps/server/src/mcp/toolkits/theme/tools.ts", "apps/server/src/mcp/toolkits/theme/handlers.ts"]
+kar = ["src/workbench/http.rs"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "读取、应用合法主题并重连，核对作用范围，损坏配置保留前次有效值。"
+
+[[gap]]
+id = "agent-tool-thread"
+phase = 2
+name = "工作台 MCP 聊天操作与队列"
+upstream = ["apps/server/src/mcp/toolkits/thread/tools.ts", "apps/server/src/mcp/toolkits/thread/handlers.ts"]
+kar = ["src/workbench/thread_state"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "展开索引中的队列、请求、配置、移交、搜索及调度动作，检查结果分页、过期目标和模式边界。"
+
+[[gap]]
+id = "agent-tool-toolSearch"
+phase = 2
+name = "工作台 MCP 调用方工具发现"
+upstream = ["apps/server/src/mcp/toolkits/toolSearch/tools.ts", "apps/server/src/mcp/toolkits/toolSearch/handlers.ts"]
+kar = ["src/workbench/http.rs"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "仅搜索可见工具，按名称和描述排序取最多十项，一个供应商会话加载的工具不会出现于另一会话，列表变更可订阅。"
+
+[[gap]]
+id = "agent-tool-workflow"
+phase = 2
+name = "工作台 MCP 工作流操作"
+upstream = ["apps/server/src/mcp/toolkits/workflow/tools.ts", "apps/server/src/mcp/toolkits/workflow/handlers.ts"]
+kar = ["src/workbench/workflows"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "按工具的每种 action 编排，核对定义和运行、超时、重复命令与回报的回合归属。"
+
+[[gap]]
+id = "agent-tool-worktree"
+phase = 2
+name = "工作台 MCP 工作树和交接"
+upstream = ["apps/server/src/mcp/toolkits/worktree/tools.ts", "apps/server/src/mcp/toolkits/worktree/handlers.ts"]
+kar = ["src/workbench/git.rs"]
+operation_mapping = "backend-workbench-mcp-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "检查含未提交更改的交接、状态及列表，目标树和仓库受当前项目约束。"
+
+[[gap]]
+id = "environment-descriptor"
+phase = 2
+name = "环境元数据发现"
+upstream = ["apps/server/src/http.ts"]
+kar = ["src/workbench/access"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_remote_access"
+accept = "读取实例标识、版本和能力的公开范围，再次登录同实例核对标识。"
+
+[[gap]]
+id = "environment-auth"
+phase = 2
+name = "环境浏览器会话、配对与用途绑定票据"
+upstream = ["apps/server/src/auth/http.ts"]
+kar = ["src/workbench/access"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_remote_access"
+accept = "按表内各路由核对配对凭证、浏览器会话、刷新、撤销、媒体与订阅票据，错用票据及并发重放被拒绝。"
+
+[[gap]]
+id = "mcp-http-oauth"
+phase = 2
+name = "MCP 客户端注册与授权"
+upstream = ["apps/server/src/auth/mcpOAuthHttp.ts"]
+kar = ["src/workbench/access"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "核对发现元数据、动态注册、用户同意、拒绝、授权码与 PKCE、令牌撤销，确认回调和实际权限范围。"
+
+[[gap]]
+id = "mcp-http-session"
+phase = 2
+name = "工具传输、会话认证及作用域"
+upstream = ["apps/server/src/mcp/McpHttpServer.ts"]
+kar = ["src/workbench/http.rs"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_mcp"
+accept = "以两个独立客户端初始化、列出、调用及关闭工具会话，验证会话撤销、来源限制、访问边界和延迟加载。"
+
+[[gap]]
+id = "voice-backend"
+phase = 2
+name = "语音模型管理、本地和云端转录"
+upstream = ["apps/server/src/speech/http.ts", "apps/server/src/speech/stream.ts"]
+kar = ["src/workbench/http.rs"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_voice"
+accept = "按表内 16 个语音 API 和流式入口检查模型下载取消、链接、选择、卸载时限、加速设置、转录和后处理；独立记录 macOS 可用模型、供应商及真实音频结果。"
+
+[[gap]]
+id = "connect-service"
+phase = 2
+name = "云端连接注册、连接偏好与可达性"
+upstream = ["apps/server/src/cloud/http.ts", "apps/server/src/cloud/CliTokenManager.ts"]
+kar = ["src/workbench/access"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_remote_access"
+accept = "检查带状态的回调、关联证明、配置、偏好、健康、凭证签发和解除关联，验证旧凭证失效。"
+
+[[gap]]
+id = "guest-view-routes"
+phase = 2
+name = "访客历史、单项内容、命令输出及媒体"
+upstream = ["apps/server/src/guest/http.ts"]
+kar = ["src/workbench/access/guest.rs"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_remote_access"
+accept = "用访客仅查看共享窗口的已发布内容，分页、续收、媒体范围读取和关闭共享后吊销分别复验。"
+
+[[gap]]
+id = "host-http-assets"
+phase = 2
+name = "宿主资源、追踪代理及静态 HTTP"
+upstream = ["apps/server/src/http.ts"]
+kar = ["src/workbench/http.rs"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_acceptance"
+accept = "分别检查资源读取、原始上传、Range/If-Range/缓存验证、上报追踪和静态入口，错误票据或内容长度不得写入。"
+
+[[gap]]
+id = "preview-tunnel"
+phase = 2
+name = "代理开发服务预览隧道"
+upstream = ["apps/server/src/preview/PreviewTunnel.ts"]
+kar = ["src/workbench/terminal_preview"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_terminal_preview"
+accept = "校验当前服务和授权端口，打开及断开隧道，检查其他项目和到期票据被拒绝。"
+
+[[gap]]
+id = "preview-browser-stream"
+phase = 2
+name = "服务端浏览器视频、输入及文件上传"
+upstream = ["apps/server/src/preview/ServerBrowserStream.ts"]
+kar = ["src/workbench/terminal_preview"]
+operation_mapping = "backend-workbench-http-map.tsv"
+status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+test_target = "cargo test --locked --test workbench_terminal_preview"
+accept = "两个客户连接同一标签页，核对帧、输入、文件选择、过期请求、断线后重新订阅。"
