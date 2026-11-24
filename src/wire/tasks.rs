@@ -66,17 +66,42 @@ pub(super) fn reported(p: Protocol, v: &Value) -> Option<Event> {
     if !matches!(p, Protocol::Claude | Protocol::Qoder | Protocol::Qwen) || v["type"] != "system" {
         return None;
     }
-    let body = if p == Protocol::Qwen { &v["data"] } else { v };
+    if p == Protocol::Qwen {
+        let body = &v["data"];
+        let id = string(&body["task_id"])?;
+        let change = match v["subtype"].as_str()? {
+            "task_started" => {
+                let native_type = body["subagent_type"].as_str().map(str::to_owned);
+                TaskChange::Started {
+                    task_type: if native_type.is_some() {
+                        Type::Agent
+                    } else {
+                        Type::Other
+                    },
+                    details: TaskDetails {
+                        native_type,
+                        description: body["description"].as_str().map(str::to_owned),
+                        tool_call_id: body["tool_use_id"].as_str().map(str::to_owned),
+                        ..Default::default()
+                    },
+                }
+            }
+            "task_notification" => ended(match body["status"].as_str()? {
+                "completed" => Status::Completed,
+                "failed" => Status::Failed,
+                "stopped" => Status::Stopped,
+                _ => return None,
+            }),
+            _ => return None,
+        };
+        return Some(task(&id, change));
+    }
+    let body = v;
     let id = string(&body["task_id"])?;
     let change = match v["subtype"].as_str()? {
         "task_started" => {
-            let native_type = string(if p == Protocol::Qwen {
-                &body["subagent_type"]
-            } else {
-                &body["task_type"]
-            });
+            let native_type = string(&body["task_type"]);
             let task_type = match native_type.as_deref() {
-                Some(_) if p == Protocol::Qwen => Type::Agent,
                 Some("local_agent") => Type::Agent,
                 _ if p == Protocol::Qoder => Type::Other,
                 Some("local_bash") => Type::Shell,
@@ -288,6 +313,32 @@ impl CodexTasks {
                     ));
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn qwen_task_notifications_preserve_only_documented_task_transitions() {
+        let mut frame = json!({"type":"system","subtype":"task_notification","data":{"task_id":"child","status":"completed","summary":"unrelated"}});
+        for (native, expected) in [
+            ("completed", Status::Completed),
+            ("stopped", Status::Stopped),
+            ("failed", Status::Failed),
+        ] {
+            frame["data"]["status"] = native.into();
+            assert_eq!(
+                reported(Protocol::Qwen, &frame),
+                Some(task("child", ended(expected)))
+            );
+        }
+        for native in ["running", "killed", "errored", "shutdown"] {
+            frame["data"]["status"] = native.into();
+            assert!(reported(Protocol::Qwen, &frame).is_none());
         }
     }
 }

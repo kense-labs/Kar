@@ -18,6 +18,12 @@ impl Runtime {
     ) -> crate::forms::ModelListing {
         use crate::forms::{ListingReason, ModelListing};
         let read = async {
+            if self.protocol == crate::Protocol::Qwen && self.id == "qwen" {
+                let catalog = self
+                    .catalog(crate::Catalog::Models, options.clone())
+                    .await?;
+                return Ok(serde_json::from_value(catalog)?);
+            }
             if self.protocol == crate::Protocol::Acp && self.id == "cursor" {
                 let models = crate::cursor_models::catalog(&self.selected(options).await?, options)
                     .await?

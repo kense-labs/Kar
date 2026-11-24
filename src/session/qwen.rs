@@ -2,7 +2,16 @@ use super::Session;
 use crate::{Error, Result};
 use serde_json::{Value, json};
 
-pub(super) fn initialize_error(error: Error, effort: Option<&str>) -> Error {
+pub(super) fn initialize_error(session: &Session, error: Error, effort: Option<&str>) -> Error {
+    if matches!(error, Error::Closed(_) | Error::Timeout(_))
+        && let Some(auth) = session
+            .records()
+            .iter()
+            .filter(|r| r.direction == crate::Direction::FromRuntime)
+            .find_map(|r| crate::opening::qwen_missing_auth(&r.native))
+    {
+        return auth.into();
+    }
     if let (Error::Refused(wire), Some(level)) = (&error, effort)
         && let Ok(response) = serde_json::from_str::<Value>(wire)
         && let Some(message) = response["error"].as_str()
@@ -13,7 +22,8 @@ pub(super) fn initialize_error(error: Error, effort: Option<&str>) -> Error {
     error
 }
 
-pub(super) fn project_models(models: &mut [Value]) {
+pub(super) fn project_models(models: &mut Vec<Value>) {
+    models.retain(|m| m["id"].as_str().is_some_and(|s| !s.is_empty()));
     for model in models {
         if let Some(label) = model["label"].as_str() {
             model["displayName"] = label.to_owned().into();
@@ -25,9 +35,13 @@ pub(super) fn project_models(models: &mut [Value]) {
                 values
                     .iter()
                     .filter_map(|v| {
-                        v.as_str()
-                            .or_else(|| v["effort"].as_str())
-                            .or_else(|| v["id"].as_str())
+                        v.as_str().or_else(|| {
+                            let field = v
+                                .get("effort")
+                                .filter(|e| !e.is_null())
+                                .or_else(|| v.get("id"))?;
+                            field.as_str().filter(|s| !s.is_empty())
+                        })
                     })
                     .collect::<Vec<_>>()
             );
@@ -84,5 +98,22 @@ impl Session {
             )));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_projection_ignores_malformed_native_rows() {
+        let mut rows = vec![
+            Value::Null,
+            json!({"id":""}),
+            json!({"id":"m","capabilities":{"reasoning":{"efforts":["low",{"effort":"medium"},{"id":"high"},{"effort":""},{"id":0}]}}}),
+        ];
+        project_models(&mut rows);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["effortLevels"], json!(["low", "medium", "high"]));
     }
 }

@@ -1187,7 +1187,13 @@ impl Actor {
                     Some(abort.client),
                     RpcIntent::Abort(abort.request),
                 )
-                .await?
+                .await?;
+                if self.protocol == Protocol::Qwen
+                    && let Some(turn) = &mut self.turn
+                {
+                    // A root result can arrive before the interrupt's control response.
+                    turn.aborted = true;
+                }
             }
             Protocol::Factory => {
                 self.rpc(
@@ -1380,6 +1386,18 @@ impl Actor {
         transport
     }
     async fn receive(&mut self, v: Value, context: Option<crate::ContextUsage>) -> Result<()> {
+        if self.protocol == Protocol::Qwen
+            && let Some(error) = crate::opening::qwen_missing_auth(&v)
+            && let Some(id) = self
+                .pending
+                .iter()
+                .find_map(|(id, p)| (p.method == "initialize").then_some(*id))
+            && let Some(tx) = self.pending.remove(&id).and_then(|p| p.reply)
+        {
+            self.record(Direction::FromRuntime, RecordKind::Frame, v, vec![], vec![]);
+            let _ = tx.send(Err(error.into()));
+            return Ok(());
+        }
         if self.protocol == Protocol::Factory
             && self
                 .session()
@@ -2332,7 +2350,7 @@ impl Actor {
                     outcome: Outcome::Failed,
                 });
             }
-            if p.method == "interrupt" && result.is_ok() {
+            if p.method == "interrupt" && result.is_ok() && self.protocol != Protocol::Qwen {
                 self.claude_notifications
                     .acknowledge_interrupt(p.claude_interrupt);
                 if let Some(t) = &mut self.turn
@@ -2759,8 +2777,9 @@ impl Actor {
                 || (packet["type"] == "agent_settled" && self.pi_pending_end.is_some()));
         let qwen = self.protocol == Protocol::Qwen
             && self.qwen_context
+            && self.turn.as_ref().is_some_and(|turn| !turn.aborted)
             && packet["type"] == "result"
-            && !packet["parent_tool_use_id"].is_string();
+            && packet["parent_tool_use_id"].is_null();
         let factory = self.protocol == Protocol::Factory
             && ((packet["method"] == "droid.session_notification"
                 && packet["params"]["notification"]["type"] == "agent_turn_completed"

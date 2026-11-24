@@ -2,6 +2,8 @@
 mod abort_turn;
 #[path = "support/busy_prompt.rs"]
 mod busy_prompt;
+#[path = "qwen_live/catalog_launch.rs"]
+mod catalog_launch;
 #[path = "support/declaration.rs"]
 mod declaration;
 #[path = "qwen_live/effort.rs"]

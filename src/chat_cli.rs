@@ -44,6 +44,9 @@ enum Action {
     Resume {
         #[arg(long)]
         chat: Option<Uuid>,
+        /// Pass a native argument for this launch. Repeat for separate arguments.
+        #[arg(long = "launch-arg", value_name = "ARG", allow_hyphen_values = true)]
+        launch_args: Vec<String>,
         #[command(flatten)]
         message: Message,
     },
@@ -592,9 +595,16 @@ impl Chat {
                 opts.model = model;
                 (store.create(&runtime, bin.as_deref(), opts).await?, message)
             }
-            Action::Resume { chat, message } => {
-                (store.resume(selected(&store, chat)?).await?, message)
-            }
+            Action::Resume {
+                chat,
+                message,
+                launch_args,
+            } => (
+                store
+                    .resume_with(selected(&store, chat)?, |o| o.launch_args = launch_args)
+                    .await?,
+                message,
+            ),
         };
         let result = talk(&session, message, self.json).await;
         let closed = session.close().await;

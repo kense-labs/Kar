@@ -248,7 +248,8 @@ pub(crate) async fn prepare(
     };
     let probe = Probe::for_session(options)?;
     let program = runtime.program.clone();
-    let args = runtime.args.clone();
+    let mut args = runtime.args.clone();
+    args.extend(options.launch_args.iter().map(OsString::from));
     tokio::task::spawn_blocking(move || {
         let version = version.or_else(|| {
             if requested {

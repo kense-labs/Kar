@@ -417,9 +417,6 @@ impl Session {
                     );
                 }
                 memory = Some(setup);
-                if !dirs.is_empty() {
-                    process.arg("--include-directories").args(&dirs);
-                }
                 Uuid::parse_str(&id)
                     .map_err(|_| Error::Protocol("Qwen requires a native session UUID".into()))?;
                 process.args([
@@ -441,6 +438,21 @@ impl Session {
                     .arg(&id);
                 if let Some(model) = &options.model {
                     process.arg("--model").arg(model);
+                }
+                if let Some(text) = &options.settings.system_prompt {
+                    process.arg(format!("--system-prompt={text}"));
+                }
+                if let Some(text) = &options.settings.append_system_prompt {
+                    process.arg(format!("--append-system-prompt={text}"));
+                }
+                process.args(&options.launch_args);
+                if !dirs.is_empty() {
+                    process.arg("--include-directories").args(&dirs);
+                }
+                if !options.settings.disallowed_tools.is_empty() {
+                    process
+                        .arg("--exclude-tools")
+                        .args(&options.settings.disallowed_tools);
                 }
             }
             Protocol::Pi => {
@@ -1086,7 +1098,7 @@ impl Session {
                     init["effort"] = effort.as_str().into();
                 }
                 session.info = session.rpc("initialize", init).await.map_err(|error| {
-                    qwen::initialize_error(error, options.settings.effort.as_deref())
+                    qwen::initialize_error(&session, error, options.settings.effort.as_deref())
                 })?;
                 if let Some(effort) = &options.settings.effort {
                     session

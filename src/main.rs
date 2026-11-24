@@ -222,6 +222,9 @@ fn parse_output_schema(s: &str) -> serde_json::Result<serde_json::Map<String, se
 }
 #[derive(Args)]
 struct NativeSettings {
+    /// Pass one native session argument. Repeat for separate arguments.
+    #[arg(long = "launch-arg", value_name = "ARG", allow_hyphen_values = true)]
+    launch_args: Vec<String>,
     /// Remove one inherited environment variable from the native session. Repeatable.
     #[arg(long = "unset-env", value_name = "NAME", value_parser = parse_env_name)]
     unset_env: Vec<String>,
@@ -283,6 +286,7 @@ fn parse_env_name(name: &str) -> std::result::Result<String, String> {
 impl NativeSettings {
     fn options(self, cwd: PathBuf) -> SessionOptions {
         let mut opts = SessionOptions::new(cwd);
+        opts.launch_args = self.launch_args;
         opts.unset_env = self.unset_env.into_iter().collect();
         opts.settings = kar::SessionSettings {
             native_memory_default: self.native_memory_default,

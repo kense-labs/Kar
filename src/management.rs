@@ -100,6 +100,7 @@ impl Runtime {
     pub async fn catalog(&self, kind: Catalog, options: crate::SessionOptions) -> Result<Value> {
         crate::options::environment::validate_removals(&options.unset_env)?;
         let standalone = options.resume.is_none()
+            && options.launch_args.is_empty()
             && options.model.is_none()
             && options.settings == crate::SessionSettings::default()
             && options.mcp_servers.is_empty()

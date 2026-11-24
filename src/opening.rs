@@ -6,6 +6,32 @@ use crate::{
 use serde_json::{Value, json};
 use std::{collections::HashSet, path::Path};
 
+/// Qwen sends this root terminal result before replying to initialize. Similar
+/// text in a model response or in a child result is not an account diagnosis.
+pub(crate) fn qwen_missing_auth(result: &Value) -> Option<OpenError> {
+    const MESSAGE: &str = "No auth type is selected. Please configure an auth type (e.g. via settings or `--auth-type`) before running in non-interactive mode.";
+    if result["type"] != "result"
+        || result["subtype"] != "error_during_execution"
+        || result["is_error"] != true
+        || result["num_turns"].as_u64() != Some(0)
+        || !result["parent_tool_use_id"].is_null()
+        || result.pointer("/error/message")?.as_str()? != MESSAGE
+    {
+        return None;
+    }
+    Some(OpenError::RuntimeFailure {
+        failure: TurnFailure {
+            credential: Some(crate::CredentialProblem::Missing),
+            ..TurnFailure::new(FailureClass::Auth, MESSAGE)
+        },
+        code: None,
+        cause: Some(NativeCause {
+            method: "initialize".into(),
+            native: json!({"type":"result", "subtype":"error_during_execution", "num_turns":0, "is_error":true, "error":{"message":MESSAGE}}),
+        }),
+    })
+}
+
 #[derive(Debug)]
 pub(crate) enum OpenStep {
     Open,
@@ -208,6 +234,36 @@ pub(crate) async fn verify_acp_cwd(
             Value::String(s) if s.is_empty() => return Err(refuse(ResumeCwdReason::NotListed)),
             Value::String(s) if visited.insert(s.clone()) => params = json!({"cursor":s}),
             _ => return Err(refuse(ResumeCwdReason::ListingUnavailable)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod qwen_tests {
+    use super::*;
+
+    #[test]
+    fn missing_auth_requires_the_exact_native_root_startup_result() {
+        let message = "No auth type is selected. Please configure an auth type (e.g. via settings or `--auth-type`) before running in non-interactive mode.";
+        let frame = json!({"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"error":{"message":message},"other":"unrelated private data"});
+        let Some(OpenError::RuntimeFailure {
+            cause: Some(cause), ..
+        }) = qwen_missing_auth(&frame)
+        else {
+            panic!("expected a typed opening failure")
+        };
+        assert!(cause.native.get("other").is_none());
+        for (k, v) in [
+            ("type", json!("assistant")),
+            ("subtype", json!("success")),
+            ("parent_tool_use_id", json!("child")),
+            ("num_turns", json!(1)),
+            ("is_error", json!(false)),
+            ("error", json!({"message":"unrelated auth failure"})),
+        ] {
+            let mut other = frame.clone();
+            other[k] = v;
+            assert!(qwen_missing_auth(&other).is_none(), "nonmatching field {k}");
         }
     }
 }

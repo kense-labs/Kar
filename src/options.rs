@@ -1,6 +1,7 @@
 pub(crate) mod availability;
 pub(crate) mod environment;
 pub(crate) mod instructions;
+pub(crate) mod launch_args;
 pub(crate) mod mcp_capabilities;
 pub(crate) mod mcp_file;
 pub(crate) mod opencode;

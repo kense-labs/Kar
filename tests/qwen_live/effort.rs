@@ -3,7 +3,7 @@ use kar::{Catalog, Error, Event, InstallationSnapshot, Runtime};
 
 const UNKNOWN: &str = "kar-no-such-effort";
 
-fn configure(f: &Fixture, model: &str, reasoning: Option<Value>) {
+pub(super) fn configure(f: &Fixture, model: &str, reasoning: Option<Value>) {
     let settings = f.dir.path().join("home/.qwen/settings.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
     let entry = &mut config["modelProviders"]["openai"][0];

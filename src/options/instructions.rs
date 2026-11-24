@@ -66,17 +66,6 @@ pub(crate) fn launch(
                 cmd.arg("--disallowed-tools").args(deny);
             }
         }
-        Protocol::Qwen => {
-            if let Some(text) = base {
-                cmd.arg(format!("--system-prompt={text}"));
-            }
-            if let Some(text) = append {
-                cmd.arg(format!("--append-system-prompt={text}"));
-            }
-            if !deny.is_empty() {
-                cmd.arg("--exclude-tools").args(deny);
-            }
-        }
         Protocol::Pi => {
             if let Some(trusted) = s.pi_project_trusted {
                 cmd.arg(if trusted { "--approve" } else { "--no-approve" });
