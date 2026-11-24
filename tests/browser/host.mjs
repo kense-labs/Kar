@@ -270,7 +270,9 @@ async function checkRetriesAndAdoption(runtime,harness,options) {
         check(changed.message.includes("cannot reconfigure"),"unexpected active resume refusal");
         const observer = await runtime.open({...options,resume:first.id,appendSystemPrompt:"DURABLE-ADOPT-SAVED"});
         check(observer.id===first.id && observer.snapshot().status.kind==="running","resumed observer missed the active run");
-        check((await harness.snapshot(LiveDoc,Number(observer.id),ctx))?.run,"native active run missing");
+        const conversationId = Number(observer.id);
+        check(Number.isSafeInteger(conversationId) && conversationId > 0, "native conversation ID must be a positive integer");
+        check((await harness.snapshot(LiveDoc,conversationId,ctx))?.run,"native active run missing");
         await observer.abort();
         check((await observer.wait(held.id)).status==="unanswered" && observer.snapshot().status.kind==="idle","adopted input did not abort");
         await observer.close();

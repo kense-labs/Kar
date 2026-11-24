@@ -125,6 +125,10 @@ pub(crate) async fn check(s: &Session, slow: &str, hold: impl Fn(), release: imp
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let rows = s.records();
     assert_eq!(ends(&rows[from..]).len(), 1);
+    assert!(
+        !s.status().is_running(),
+        "withdrawn input must leave the session idle"
+    );
     assert!(!rows[from..].iter().any(|r| {
         r.prompt
             .as_ref()
@@ -135,4 +139,11 @@ pub(crate) async fn check(s: &Session, slow: &str, hold: impl Fn(), release: imp
     }));
     s.close().await.unwrap();
     assert!(matches!(s.withdraw(removed).await, Err(Error::Closed(_))));
+    let records = s.records();
+    let (_, terminal) = control(&records, "withdraw", removed);
+    assert_eq!(terminal.native["type"], "rejected");
+    assert!(matches!(
+        terminal.native["code"].as_str(),
+        Some("disposed" | "runtime_exited")
+    ));
 }
