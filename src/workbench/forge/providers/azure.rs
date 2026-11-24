@@ -568,6 +568,9 @@ pub(super) fn issue_body_field(fields: &Value) -> &'static str {
         "System.Description"
     }
 }
+pub(super) fn git_endpoint(c: &Context, tail: &[&str]) -> Result<Url, ForgeError> {
+    Location::from(c)?.git(c, tail)
+}
 pub(super) fn organization_pull(c: &Context, n: u64) -> Result<Url, ForgeError> {
     Location::from(c)?.url(c, false, "git", &["pullrequests", &n.to_string()])
 }

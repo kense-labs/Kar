@@ -1,6 +1,8 @@
 //! Real local git repositories and a deterministic GitHub REST peer on loopback.
 #[path = "support/codex_chat_peer.rs"]
 mod codex_chat_peer;
+#[path = "workbench_forge/diff_contents.rs"]
+mod diff_contents;
 #[path = "support/workbench_server.rs"]
 mod server;
 use axum::{
@@ -203,7 +205,7 @@ async fn scenario() {
         created_issue: None,
         issue: json!({"number":7,"title":"Fix notes","state":"open","html_url":"https://review.example/team/repo/issues/7"}),
     }));
-    let api = Router::new()
+    let api = diff_contents::github(Router::new())
         .route("/user", get(user))
         .route(
             "/user/starred/team/repo",
@@ -329,6 +331,7 @@ async fn scenario() {
             .await
             .is_null()
     );
+    diff_contents::verify(&a, &forge, "github").await;
     let diff = ok(a.get(format!("{forge}/pulls/1/diff"))).await;
     assert_eq!(diff["files"], json!(["notes.txt"]));
     let patch = ok(a.get(format!("{forge}/pulls/1/diff?path=notes.txt"))).await;

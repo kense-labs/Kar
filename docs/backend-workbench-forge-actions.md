@@ -111,3 +111,7 @@ Forgejo 的扩展工单入口通过原生 timeline 读取事件和跨仓库 PR �
 Azure DevOps 从工单类型读取可选状态和自定义完成态，按所选项目校验工单编号，读取最多五页原生 revisions，去重解析最多十个关联 PR。评论从最新一页向前翻，每页按时间正序展示；保留六种原生计数及当前账号是否已反应，Azure 未返回反应者名单。正常 HTTP 场景覆盖复现步骤字段、自定义完成态、修订生成的五类事件、评论续页及跨项目拒绝，命令为 `cargo test --locked --test workbench_forge`。待统一执行与托管账号验证。
 
 GitLab 工单详情用 `iids[]` 读取带颜色的标签，用独立的 activity 分页还原系统事件，解析自托管子路径下的引用，并优先保留有关闭关系的关联 MR。评论的 REST 页号与 GraphQL awardEmoji 游标随同传递，短页按 X-Next-Page 续读。旧版本明确拒绝 awardEmoji 字段时保留评论，权限拒绝保留为错误。正常 HTTP 场景覆盖上述边界，统一执行 `cargo test --locked --test workbench_forge`；本批证据为 macOS 全目标编译，托管实机待验。
+
+PR 文件全文可由 `POST /projects/{project}/forge/pulls/{n}/diff/contents` 读取。请求含 changeType、oldPath、newPath 以及可选 commit。GitHub 优先读比较的 merge base，GitLab 使用 MR 的 diff_refs，Forgejo 能从 fork 解码 base64。GitCafe 同时核对快照版本、提交及文件名；TanStack Source 采用文件列表的头与合并基线；Azure 采用最新合法 iteration 的 commonRef 和 sourceRef。新建和删除只读存在的一侧。GitHub/GitLab 对原始文件设 1 MiB 上限，并校验 UTF-8 和 NUL。Azure 对指定的较旧提交返回拒绝，固定实现只能提供最新 iteration 的比较；GitCafe 与 TanStack Source 的固定实现拒绝单提交。Bitbucket 和 Cursor Origin 的固定提供方没有该读取方法。
+
+同一组协议场景覆盖六种托管服务的重命名、带空格及特殊字符的文件名、GitHub 初始提交与二进制拒绝、fork 源仓库、两种未实现驱动的原生能力边界。统一执行 `cargo test --locked --test workbench_forge`，本轮仅做 macOS 全目标编译。

@@ -2,6 +2,7 @@
 pub(super) mod azure;
 pub(in crate::workbench::forge) mod create_repo;
 pub(super) mod credentials;
+pub(in crate::workbench::forge) mod diff_contents;
 pub(in crate::workbench::forge) mod file_stats;
 pub(super) mod hosted;
 pub(super) mod issue;
@@ -59,6 +60,30 @@ async fn send_with_headers(
     body: Option<Value>,
     mutation: bool,
 ) -> Result<(Value, reqwest::header::HeaderMap), ForgeError> {
+    let res = response(c, method, url, body, mutation, None).await?;
+    let (bytes, headers) = read_bytes(res, mutation, 16 * 1024 * 1024).await?;
+    if bytes.is_empty() {
+        return Ok((Value::Null, headers));
+    }
+    serde_json::from_slice(&bytes)
+        .map(|value| (value, headers))
+        .map_err(|_| response_error(mutation, "forge returned invalid JSON"))
+}
+fn response_error(mutation: bool, reason: &str) -> ForgeError {
+    if mutation {
+        ForgeError::uncertain(reason)
+    } else {
+        ForgeError::remote(502, reason)
+    }
+}
+async fn response(
+    c: &Context,
+    method: Method,
+    url: Url,
+    body: Option<Value>,
+    mutation: bool,
+    accept: Option<&str>,
+) -> Result<reqwest::Response, ForgeError> {
     let azure_patch = c.kind == "azure-devops"
         && (method == Method::PATCH
             || method == Method::POST && body.as_ref().is_some_and(Value::is_array));
@@ -81,17 +106,13 @@ async fn send_with_headers(
     if let Some(b) = body {
         req = req.json(&b);
     }
-    let classify = |reason: &str| {
-        if mutation {
-            ForgeError::uncertain(reason)
-        } else {
-            ForgeError::remote(502, reason)
-        }
-    };
-    let mut res = req
+    if let Some(accept) = accept {
+        req = req.header("Accept", accept);
+    }
+    let res = req
         .send()
         .await
-        .map_err(|_| classify("forge did not return a response"))?;
+        .map_err(|_| response_error(mutation, "forge did not return a response"))?;
     let status = res.status();
     if status.as_u16() == 401 {
         super::signin::reject(c);
@@ -122,24 +143,29 @@ async fn send_with_headers(
             format!("{} returned {status}", c.kind),
         ));
     }
+    Ok(res)
+}
+async fn read_bytes(
+    mut res: reqwest::Response,
+    mutation: bool,
+    limit: usize,
+) -> Result<(Vec<u8>, reqwest::header::HeaderMap), ForgeError> {
     let headers = res.headers().clone();
     let mut bytes = Vec::new();
     while let Some(chunk) = res
         .chunk()
         .await
-        .map_err(|_| classify("forge response interrupted"))?
+        .map_err(|_| response_error(mutation, "forge response interrupted"))?
     {
-        if bytes.len() + chunk.len() > 16 * 1024 * 1024 {
-            return Err(classify("forge response exceeded 16 MiB"));
+        if bytes.len() + chunk.len() > limit {
+            return Err(response_error(
+                mutation,
+                "forge response exceeded its byte limit",
+            ));
         }
         bytes.extend_from_slice(&chunk);
     }
-    if bytes.is_empty() {
-        return Ok((Value::Null, headers));
-    }
-    serde_json::from_slice(&bytes)
-        .map(|value| (value, headers))
-        .map_err(|_| classify("forge returned invalid JSON"))
+    Ok((bytes, headers))
 }
 pub(super) async fn get(c: &Context, url: Url) -> Result<Value, ForgeError> {
     send(c, Method::GET, url, None, false).await

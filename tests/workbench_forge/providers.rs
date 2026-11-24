@@ -181,6 +181,9 @@ async fn peer(
     if kind == "linear" {
         return linear(&mut db, &b);
     }
+    if let Some(result) = super::diff_contents::peer(kind, path, &uri) {
+        return result;
+    }
     if let Some(result) = issue_search_peer(kind, path, &uri, &b) {
         return result;
     }
@@ -439,6 +442,9 @@ pub(super) async fn run() {
             "gitlab" | "forgejo" | "tanstack-source" | "azure-devops"
         ) {
             verify_search(&client, &base, p, kind).await;
+        }
+        if kind != "linear" {
+            super::diff_contents::verify(&client, &url, kind).await;
         }
         let chat = Uuid::new_v4();
         ok(client
