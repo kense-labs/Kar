@@ -311,7 +311,14 @@ fn peer(protocol: &str) {
                             }
                             continue;
                         }
-                        if name == "delivery-tool-wait" && protocol == "acp" {
+                        if matches!(name.as_str(), "delivery-tool-wait" | "delivery-tool-exit") && protocol == "acp" {
+                            if name == "delivery-tool-exit" {
+                                let marker = std::path::PathBuf::from(std::env::var_os("KAR_TEST_DELIVERY_EXIT").unwrap());
+                                std::thread::spawn(move || {
+                                    while !marker.exists() { std::thread::sleep(Duration::from_millis(5)); }
+                                    std::process::exit(17);
+                                });
+                            }
                             emit(json!({"method":"session/update","params":{"sessionId":"session-1","update":{
                                 "sessionUpdate":"tool_call","toolCallId":"held-tool","title":"held","status":"in_progress"
                             }}}));

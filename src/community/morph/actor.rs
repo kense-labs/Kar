@@ -413,7 +413,7 @@ impl Actor {
             Command::Queue(id, input, ack, done) => {
                 self.journal.queue_request(id, &input, &[]);
                 self.journal
-                    .queue_accepted(input.request_id, id, false, None);
+                    .queue_accepted(input.request_id, id, true, None);
                 self.queue.push_back((id, input, done));
                 let _ = ack.send(Ok(()));
             }

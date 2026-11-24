@@ -392,6 +392,64 @@ impl Session {
         batch.done.send_replace(Some(r));
     }
 
+    /// An adapter queue loses its senders on exit. The accepted/dequeued journal pair
+    /// still proves which entries never left that queue. Native queues retain ownership.
+    fn undelivered_on_close(&self, since: u64, withdrawn: &[Uuid]) -> Vec<Uuid> {
+        let mut pending = HashSet::new();
+        let mut admitted = std::collections::HashMap::new();
+        let mut terminal = false;
+        for r in self.records() {
+            if !r.agent_path.is_empty() || r.session_id.as_deref().is_some_and(|s| s != self.id()) {
+                continue;
+            }
+            for event in &r.events {
+                match event {
+                    Event::InputQueued { input_id } => {
+                        if let Ok(id) = Uuid::parse_str(input_id) {
+                            admitted.insert(id, r.seq);
+                            if r.native["queued"] == "adapter" {
+                                pending.insert(id);
+                            } else {
+                                pending.remove(&id);
+                            }
+                        }
+                    }
+                    Event::InputRemoved { input_id } => {
+                        if let Ok(id) = Uuid::parse_str(input_id) {
+                            pending.remove(&id);
+                        }
+                    }
+                    Event::InputDropped { input_id } if r.seq < since => {
+                        if let Ok(id) = Uuid::parse_str(input_id) {
+                            pending.remove(&id);
+                        }
+                    }
+                    Event::Released | Event::Exited { .. } if r.seq >= since => {
+                        terminal = true;
+                    }
+                    _ => {}
+                }
+            }
+            if r.events.contains(&Event::PromptDispatched) {
+                for id in &r.carries {
+                    if let Ok(id) = Uuid::parse_str(id) {
+                        pending.remove(&id);
+                    }
+                }
+            }
+            if terminal {
+                break;
+            }
+        }
+        if !terminal {
+            return withdrawn.to_vec();
+        }
+        pending.extend(withdrawn);
+        let mut ids: Vec<_> = pending.into_iter().collect();
+        ids.sort_by_key(|id| admitted.get(id).copied().unwrap_or(u64::MAX));
+        ids
+    }
+
     async fn collect_batch(&self, batch: &Batch) -> DeliverReceipt {
         let c = &self.journal.delivery;
         // Replay the running root from its start and then follow the same stream cursor.
@@ -409,6 +467,12 @@ impl Session {
                 || record.session_id.as_deref().is_some_and(|s| s != self.id())
             {
                 return;
+            }
+            if record.kind == crate::RecordKind::Request
+                && record.direction == Direction::ToRuntime
+                && record.native["type"] == "dispose"
+            {
+                *closed = true;
             }
             for e in &record.events {
                 match e {
@@ -494,6 +558,7 @@ impl Session {
         drop(gate);
         let merged_id = Uuid::new_v4();
         if failure.is_some() || ids.is_empty() || closed || self.is_closed() {
+            let ids = self.undelivered_on_close(batch.since, &ids);
             return DeliverReceipt::failure(
                 merged_id,
                 failure.unwrap_or_else(|| {

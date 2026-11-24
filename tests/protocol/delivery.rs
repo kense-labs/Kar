@@ -171,5 +171,70 @@ pub(super) async fn run() -> kar::Result<()> {
             .iter()
             .all(|r| !r.carries.iter().any(|id| id == &rejected_id.to_string()))
     );
-    session.close().await
+    session.close().await?;
+    unexpected_exit().await
+}
+
+async fn unexpected_exit() -> kar::Result<()> {
+    use kar::{DeliverLanded, DeliverOptions, DeliverWhen, InputOptions};
+    let (dir, runtime, mut opts) = rig(Protocol::Acp, ApprovalMode::Deny);
+    let marker = dir.path().join("exit-now");
+    opts.env.insert(
+        "KAR_TEST_DELIVERY_EXIT".into(),
+        marker.display().to_string(),
+    );
+    let session = runtime.open(opts).await?;
+    let mut journal = session.subscribe(None)?;
+    let _turn = session.prompt("delivery-tool-exit").await?;
+    while !journal
+        .next()
+        .await
+        .unwrap()
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::ToolStarted { .. }))
+    {}
+    let (earlier, _) = session.queue("saved").await?;
+    let id = uuid::Uuid::new_v4();
+    let call = {
+        let session = session.clone();
+        tokio::spawn(async move {
+            session
+                .deliver_with_options(
+                    "urgent",
+                    DeliverOptions {
+                        when: DeliverWhen::Interrupt {
+                            max_wait: Duration::from_secs(15),
+                        },
+                        input: InputOptions {
+                            input_id: Some(id),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+                .await
+        })
+    };
+    while !journal
+        .next()
+        .await
+        .unwrap()
+        .events
+        .iter()
+        .any(|e| matches!(e,Event::InputQueued{input_id} if input_id==&id.to_string()))
+    {}
+    std::fs::write(marker, [])?;
+    let receipt = call.await.unwrap()?;
+    assert_eq!(receipt.landed, DeliverLanded::Rejected);
+    assert_eq!(receipt.undelivered_input_ids, [earlier, id]);
+    assert_eq!(
+        session
+            .records()
+            .iter()
+            .filter(|r| r.events.contains(&Event::PromptDispatched))
+            .count(),
+        1
+    );
+    Ok(())
 }
