@@ -1,7 +1,9 @@
 //! Read a root turn's boundary from the same ordered records used for replay and live delivery.
+mod input;
 use crate::{
     Cursor, Direction, Error, Event, FailureClass, Outcome, Record, RecordKind, Result, TurnFailure,
 };
+pub use input::{ObservedInputEnd, input_end_after};
 use std::{collections::HashSet, sync::Arc};
 
 /// The original terminal evidence. Release ends observation even when the native process continues.
@@ -171,20 +173,29 @@ impl crate::Session {
     pub async fn await_turn_end(&self, cursor: Option<&Cursor>) -> Result<ObservedTurnEnd> {
         let records = self.records();
         let mut reader = Reader::new(&records, self.id(), cursor)?;
-        if let Some(end) = records.iter().find_map(|record| reader.read(record)) {
+        observe_live(self, records, |record| reader.read(record)).await
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn observe_live<T>(
+    session: &crate::Session,
+    records: Vec<Arc<Record>>,
+    mut read: impl FnMut(&Arc<Record>) -> Option<T>,
+) -> Result<T> {
+    if let Some(end) = records.iter().find_map(&mut read) {
+        return Ok(end);
+    }
+    let mut live = session.subscribe(records.last().map(|r| r.cursor()).as_ref())?;
+    drop(records);
+    while let Some(record) = live.next().await {
+        if let Some(end) = read(&record) {
             return Ok(end);
         }
-        let mut live = self.subscribe(records.last().map(|r| r.cursor()).as_ref())?;
-        drop(records);
-        while let Some(record) = live.next().await {
-            if let Some(end) = reader.read(&record) {
-                return Ok(end);
-            }
-        }
-        Err(Error::Closed(
-            "stream closed without a later turn boundary".into(),
-        ))
     }
+    Err(Error::Closed(
+        "stream closed without a later observation boundary".into(),
+    ))
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -193,7 +204,7 @@ mod tests {
     use crate::{Protocol, Session, SessionOptions, stream::Journal};
     use serde_json::{Value, json};
 
-    fn session() -> (Session, Journal) {
+    pub(super) fn session() -> (Session, Journal) {
         let journal = Journal::new(None).unwrap();
         journal.bind_root("root");
         let (tx, _) = tokio::sync::mpsc::channel(1);
