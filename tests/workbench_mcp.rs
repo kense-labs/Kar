@@ -217,6 +217,8 @@ async fn scenario() {
     preview_tools::devices(&url,&a,p,chat,call).await;
     preview_tools::html(&url,&a,p,chat,&root,call).await;
     if std::env::var_os("KAR_MCP_BROWSER_LIVE").is_some(){preview_tools::browser(&url,&a,p,chat,&root,call).await;}
+    preview_tools::desktop(&url,&a,p,chat,call).await;
+    preview_tools::public_page(&url,&a,p,chat,call).await;
     workflow::exercise(&url, &a, p, chat, call).await;
     operations::exercise(&url, &a, p, chat, &observer, call).await;
     let stateless = |r: RequestBuilder| {

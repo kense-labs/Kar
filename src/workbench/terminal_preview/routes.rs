@@ -41,6 +41,10 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
             post(stop_listener),
         )
         .route("/projects/{p}/previews", get(previews).post(open_preview))
+        .route(
+            "/projects/{p}/chats/{c}/desktop-previews/{id}",
+            axum::routing::put(desktop),
+        )
         .route("/projects/{p}/previews/events", get(preview_events))
         .route(
             "/projects/{p}/previews/{id}/status",
@@ -531,4 +535,32 @@ async fn preview_events(
     Ok(Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DesktopReport {
+    navigation: super::preview::Navigation,
+    #[serde(default)]
+    display: super::browser::Display,
+}
+async fn desktop(
+    State(app): State<Workbench>,
+    Path((p, c, id)): Path<(Uuid, Uuid, Uuid)>,
+    device: Option<axum::Extension<DeviceLease>>,
+    Json(q): Json<DesktopReport>,
+) -> Reply<Preview> {
+    let device = device.ok_or_else(crate::workbench::denied)?.0;
+    app.binding(p, c)?;
+    if app.archived(c) {
+        return Err(crate::workbench::denied().into());
+    }
+    Ok(Json(app.0.terminal_preview.grants.report_desktop(
+        p,
+        c,
+        device,
+        id,
+        q.navigation,
+        q.display,
+    )?))
 }

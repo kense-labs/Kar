@@ -319,3 +319,135 @@ pub(super) async fn browser(
     server::json(host.delete(format!("{terms}/{terminal}"))).await;
     server::json(host.put(&policy).json(&json!({"mode":"plan"}))).await;
 }
+
+pub(super) async fn desktop(
+    url: &str,
+    host: &Client,
+    project: &str,
+    chat: Uuid,
+    rpc: impl Fn(&str, Value) -> RequestBuilder,
+) {
+    let policy = format!("{url}/projects/{project}/chats/{chat}/model-tools/permissions");
+    let call = |name: &str, input: Value| rpc("tools/call", json!({"name":name,"arguments":input}));
+    let pair = server::json(host.post(format!("{url}/access/pairings"))).await;
+    let remote = Client::new();
+    let device = server::json(
+        remote
+            .post(format!("{url}/access/pair"))
+            .json(&json!({"credential":pair["credential"],"label":"preview desktop"})),
+    )
+    .await;
+    let tab = Uuid::new_v4();
+    let report = format!("{url}/projects/{project}/chats/{chat}/desktop-previews/{tab}");
+    let nav = json!({"navigation":{"nav_status":{"_tag":"Success","url":"https://example.org/","title":"Shared tab"},"can_go_back":false,"can_go_forward":false}});
+    assert!(
+        host.put(&report)
+            .json(&nav)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_client_error()
+    );
+    let push = || {
+        remote
+            .put(&report)
+            .bearer_auth(device["token"].as_str().unwrap())
+            .json(&nav)
+    };
+    assert_eq!(server::json(push()).await["runtime"], "desktop");
+    server::json(
+        host.put(&policy)
+            .json(&json!({"mode":"execute","preview_tools":{"tabs":[tab]}})),
+    )
+    .await;
+    let listed = server::json(call("kar_preview_list", json!({}))).await;
+    assert_eq!(
+        listed["result"]["structuredContent"]["sessions"][0]["runtime"],
+        "desktop"
+    );
+    assert_eq!(
+        server::json(call(
+            "kar_preview_evaluate",
+            json!({"tab_id":tab,"expression":"1+1"})
+        ))
+        .await["result"]["isError"],
+        true
+    );
+    assert_eq!(
+        server::json(call("kar_preview_close", json!({"tab_id":tab}))).await["result"]["structuredContent"]
+            ["closed"],
+        tab.to_string()
+    );
+    let listed = server::json(call("kar_preview_list", json!({}))).await;
+    assert!(
+        listed["result"]["structuredContent"]["sessions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(push().send().await.unwrap().status().is_client_error());
+    server::json(host.put(&policy).json(&json!({"mode":"plan"}))).await;
+}
+pub(super) async fn public_page(
+    url: &str,
+    host: &Client,
+    project: &str,
+    chat: Uuid,
+    rpc: impl Fn(&str, Value) -> RequestBuilder,
+) {
+    let policy = format!("{url}/projects/{project}/chats/{chat}/model-tools/permissions");
+    let call = |name: &str, input: Value| rpc("tools/call", json!({"name":name,"arguments":input}));
+    let local = "http://127.0.0.1:39427";
+    server::json(
+        host.put(&policy)
+            .json(&json!({"mode":"execute","preview_tools":{"public_origins":[local]}})),
+    )
+    .await;
+    let refused = server::json(call("kar_preview_open", json!({"url":format!("{local}/")}))).await;
+    assert_eq!(refused["result"]["isError"], true);
+    if let Ok(public) = std::env::var("KAR_MCP_PUBLIC_URL") {
+        let origin = reqwest::Url::parse(&public)
+            .unwrap()
+            .origin()
+            .ascii_serialization();
+        server::json(host.put(&policy).json(
+            &json!({"mode":"execute","preview_tools":{"public_origins":[origin],"html":true}}),
+        ))
+        .await;
+        let page = server::json(call("kar_preview_open", json!({"url":public}))).await;
+        let tab = &page["result"]["structuredContent"]["tab_id"];
+        assert!(tab.is_string(), "{page}");
+        let snapshot = server::json(call(
+            "kar_preview_snapshot",
+            json!({"tab_id":tab,"include_image":true}),
+        ))
+        .await;
+        assert_eq!(snapshot["result"]["content"][1]["type"], "image");
+        server::json(call("kar_preview_close", json!({"tab_id":tab}))).await;
+        if let Ok(image) = std::env::var("KAR_MCP_PUBLIC_IMAGE") {
+            let asset = reqwest::Url::parse(&image).unwrap();
+            assert_eq!(asset.origin().ascii_serialization(), origin);
+            let html = format!("<img src='{}'>", asset);
+            let render = server::json(call(
+                "kar_html_render",
+                json!({"html":html,"title":"Public asset","height":200}),
+            ))
+            .await;
+            let view = render["result"]["structuredContent"]["htmlRender"]["view_url_endpoint"]
+                .as_str()
+                .unwrap();
+            let signed = server::json(host.post(format!("{url}{view}"))).await;
+            let bytes = Client::new()
+                .get(format!("{url}{}", signed["read_path"].as_str().unwrap()))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            assert!(bytes.contains("data:image/") && !bytes.contains(asset.as_str()));
+        }
+    }
+    server::json(host.put(&policy).json(&json!({"mode":"plan"}))).await;
+}

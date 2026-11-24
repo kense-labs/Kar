@@ -319,7 +319,7 @@ async fn download(
         return Ok(([
             (header::CONTENT_TYPE,"text/html; charset=utf-8"),(header::X_CONTENT_TYPE_OPTIONS,"nosniff"),
             (header::CACHE_CONTROL,"private, no-store"),(header::REFERRER_POLICY,"no-referrer"),
-            (header::CONTENT_SECURITY_POLICY,"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'")
+            (header::CONTENT_SECURITY_POLICY,"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'")
         ],data).into_response());
     }
     let mime = if a.kind == AttachmentKind::Image {

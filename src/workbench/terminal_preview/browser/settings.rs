@@ -78,7 +78,7 @@ pub(in super::super) enum Color {
     Light,
     Dark,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub(in super::super) struct Display {
     pub viewport: Viewport,

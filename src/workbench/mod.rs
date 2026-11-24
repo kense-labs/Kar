@@ -24,6 +24,7 @@ mod http;
 mod interactions;
 mod suggestions;
 mod project_lifecycle;
+mod public_web;
 mod search;
 mod shell;
 mod task_folders;

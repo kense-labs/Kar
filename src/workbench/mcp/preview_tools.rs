@@ -15,6 +15,7 @@ pub(in crate::workbench) struct Resources {
     pub html: bool,
     pub html_workspace_files: bool,
     pub upload_files: bool,
+    pub public_origins: BTreeSet<String>,
 }
 #[derive(Copy, Clone)]
 enum Access {
@@ -32,7 +33,11 @@ fn allowed(c: &Caller, a: Access) -> bool {
         && match a {
             Access::Html => p.preview_tools.html,
             Access::DeviceRead | Access::DeviceControl => !p.preview_tools.device_hosts.is_empty(),
-            _ => !p.preview_tools.tabs.is_empty() || !p.preview_tools.terminals.is_empty(),
+            _ => {
+                !p.preview_tools.tabs.is_empty()
+                    || !p.preview_tools.terminals.is_empty()
+                    || !p.preview_tools.public_origins.is_empty()
+            }
         }
         && (matches!(a, Access::Read | Access::DeviceRead | Access::Html)
             || (p.executes() && !c.plan))
@@ -60,7 +65,7 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         (
             "kar_preview_open",
             "Open a real preview of the granted project terminal listener. Supply its terminal_id and port or select an existing tab_id.",
-            json!({"terminal_id":tab,"port":{"type":"integer"},"path":string,"reuse_existing_tab":yes}),
+            json!({"terminal_id":tab,"port":{"type":"integer"},"url":string,"path":string,"reuse_existing_tab":yes}),
             &[],
             Access::Control,
         ),
@@ -233,6 +238,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
             g.chat,
             name,
             input,
+            &c.policy.as_ref().unwrap().preview_tools.public_origins,
             c.policy
                 .as_ref()
                 .unwrap()
@@ -303,6 +309,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
                 g.chat,
                 &resources.tabs,
                 &resources.terminals,
+                &resources.public_origins,
                 resources.upload_files && c.files_allowed,
                 name,
                 input,

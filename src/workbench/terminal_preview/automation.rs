@@ -10,6 +10,7 @@ pub(in crate::workbench) async fn call(
     chat: Uuid,
     shared: &Ids,
     terminals: &Ids,
+    origins: &BTreeSet<String>,
     upload: bool,
     name: &str,
     mut input: Value,
@@ -23,18 +24,35 @@ pub(in crate::workbench) async fn call(
         #[serde(deny_unknown_fields)]
         struct Open {
             terminal_id: Option<Uuid>,
+            url: Option<String>,
             port: Option<u16>,
             path: Option<String>,
             reuse_existing_tab: Option<bool>,
         }
         let q: Open = serde_json::from_value(input)?;
         let grant = if let Some(id) = tab {
-            if q.terminal_id.is_some() || q.port.is_some() || q.reuse_existing_tab == Some(false) {
+            if q.url.is_some()
+                || q.terminal_id.is_some()
+                || q.port.is_some()
+                || q.reuse_existing_tab == Some(false)
+            {
                 return Err(Error::Refused(
                     "existing tab conflicts with a new listener".into(),
                 ));
             }
             state.model_grant(project, chat, shared, terminals, id)?
+        } else if let Some(url) = &q.url {
+            if q.terminal_id.is_some() || q.port.is_some() {
+                return Err(Error::Refused(
+                    "pass a public URL or a terminal listener".into(),
+                ));
+            }
+            let url = reqwest::Url::parse(url)
+                .map_err(|_| Error::Refused("invalid public URL".into()))?;
+            state
+                .grants
+                .open_public(project, chat, url, origins.clone(), check.clone())
+                .await?
         } else {
             let terminal = q
                 .terminal_id
@@ -55,11 +73,9 @@ pub(in crate::workbench) async fn call(
             let target = *ports.first().ok_or_else(|| {
                 Error::Refused("port is not open in the granted project terminal".into())
             })?;
-            let existing = state
-                .grants
-                .list(project, None)
-                .into_iter()
-                .find(|t| t.chat == Some(chat) && t.terminal == terminal && t.target == target);
+            let existing = state.grants.list(project, None).into_iter().find(|t| {
+                t.chat == Some(chat) && t.terminal == Some(terminal) && t.target == Some(target)
+            });
             check()?;
             let id = if let Some(t) = existing.filter(|_| q.reuse_existing_tab != Some(false)) {
                 t.id
@@ -80,6 +96,9 @@ pub(in crate::workbench) async fn call(
             };
             state.model_grant(project, chat, shared, terminals, id)?
         };
+        if grant.info.runtime == "desktop" {
+            return Err(Error::Unsupported("this preview is owned by the paired desktop; automatic actions require a server tab".into()));
+        }
         check()?;
         if let Some(path) = q.path {
             state
@@ -106,6 +125,12 @@ pub(in crate::workbench) async fn call(
     };
     let grant = state.model_grant(project, chat, shared, terminals, id)?;
     check()?;
+    if grant.info.runtime == "desktop" {
+        return Err(Error::Unsupported(
+            "this preview is owned by the paired desktop; automatic actions require a server tab"
+                .into(),
+        ));
+    }
     let browsers = &state.browsers;
     match name {
         "kar_preview_status" => browsers.model_status(grant).await,

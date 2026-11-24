@@ -244,9 +244,20 @@ impl Pool {
         }
         if name == "kar_preview_navigate" {
             let root = reqwest::Url::parse(&grant.info.url).unwrap();
-            let target = root
+            let mut target = root
                 .join(text(q, "url")?)
                 .map_err(|_| invalid("invalid page URL"))?;
+            if grant.info.public_origin.as_deref()
+                == Some(target.origin().ascii_serialization().as_str())
+            {
+                let path = target.path().to_owned();
+                let query = target.query().map(str::to_owned);
+                let fragment = target.fragment().map(str::to_owned);
+                target = root.clone();
+                target.set_path(&path);
+                target.set_query(query.as_deref());
+                target.set_fragment(fragment.as_deref());
+            }
             if target.origin() != root.origin()
                 || !target.username().is_empty()
                 || target.password().is_some()

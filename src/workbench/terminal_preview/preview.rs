@@ -31,12 +31,17 @@ use uuid::Uuid;
 
 #[derive(Clone, Serialize)]
 pub(super) struct Preview {
+    pub runtime: &'static str,
     pub id: Uuid,
     pub project: Uuid,
-    pub terminal: Uuid,
-    #[serde(skip_serializing_if="Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub chat: Option<Uuid>,
-    pub target: Port,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<Port>,
     pub url: String,
     pub profile_id: String,
     #[serde(flatten)]
@@ -81,6 +86,11 @@ impl Navigation {
         Ok(())
     }
 }
+struct Public {
+    source: reqwest::Url,
+    origins: std::collections::BTreeSet<String>,
+    authorized: Arc<dyn Fn() -> Result<()> + Send + Sync>,
+}
 pub(super) struct Grant {
     pub info: Preview,
     display: Mutex<Display>,
@@ -89,7 +99,8 @@ pub(super) struct Grant {
     publishing: Mutex<()>,
     device: Option<DeviceLease>,
     terminal: Weak<Terminal>,
-    root: ProcessId,
+    root: Option<ProcessId>,
+    public: Option<Public>,
     authority: String,
     stop: watch::Sender<bool>,
 }
@@ -112,7 +123,12 @@ impl Grant {
         }
     }
     fn active(&self) -> bool {
-        !*self.stop.borrow() && self.device.as_ref().is_none_or(DeviceLease::active)
+        !*self.stop.borrow()
+            && self.device.as_ref().is_none_or(DeviceLease::active)
+            && self
+                .public
+                .as_ref()
+                .is_none_or(|p| (p.authorized)().is_ok())
     }
     fn belongs_to(&self, project: Uuid, device: Option<Uuid>) -> bool {
         self.info.project == project
@@ -189,6 +205,9 @@ impl Grant {
         self.stop.subscribe()
     }
     pub async fn visible(&self) -> Result<bool> {
+        if self.public.is_some() {
+            return Ok(self.active());
+        }
         if !self.active()
             || !self
                 .terminal
@@ -197,8 +216,8 @@ impl Grant {
         {
             return Ok(false);
         }
-        let root = self.root;
-        let target = self.info.target;
+        let root = self.root.ok_or_else(super::missing)?;
+        let target = self.info.target.ok_or_else(super::missing)?;
         tokio::task::spawn_blocking(move || {
             process::ports(root).map(|ports| ports.contains(&target))
         })
@@ -210,8 +229,8 @@ impl Grant {
             if !self.visible().await? {
                 return Err(Error::Closed("preview listener stopped".into()));
             }
-            let root = self.root;
-            let target = self.info.target;
+            let root = self.root.ok_or_else(super::missing)?;
+            let target = self.info.target.ok_or_else(super::missing)?;
             let s = TcpStream::connect(SocketAddr::new(target.address, target.port)).await?;
             let client = s.local_addr()?;
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -268,7 +287,11 @@ impl Grant {
 }
 
 #[derive(Default)]
-pub(super) struct Grants(Mutex<HashMap<Uuid, Arc<Grant>>>, pub Arc<Events>);
+pub(super) struct Grants(
+    Mutex<HashMap<Uuid, Arc<Grant>>>,
+    pub Arc<Events>,
+    Mutex<HashMap<(Uuid, Uuid), Instant>>,
+);
 impl Grants {
     pub async fn open(
         &self,
@@ -303,11 +326,13 @@ impl Grants {
             listener.local_addr()?.port()
         );
         let info = Preview {
+            runtime: "server",
             id,
             project,
-            terminal: m.id,
+            terminal: Some(m.id),
+            public_origin: None,
             chat,
-            target,
+            target: Some(target),
             url: format!("http://{authority}/"),
             profile_id,
             display: display.clone(),
@@ -321,7 +346,8 @@ impl Grants {
             publishing: Mutex::new(()),
             device: device.clone(),
             terminal: Arc::downgrade(&term),
-            root,
+            root: Some(root),
+            public: None,
             authority,
             stop: watch::channel(false).0,
         });
@@ -360,6 +386,158 @@ impl Grants {
         });
         Ok(info)
     }
+    pub async fn open_public(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        source: reqwest::Url,
+        origins: std::collections::BTreeSet<String>,
+        authorized: Arc<dyn Fn() -> Result<()> + Send + Sync>,
+    ) -> Result<Arc<Grant>> {
+        use crate::workbench::public_web;
+        public_web::authorize(&origins, &source)?;
+        public_web::addresses(&source).await?;
+        authorized()?;
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let id = Uuid::new_v4();
+        let authority = format!(
+            "{}.localhost:{}",
+            Uuid::new_v4().simple(),
+            listener.local_addr()?.port()
+        );
+        let mut local = reqwest::Url::parse(&format!("http://{authority}")).expect("local URL");
+        local.set_path(source.path());
+        local.set_query(source.query());
+        local.set_fragment(source.fragment());
+        let display = Display::default();
+        let info = Preview {
+            runtime: "server",
+            id,
+            project,
+            terminal: None,
+            chat: Some(chat),
+            target: None,
+            public_origin: Some(source.origin().ascii_serialization()),
+            url: local.to_string(),
+            profile_id: "incognito".into(),
+            display: display.clone(),
+            navigation: Navigation::default(),
+        };
+        let grant = Arc::new(Grant {
+            info: info.clone(),
+            display: Mutex::new(display),
+            navigation: Mutex::new((Navigation::default(), false)),
+            events: self.1.clone(),
+            publishing: Mutex::new(()),
+            device: None,
+            terminal: Weak::new(),
+            root: None,
+            public: Some(Public {
+                source,
+                origins,
+                authorized,
+            }),
+            authority,
+            stop: watch::channel(false).0,
+        });
+        self.0.lock().unwrap().insert(id, grant.clone());
+        self.1
+            .push(project, None, json!({"type":"opened","snapshot":info}));
+        let app = Router::new().fallback(proxy).with_state(grant.clone());
+        let stop = grant.stop.subscribe();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(stopped(stop))
+                .await;
+        });
+        let weak = Arc::downgrade(&grant);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let Some(grant) = weak.upgrade() else {
+                    return;
+                };
+                if !grant.active() {
+                    grant.revoke();
+                    return;
+                }
+            }
+        });
+        Ok(grant)
+    }
+    pub fn report_desktop(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        device: DeviceLease,
+        id: Uuid,
+        nav: Navigation,
+        display: Display,
+    ) -> Result<Preview> {
+        nav.validate()?;
+        display.validate()?;
+        let mut all = self.0.lock().unwrap();
+        let mut closed = self.2.lock().unwrap();
+        closed.retain(|_, at| at.elapsed() < Duration::from_secs(3600));
+        if closed.contains_key(&(device.id, id)) || !device.active() {
+            return Err(super::missing());
+        }
+        if let Some(g) = all.get(&id) {
+            if g.info.runtime != "desktop"
+                || g.info.project != project
+                || g.info.chat != Some(chat)
+                || g.owner() != Some(device.id)
+            {
+                return Err(super::missing());
+            }
+            g.report_status(nav)?;
+            if g.display() != display {
+                g.set_display(display, json!({"reported":true}));
+            }
+            return Ok(g.snapshot());
+        }
+        let url = nav.nav_status["url"]
+            .as_str()
+            .unwrap_or("about:blank")
+            .to_owned();
+        let info = Preview {
+            runtime: "desktop",
+            id,
+            project,
+            terminal: None,
+            public_origin: None,
+            chat: Some(chat),
+            target: None,
+            url,
+            profile_id: "desktop".into(),
+            display: display.clone(),
+            navigation: nav.clone(),
+        };
+        let grant = Arc::new(Grant {
+            info: info.clone(),
+            display: Mutex::new(display),
+            navigation: Mutex::new((nav, false)),
+            events: self.1.clone(),
+            publishing: Mutex::new(()),
+            device: Some(device.clone()),
+            terminal: Weak::new(),
+            root: None,
+            public: None,
+            authority: String::new(),
+            stop: watch::channel(false).0,
+        });
+        all.insert(id, grant.clone());
+        self.1.push(
+            project,
+            Some(device.id),
+            json!({"type":"opened","snapshot":info}),
+        );
+        tokio::spawn(async move {
+            let mut stop = grant.revocation();
+            tokio::select! {_=device.revoked()=>grant.revoke(),_=stop.changed()=>{}}
+        });
+        Ok(info)
+    }
     pub fn get(&self, project: Uuid, id: Uuid, device: Option<Uuid>) -> Result<Arc<Grant>> {
         self.0
             .lock()
@@ -383,7 +561,13 @@ impl Grants {
         if all.get(&id).is_none_or(|g| !g.belongs_to(project, device)) {
             return Err(super::missing());
         }
-        all.remove(&id).unwrap().revoke();
+        let grant = all.remove(&id).unwrap();
+        if grant.info.runtime == "desktop"
+            && let Some(owner) = grant.owner()
+        {
+            self.2.lock().unwrap().insert((owner, id), Instant::now());
+        }
+        grant.revoke();
         Ok(())
     }
 }
@@ -407,6 +591,43 @@ pub(super) async fn proxy(State(grant): State<Arc<Grant>>, mut req: Request) -> 
     {
         return StatusCode::FORBIDDEN.into_response();
     }
+    if let Some(public) = &grant.public {
+        if !grant.active()
+            || !matches!(*req.method(), Method::GET | Method::HEAD)
+            || req.headers().contains_key(header::UPGRADE)
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let mut upstream = public.source.clone();
+        upstream.set_path(req.uri().path());
+        upstream.set_query(req.uri().query());
+        upstream.set_fragment(None);
+        let reply =
+            crate::workbench::public_web::get(&public.origins, upstream, 25 * 1024 * 1024).await;
+        let Ok(mut resource) = reply else {
+            return StatusCode::BAD_GATEWAY.into_response();
+        };
+        // A redirect must not make relative links point to a different remote origin under this tab's grant.
+        if resource.url.origin() != public.source.origin() {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        if resource.mime.starts_with("text/html") {
+            let html = String::from_utf8_lossy(&resource.bytes).into_owned();
+            match crate::workbench::public_web::bundle(&public.origins, html).await {
+                Ok(page) => resource.bytes = page.into_bytes(),
+                Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+            }
+        }
+        if !grant.active() {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let bytes = if req.method() == Method::HEAD {
+            Vec::new()
+        } else {
+            resource.bytes
+        };
+        return (resource.status,[(header::CONTENT_TYPE,resource.mime.as_str()),(header::REFERRER_POLICY,"no-referrer"),(header::X_CONTENT_TYPE_OPTIONS,"nosniff"),(header::CACHE_CONTROL,"private, no-store"),(header::CONTENT_SECURITY_POLICY,"default-src 'self' data:; script-src 'self' 'unsafe-inline' data:; style-src 'self' 'unsafe-inline' data:; form-action 'none'; frame-ancestors 'none'; base-uri 'self'")],bytes).into_response();
+    }
     let Ok(socket) = grant.connect().await else {
         return StatusCode::BAD_GATEWAY.into_response();
     };
@@ -425,7 +646,10 @@ pub(super) async fn proxy(State(grant): State<Arc<Grant>>, mut req: Request) -> 
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
     let front = websocket.then(|| hyper::upgrade::on(&mut req));
-    let upstream = SocketAddr::new(grant.info.target.address, grant.info.target.port).to_string();
+    let Some(target) = grant.info.target else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let upstream = SocketAddr::new(target.address, target.port).to_string();
     let path = req
         .uri()
         .path_and_query()

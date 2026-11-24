@@ -150,6 +150,7 @@ pub(super) async fn call(
     chat: Uuid,
     name: &str,
     input: Value,
+    origins: &std::collections::BTreeSet<String>,
     files: bool,
     check: impl Fn() -> Result<()>,
 ) -> Result<Value> {
@@ -168,6 +169,7 @@ pub(super) async fn call(
             _ => return Err(refuse("appearance must be dark or light")),
         };
         let (html, missing) = prepare(app, &cwd, q.html, q.path, files)?;
+        let html = crate::workbench::public_web::bundle(origins, html).await?;
         let mut view = html_browser::capture(&html, &[width], dark, true).await?;
         check()?;
         if !missing.is_empty() {
@@ -189,6 +191,7 @@ pub(super) async fn call(
             missing.join(", ")
         )));
     }
+    let html = crate::workbench::public_web::bundle(origins, html).await?;
     let heights = html_browser::capture(
         &html,
         &[320, 375, 430, 520, 640, 728, 860, 1000, 1144],
