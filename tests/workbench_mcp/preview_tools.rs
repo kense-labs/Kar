@@ -104,3 +104,66 @@ pub(super) async fn devices(
     assert!(!std::path::Path::new(cfg).exists());
     server::json(host.put(&policy).json(&json!({"mode":"plan"}))).await;
 }
+
+pub(super) async fn html(
+    url: &str,
+    host: &Client,
+    project: &str,
+    chat: Uuid,
+    root: &std::path::Path,
+    rpc: impl Fn(&str, Value) -> RequestBuilder,
+) {
+    let policy = format!("{url}/projects/{project}/chats/{chat}/model-tools/permissions");
+    let call = |name: &str, input: Value| rpc("tools/call", json!({"name":name,"arguments":input}));
+    let page = "<!doctype html><html><body><h1>Kar HTML</h1><script>console.log('measured-by-chrome')</script></body></html>";
+    let fp = root.join("mcp-page.html");
+    fs::write(&fp, page).unwrap();
+    server::json(
+        host.put(&policy)
+            .json(&json!({"mode":"plan","preview_tools":{"html":true}})),
+    )
+    .await;
+    let from_file = json!({"path":fp,"title":"HTML check","height":180});
+    let rejected = server::json(call("kar_html_render", from_file.clone())).await;
+    assert_eq!(rejected["result"]["isError"], true);
+    if std::env::var_os("KAR_MCP_BROWSER_LIVE").is_some() {
+        let preview =
+            server::json(call("kar_html_preview", json!({"html":page,"width":390}))).await;
+        assert_eq!(preview["result"]["structuredContent"]["width"], 390);
+        assert!(
+            preview["result"]["structuredContent"]["consoleMessages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["text"] == "measured-by-chrome")
+        );
+        assert_eq!(preview["result"]["content"][1]["type"], "image");
+    }
+    server::json(
+        host.put(&policy).json(
+            &json!({"mode":"plan","preview_tools":{"html":true,"html_workspace_files":true}}),
+        ),
+    )
+    .await;
+    let denied = call("kar_html_render", from_file.clone())
+        .header("kar-mode-limit", "approval-required/plan");
+    assert_eq!(server::json(denied).await["result"]["isError"], true);
+    let saved = server::json(call("kar_html_render", from_file)).await;
+    let item = &saved["result"]["structuredContent"]["htmlRender"];
+    assert!(item["attachmentId"].is_string());
+    let ticket = server::json(host.post(format!(
+        "{url}{}",
+        item["view_url_endpoint"].as_str().unwrap()
+    )))
+    .await;
+    let view = Client::new()
+        .get(format!("{url}{}", ticket["read_path"].as_str().unwrap()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(view.headers()["content-type"], "text/html; charset=utf-8");
+    let csp = view.headers()["content-security-policy"].to_str().unwrap();
+    assert!(csp.contains("sandbox allow-scripts") && !csp.contains("allow-same-origin"));
+    assert!(view.text().await.unwrap().contains("Kar HTML"));
+    server::json(host.put(&policy).json(&json!({"mode":"plan"}))).await;
+}

@@ -56,7 +56,7 @@ fn main() {
         _ => {}
     }
     tokio::runtime::Runtime::new().unwrap().block_on(async {
-        tokio::time::timeout(Duration::from_secs(120), scenario())
+        tokio::time::timeout(Duration::from_secs(180), scenario())
             .await
             .unwrap();
     })
@@ -205,6 +205,7 @@ async fn scenario() {
     let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
     preview_tools::controls(&url, &a, p, chat, call).await;
     preview_tools::devices(&url,&a,p,chat,call).await;
+    preview_tools::html(&url,&a,p,chat,&root,call).await;
     workflow::exercise(&url, &a, p, chat, call).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")

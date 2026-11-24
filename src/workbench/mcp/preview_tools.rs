@@ -12,6 +12,8 @@ pub(in crate::workbench) struct Resources {
     pub tabs: BTreeSet<Uuid>,
     pub terminals: BTreeSet<Uuid>,
     pub device_hosts: BTreeSet<String>,
+    pub html: bool,
+    pub html_workspace_files: bool,
 }
 #[derive(Copy, Clone)]
 enum Access {
@@ -19,6 +21,7 @@ enum Access {
     Control,
     DeviceRead,
     DeviceControl,
+    Html,
 }
 fn allowed(c: &Caller, a: Access) -> bool {
     let Some(p) = c.policy.as_ref() else {
@@ -26,10 +29,12 @@ fn allowed(c: &Caller, a: Access) -> bool {
     };
     c.grant.as_ref().is_some_and(|g| g.active())
         && match a {
+            Access::Html => p.preview_tools.html,
             Access::DeviceRead | Access::DeviceControl => !p.preview_tools.device_hosts.is_empty(),
             _ => !p.preview_tools.tabs.is_empty() || !p.preview_tools.terminals.is_empty(),
         }
-        && (matches!(a, Access::Read | Access::DeviceRead) || (p.executes() && !c.plan))
+        && (matches!(a, Access::Read | Access::DeviceRead | Access::Html)
+            || (p.executes() && !c.plan))
 }
 pub(super) fn tools(c: &Caller) -> Vec<Tool> {
     let mut out = Vec::new();
@@ -38,6 +43,12 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
     }
     if allowed(c, Access::Control) {
         out.push(Tool{name:"kar_preview_close",description:"Close a preview tab shared with this chat and release its browser and tunnel.",properties:json!({"tab_id":{"type":"string","format":"uuid"}}),required:&["tab_id"]});
+    }
+    if allowed(c, Access::Html) {
+        let text = json!({"type":"string","minLength":1,"maxLength":512000});
+        let path = json!({"type":"string","minLength":1});
+        out.push(Tool{name:"kar_html_preview",description:"Preview one inline HTML page or authorized absolute workspace .html path. Returns a Chromium PNG, content height, and console messages.",properties:json!({"html":text,"path":path,"width":{"type":"integer","minimum":240,"maximum":1600},"appearance":{"enum":["dark","light"]}}),required:&[]});
+        out.push(Tool{name:"kar_html_render",description:"Publish an HTML attachment in this chat, with a signed sandboxed reader view. Pass exactly one of html or path.",properties:json!({"html":text,"path":path,"height":{"type":"integer","minimum":80,"maximum":2000},"title":{"type":"string","minLength":1,"maxLength":200}}),required:&["title","height"]});
     }
     let device = json!({"type":"string","minLength":1});
     let props = json!({"device_id":device,"host_id":device});
@@ -112,6 +123,24 @@ impl DevicePermission {
     }
 }
 pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Value> {
+    if name.starts_with("kar_html_") {
+        let g = check(app, c, Access::Html)?;
+        return super::html::call(
+            app,
+            g.project,
+            g.chat,
+            name,
+            input,
+            c.policy
+                .as_ref()
+                .unwrap()
+                .preview_tools
+                .html_workspace_files
+                && c.files_allowed,
+            || check(app, c, Access::Html).map(|_| ()),
+        )
+        .await;
+    }
     if name.starts_with("kar_device_") {
         return super::super::devices::model::call(app, DevicePermission(c.clone()), name, input)
             .await;

@@ -259,7 +259,7 @@ pub(super) async fn call(
     name: &str,
     input: Value,
 ) -> Result<Value> {
-    if name.starts_with("kar_preview_") || name.starts_with("kar_device_"){return preview_tools::call(&app,&caller,name,input).await;}
+    if name.starts_with("kar_preview_") || name.starts_with("kar_device_") || name.starts_with("kar_html_"){return preview_tools::call(&app,&caller,name,input).await;}
     if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
         return issues::call(app, caller, name, input).await;
     }

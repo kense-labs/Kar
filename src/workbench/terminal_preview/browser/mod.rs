@@ -1,5 +1,6 @@
 //! Server-managed browser tabs. A browser profile belongs to one project and device.
 mod cdp;
+pub(in crate::workbench) mod html;
 mod network;
 pub(super) mod profiles;
 mod settings;

@@ -40,6 +40,8 @@ struct Upload {
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Download {
+    #[serde(default,skip_serializing_if="std::ops::Not::not")]
+    as_html:bool,
     project: Uuid,
     chat: Uuid,
     attachment: Uuid,
@@ -235,9 +237,16 @@ async fn sign_read(
     State(app): State<Workbench>,
     Path((p, c, id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Reply<Value> {
+    sign_view(app,p,c,id,false).await
+}
+async fn sign_html(State(app):State<Workbench>,Path((p,c,id)):Path<(Uuid,Uuid,Uuid)>)->Reply<Value>{
+    sign_view(app,p,c,id,true).await
+}
+async fn sign_view(app:Workbench,p:Uuid,c:Uuid,id:Uuid,as_html:bool)->Reply<Value>{
     blocking(move || {
         app.binding(p, c)?;
-        app.0.chats.visible_attachment(c, id)?;
+        let a=app.0.chats.visible_attachment(c, id)?;
+        if as_html && (a.kind!=AttachmentKind::File || a.mime!="text/html"){return Err(missing());}
         let key = credential()?;
         let ticket = Uuid::new_v4();
         let at = now();
@@ -247,6 +256,7 @@ async fn sign_read(
             db.assets.reads.insert(
                 ticket,
                 Download {
+                    as_html,
                     project: p,
                     chat: c,
                     attachment: id,
@@ -274,6 +284,7 @@ async fn download(
         .filter(|r| r.expires_ms > now() && matches_hash(&key, &r.secret_hash))
         .cloned()
         .ok_or_else(missing)?;
+    let as_html=read.as_html;
     let (a, data) = tokio::task::spawn_blocking(move || -> Result<_> {
         app.binding(read.project, read.chat)?;
         let a = app.0.chats.visible_attachment(read.chat, read.attachment)?;
@@ -283,6 +294,13 @@ async fn download(
     .await
     .map_err(|e| Error::Closed(e.to_string()))??;
     // File downloads share the service origin. Keep arbitrary documents outside the browser execution context.
+    if as_html && a.kind==AttachmentKind::File && a.mime=="text/html" {
+        return Ok(([
+            (header::CONTENT_TYPE,"text/html; charset=utf-8"),(header::X_CONTENT_TYPE_OPTIONS,"nosniff"),
+            (header::CACHE_CONTROL,"private, no-store"),(header::REFERRER_POLICY,"no-referrer"),
+            (header::CONTENT_SECURITY_POLICY,"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'")
+        ],data).into_response());
+    }
     let mime = if a.kind == AttachmentKind::Image {
         a.mime.as_str()
     } else {
@@ -304,6 +322,7 @@ pub(super) fn routes() -> Router<Workbench> {
         .route("/projects/{p}/attachments/uploads", post(issue))
         .route("/projects/{p}/attachments/{id}", delete(discard))
         .route("/projects/{p}/chats/{c}/attachments", post(claim))
+        .route("/projects/{p}/chats/{c}/html-renders/{id}/url",post(sign_html))
         .route(
             "/projects/{p}/chats/{c}/attachments/{id}/url",
             post(sign_read),

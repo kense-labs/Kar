@@ -4,6 +4,7 @@ mod issues;
 pub(super) use issues::{Policy, permission_routes};
 mod registry;
 mod preview_tools;
+mod html;
 pub(in crate::workbench) use preview_tools::DevicePermission;
 mod toolkit;
 mod workflow;
@@ -36,6 +37,7 @@ struct Caller {
     identity: Identity,
     grant: Option<Arc<Grant>>,
     plan: bool,
+    files_allowed: bool,
     policy: Option<Policy>,
 }
 fn hdr<'a>(h: &'a HeaderMap, k: &str) -> Option<&'a str> {
@@ -108,9 +110,12 @@ async fn scope(State(app): State<Workbench>, mut req: Request, next: Next) -> Re
     } else {
         false
     };
+    // An owner may grant scoped file reads; a narrower provider limit still wins.
+    let files_allowed=hdr(req.headers(),"kar-mode-limit").is_none_or(|m|m.starts_with("full-access/"));
     let policy = grant.as_ref().and_then(|g| issues::authorized(&app, g));
     req.extensions_mut().insert(Caller {
         policy,
+        files_allowed,
         identity,
         grant,
         plan,

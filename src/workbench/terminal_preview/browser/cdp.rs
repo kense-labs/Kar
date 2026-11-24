@@ -36,6 +36,8 @@ fn executable() -> Result<PathBuf> {
 pub(super) struct Connection {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     sequence: u64,
+    pub(super) observe_console: bool,
+    pub(super) console:Vec<Value>,
 }
 impl Connection {
     async fn connect(url: &str) -> Result<Self> {
@@ -45,6 +47,7 @@ impl Connection {
         Ok(Self {
             socket,
             sequence: 0,
+            observe_console:false,console:vec![],
         })
     }
     pub(super) async fn request(
@@ -68,6 +71,10 @@ impl Connection {
                 match frame.map_err(|_| Error::Closed("Chromium connection failed".into()))? {
                     Message::Text(text) => {
                         let mut reply: Value = serde_json::from_str(&text)?;
+                        if self.observe_console && reply["method"]=="Runtime.consoleAPICalled" && self.console.len()<20{
+                            let text=reply["params"]["args"].as_array().into_iter().flatten().filter_map(|a|a.get("value").or_else(||a.get("description"))).map(|v|v.as_str().map(str::to_owned).unwrap_or_else(||v.to_string())).collect::<Vec<_>>().join(" ");
+                            self.console.push(json!({"level":reply["params"]["type"],"text":text.chars().take(500).collect::<String>()}));
+                        }
                         if reply["id"] != id {
                             continue;
                         }

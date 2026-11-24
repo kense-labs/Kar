@@ -1,5 +1,6 @@
 //! Project-owned interactive terminals and revocable previews of their listeners.
 mod browser;
+pub(super) use browser::html as html_browser;
 mod events;
 mod history;
 mod preview;
