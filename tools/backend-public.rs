@@ -3,6 +3,8 @@
 mod declaration;
 #[path = "../tests/support/declared_turn.rs"]
 mod declared_turn;
+#[path = "backend-public/turns.rs"]
+mod turns;
 use anyhow::{Result, bail, ensure};
 use clap::Parser;
 use kar::{
@@ -222,6 +224,28 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => return Err(e.into()),
                     }
+                }
+                "session.query-readbacks-carry-stream-seq"
+                | "session.framing-and-attribution"
+                | "session.observer-isolation"
+                | "session.multi-turn-conversation"
+                | "session.steer-after-end"
+                | "session.cursor-replays-without-loss-or-duplication"
+                | "session.dispose-is-recorded"
+                | "session.dispose-mid-turn-settles"
+                | "session.images-travel-with-input"
+                | "session.single-active-turn"
+                | "session.abort-settles-and-is-idempotent"
+                | "session.steer-mid-turn"
+                | "session.queue-runs-after-turn"
+                | "session.withdraw-before-dispatch" => {
+                    let cwd = opts.cwd.clone();
+                    let session = rt.open(opts).await?;
+                    evidence["exercise"] = tokio::time::timeout(
+                        std::time::Duration::from_secs(180),
+                        turns::run(case, &session, &cwd),
+                    )
+                    .await??;
                 }
                 _ => bail!("unknown fixed public case {case}"),
             }

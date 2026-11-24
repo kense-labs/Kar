@@ -137,6 +137,15 @@ fn catalog() -> Result<Vec<Case>> {
             "session.effort-never-substituted",
             "session.effort-listed-levels-apply-across-resume",
             "session.resume-or-loud-rejection",
+            "session.query-readbacks-carry-stream-seq",
+            "session.framing-and-attribution",
+            "session.dispose-mid-turn-settles",
+            "session.images-travel-with-input",
+            "session.single-active-turn",
+            "session.abort-settles-and-is-idempotent",
+            "session.steer-mid-turn",
+            "session.queue-runs-after-turn",
+            "session.withdraw-before-dispatch",
         ] {
             if public_case == "session.effort-listed-levels-apply-across-resume"
                 && !matches!(
