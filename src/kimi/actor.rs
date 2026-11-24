@@ -33,6 +33,10 @@ struct Steer {
     parent: Option<String>,
     prompt: Option<String>,
 }
+struct PendingAbort {
+    deadline: tokio::time::Instant,
+    span: Option<String>,
+}
 pub(super) struct Actor {
     web: Web,
     socket: Socket,
@@ -45,6 +49,7 @@ pub(super) struct Actor {
     turn: Option<Turn>,
     queue: VecDeque<(Uuid, String, Reply<TurnReport>)>,
     steers: Vec<Steer>,
+    pending_abort: Option<PendingAbort>,
     sent: HashSet<String>,
     compaction: Option<Operation>,
     requests: HashMap<String, (String, Value)>,
@@ -82,6 +87,7 @@ impl Actor {
             turn: None,
             queue: VecDeque::new(),
             steers: vec![],
+            pending_abort: None,
             sent: HashSet::new(),
             compaction: None,
             requests: HashMap::new(),
@@ -94,6 +100,7 @@ impl Actor {
         self.turn.is_some()
             || self.projection.active().is_some()
             || !self.steers.is_empty()
+            || self.pending_abort.is_some()
             || self.compaction.is_some()
     }
     fn record(&self, dir: Direction, kind: RecordKind, mut body: Value, events: Vec<Event>) {
@@ -253,6 +260,11 @@ impl Actor {
             return None;
         }
         if f.events.contains(&Event::TurnStarted) {
+            if let Some(cancel) = &mut self.pending_abort
+                && cancel.span.is_none()
+            {
+                cancel.span.clone_from(&f.span);
+            }
             if let Some(i) = self.steers.iter().position(|s| {
                 s.parent
                     .as_deref()
@@ -274,11 +286,23 @@ impl Actor {
                 }
             }
         }
-        if f.events
-            .iter()
-            .any(|e| matches!(e, Event::TurnEnded { outcome } if *outcome != Outcome::Completed))
-        {
-            self.steers.clear();
+        if let Some(outcome) = f.events.iter().find_map(|e| match e {
+            Event::TurnEnded { outcome } => Some(outcome),
+            _ => None,
+        }) {
+            if self
+                .pending_abort
+                .as_ref()
+                .is_some_and(|cancel| match &cancel.span {
+                    Some(target) => f.span.as_ref() == Some(target),
+                    None => self.projection.active().is_none(),
+                })
+            {
+                self.pending_abort = None;
+            }
+            if *outcome != Outcome::Completed && self.projection.active().is_none() {
+                self.steers.clear();
+            }
         }
         let t = self.turn.as_mut()?;
         if t.span.is_some() && f.span != t.span {
@@ -410,6 +434,92 @@ impl Actor {
         }
         Ok(())
     }
+    fn arm_abort(&mut self, deadline: tokio::time::Instant) {
+        self.pending_abort.get_or_insert_with(|| PendingAbort {
+            deadline,
+            span: self.projection.active().map(str::to_owned),
+        });
+    }
+    async fn abort(&mut self) -> Result<Value> {
+        let idle = self.turn.is_none() && self.projection.active().is_none();
+        let local = idle && self.steers.is_empty() && self.pending_abort.is_none();
+        let id = Uuid::new_v4();
+        self.record(
+            if local {
+                Direction::Host
+            } else {
+                Direction::ToRuntime
+            },
+            RecordKind::Request,
+            json!({"id":id,"method":"POST /sessions/{id}:cancel"}),
+            vec![],
+        );
+        let result = if local {
+            Err(Error::Refused("no active turn".into()))
+        } else {
+            // Repeated attempts share the earliest deadline. A refused attempt
+            // cannot disarm a previous cancellation that the server accepted.
+            let deadline = self
+                .pending_abort
+                .as_ref()
+                .map(|cancel| cancel.deadline)
+                .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(10));
+            let reply = tokio::time::timeout_at(
+                deadline,
+                self.web.request(
+                    Method::POST,
+                    &(self.path.clone() + ":cancel"),
+                    Some(json!({})),
+                ),
+            )
+            .await;
+            match reply {
+                Ok(Ok(v)) if v["cancelled"] == true => {
+                    self.arm_abort(deadline);
+                    Ok(v)
+                }
+                Ok(Ok(v)) if v["cancelled"] == false => {
+                    Err(Error::Refused("no active turn".into()))
+                }
+                Ok(Ok(_)) => Err(Error::Protocol(
+                    "Kimi cancel response lacks a boolean cancelled field".into(),
+                )),
+                Ok(Err(e)) => {
+                    if matches!(e, Error::Http(_) | Error::Json(_)) {
+                        self.arm_abort(deadline);
+                    }
+                    Err(e)
+                }
+                Err(_) => {
+                    self.arm_abort(deadline);
+                    Err(Error::Timeout("Kimi cancellation".into()))
+                }
+            }
+        };
+        // The parent may have ended while its steer is still waiting for a native turn.
+        if !local
+            && idle
+            && matches!(&result,Err(Error::Refused(reason)) if reason=="no active turn")
+        {
+            self.steers.clear();
+            self.pending_abort = None;
+        }
+        let report = match &result {
+            Ok(v) => json!({"id":id,"result":v}),
+            Err(e) => json!({"id":id,"error":e.to_string()}),
+        };
+        self.record(
+            if local {
+                Direction::Host
+            } else {
+                Direction::FromRuntime
+            },
+            RecordKind::Response,
+            report,
+            vec![],
+        );
+        result
+    }
     async fn command(&mut self, c: Command) -> Result<()> {
         match c {
             Command::Prompt(input, admission, ack, done) => {
@@ -456,21 +566,7 @@ impl Actor {
                 Self::acknowledge_input(ack, res)?;
             }
             Command::Abort(ack) => {
-                let res = self
-                    .web
-                    .request(
-                        Method::POST,
-                        &(self.path.clone() + ":cancel"),
-                        Some(json!({})),
-                    )
-                    .await
-                    .and_then(|v| {
-                        if v["cancelled"] == false {
-                            Err(Error::Refused("no active turn".into()))
-                        } else {
-                            Ok(v)
-                        }
-                    });
+                let res = self.abort().await;
                 let _ = ack.send(res);
             }
             Command::StopTask(id, ack) => {
@@ -591,9 +687,15 @@ impl Actor {
                     break e.to_string();
                 }
             }
-            let deadline = self.controls.values().map(|(d, _)| *d).min();
+            let deadline = self
+                .controls
+                .values()
+                .map(|(d, _)| *d)
+                .chain(self.pending_abort.as_ref().map(|cancel| cancel.deadline))
+                .min();
             tokio::select! {
                 ()=async {if let Some(at)=deadline{tokio::time::sleep_until(at).await}else{std::future::pending::<()>().await}}=>{
+                    if self.pending_abort.as_ref().is_some_and(|cancel| cancel.deadline <= tokio::time::Instant::now()) { break "Kimi cancellation exceeded its deadline".into(); }
                     let expired:Vec<_>=self.controls.iter().filter(|(_,v)|v.0<=tokio::time::Instant::now()).map(|(id,_)|id.clone()).collect();
                     let mut failed=false;for id in expired{if let Some((_,Some(tx)))=self.controls.remove(&id){let _=tx.send(Err(Error::Timeout("Kimi WebSocket command".into())));}else{failed=true;}}
                     if failed{break "Kimi child subscription timed out".into();}

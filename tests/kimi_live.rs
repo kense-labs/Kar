@@ -1,5 +1,7 @@
 #[path = "support/declaration.rs"]
 mod declaration;
+#[path = "support/sse.rs"]
+mod sse;
 
 use axum::{Json, Router, body::Body, extract::State, http::Response, routing::post};
 use kar::{
@@ -20,6 +22,9 @@ struct Requests {
     saw_live_tool: Arc<tokio::sync::Notify>,
     model_started: Arc<tokio::sync::Notify>,
     finish_model: Arc<tokio::sync::Notify>,
+}
+fn tool_arguments() -> Value {
+    json!({"command":"printf kap-native-output","description":"Print a test marker"})
 }
 async fn model(State(requests): State<Requests>, Json(body): Json<Value>) -> Response<Body> {
     let msgs = body["messages"].as_array().unwrap();
@@ -49,29 +54,34 @@ async fn model(State(requests): State<Requests>, Json(body): Json<Value>) -> Res
     if marker.is_none() && !resumed && !needs_tool {
         requests.saw_live_tool.notified().await;
     }
-    let delta = if needs_tool {
-        let arguments =
-            json!({"command":"printf kap-native-output","description":"Print a test marker"});
-        json!({"role":"assistant","tool_calls":[{
-            "index":0, "id":"kar-kap-tool", "type":"function",
-            "function":{"name":"Bash","arguments":arguments.to_string()}
-        }]})
+    let mut chunks = Vec::new();
+    if needs_tool {
+        let args = tool_arguments().to_string();
+        let split = args.find("kap-native-output").unwrap();
+        chunks.push((json!({"role":"assistant","tool_calls":[{
+            "index":0,"id":"kar-kap-tool","type":"function","function":{"name":"Bash","arguments":&args[..split]}
+        }]}), Value::Null));
+        chunks.push((
+            json!({"tool_calls":[{"index":0,"function":{"arguments":&args[split..]}}]}),
+            Value::Null,
+        ));
     } else {
         let reply = if resumed {
             "kap-second-answer"
         } else {
             "kap-first-answer"
         };
-        json!({"role":"assistant","content":marker.unwrap_or(reply)})
-    };
+        chunks.push((
+            json!({"role":"assistant","content":marker.unwrap_or(reply)}),
+            Value::Null,
+        ));
+    }
+    chunks.push((
+        json!({}),
+        json!(if needs_tool { "tool_calls" } else { "stop" }),
+    ));
     let mut sse = String::new();
-    for (d, reason) in [
-        (delta, Value::Null),
-        (
-            json!({}),
-            json!(if needs_tool { "tool_calls" } else { "stop" }),
-        ),
-    ] {
+    for (d, reason) in chunks {
         let chunk = json!({"id":"chatcmpl-kap","object":"chat.completion.chunk","created":1,"model":"fixture","choices":[{"index":0,"delta":d,"finish_reason":reason}]});
         sse.push_str(&format!("data: {chunk}\n\n"));
     }
@@ -91,6 +101,16 @@ async fn kap_tool_turn_replay_and_native_resume() {
 async fn official_cli_falls_back_and_resumes_over_acp() {
     exercise(false).await;
 }
+async fn serve_chat(store: &ChatStore, id: Uuid) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let router = kar::chat::event_router(store.clone(), id);
+    (
+        url,
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() }),
+    )
+}
+
 async fn exercise(kap: bool) {
     let requests = Requests::default();
     let app = Router::new()
@@ -238,28 +258,38 @@ async fn exercise(kap: bool) {
     let native = session.info().native_id.clone();
     let mut a = ChatReplica::from_snapshot(store.feed_snapshot(id).unwrap());
     let mut b = ChatReplica::from_snapshot(store.feed_snapshot(id).unwrap());
-    let mut feed = store.follow(id, Some(a.cursor())).unwrap();
-    let mut second = store.follow(id, Some(b.cursor())).unwrap();
+    let opening = a.cursor();
+    let (url, server) = serve_chat(&store, id).await;
+    let mut feed = sse::SseClient::open(&url, &opening.to_string(), None).await;
+    let mut second = Some(sse::SseClient::open(&url, &opening.to_string(), None).await);
+    let mut from_a = vec![];
+    let mut from_b = vec![];
     {
         let send = session.send(Uuid::new_v4(), "KAP_FIRST");
         tokio::pin!(send);
         let observe = async {
             let mut answered = std::collections::HashSet::new();
-            let mut tool_seen = false;
+            let mut partials = Vec::new();
             let result = loop {
                 tokio::select! {
                     result = &mut send => break result.unwrap(),
-                    next = feed.recv() => {
-                        let event = next.unwrap();
+                    event = feed.next() => {
+                        from_a.push(serde_json::to_value(&event).unwrap());
                         assert!(a.apply(event.clone()).unwrap());
                         assert!(!a.apply(event).unwrap());
-                        if !tool_seen {
-                            b.apply(second.recv().await.unwrap()).unwrap();
-                            if let Some(turn) = b.turns().last()
-                                && turn.items.iter().any(|i| matches!(i.item, Item::Tool { .. }))
-                            {
-                                assert_eq!(turn.status, TurnStatus::Running);
-                                tool_seen = true;
+                        if let Some(activity) = a.turns().last().and_then(|t| t.items.iter().find_map(|i|
+                            match &i.item {Item::Tool{id,activity} if id=="kar-kap-tool" => Some(activity), _ => None}
+                        )) && activity.input_partial {
+                            let text=activity.input.as_ref().unwrap().as_str().unwrap().to_owned();
+                            if partials.last()!=Some(&text) { partials.push(text); }
+                        }
+                        if let Some(client)=second.as_mut() {
+                            let event=client.next().await;
+                            from_b.push(serde_json::to_value(&event).unwrap());
+                            assert!(b.apply(event).unwrap());
+                            if b.turns().last().is_some_and(|turn| turn.items.iter().any(|i| matches!(&i.item,Item::Tool{activity,..} if activity.input_partial))) {
+                                assert_eq!(b.turns().last().unwrap().status, TurnStatus::Running);
+                                second.take();
                                 requests.saw_live_tool.notify_one();
                             }
                         }
@@ -270,18 +300,37 @@ async fn exercise(kap: bool) {
                 }
             };
             assert_eq!(result.status, TurnStatus::Completed);
+            assert!(
+                partials
+                    .iter()
+                    .all(|part| tool_arguments().to_string().starts_with(part))
+            );
+            assert!(partials.windows(2).all(|w| w[1].starts_with(&w[0])));
+            assert!(
+                !partials.is_empty(),
+                "KAP did not emit partial tool arguments"
+            );
         };
         tokio::time::timeout(Duration::from_secs(50), observe)
             .await
             .expect("Kimi first turn timed out");
     }
-    drop(second);
+    let first_tip = store.feed_snapshot(id).unwrap().cursor;
+    while a.cursor() != first_tip {
+        let event = feed.next().await;
+        from_a.push(serde_json::to_value(&event).unwrap());
+        assert!(a.apply(event).unwrap());
+    }
+    assert!(second.is_none());
+    assert_ne!(a.cursor(), b.cursor());
     drop(feed);
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
     let items = &store.history(id).unwrap().turns[0].items;
     assert!(
         items
             .iter()
-            .any(|i| matches!(&i.item,Item::Tool{id,..} if id=="kar-kap-tool"))
+            .any(|i| matches!(&i.item,Item::Tool{id,activity} if id=="kar-kap-tool" && !activity.input_partial && activity.input.as_ref()==Some(&tool_arguments()) && activity.result.is_some()))
     );
     assert_eq!(
         items
@@ -298,6 +347,18 @@ async fn exercise(kap: bool) {
     );
     assert!(items.iter().any(|i|matches!(&i.item,Item::Message{role:Role::Assistant,text,..} if text=="kap-first-answer")));
     session.close().await.unwrap();
+    let sibling = store
+        .create("kimi", Some(&bin), opts.clone())
+        .await
+        .unwrap();
+    let sibling_id = sibling.info().id;
+    assert_ne!(sibling_id, id);
+    sibling
+        .send(Uuid::new_v4(), "KAP_SECOND unrelated chat sentinel")
+        .await
+        .unwrap();
+    sibling.close().await.unwrap();
+    let sibling_tip = store.feed_snapshot(sibling_id).unwrap().cursor;
     // Reproduce a controller that persisted through tool start but missed the terminal
     // frames. The real Kimi session already holds the complete turn.
     let crash_dir = dir.path().join("crash-store");
@@ -359,13 +420,49 @@ async fn exercise(kap: bool) {
     chat.close().await.unwrap();
     let history = store.history(id).unwrap();
     let tip = store.feed_snapshot(id).unwrap().cursor;
-    for replica in [&mut a, &mut b] {
-        let mut f = store.follow(id, Some(replica.cursor())).unwrap();
+    let mut canonical = vec![];
+    let mut durable = store.follow(id, Some(opening)).unwrap();
+    while durable.cursor() != tip {
+        canonical.push(serde_json::to_value(durable.recv().await.unwrap()).unwrap());
+    }
+    let (url, server) = serve_chat(&store, id).await;
+    let wrong = reqwest::Client::new()
+        .get(format!("{url}/events"))
+        .header("last-event-id", sibling_tip.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(
+        !serde_json::to_string(&canonical)
+            .unwrap()
+            .contains("unrelated chat sentinel")
+    );
+    let prefixes = (from_a.len(), from_b.len());
+    for (replica, received) in [(&mut a, &mut from_a), (&mut b, &mut from_b)] {
+        let mut client = sse::SseClient::open(
+            &url,
+            &opening.to_string(),
+            Some(&replica.cursor().to_string()),
+        )
+        .await;
         while replica.cursor() != tip {
-            replica.apply(f.recv().await.unwrap()).unwrap();
+            let event = client.next().await;
+            received.push(serde_json::to_value(&event).unwrap());
+            assert!(replica.apply(event.clone()).unwrap());
+            assert!(!replica.apply(event).unwrap());
         }
+        assert_eq!(*received, canonical);
         assert_eq!(replica.turns(), history.turns);
     }
+    println!(
+        "KAP SSE verified {} durable events per client, {} and {} received before disconnection, {} turns",
+        canonical.len(),
+        prefixes.0,
+        prefixes.1,
+        history.turns.len()
+    );
+    server.abort();
     assert_eq!(history.turns.len(), 2);
     assert_eq!(history.turns[1].id, queued);
     assert!(history.turns[1].items.iter().any(|i|matches!(&i.item,Item::Message{role:Role::Assistant,text,..} if text=="kap-second-answer")));

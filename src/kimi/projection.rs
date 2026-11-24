@@ -18,6 +18,8 @@ pub(super) struct Frame {
 struct Item {
     kind: String,
     text: String,
+    partial_input: String,
+    complete_input: Option<Value>,
     started: bool,
     ended: bool,
 }
@@ -404,6 +406,30 @@ pub(crate) fn tool_snapshot(id: &str, item: &Value) -> Vec<Event> {
     events
 }
 impl Item {
+    fn tool_input(&mut self, id: &str, item: &Value, events: &mut Vec<Event>) {
+        if let Some(input) = item.get("input").filter(|v| !v.is_null()) {
+            if self.complete_input.as_ref() != Some(input) {
+                events.push(Event::ToolInput {
+                    id: id.into(),
+                    input: input.clone(),
+                });
+                self.complete_input = Some(input.clone());
+                self.partial_input.clear();
+            }
+        } else if self.complete_input.is_none()
+            && let Some(snapshot) = item["input_text"].as_str()
+            && let Some(suffix) = snapshot
+                .strip_prefix(&self.partial_input)
+                .filter(|s| !s.is_empty())
+        {
+            events.push(Event::ToolInputDelta {
+                id: id.into(),
+                delta: suffix.into(),
+            });
+            self.partial_input = snapshot.into();
+        }
+    }
+
     fn update(&mut self, kind: &str, id: &str, v: &Value, events: &mut Vec<Event>) {
         if self.ended {
             return;
@@ -427,7 +453,10 @@ impl Item {
                         Event::TextDelta { text: delta }
                     });
                 }
-                Some("input_text") => events.push(Event::ToolInputDelta { id: call, delta }),
+                Some("input_text") if self.complete_input.is_none() => {
+                    self.partial_input.push_str(&delta);
+                    events.push(Event::ToolInputDelta { id: call, delta });
+                }
                 Some("output") => events.push(Event::ToolProgress {
                     id: call,
                     output: None,
@@ -438,12 +467,7 @@ impl Item {
             return;
         }
         if kind == "item.updated" {
-            if let Some(input) = v["set"].get("input") {
-                events.push(Event::ToolInput {
-                    id: call.clone(),
-                    input: input.clone(),
-                });
-            }
+            self.tool_input(id, &v["set"], events);
             if let Some(output) = string(&v["set"]["output"]) {
                 events.push(Event::ToolProgress {
                     id: call,
@@ -489,16 +513,7 @@ impl Item {
                         name: item["name"].as_str().unwrap_or("unknown").into(),
                     });
                 }
-                if let Some(input) = item
-                    .get("input")
-                    .filter(|v| !v.is_null())
-                    .or_else(|| item.get("input_text"))
-                {
-                    events.push(Event::ToolInput {
-                        id: call.clone(),
-                        input: input.clone(),
-                    });
-                }
+                self.tool_input(id, item, events);
                 if let Some(output) = string(&item["output"]) {
                     events.push(Event::ToolProgress {
                         id: call.clone(),
@@ -560,6 +575,97 @@ mod tests {
     use super::*;
     fn events(p: &mut Projection, v: Value) -> Vec<Event> {
         p.frames(v).into_iter().flat_map(|f| f.events).collect()
+    }
+    #[test]
+    fn tool_snapshots_extend_partial_input_and_settle_only_on_native_input() {
+        let mut item = Item::default();
+        let mut card = crate::observe::Tool::default();
+        let mut step = |kind: &str, value: Value| {
+            let mut projected = vec![];
+            item.update(kind, "call", &value, &mut projected);
+            for event in &projected {
+                card.apply(event, false);
+            }
+            (card.clone(), projected)
+        };
+        let running = |s: &str| json!({"item":{"type":"tool_call","name":"Read","input_text":s}});
+        let (partial, events) = step("item.started", running("{"));
+        assert!(partial.input_partial);
+        assert!(
+            matches!(&events[..],[Event::ToolStarted{..},Event::ToolInputDelta{delta,..}] if delta=="{")
+        );
+        assert!(step("item.started", running("{")).1.is_empty());
+        step(
+            "item.delta",
+            json!({"field":"input_text","delta":"\"path\":"}),
+        );
+        let (expanded, events) = step("item.started", running("{\"path\":\"a\"}"));
+        assert!(expanded.input_partial);
+        assert!(matches!(&events[..],[Event::ToolInputDelta{delta,..}] if delta=="\"a\"}"));
+        assert!(step("item.started", running("{")).1.is_empty());
+        let args = json!({"path":"a"});
+        let (ready, events) = step("item.updated", json!({"set":{"input":args}}));
+        assert!(matches!(&events[..], [Event::ToolInput { .. }]));
+        assert_eq!(ready.input, Some(args.clone()));
+        assert!(!ready.input_partial);
+        assert!(
+            step("item.delta", json!({"field":"input_text","delta":"stale"}))
+                .1
+                .is_empty()
+        );
+        let (finished, events) = step(
+            "item.ended",
+            json!({"item":{"type":"tool_call","input":args,"output":"ok"}}),
+        );
+        assert!(finished.finished && finished.result.is_some());
+        assert!(!events.iter().any(|e| matches!(e, Event::ToolInput { .. })));
+        let recovered = tool_snapshot(
+            "call",
+            &json!({"type":"tool_call","status":"ended","input_text":"{}"}),
+        );
+        assert!(
+            recovered
+                .iter()
+                .any(|e| matches!(e,Event::ToolInputDelta{delta,..} if delta=="{}"))
+        );
+        assert!(
+            !recovered
+                .iter()
+                .any(|e| matches!(e, Event::ToolInput { .. }))
+        );
+    }
+    #[test]
+    fn ending_tool_supplies_arguments_without_an_update() {
+        let args = json!({"path":"example.rs"});
+        for start in [
+            Value::Null,
+            json!({"input_text":"{"}),
+            json!({"input":args}),
+        ] {
+            let mut first = json!({"type":"tool_call","name":"Read"});
+            if let Some(fields) = start.as_object() {
+                first.as_object_mut().unwrap().extend(fields.clone());
+            }
+            let mut item = Item::default();
+            let mut events = vec![];
+            item.update("item.started", "call", &json!({"item":first}), &mut events);
+            let end = json!({"item":{"type":"tool_call","input":args,"output":"ok"}});
+            item.update("item.ended", "call", &end, &mut events);
+            item.update("item.ended", "call", &end, &mut events);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| matches!(e,Event::ToolInput{input,..} if input==&args))
+                    .count(),
+                1
+            );
+            let mut card = crate::observe::Tool::default();
+            for event in &events {
+                card.apply(event, false);
+            }
+            assert_eq!(card.input.as_ref(), Some(&args));
+            assert!(!card.input_partial && card.finished);
+        }
     }
     #[test]
     fn root_history_and_repeated_snapshots_do_not_duplicate_turns_or_items() {

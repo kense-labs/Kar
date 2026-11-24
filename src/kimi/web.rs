@@ -338,6 +338,18 @@ impl Web {
                     .redacted(secrets));
                 }
             }
+            if is_post && path.ends_with(":cancel") {
+                let message = v["msg"].as_str().unwrap_or("").to_ascii_lowercase();
+                if v["code"] == 40902
+                    || ["no active turn", "no running turn"]
+                        .iter()
+                        .any(|s| message.contains(s))
+                    || message == "not running"
+                    || (message.contains("turn") && message.contains("not running"))
+                {
+                    return Err(Error::Refused("no active turn".into()));
+                }
+            }
             return Err(Error::Refused(format!(
                 "Kimi API returned HTTP {} and code {:?}",
                 status.as_u16(),
