@@ -14,14 +14,19 @@ use std::{
 };
 use uuid::Uuid;
 
-fn peer() {
+fn peer(local: bool) {
     assert!(std::env::var_os("KAR_WORKBENCH_TOKEN").is_none());
-    assert_eq!(
-        std::env::var("KAR_FIXTURE_DISTRIBUTION_ENV").as_deref(),
-        Ok("peer")
-    );
-    let db = PathBuf::from(std::env::var_os("FIXTURE_NATIVE_DB").unwrap())
-        .join(std::env::var("KAR_FIXTURE_KIND").unwrap());
+    if !local {
+        assert_eq!(
+            std::env::var("KAR_FIXTURE_DISTRIBUTION_ENV").as_deref(),
+            Ok("peer")
+        );
+    }
+    let db = PathBuf::from(std::env::var_os("FIXTURE_NATIVE_DB").unwrap()).join(if local {
+        "local".to_owned()
+    } else {
+        std::env::var("KAR_FIXTURE_KIND").unwrap()
+    });
     let native = "prepared-session";
     for line in std::io::stdin().lock().lines() {
         let req: Value = serde_json::from_str(&line.unwrap()).unwrap();
@@ -178,6 +183,7 @@ async fn exercise() {
     wrong["distribution"]["binary"][&platform]["sha256"] = "00".repeat(32).into();
     let mut other = agent.clone();
     other["id"] = "unused".into();
+    other["distribution"]["binary"][&platform]["env"]["KAR_FIXTURE_KIND"] = "override".into();
     let mut unpinned = agent.clone();
     unpinned["id"] = "unpinned".into();
     unpinned["distribution"]["npx"]["package"] = "other@latest".into();
@@ -284,6 +290,58 @@ async fn exercise() {
     )
     .await;
     let project = project["id"].as_str().unwrap();
+    let grants = server::json(client.post(format!("{base}/access/pairings"))).await;
+    let device = server::json(
+        Client::new()
+            .post(format!("{base}/access/pair"))
+            .json(&json!({"credential":grants["credential"],"label":"ACP client"})),
+    )
+    .await;
+    let token = device["token"].as_str().unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let template = json!({"source":"local","name":"Local","command_path":exe,"command_args":["local-fixture","one argument with spaces"]});
+    let mut profiled_chats = Vec::new();
+    for (name, config) in [
+        ("local", template.clone()),
+        (
+            "override",
+            json!({"source":"registry","agent_id":"unused","distribution":"binary","command_path":exe,"name":"Override"}),
+        ),
+    ] {
+        let url = format!("{base}/acp-registry/profiles/{name}");
+        assert_eq!(
+            Client::new()
+                .put(&url)
+                .bearer_auth(token)
+                .json(&config)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
+        let profile = server::json(client.put(&url).json(&config)).await;
+        let chat = Uuid::new_v4();
+        let created = server::json(
+            client
+                .post(format!("{base}/projects/{project}/chats"))
+                .json(&json!({"id":chat,"runtime":profile["runtime"]})),
+        )
+        .await;
+        assert_eq!(created["info"]["program"], exe.to_str().unwrap());
+        let path = format!("/projects/{project}/chats/{chat}/messages");
+        assert!(
+            server::json(
+                client
+                    .post(format!("{base}{path}"))
+                    .json(&json!({"id":Uuid::new_v4(),"text":"profile first"}))
+            )
+            .await
+            .to_string()
+            .contains("received profile first")
+        );
+        profiled_chats.push(path);
+    }
     let once = invoke(&client, &base, "once", "binary").await;
     let once_chat = Uuid::new_v4();
     let once_create = server::json(
@@ -420,6 +478,18 @@ async fn exercise() {
             .unwrap()
             .contains("original ACP process ended")
     );
+    for path in profiled_chats {
+        assert!(
+            server::json(
+                client
+                    .post(format!("{base}{path}"))
+                    .json(&json!({"id":Uuid::new_v4(),"text":"profile second"}))
+            )
+            .await
+            .to_string()
+            .contains("received profile second")
+        );
+    }
     for (endpoint, chat, handle, _) in endpoints {
         assert!(
             server::json(
@@ -536,8 +606,12 @@ fn main() {
         manager(program, &args);
         return;
     }
+    if args == ["local-fixture", "one argument with spaces"] {
+        peer(true);
+        return;
+    }
     if args == ["acp-fixture"] {
-        peer();
+        peer(false);
         return;
     }
     let rt = tokio::runtime::Runtime::new().unwrap();

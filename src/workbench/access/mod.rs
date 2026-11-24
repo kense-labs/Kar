@@ -327,6 +327,7 @@ async fn revoke(State(app): State<Workbench>, Path(id): Path<Uuid>) -> AccessRes
 
 pub(super) fn routes(app: Workbench, auth: Auth) -> Router {
     let admin = guest::admin()
+        .merge(super::acp_registry::owner_routes())
         .route("/access/pairings", post(grant))
         .route("/access/devices", get(devices))
         .route("/access/devices/{id}", delete(revoke))

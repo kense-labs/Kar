@@ -174,7 +174,7 @@ impl ChatInfo {
                 "saved provider protocol has changed".into(),
             ));
         }
-        if self.runtime.starts_with("acp:") && rt.program != self.program {
+        if crate::workbench::acp_registry::dynamic(&self.runtime) && rt.program != self.program {
             return Err(Error::Refused("prepared ACP executable differs from saved chat".into()));
         }
         rt.program = self.program.clone();
@@ -285,7 +285,7 @@ impl ChatStore {
         Self::open(state.join("kar/chats"))
     }
     pub(crate) fn resolve_runtime(&self, id: &str, opts: &mut SessionOptions) -> Result<crate::Runtime> {
-        if id.starts_with("acp:") {
+        if crate::workbench::acp_registry::dynamic(id) {
             crate::workbench::acp_registry::resolve(self, id, opts)
         } else {
             runtime(id)
@@ -525,7 +525,7 @@ impl ChatStore {
         let worktree = crate::workbench_git::pin_checkout(&opts.cwd)?;
         let _registry_pin = crate::workbench::acp_registry::pin(self, runtime_id)?;
         let mut rt = self.resolve_runtime(runtime_id, &mut opts)?;
-        if runtime_id.starts_with("acp:") && program.is_some() {
+        if crate::workbench::acp_registry::dynamic(runtime_id) && program.is_some() {
             return Err(Error::Refused("a prepared ACP instance owns its executable".into()));
         }
         if let Some(bin) = program {

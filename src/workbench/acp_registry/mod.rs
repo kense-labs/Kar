@@ -3,6 +3,7 @@
 mod archive;
 mod catalog;
 mod packages;
+mod profiles;
 use super::{Workbench, http::ApiError};
 use crate::{Error, Protocol, Result, Runtime, SessionOptions, chat::ChatStore};
 use axum::{
@@ -132,17 +133,13 @@ pub(crate) fn resolve(
     runtime: &str,
     opts: &mut SessionOptions,
 ) -> Result<Runtime> {
+    if runtime.starts_with("acp-profile:") {
+        return profiles::resolve(store, runtime, opts);
+    }
     let k = Key::parse(runtime)?;
     let r = Receipt::load(&k, store, runtime)?;
     let program = r.program(&k.dir(store))?;
-    for (key, value) in r.settings.env {
-        if opts.unset_env.iter().any(|n| n.eq_ignore_ascii_case(&key))
-            || key.eq_ignore_ascii_case("KAR_WORKBENCH_TOKEN")
-        {
-            continue;
-        }
-        opts.env.entry(key.into()).or_insert(value.into());
-    }
+    configure(&r.settings, opts);
     if k.kind != "binary"
         && let Some(path) = opts.env_value("PATH")
     {
@@ -161,6 +158,21 @@ pub(crate) fn resolve(
         .map(String::as_str)
         .collect::<Vec<_>>();
     Ok(Runtime::new(runtime, program, &args, Protocol::Acp))
+}
+fn configure(launch: &Launch, opts: &mut SessionOptions) {
+    for (key, value) in &launch.env {
+        if opts.unset_env.iter().any(|n| n.eq_ignore_ascii_case(key))
+            || key.eq_ignore_ascii_case("KAR_WORKBENCH_TOKEN")
+        {
+            continue;
+        }
+        opts.env
+            .entry(key.as_str().into())
+            .or_insert(value.as_str().into());
+    }
+}
+pub(super) fn owner_routes() -> Router<Workbench> {
+    profiles::owner_routes()
 }
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
@@ -393,12 +405,12 @@ fn prepared(store: &ChatStore) -> Result<Vec<Value>> {
     Ok(out)
 }
 async fn instances(State(app): State<Workbench>) -> Reply {
-    super::http::blocking(move || Ok(json!({"instances":prepared(&app.0.chats)?}))).await
+    super::http::blocking(move || Ok(json!({"instances":prepared(&app.0.chats)?,"profiles":profiles::instances(&app.0.chats)?}))).await
 }
 // A lasting chat identity never owns a binary. The file lock follows the native
 // process, including sessions opened from a second Kar process using this store.
 pub(crate) fn pin_process(runtime: &Runtime) -> Result<Option<File>> {
-    if !runtime.id.starts_with("acp:") {
+    if !dynamic(&runtime.id) {
         return Ok(None);
     }
     let Some(registry_root) = runtime
@@ -406,22 +418,29 @@ pub(crate) fn pin_process(runtime: &Runtime) -> Result<Option<File>> {
         .ancestors()
         .find(|p| p.ends_with("workbench/acp-registry"))
     else {
-        // Runtime::new also accepts IDs chosen by SDK callers for external executables.
         return Ok(None);
     };
-    let key = Key::parse(&runtime.id)?;
-    if !runtime.program.starts_with(
-        key.path_in(&registry_root.join("instances"))
-            .join("payload"),
-    ) {
-        return Err(bad(
-            "prepared executable differs from the installation root",
-        ));
+    let Ok(relative) = runtime
+        .program
+        .strip_prefix(registry_root.join("instances"))
+    else {
+        return Ok(None);
+    };
+    let mut parts = relative.iter().filter_map(|s| s.to_str());
+    let (Some(agent), Some(version), Some(kind), Some("payload")) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(bad("invalid managed ACP executable path"));
+    };
+    let managed = format!("acp:{agent}:{version}:{kind}");
+    let key = Key::parse(&managed)?;
+    if runtime.id.starts_with("acp:") && managed != runtime.id {
+        return Err(bad("prepared executable differs from selected runtime"));
     }
     let guard = lock_path(&key.path_in(&registry_root.join("usage-locks")), false)?;
     let dir = key.path_in(&registry_root.join("instances"));
     let receipt: Receipt = serde_json::from_reader(File::open(dir.join("launch.json"))?)?;
-    if receipt.runtime != runtime.id || receipt.program(&dir)? != runtime.program {
+    if receipt.runtime != managed || receipt.program(&dir)? != runtime.program {
         return Err(bad("ACP launch receipt differs from the selected instance"));
     }
     // Resolving the prepared release consumes its short install-to-chat reservation.
