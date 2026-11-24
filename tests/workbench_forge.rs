@@ -355,12 +355,19 @@ async fn scenario() {
 
 #[path = "workbench_forge/actions.rs"]
 mod actions;
+#[path = "workbench_forge/actions_live.rs"]
+mod actions_live;
 #[path = "workbench_forge/hosted.rs"]
 mod hosted;
 #[path = "workbench_forge/providers.rs"]
 mod providers;
 fn main() {
     match std::env::args().nth(1).as_deref() {
+        Some(mode @ ("hosted-issue-actions" | "hosted-review-actions")) => {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(actions_live::run(mode == "hosted-issue-actions"))
+        }
         Some("hosted-github") => tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(hosted::run()),

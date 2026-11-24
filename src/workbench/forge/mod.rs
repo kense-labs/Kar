@@ -501,11 +501,15 @@ impl Context {
         format!("{}://{}/{}", self.kind, self.host, self.repository)
     }
     async fn execute(&self, op: &Operation) -> Result<Value, ForgeError> {
-        if self.kind == "github" {
-            github::execute(self, op).await
+        let mut result = if self.kind == "github" {
+            github::execute(self, op).await?
         } else {
-            providers::execute(self, op).await
+            providers::execute(self, op).await?
+        };
+        if matches!(op, Operation::Identity) {
+            result["kind"] = self.kind.clone().into();
         }
+        Ok(result)
     }
 }
 

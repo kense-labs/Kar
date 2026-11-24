@@ -127,6 +127,26 @@ pub(super) fn cases() -> Vec<Case> {
     );
     hosted.environment = ["KAR_FORGE_TEST_REPO", "GH_TOKEN"].map(String::from).into();
     cases.push(hosted);
+    for mode in ["hosted-issue-actions", "hosted-review-actions"] {
+        let mut case = scenario(
+            "workbench_forge",
+            mode,
+            &["--test", "workbench_forge", "--", mode],
+            "explicit disposable native forge/issue team, selected credentials and expected success, permission or unsupported; creates marked tracker objects or reviews",
+        );
+        case.environment = [
+            "KAR_FORGE_ACTION_DRIVER",
+            "KAR_FORGE_ACTION_SCOPE",
+            "KAR_FORGE_ACTION_REMOTE",
+            "KAR_FORGE_ACTION_EXPECT",
+        ]
+        .map(String::from)
+        .into();
+        if mode == "hosted-review-actions" {
+            case.environment.push("KAR_FORGE_ACTION_PR".into());
+        }
+        cases.push(case);
+    }
     let mut chain = scenario(
         "workbench_acceptance",
         "hosted-codex-qwen",
