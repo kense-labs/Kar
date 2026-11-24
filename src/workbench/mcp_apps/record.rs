@@ -3,10 +3,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{fs, io, path::Path};
-pub(super) fn hash(v: &Value) -> String {
+pub(in crate::workbench) fn hash(v: &Value) -> String {
     format!("{:x}", Sha256::digest(v.to_string().as_bytes()))
 }
-pub(super) fn read<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+pub(in crate::workbench) fn read<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     match fs::File::open(path) {
         Ok(f) => Ok(Some(serde_json::from_reader(f)?)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -31,10 +31,10 @@ fn put<T: Serialize>(path: &Path, value: &T, initial: bool) -> Result<bool> {
     fs::File::open(dir)?.sync_all()?;
     Ok(true)
 }
-pub(super) fn capture<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(in crate::workbench) fn capture<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     put(path, value, true).map(drop)
 }
-pub(super) fn reserve(path: &Path, key: &str) -> Result<Option<Value>> {
+pub(in crate::workbench) fn reserve(path: &Path, key: &str) -> Result<Option<Value>> {
     if put(path, &json!({"request":key}), true)? {
         return Ok(None);
     }
@@ -52,7 +52,7 @@ pub(super) fn reserve(path: &Path, key: &str) -> Result<Option<Value>> {
     }
     Err(Error::Refused("the original MCP call is still running or its outcome is unknown; check the server before issuing another command".into()))
 }
-pub(super) fn finish(path: &Path, key: &str, value: Result<Value>) -> Result<Value> {
+pub(in crate::workbench) fn finish(path: &Path, key: &str, value: Result<Value>) -> Result<Value> {
     match value {
         Ok(v) => {
             put(path, &json!({"request":key,"result":v}), false)?;

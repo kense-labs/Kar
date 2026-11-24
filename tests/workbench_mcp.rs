@@ -38,9 +38,13 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path="workbench_mcp/provider_controls.rs"]
+mod provider_controls;
 #[path="workbench_mcp/apps.rs"]
 mod apps;
 fn main() {
+    if std::env::args().next().as_deref().is_some_and(|s|s.ends_with("claude-control-fixture")) {provider_controls::claude_peer();return;}
+    if std::env::args().nth(1).as_deref()==Some("provider-controls"){tokio::runtime::Runtime::new().unwrap().block_on(provider_controls::scenario());return;}
     if std::env::args().nth(1).as_deref()==Some("apps"){tokio::runtime::Runtime::new().unwrap().block_on(apps::scenario());return;}
     if matches!(std::env::args().nth(1).as_deref(),Some("simctl"|"devices"|"-s"|"-version"|"version"|"-list-avds"|"--find")){
         devices::peer(&std::env::args().skip(1).collect::<Vec<_>>());

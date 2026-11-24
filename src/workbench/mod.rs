@@ -28,6 +28,7 @@ mod handoff;
 mod http;
 mod interactions;
 mod mcp_apps;
+mod provider_controls;
 mod suggestions;
 mod project_lifecycle;
 mod public_web;
@@ -160,6 +161,7 @@ struct Inner {
     clones: forge::clone_jobs::Tracker,
     tracker_accounts:forge::trackers::Store,
     signin: forge::signin::Service,
+    provider_oauth:provider_controls::Flows,
     state: PathBuf,
     pump: chat_controls::QueuePump,
     access: access::AccessStore,
@@ -273,6 +275,7 @@ impl Workbench {
                 tracker_accounts,
                 clones: Default::default(),
                 signin: Default::default(),
+                provider_oauth:Default::default(),
                 pump: Default::default(),
                 access,
                 state,

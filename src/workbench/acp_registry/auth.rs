@@ -1,5 +1,6 @@
 //! Owner-only, process-scoped ACP authentication. Interactive output stays in memory.
 mod flow;
+pub(in crate::workbench) use flow::client as client_key;
 mod builtin;
 use axum::http::HeaderMap;
 use super::*;

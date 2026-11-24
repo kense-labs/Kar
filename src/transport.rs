@@ -30,6 +30,13 @@ use tokio::{
 
 pub(crate) const CLAUDE_COMPACT_CATALOG: &str = "kar/claudeCompactCatalog";
 const GROK_COMPACT: &str = "_x.ai/compact_conversation";
+fn private_provider_request(protocol:Protocol,method:&str)->bool{
+    match protocol {
+        Protocol::Claude=>matches!(method,"mcp_authenticate"|"mcp_oauth_callback_url"|"mcp_reconnect"),
+        Protocol::Codex=>matches!(method,"mcpServer/oauth/login"|"feedback/upload"),
+        _=>false
+    }
+}
 fn claude_private(method: &str) -> bool {
     matches!(
         method,
@@ -353,6 +360,7 @@ pub(crate) struct Actor {
     next: u64,
     pending: HashMap<u64, Pending>,
     private_list_ids: HashSet<u64>,
+    private_provider_ids: HashSet<u64>,
     requests: HashMap<String, (String, Value)>,
     pi_deadlines: HashMap<String, (tokio::time::Instant, Value)>,
     // Modern Pi closes a prompt after retries and compaction have settled.
@@ -461,6 +469,7 @@ impl Actor {
             next: 0,
             pending: HashMap::new(),
             private_list_ids: HashSet::new(),
+            private_provider_ids:HashSet::new(),
             requests: HashMap::new(),
             pi_deadlines: HashMap::new(),
             pi_pending_end: None,
@@ -843,6 +852,10 @@ impl Actor {
             _ => method,
         };
         let mut packet = wire::request(self.protocol, id, wire_method, params);
+        if private_provider_request(self.protocol,method){
+            self.private_provider_ids.insert(id);
+            return self.write_private(&packet).await;
+        }
         if self.protocol == Protocol::Qoder && crate::qoder::private_method(method) {
             packet["request_id"] = format!("{}{id}", crate::qoder::PRIVATE).into();
             if method == "daemon.initialize" {
@@ -1707,7 +1720,26 @@ impl Actor {
         let _ = tx.send(result);
         transport
     }
-    async fn receive(&mut self, v: Value, context: Option<crate::ContextUsage>) -> Result<()> {
+    async fn receive(&mut self, mut v: Value, context: Option<crate::ContextUsage>) -> Result<()> {
+        if let Some(id)=wire::response_id(self.protocol,&v)
+            .and_then(|v|v.as_u64().or_else(||v.as_str()?.parse().ok()))
+            && self.private_provider_ids.contains(&id){
+            if let Some(p)=self.pending.remove(&id) && let Some(tx)=p.reply {
+                let result=wire::result(self.protocol,&v).map_err(|_|{
+                    if v.pointer("/error/code").and_then(Value::as_i64)==Some(-32601){
+                        Error::Unsupported(format!("the native provider does not implement {}",p.method))
+                    }else{
+                        Error::Refused(format!("the native provider rejected {}",p.method))
+                    }
+                });
+                let _=tx.send(result);
+            }
+            return Ok(());
+        }
+        if self.protocol==Protocol::Codex && v["method"]=="mcpServer/oauthLogin/completed"{
+            // Provider diagnostics in this notification may echo the OAuth callback.
+            v=serde_json::json!({"method":"mcpServer/oauthLogin/completed","params":{"name":v["params"]["name"],"success":v["params"]["success"],"threadId":v["params"]["threadId"]}});
+        }
         if let Some(muse) = &mut self.muse {
             if muse.hold_before_open(&v)? {
                 return Ok(());

@@ -244,7 +244,38 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                     reply(json!({"turnId":turn}));
                 }
             }
+            Some("feedback/upload")=>{
+                assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["classification"],"bug");assert_eq!(v["params"]["includeLogs"],true);
+                assert_eq!(v["params"]["reason"],"private-fixture-feedback-reason");
+                writeln!(OpenOptions::new().create(true).append(true).open(database.join("feedback-count")).unwrap(),"upload").unwrap();
+                reply(json!({"threadId":"provider-receipt"}));
+            }
+            Some("mcpServer/oauth/login")=>{
+                assert_eq!(v["params"]["threadId"],session);
+                if v["params"]["name"]=="refused"{
+                    emit(json!({"id":v["id"],"error":{"code":-32601,"message":"fixture-private-native-error"}}));continue;
+                }
+                assert_eq!(v["params"]["name"],"vault");
+                let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let redirect=format!("http://{}/cb",listener.local_addr().unwrap());
+                let mut target=url::Url::parse("https://id.example.org/oauth").unwrap();
+                target.query_pairs_mut().append_pair("redirect_uri",&redirect).append_pair("state","private-fixture-state");
+                let db=database.clone();let root=session.clone();
+                std::thread::spawn(move||{
+                    let(mut c,_)=listener.accept().unwrap();
+                    let mut request=String::new();std::io::BufReader::new(c.try_clone().unwrap()).read_line(&mut request).unwrap();
+                    assert!(request.starts_with("GET /cb?") && request.contains("code=private-fixture-code"));
+                    c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    std::fs::write(db.join("oauth-connected"),"ok").unwrap();
+                    emit(json!({"method":"mcpServer/oauthLogin/completed","params":{"threadId":root,"name":"vault","success":true,"error":"private-fixture-code"}}));
+                });
+                reply(json!({"authorizationUrl":target.as_str()}));
+            }
             Some("mcpServerStatus/list")=>{
+                if v["params"]["serverName"]=="vault" || v["params"]["serverName"]=="refused" {
+                    assert_eq!(v["params"]["threadId"],session);
+                    reply(json!({"data":[{"name":v["params"]["serverName"],"runtimeStatus":if database.join("oauth-connected").exists(){"connected"}else{"needsAuth"}}],"nextCursor":null}));continue;
+                }
                 assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["serverName"],"weather");
                 reply(json!({"data":[{"name":"weather","tools":{
                     "lookup":{"name":"lookup","title":"Weather lookup","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},

@@ -95,7 +95,7 @@ impl Jobs {
 }
 type Key = (Uuid, String, Uuid);
 /// The client generates an independent random secret for its window and never places it in a URL.
-pub(super) fn client(headers: &HeaderMap) -> Result<Option<String>> {
+pub(in crate::workbench) fn client(headers: &HeaderMap) -> Result<Option<String>> {
     let Some(v) = headers.get("kar-auth-client") else {
         return Ok(None);
     };

@@ -1,6 +1,6 @@
 //! MCP applications use only the MCP server and native thread that produced their original tool item.
 mod native;
-mod record;
+pub(in crate::workbench) mod record;
 use super::{Workbench, http::ApiError};
 use crate::{Error, Protocol, Result, Session, chat::Item, observe::Tool};
 use axum::{

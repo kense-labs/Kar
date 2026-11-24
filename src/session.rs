@@ -1664,6 +1664,7 @@ impl Session {
         self.journal.control_receipt(request_id)
     }
 
+    pub(crate) fn latest_cursor(&self)->Option<Cursor>{self.journal.latest_record().map(|r|r.cursor())}
     pub fn records(&self) -> Vec<Arc<Record>> {
         self.journal.records()
     }

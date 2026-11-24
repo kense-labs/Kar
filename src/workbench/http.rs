@@ -101,6 +101,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::shell::routes())
         .merge(super::interactions::routes())
         .merge(super::mcp_apps::routes())
+        .merge(super::provider_controls::routes())
         .merge(super::suggestions::routes())
         .merge(super::force_stop::routes())
         .merge(super::assets::routes())
