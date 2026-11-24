@@ -5,6 +5,7 @@ mod files;
 mod handoff;
 mod http;
 mod search;
+mod terminal_preview;
 pub use search::{Hit, SearchKind};
 
 use crate::{
@@ -50,6 +51,7 @@ struct Inner {
     state: PathBuf,
     access: access::AccessStore,
     documents: documents::Documents,
+    terminal_preview: terminal_preview::TerminalPreview,
     _lease: File,
     controllers: Mutex<HashMap<Uuid, Controller>>,
 }
@@ -100,7 +102,9 @@ impl Workbench {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Catalog::default(),
             Err(e) => return Err(e.into()),
         };
+        let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
         Ok(Self(Arc::new(Inner {
+            terminal_preview,
             chats,
             roots: allowed,
             catalog: Mutex::new(catalog),

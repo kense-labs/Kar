@@ -62,6 +62,10 @@ impl Workbench {
 }
 
 impl Workspace {
+    pub(super) fn root_handle(&self) -> Result<fs::File> {
+        Ok(self.dir.try_clone()?.into_std_file())
+    }
+
     // Resolve existing links before checking the target. A missing suffix can be created
     // under its nearest existing parent. Final operations use the pinned directory handle.
     pub(super) fn target(&self, relative: &Path, create: bool) -> Result<PathBuf> {
