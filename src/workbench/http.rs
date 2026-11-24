@@ -8,15 +8,15 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, Query, Request, State},
-    http::{HeaderMap, StatusCode, Uri, header},
-    middleware::{self, Next},
+    extract::{DefaultBodyLimit, Path, Query, State},
+    http::{HeaderMap, StatusCode, Uri},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
 use serde::Deserialize;
 use std::{io, path::PathBuf};
-use subtle::ConstantTimeEq;
+
 use uuid::Uuid;
 
 pub(super) struct ApiError(Error);
@@ -57,6 +57,8 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
     if token.is_empty() {
         return Err(Error::Refused("empty workbench token".into()));
     }
+    let auth = super::access::Auth::new(app.clone(), token);
+    let access = super::access::routes(app.clone(), auth.clone());
     let router = Router::new()
         .route("/projects", get(projects).post(register))
         .route("/projects/{project}/chats", get(chats).post(create_chat))
@@ -69,21 +71,12 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .route("/search/chats", get(search_chats))
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .with_state(app)
-        .layer(middleware::from_fn_with_state(token, authorize));
+        .layer(middleware::from_fn_with_state(
+            auth,
+            super::access::authorize,
+        ))
+        .merge(access);
     Ok(router)
-}
-
-async fn authorize(State(token): State<String>, req: Request, next: Next) -> Response {
-    let given = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .unwrap_or_default();
-    if !bool::from(given.as_bytes().ct_eq(token.as_bytes())) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    next.run(req).await
 }
 
 async fn projects(State(app): State<Workbench>) -> Json<Vec<Project>> {

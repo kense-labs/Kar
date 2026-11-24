@@ -139,6 +139,26 @@ impl Workspace {
     }
 
     pub(super) fn write_bytes(&self, path: &Path, data: &[u8]) -> Result<()> {
+        self.save(path, data, true)
+    }
+
+    pub(super) fn publish_attachment(&self, path: &Path, data: &[u8]) -> Result<()> {
+        if self.target(path, true)? != path {
+            return Err(denied());
+        }
+        match self.save(path, data, false) {
+            Err(Error::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists => {
+                if self.read_bytes(path, data.len())? == data {
+                    Ok(())
+                } else {
+                    Err(Error::Refused("attachment destination has changed".into()))
+                }
+            }
+            result => result,
+        }
+    }
+
+    fn save(&self, path: &Path, data: &[u8], replace: bool) -> Result<()> {
         let dir = self.parent(path, true)?;
         let name = path.file_name().ok_or_else(denied)?;
         let permissions = match dir.symlink_metadata(name) {
@@ -163,7 +183,12 @@ impl Workspace {
             }
             file.sync_all()?;
             drop(file);
-            dir.rename(&tmp, &dir, name)?;
+            if replace {
+                dir.rename(&tmp, &dir, name)?;
+            } else {
+                dir.hard_link(&tmp, &dir, name)?;
+                dir.remove_file(&tmp)?;
+            }
             #[cfg(unix)]
             dir.try_clone()?.into_std_file().sync_all()?;
             Ok(())

@@ -27,3 +27,10 @@
 
 
 macOS 的原生文档入口已接入 Codex app-server。统一验收命令为 `cargo test --locked --test workbench_coediting actual_codex_merges_a_native_file_edit_with_a_concurrent_owner_save -- --ignored`。场景使用本机 Codex CLI、隔离的供应商配置和回环模型，由原生文件工具改写副本，同时在工作台保存人的修改。重启工作台后用原操作 ID 核对同一回执与工具调用次数。该场景已编译，尚待实际执行。写入策略与恢复读取参考 Codex 0.169.0 的 [thread/start 返回契约](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server-protocol/schema/json/v2/ThreadStartResponse.json) 和 [分页历史契约](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/app-server-protocol/schema/json/v2/ThreadTurnsListParams.json)。
+
+
+## macOS 设备与访客入口（待统一验收）
+
+对照工作台固定提交 `2808e878de91aacc7fb82887f18414976be7ae34` 的配对、授权与访客服务。Kar 实现持久的一次性配对凭证、设备撤销、限时单聊天分享、访客快照及 SSE、附件权限和主人接纳/驳回。复验命令为 `cargo test --locked --test workbench_remote_access`，使用两个独立客户端、回环 HTTP、正常 Kar 工作台进程和原生协议替身。涵盖服务重启、凭证重用、跨聊天及跨访客拒绝、两次接纳只形成一个回合、过期和撤销活动订阅。本轮仅做编译检查。
+
+跨设备场景在同一候选提交补验。需要第二台客户端和能访问宿主 Mac 的 SSH 连接。按 README 建立本地转发，从第二台设备执行一次配对、加入访客、订阅、提议、接纳和撤销，记录两端版本、连接方式、输入 ID、事件游标与撤销后结果。

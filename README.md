@@ -401,6 +401,19 @@ kar workbench --root "$PWD"
 | 读取或保存普通文本文件 | `GET` 或 `PUT /projects/{p}/file?path=relative/path`，正文使用 `{"text":"…"}`。 |
 | 搜索 | `GET /projects/{p}/search?q=关键词&kind=paths`，也可选 `content` 或 `messages`。跨可见项目查聊天用 `GET /search/chats?q=关键词`。 |
 
+### 配对设备和访客
+
+工作台默认监听回环地址。要从另一台 Mac 使用同一服务，可在宿主启动 `kar workbench --root "$PWD" --port 4777`，在已获 SSH 访问权的客户端运行 `ssh -N -L 4777:127.0.0.1:4777 用户@宿主`，然后访问客户端的 `http://127.0.0.1:4777`。
+
+| 操作 | HTTP 接口 |
+| --- | --- |
+| 设备配对 | 主人用启动令牌调用 `POST /access/pairings`，将返回的 5 分钟一次性凭证交给指定设备。设备向 `POST /access/pair` 提交 `credential` 与 `label`，保存返回的设备 Bearer 令牌。 |
+| 设备管理 | 主人调用 `GET /access/devices` 列出设备，或 `DELETE /access/devices/{id}` 撤销设备。已配对设备可以操作工作台项目、聊天、终端和预览，管理凭证的接口需要主人令牌。 |
+| 创建或撤销访客分享 | 主人向 `POST /projects/{p}/chats/{c}/shares` 提交 `{}` 或 `ttl_seconds`，默认 24 小时。新链接替换同一聊天的旧链接，`DELETE /access/shares/{s}` 可提前结束分享。 |
+| 加入、查看与订阅 | 访客向 `POST /guest/{s}/redeem` 提交 `credential` 和单行 `name`，使用返回的访客令牌调用同一分享下的 `/snapshot` 和 `/events`。视图展示主会话的用户和助手消息，以及本人提议的状态。 |
+| 提议与处理 | 访客向 `POST /guest/{s}/proposals` 发送稳定的 UUID `request_id`、`text` 及可选的 `attachments` 数组，附件含 `name` 和 `base64`。主人在 `GET /access/shares/{s}/proposals` 查看并向其 `/{提议ID}` 发送 `PUT {"accept":true}` 或 `false`。 |
+| 读取附件 | 访客向 `GET /guest/{s}/attachments/{id}` 请求该分享中本人提交或已获接纳的附件。每次至多 4 个，总计 10 MiB。接纳时工作台把文件发布到项目的 `.kar-attachments` 目录，并用同一个消息 ID 投递。 |
+
 ### 工作台文档协作
 
 在项目中对已有的 `.txt`、`.md`、`.markdown`、`.docx`、`.xlsx` 或 `.pptx` 请求 `GET /projects/{p}/documents/state?path=相对路径`，即可取得文档 ID、修订号、游标和待处理冲突。以下接口沿用相同的项目、路径查询参数和访问令牌。

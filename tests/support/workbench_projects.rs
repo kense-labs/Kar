@@ -1,50 +1,11 @@
 //! Scheduled for the combined workbench acceptance run. The current test binary supplies Codex stdio.
 use kar::chat::{ChatFeedSnapshot, ChatReplica, HttpChatFeed};
-use reqwest::{Client, StatusCode, header};
-use serde_json::{Value, json};
-use std::{path::Path, process::Stdio, time::Duration};
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    process::{Child, Command},
-};
+use reqwest::{Client, StatusCode};
+use serde_json::json;
+use std::time::Duration;
 use uuid::Uuid;
 
-async fn serve(state: &Path, projects: &Path, native: &Path) -> (Child, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_kar"))
-        .args(["workbench", "--state"])
-        .arg(state)
-        .arg("--root")
-        .arg(projects)
-        .env("KAR_CODEX_BIN", std::env::current_exe().unwrap())
-        .env("KAR_WORKBENCH_TOKEN", "kar-workbench-fixture")
-        .env("FIXTURE_NATIVE_DB", native)
-        .stdout(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let line = BufReader::new(child.stdout.take().unwrap())
-        .lines()
-        .next_line()
-        .await
-        .unwrap()
-        .unwrap();
-    let ready: Value = serde_json::from_str(&line).unwrap();
-    (child, ready["url"].as_str().unwrap().to_owned())
-}
-
-fn client() -> Client {
-    let mut headers = header::HeaderMap::new();
-    headers.insert(
-        header::AUTHORIZATION,
-        "Bearer kar-workbench-fixture".parse().unwrap(),
-    );
-    Client::builder().default_headers(headers).build().unwrap()
-}
-
-async fn json(req: reqwest::RequestBuilder) -> Value {
-    let r = req.send().await.unwrap().error_for_status().unwrap();
-    r.json().await.unwrap()
-}
+use super::workbench_server::{client, json, serve};
 
 #[tokio::main]
 pub(crate) async fn run() {
