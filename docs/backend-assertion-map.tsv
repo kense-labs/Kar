@@ -1,0 +1,19 @@
+source	lines	commit	runtimes	evidence_kind	kar_file	anchor	note
+sea-trial/cases/session.ts#L150	162,163	c747118	pi,claude,qwen,factory,dsh	原生程序与回环模型	tests/support/public_stream.rs	assert!(task.await.unwrap_err().is_panic());	订阅任务在提示到达时 panic，独立订阅逐条对照留存记录，脚本的回合继续完成。
+sea-trial/cases/session.ts#L168	176,180,184	c747118	pi,claude,qwen,factory,dsh	原生程序与回环模型	tests/support/public_stream.rs	each root turn must end exactly once	每次输入产生唯一提示与根终态；连续三次读取 Completed。
+sea-trial/cases/session.ts#L236	248,251	c747118	pi,claude,qwen,factory,dsh	原生程序与回环模型	tests/support/public_stream.rs	compare_delivery(&mut sub, &records[	从提示游标逐项比对已有记录，继续比较后续回合直至关闭，含完整记录内容。
+sea-trial/cases/session.ts#L28	34,37,41,42,43,45	c747118	pi,claude,qwen,factory,dsh	原生程序与回环模型	tests/support/public_readbacks.rs	assert_eq!(prompt.native_admission	逐个核对两次命令类型、显式或生成 UUID 及 Pi RPC 的准入标记。
+sea-trial/cases/session.ts#L28	52,53,54,55	c747118	pi,claude,qwen,factory,dsh	原生程序与回环模型	tests/support/public_readbacks.rs	assert_eq!(matched, [true; 3]);	逐条重放到模型、用量、上下文各自的 seq，比较相应值。
+sea-trial/cases/session.ts#L96	101,103	875c707	pi,qwen,factory	原生程序与回环模型	tests/support/busy_prompt.rs	assert_eq!(seen.len(), 2);	活动期间重复提交同一新输入，各次尝试有独立拒绝回执和 busy 原因。
+sea-trial/cases/session.ts#L213	219,227,228	87b1637	pi,qwen,factory	原生程序与回环模型	tests/support/adapter_queue.rs	assert_eq!(completed.len(), 2);	两个完成终态夹住后续派发；校验全部含终态记录的最后事件。
+sea-trial/cases/session-withdraw.ts#L27	35,36,40,44,46,48,50,52	87b1637	pi,qwen,factory	原生程序与回环模型	tests/support/adapter_queue.rs	s.withdraw(removed).await.unwrap();	提前撤回后等待，核对回执、根回合数及未出现被撤回输入，重复撤回和未知 UUID 被拒绝。
+sea-trial/cases/session.ts#L258	266,268	a0bda94	pi,claude,qwen,factory,dsh,kimi	原生程序与回环模型	tests/support/disposal.rs	no correlated dispose response	显式关闭的唯一回执带原请求 ID，exited 有退出码字段。
+sea-trial/cases/session-dispose.ts#L33	39,42,44	a0bda94	pi,claude,qwen,factory,dsh,kimi	原生程序与回环模型	tests/support/disposal.rs	dispose must finish within the public 15-second deadline	并发关闭在十五秒内结算并记录单一退出回执。
+sea-trial/cases/session.ts#L118	127,129,131,132,133	1807d7e	pi,claude,qwen,factory,dsh,codex,kimi	原生程序与回环模型	tests/support/abort_turn.rs	assert_ne!(late, accepted);	活动和空闲中止有独立回执；按原输入或根会话对照惟一终态，第二次中止保持该终态，检查帧内结束顺序。
+sea-trial/vendor/pi-durable.vendor.test.ts#L24	28,30,33,35,37,38,43	1807d7e	pi-durable	Chromium / 原生 Harness 与回环模型	tests/browser/host.mjs	const firstAbort = resumed.records().length;	慢回合拒绝并发普通提示，队列输入可撤回；中止有对应回执，原提交处于 unanswered，只出现一次 aborted，状态为空闲。
+sea-trial/vendor/pi-durable.vendor.test.ts#L47	54,55,60,62	1807d7e	pi-durable	Chromium / 原生 Harness 与回环模型	tests/browser/host.mjs	idle retry opened a model run	重试取得同一提交及 done 回执，检查状态、接受回执与用户消息个数。
+sea-trial/vendor/pi-durable.vendor.test.ts#L47	61	1807d7e	pi-durable	Chromium / 原生 Harness 与回环模型	tests/browser/live.mjs	assert.deepEqual(probeCalls	接收端统计 seed、retry、adopt，重复输入未触发模型。
+sea-trial/vendor/pi-durable.vendor.test.ts#L66	72,76,78	1807d7e	pi-durable	Chromium / 原生 Harness 与回环模型	tests/browser/host.mjs	native active run missing	重开同一 ID 后查原生 LiveDoc.run，中止回到 idle。
+sea-trial/vendor/pi-durable.vendor.test.ts#L82	90,91,92	1807d7e	pi-durable	Chromium / 原生 Harness 与回环模型	tests/browser/host.mjs	retry ended the active run	旧输入的重试在另一回合挂起时返回已完成提交，新回合独立完成。
+sea-trial/vendor/pi-durable.vendor.test.ts#L82	93	1807d7e	pi-durable	Chromium / 原生 Harness 与回环模型	tests/browser/live.mjs	assert.deepEqual(probeCalls	种子与重新打开模型闸门的请求各出现一次，重试正文未到达端点。
+sea-trial/vendor/pi-durable.vendor.test.ts#L97	102,104	1807d7e	pi-durable	Chromium / 原生 Harness 与回环模型	tests/browser/host.mjs	unexpected active resume refusal	带改动设置打开返回原生拒绝，携带原设置仍能挂接正在运行的提交。
