@@ -4,6 +4,9 @@ mod cli_routing;
 mod declaration;
 #[path = "dsh_live/prompts.rs"]
 mod prompts;
+#[cfg(unix)]
+#[path = "dsh_live/queue_crash.rs"]
+mod queue_crash;
 #[path = "dsh_live/titles.rs"]
 mod titles;
 
@@ -38,7 +41,7 @@ struct Model {
     release: Arc<tokio::sync::Notify>,
     file: PathBuf,
     goal_release: tokio::sync::watch::Sender<bool>,
-    hold_compact: tokio::sync::watch::Sender<bool>,
+    hold_model_reply: tokio::sync::watch::Sender<bool>,
     compact_entered: Arc<tokio::sync::Notify>,
 }
 async fn models() -> Json<Value> {
@@ -53,6 +56,18 @@ async fn message(
         return completion("confirmed", None);
     }
     let messages = body["messages"].to_string();
+    if messages.contains("KAR_QUEUE_CRASH") {
+        let held = body["messages"]
+            .as_array()
+            .and_then(|messages| messages.last())
+            .is_some_and(|m| m["content"].to_string().contains("KAR_QUEUE_CRASH first"));
+        model.requests.lock().unwrap().push(body);
+        if held {
+            let mut gate = model.hold_model_reply.subscribe();
+            gate.wait_for(|hold| !*hold).await.unwrap();
+        }
+        return completion("queue reply", None);
+    }
     if messages.contains("DSH_PROMPT_") {
         let session = headers
             .get("x-deepseek-harness-session-id")
@@ -147,8 +162,8 @@ async fn message(
         release.wait_for(|allow| *allow).await.unwrap();
     }
     let compact_fixture = messages.contains("DSH_COMPACT");
-    if *model.hold_compact.borrow() && compact_fixture {
-        let mut waiting = model.hold_compact.subscribe();
+    if *model.hold_model_reply.borrow() && compact_fixture {
+        let mut waiting = model.hold_model_reply.subscribe();
         model.compact_entered.notify_one();
         waiting.wait_for(|hold| !*hold).await.unwrap();
     }
@@ -632,7 +647,7 @@ async fn native_manual_compaction() {
             TurnStatus::Completed
         );
     }
-    data.hold_compact.send_replace(true);
+    data.hold_model_reply.send_replace(true);
     let cancelled = compact_chat.start_compaction().await.unwrap();
     tokio::time::timeout(Duration::from_secs(10), data.compact_entered.notified())
         .await
@@ -669,7 +684,7 @@ async fn native_manual_compaction() {
     ));
     compact_chat.abort().await.unwrap();
     let aborted = cancelled.wait(timeout).await;
-    data.hold_compact.send_replace(false);
+    data.hold_model_reply.send_replace(false);
     assert!(
         matches!(aborted.status, kar::CompactionStatus::Aborted { .. }),
         "{aborted:?}"
