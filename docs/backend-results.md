@@ -182,6 +182,14 @@ macOS arm64 的 Pi 1.6.0 和 Ubuntu arm64 的 Pi 1.4.0、1.6.0 均通过。设�
 - A 结束时扩展自行启动模型，已排队的 B 在原生预检期间遭拒。B 带有自己 UUID 的丢弃回执，输入钩子只观察到一次 B。独立模型正常结算，会话继续接受输入。
 - 双 HTTP 客户端分别保存游标，独立活动和排队输入完成后重开会话再重连。每端逐条比对了全部 32 条持久事件。另在同一流程的模型挂起位置强杀 Kar，观察端只将独立活动标为 interrupted，原命令维持 handled。恢复原生会话后，队列继续发送下一条，重复两个 UUID 均取回既有回执。
 
+## 适配器排队与撤回
+
+提交 `87b1637` 验证了公共用例 `session.queue-runs-after-turn` 和 `session.withdraw-before-dispatch`。慢回合中排队的输入先收到与该请求对应的 accepted 回执。原回合结束后才派发排队输入。撤回一条尚未派发的输入有独立回执，原排队请求与回执可重读；再次撤回和撤回未知 UUID 都会返回 `not_queued`。结束原回合后再观察 1.5 秒，已撤回输入没有进入模型。
+
+复验使用 `cargo test --locked --test <target> public_adapter_queue_and_withdraw -- --ignored --nocapture`。在 macOS arm64 和 Ubuntu arm64 上分别运行了 Pi RPC（`native_live`）、Factory Droid 1.12.1（`factory_live`）和 Qwen Code 0.27.4（`qwen_live`）。Pi 在 macOS 验证 1.6.0，在 Ubuntu 验证 1.4.0 和 1.6.0。每组均使用真实供应商进程和本地模型服务，版本与实际断言见证据表。
+
+Pi 还验证了 A、HANDLE、C 三条连续输入。模型处理 A 和 C，扩展单独处理 HANDLE，回放中的三条输入各显示一次。另一个抛出异常的扩展命令留下原生错误帧与 handled 回执，模型调用数为零。三个 Pi 平台与版本组合完整运行 `pi_history::` 各通过 19 项。此次验收使用 Rust 原始会话流和持久聊天流各自的公开接口。
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。

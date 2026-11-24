@@ -389,7 +389,7 @@ UI 可以同时通过 `session.subscribe(None)` 读取历史和后续记录。�
 
 需要逐条处理事件的界面可以调用 `session.events(None)`。一条原生记录可能产生多个事件，保存返回的 `EventCursor` 可在同一条记录内继续读取。浏览器提供对应的 `snapshot()` 和 `subscribeEvents(cursor)`。
 
-`prompt` 成功表示输入已发给本地 agent，`turn.wait()` 或 `turn.report()` 等待这一轮结束。繁忙时重复 `prompt` 会返回 `Error::Busy`。`queue` 返回输入 ID 和等待句柄，`withdraw` 可撤回尚未发送的输入。底层 `Session` 的队列和实时事件存放在宿主进程内。聊天产品可使用 `ChatStore::enqueue` 持久化待发输入和投递回执。主动终止当前工作请调用 `abort`。同时支持自动选择发送方式的 `deliver` 和带图片的 `prompt_images`，CLI 通过 `--image <文件>` 附加图片。
+`prompt` 成功表示输入已发给本地 agent，`turn.wait()` 或 `turn.report()` 等待这一轮结束。繁忙时重复 `prompt` 会返回 `Error::Busy`。`queue` 返回输入 ID 和等待句柄，`withdraw` 可撤回尚未发送的输入。在由 Kar 保管队列的 stdio 适配器上，排队与撤回各有请求 ID；原始会话流中的回执通过 `requestId` 关联请求。撤回已派发或未知的输入会得到 `not_queued`。底层 `Session` 的队列和实时事件存放在宿主进程内。聊天产品可使用 `ChatStore::enqueue` 持久化待发输入和投递回执。主动终止当前工作请调用 `abort`。同时支持自动选择发送方式的 `deliver` 和带图片的 `prompt_images`，CLI 通过 `--image <文件>` 附加图片。
 
 Grok 支持普通回合中的图片。使用 Grok 1.0.92 和本地模型服务分别发送了图文消息和纯图片消息，两次模型请求都包含原始 PNG 数据。
 
