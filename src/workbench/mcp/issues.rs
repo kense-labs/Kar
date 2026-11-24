@@ -22,11 +22,17 @@ pub(in crate::workbench) struct Policy {
     #[serde(default)]
     workflow_reads: bool,
     #[serde(default)]
+    pull_reads:bool,
+    #[serde(default)]
+    pull_writes:bool,
+    #[serde(default)]
     workflow_writes: bool,
     #[serde(default)]
     worktree_directory: Option<std::path::PathBuf>,
-    issue_scope: Option<String>,
-    repository: Option<String>,
+    pub(super) issue_scope: Option<String>,
+    pub(super) repository: Option<String>,
+    #[serde(default)]
+    pub(super) pull_repository:Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +45,10 @@ struct Configure {
     issue_writes: bool,
     #[serde(default)]
     workflow_reads: bool,
+    #[serde(default)]
+    pull_reads:bool,
+    #[serde(default)]
+    pull_writes:bool,
     #[serde(default)]
     workflow_writes: bool,
     #[serde(default)]
@@ -59,6 +69,8 @@ impl Policy {
     pub(super) fn worktree_directory(&self) -> Option<&std::path::Path> {
         self.worktree_directory.as_deref().filter(|_| self.mode == Mode::Execute)
     }
+    pub(super) fn reads_pulls(&self)->bool{(self.pull_reads || self.writes_pulls()) && self.pull_repository.is_some()}
+    pub(super) fn writes_pulls(&self)->bool{self.mode==Mode::Execute && self.pull_writes && self.pull_repository.is_some()}
     pub(super) fn reads_workflows(&self) -> bool {
         self.workflow_reads || self.writes_workflows()
     }
@@ -104,7 +116,9 @@ async fn configure(
         let dir=app.workspace_at(&path)?;
         Some(dir.root)
     } else {None};
+    let pull_repository=if cfg.pull_reads || cfg.pull_writes && cfg.mode==Mode::Execute {Some(forge::model::pull_repository(app.clone(),p).await?)}else{None};
     let policy = Policy {
+        pull_repository,pull_reads:cfg.pull_reads,pull_writes:cfg.pull_writes,
         worktree_directory,
         mode: cfg.mode,
         issue_reads: cfg.issue_reads,
@@ -115,7 +129,7 @@ async fn configure(
         repository,
     };
     app.update(|db| {
-        if (policy.reads_issues() || policy.reads_workflows() || policy.worktree_directory().is_some())
+        if (policy.reads_pulls() || policy.reads_issues() || policy.reads_workflows() || policy.worktree_directory().is_some())
             && (db.archived.contains(&c)
                 || db
                     .projects

@@ -6,11 +6,11 @@ use crate::{
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Map;
 
-struct Tool {
-    name: &'static str,
-    description: &'static str,
-    properties: Value,
-    required: &'static [&'static str],
+pub(super) struct Tool {
+    pub(super) name: &'static str,
+    pub(super) description: &'static str,
+    pub(super) properties: Value,
+    pub(super) required: &'static [&'static str],
 }
 impl Tool {
     fn public(&self) -> Value {
@@ -126,6 +126,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             required:&["task_ids"],
         });
     }
+    tools.extend(super::forge_tools::tools(caller));
     tools
 }
 pub(super) fn enabled(name: &str, caller: &Caller, deferred: bool) -> bool {
@@ -260,6 +261,7 @@ pub(super) async fn call(
     if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
         return issues::call(app, caller, name, input).await;
     }
+    if super::forge_tools::handles(name) {return super::forge_tools::call(app,caller,name,input).await;}
     if name.starts_with("kar_worktree_") {return super::worktree::call(app,caller,name,input).await;}
     if name == "kar_background_wait" {
         #[derive(Deserialize)]

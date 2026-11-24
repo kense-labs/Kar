@@ -43,7 +43,11 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
     );
     git(root, &["remote", "add", "origin", REMOTE]);
     let calls = Calls::default();
+    let pull = json!({"number":19,"title":"Scoped pull","state":"open","html_url":"https://models.example/kar/demo/pull/19","head":{"ref":"feature","sha":"abc"},"base":{"ref":"main","sha":"def"}});
+    let detail = pull.clone();
     let api = Router::new()
+        .route("/repos/kar/demo/pulls",get(move||async move{Json(json!([pull]))}))
+        .route("/repos/kar/demo/pulls/19",get(move||async move{Json(detail)}))
         .route(
             "/repos/kar/demo/issues",
             post(
@@ -125,7 +129,51 @@ pub(super) async fn exercise(
         .await
         .unwrap();
     assert_eq!(external.status(), StatusCode::UNAUTHORIZED);
-    let registered = server::json(host.put(&policy).json(&enable)).await;
+    let mut grant = enable.clone();
+    grant["pull_writes"] = true.into();
+    let registered = server::json(host.put(&policy).json(&grant)).await;
+    for (tool, num) in [("kar_issue_links", 7), ("kar_pull_request_links", 19)] {
+        let add = json!({"action":"link","number":num,"command_id":Uuid::new_v4()});
+        assert!(denied(
+            &server::json(make(tool, add.clone()).header("kar-mode-limit", "auto/plan")).await
+        ));
+        let linked = server::json(make(tool, add.clone())).await;
+        assert_eq!(
+            linked["result"]["structuredContent"]["changes"][0]["linked"],
+            true
+        );
+        assert_eq!(
+            server::json(make(tool, add.clone())).await["result"],
+            linked["result"]
+        );
+        let list = server::json(make(tool, json!({"action":"list"}))).await;
+        assert_eq!(
+            list["result"]["structuredContent"]["links"][0]["number"],
+            num
+        );
+        let remove = json!({"action":"unlink","numbers":[num],"command_id":Uuid::new_v4()});
+        let deleted = server::json(make(tool, remove.clone())).await;
+        assert_eq!(
+            deleted["result"]["structuredContent"]["changes"][0]["previously_linked"],
+            true
+        );
+        assert_eq!(
+            server::json(make(tool, remove)).await["result"],
+            deleted["result"]
+        );
+        server::json(make(tool, add)).await;
+        assert_eq!(
+            server::json(make(tool, json!({"action":"list"}))).await["result"]["structuredContent"]
+                ["links"],
+            json!([])
+        );
+    }
+    let pull = server::json(make(
+        "kar_pull_request",
+        json!({"action":"read","number":19}),
+    ))
+    .await;
+    assert_eq!(pull["result"]["structuredContent"]["title"], "Scoped pull");
     assert!(
         registered["repository"]
             .as_str()

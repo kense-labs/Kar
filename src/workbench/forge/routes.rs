@@ -118,13 +118,13 @@ pub(in crate::workbench) async fn model_issue_write(
     ) {
         return Err(ForgeError::bad("unsupported model issue operation"));
     }
-    let input = Input {
-        id,
-        chat,
-        issue_scope,
-        operation,
-        routing: None,
-    };
+    model_forge_write(app,project,chat,id,issue_scope,operation,authorize).await
+}
+pub(super) async fn model_forge_write(
+    app:Workbench,project:Uuid,chat:Uuid,id:Uuid,issue_scope:Option<String>,operation:Operation,
+    authorize:impl FnOnce(&crate::workbench::Catalog,&str)->crate::Result<()>
+)->Result<Value,ForgeError>{
+    let input = Input {id,chat,issue_scope,operation,routing:None};
     Ok(execute_checked(app, project, input, authorize).await?.0)
 }
 
@@ -152,7 +152,7 @@ async fn execute_checked(
     let id = input.id;
     let remembered = app.update(|db| {
         authorize(db, &identity)?;
-        if db.forge.bindings.contains_key(&id) && !db.forge.operations.contains_key(&id) {
+        if db.forge.model_link_receipts.contains_key(&id) || db.forge.bindings.contains_key(&id) && !db.forge.operations.contains_key(&id) {
             return Err(Error::Refused(
                 "operation ID already belongs to a binding".into(),
             ));
@@ -443,7 +443,7 @@ fn save_binding(app: &Workbench, id: Uuid, binding: Binding) -> Reply<Binding> {
                 "binding ID already belongs to another request".into(),
             ));
         }
-        if db.forge.operations.contains_key(&id) {
+        if db.forge.operations.contains_key(&id) || db.forge.model_link_receipts.contains_key(&id) {
             return Err(Error::Refused(
                 "binding ID already belongs to an operation".into(),
             ));

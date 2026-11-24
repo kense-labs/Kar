@@ -3,6 +3,7 @@ mod actions;
 pub(super) mod clone_jobs;
 mod github;
 mod linked_chats;
+pub(in crate::workbench) mod model;
 mod providers;
 mod publish;
 mod repository;
@@ -219,6 +220,8 @@ type Reply<T> = Result<Json<T>, ForgeError>;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct ForgeState {
+    #[serde(default)]
+    model_link_receipts:BTreeMap<Uuid,model::LinkReceipt>,
     #[serde(default)]
     activity: signals::Activity,
     #[serde(default)]
