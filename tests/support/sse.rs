@@ -5,7 +5,15 @@ pub(crate) struct SseClient {
 }
 impl SseClient {
     pub(crate) async fn open(url: &str, initial: &str, saved: Option<&str>) -> Self {
-        let mut request = reqwest::Client::new()
+        Self::open_with_client(&reqwest::Client::new(), url, initial, saved).await
+    }
+    pub(crate) async fn open_with_client(
+        client: &reqwest::Client,
+        url: &str,
+        initial: &str,
+        saved: Option<&str>,
+    ) -> Self {
+        let mut request = client
             .get(format!("{url}/events"))
             .query(&[("after", initial)]);
         if let Some(saved) = saved {

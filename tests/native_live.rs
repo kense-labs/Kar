@@ -2146,7 +2146,7 @@ async fn live_steering(provider: &str, tool: bool) {
 }
 
 #[tokio::test]
-#[ignore = "requires a Claude Code binary; sends a tool request from a loopback fixture"]
+#[ignore = "requires Claude Code with background Bash and host approval; loopback model, native wait/clear by launch occurrence and stop receipt"]
 async fn actual_claude_waits_for_host_approval() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config");
@@ -2308,6 +2308,7 @@ async fn actual_claude_waits_for_host_approval() {
         .follow(session.info().id, Some(snapshot.cursor))
         .unwrap();
     let mut replica = kar::chat::ChatReplica::from_snapshot(snapshot);
+    let background_input = uuid::Uuid::new_v4();
     let control =
         async {
             let mut stopped = None;
@@ -2332,11 +2333,24 @@ async fn actual_claude_waits_for_host_approval() {
                         Event::Task {
                             id,
                             change:
-                                kar::TaskChange::Started {
-                                    task_type: kar::TaskType::Shell,
-                                    details,
-                                },
-                        } if details.tool_call_id.as_deref() == Some("toolu_bg") => {
+                                kar::TaskChange::Background { work },
+                        } if stopped.is_none() && work.pending && work.tool_use_id.as_deref() == Some("toolu_bg") => {
+                            assert_eq!(work.kind, kar::BackgroundKind::Command);
+                            assert_eq!(work.turn_id, Some(background_input));
+                            assert!(!work.awaited);
+                            let task = session.snapshot().tasks.into_iter().find(|t| t.id == *id && t.pending_background()).unwrap();
+                            let occurrence = task.started_at.unwrap();
+                            let request = kar::BackgroundWaitRequest {
+                                task_ids: vec![id.clone(), id.clone(), "unknown".into()],
+                                waiting: true,
+                                started_at: [(id.clone(), occurrence)].into(),
+                            };
+                            let receipt = session.await_background_tasks(request.clone()).await.unwrap();
+                            assert_eq!(receipt.matched, [id.clone()]);
+                            assert_eq!(receipt.unmatched, ["unknown"]);
+                            assert!(session.history().unwrap().background_working);
+                            session.await_background_tasks(kar::BackgroundWaitRequest{waiting:false,..request}).await.unwrap();
+                            assert!(!session.history().unwrap().background_working);
                             session.stop_task(id).await.unwrap();
                             stopped = Some(id.clone());
                         }
@@ -2356,7 +2370,7 @@ async fn actual_claude_waits_for_host_approval() {
         };
     let (background, id) = tokio::time::timeout(Duration::from_secs(15), async {
         tokio::join!(
-            session.send(uuid::Uuid::new_v4(), "kar-background-task"),
+            session.send(background_input, "kar-background-task"),
             control
         )
     })

@@ -2034,6 +2034,8 @@ mod workbench_cloud_live;
 mod workbench_usage;
 #[path = "support/workbench_observability.rs"]
 mod workbench_observability;
+#[path = "support/workbench_background.rs"]
+mod workbench_background;
 #[path = "support/workbench_shell.rs"]
 mod workbench_shell;
 #[cfg(target_os="macos")]
@@ -2048,6 +2050,14 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("workbench-shell") {
         workbench_shell::run();
+        return;
+    }
+    if std::env::var_os("KAR_TEST_CLAUDE_BACKGROUND").is_some() {
+        workbench_background::peer();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("workbench-background") {
+        workbench_background::run();
         return;
     }
     let mode = std::env::args().nth(1);

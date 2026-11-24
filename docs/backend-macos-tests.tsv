@@ -12,7 +12,7 @@ claude	native_live	actual_claude_durable_chat_across_processes	KAR_CLAUDE_BIN	Cl
 claude	native_live	actual_claude_input_receipts_and_reconnect	KAR_CLAUDE_BIN	requires installed Claude Code; tests native UUID refusal, cancellation and HTTP replay against a loopback model
 claude	native_live	actual_claude_steering_and_reconnect	KAR_CLAUDE_BIN	requires Claude Code; checks both tool-loop and separate native turns with a loopback model
 claude	native_live	actual_claude_turn_and_resume	KAR_CLAUDE_BIN	requires an installed Claude Code binary; uses only a loopback model fixture
-claude	native_live	actual_claude_waits_for_host_approval	KAR_CLAUDE_BIN	requires a Claude Code binary; sends a tool request from a loopback fixture
+claude	native_live	actual_claude_waits_for_host_approval	KAR_CLAUDE_BIN	requires Claude Code with background Bash and host approval; loopback model, native wait/clear by launch occurrence and stop receipt
 claude	native_live	claude_history::replay_native_blocks_after_controller_crash	KAR_CLAUDE_BIN	real Claude Code, isolated native transcript, local model and two HTTP clients
 claude	native_live	resume_prompts::claude_prompt_persistence	KAR_CLAUDE_BIN	requires Claude Code with a loopback model
 claude	native_live	prompt_suggestions::claude_emits_a_next_prompt_for_the_completed_root_turn	KAR_CLAUDE_BIN	requires native Claude Code initialize promptSuggestions and prompt_suggestion events; isolated home, loopback Anthropic model
