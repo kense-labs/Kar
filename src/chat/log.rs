@@ -1735,6 +1735,24 @@ impl Log {
         }
         let root =
             r.agent_path.is_empty() && r.session_id.as_deref() == Some(&self.state.info.native_id);
+        if root
+            && self.state.info.protocol == Protocol::Codex
+            && r.kind == RecordKind::Frame
+            && r.direction == Direction::FromRuntime
+            && r.frame_type() == Some("turn/start")
+            && r.response_to.is_some()
+            && let Some((input, receipt)) = r.events.iter().find_map(|e| match e {
+                Event::NativeInput { input_id, receipt } => Some((*input_id, *receipt)),
+                _ => None,
+            })
+        {
+            if self.state.find(input).is_some() && receipt == crate::InputReceipt::Started {
+                self.input_sent(input)?;
+            }
+            if self.state.active() != Some(input) {
+                return Ok(());
+            }
+        }
         // A dedicated steering RPC can answer after the original prompt, or after
         // the next turn has started. Its captured owner survives both races.
         if root
@@ -1948,22 +1966,6 @@ impl Log {
             {
                 self.input_sent(id)?;
             }
-        }
-        if self.state.info.protocol == Protocol::Codex
-            && r.kind == RecordKind::Frame
-            && r.direction == Direction::FromRuntime
-            && r.frame_type() == Some("turn/start")
-            && r.prompt.as_ref().is_some_and(|p| {
-                p.input_id == id.to_string()
-                    && p.request_id.is_some()
-                    && p.request_id == r.response_to
-            })
-            && r.native
-                .pointer("/result/turn/id")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|turn| !turn.is_empty())
-        {
-            self.input_sent(id)?;
         }
         if !self.dispatched {
             return Ok(());

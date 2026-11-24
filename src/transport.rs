@@ -2370,7 +2370,6 @@ impl Actor {
             }
             if let (Some(request), Some(input)) = (p.prompt_request, p.codex_prompt_input) {
                 codex_request = Some(request);
-                received = received.with_prompt_request(input, false, request, None);
                 if let Some(native) = v.get("error") {
                     let mut decision = codex_admission::refusal(native);
                     redact(&mut decision, &self.secrets);
@@ -2388,6 +2387,10 @@ impl Actor {
                         .and_then(Value::as_str)
                         .is_some_and(|id| !id.is_empty())
                 }) {
+                    events.push(Event::NativeInput {
+                        input_id: input,
+                        receipt: crate::InputReceipt::Started,
+                    });
                     codex_prompt_decision =
                         Some((request, json!({"type":"accepted","native":native})));
                 } else {

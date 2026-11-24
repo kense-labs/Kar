@@ -161,6 +161,7 @@ impl<'a> InputReader<'a> {
         if self.attempt.requests.contains(id) {
             if record.prompt.as_ref().is_some_and(|p| p.native_admission)
                 || body(record)["admission"] == "native"
+                || record.native["method"] == "turn/start"
             {
                 self.attempt.admission = Some(id.to_owned());
             }

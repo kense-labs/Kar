@@ -101,6 +101,20 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
             assert_eq!(proof.native["success"], true);
             assert!(prompt.seq < proof.seq && proof.seq < replies[0].seq);
         }
+        if session.protocol() == kar::Protocol::Codex {
+            assert_eq!(prompt.native["params"]["clientUserMessageId"], id);
+            let proof = turn_records
+                .iter()
+                .find(|r| {
+                    r.direction == kar::Direction::FromRuntime
+                        && r.response_to.as_deref() == Some(request)
+                        && r.frame_type() == Some("turn/start")
+                })
+                .unwrap();
+            assert!(proof.native["result"]["turn"]["id"].is_string());
+            assert_eq!(proof.native["result"], admission.response.native["native"]);
+            assert!(prompt.seq < proof.seq && proof.seq < admission.response.seq);
+        }
         let mut ends = Vec::new();
         for r in turn_records {
             if r.kind == RecordKind::Frame {
