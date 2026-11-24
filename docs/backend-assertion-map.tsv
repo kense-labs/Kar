@@ -187,3 +187,7 @@ sea-trial/vendor/input-dropped.vendor.test.ts#L5	18	a545e3e	codex	原生候选�
 sea-trial/vendor/input-dropped.vendor.test.ts#L5	19	a545e3e	codex	部分口径，待实机	tests/codex_process_cleanup.rs	assert!(dropped < ended);	Kar 同帧还携带插话状态及分叉锚点；核对丢弃先于终态，不宣称与上游事件数组逐项相同。
 sea-trial/cases/session.ts#L277	294	83cb976	codex	原生候选已编译	tests/native_live.rs	async fn durable_cli_roundtrip( >> assert_eq!(result.chat.native_id, native);	继续后仍使用原生线程 ID。
 sea-trial/cases/session.ts#L277	295	83cb976	codex	原生候选已编译	tests/native_live.rs	async fn durable_cli_roundtrip( >> assert_eq!(recovered.status, kar::chat::TurnStatus::Completed);	针对 Codex 复验已恢复回合的终态，以及该场景前面的续聊结果。
+sea-trial/vendor/image-only.vendor.test.ts#L48	65	47b5bcd	codex	原生候选已编译	tests/native_live/codex_queue.rs	assert_eq!(submission.images[0].path.as_deref(), path.to_str());	检查仅图片输入的空文字和原路径。
+sea-trial/vendor/image-only.vendor.test.ts#L48	66	47b5bcd	codex	原生候选已编译	tests/native_live/codex_queue.rs	assert_eq!(image_only.wait().await.unwrap(), Outcome::Completed);	等待对应输入的完成回合。
+sea-trial/vendor/image-only.vendor.test.ts#L48	68,71	47b5bcd	codex	原生候选已编译	tests/native_live/codex_queue.rs	.any(|request| has_user_image(request, None))	真实模型 HTTP 入口匹配完整 PNG，且同一条用户消息不含空文本块。
+sea-trial/vendor/images.vendor.test.ts#L83	93	47b5bcd	codex	原生候选已编译	tests/native_live/codex_queue.rs	"p[""type""] == ""input_image"""	回环供应商必须得到 input_image、high 和原始像素文件编码。Kar 在队列接纳前读取图片，通过内存图片提交。
