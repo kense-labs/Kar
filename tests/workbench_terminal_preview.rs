@@ -19,6 +19,9 @@ use tokio::{
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 use uuid::Uuid;
 
+#[path = "workbench_terminal_preview/views.rs"]
+mod views;
+
 const TOKEN: &str = "kar-workbench-terminal-test";
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

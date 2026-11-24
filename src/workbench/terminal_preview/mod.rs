@@ -6,6 +6,8 @@ mod automation;
 pub(super) use automation::call as automation;
 mod history;
 mod scripts;
+mod viewers;
+mod metadata;
 mod preview;
 mod process;
 mod routes;
@@ -35,7 +37,7 @@ struct Port {
     address: IpAddr,
     port: u16,
 }
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 enum Status {
     Starting,
@@ -45,7 +47,7 @@ enum Status {
     Interrupted { process_alive: Option<bool> },
     Error { reason: String },
 }
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 struct Meta {
     id: Uuid,
     project: Uuid,
@@ -57,6 +59,14 @@ struct Meta {
     rows: u16,
     process: Option<ProcessId>,
     status: Status,
+    #[serde(default)]
+    closed: bool,
+    #[serde(default)]
+    has_running_subprocess: bool,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    updated_at_ms: Option<i64>,
 }
 #[derive(Serialize)]
 struct Page {
@@ -79,6 +89,10 @@ struct InputReceipt {
     id: Uuid,
     sha256: String,
     delivered: bool,
+    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    reply: bool,
+    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    suppressed: bool,
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -133,10 +147,13 @@ struct Terminal {
     meta: Mutex<Meta>,
     history: Mutex<history::History>,
     live: Mutex<Option<Live>>,
+    viewers: Mutex<viewers::Viewers>,
+    directory: Arc<metadata::Metadata>,
     changed: watch::Sender<u64>,
 }
 impl Terminal {
-    fn new(dir: PathBuf, meta: Meta) -> Result<Arc<Self>> {
+    fn new(dir: PathBuf, mut meta: Meta, directory: Arc<metadata::Metadata>) -> Result<Arc<Self>> {
+        if meta.label.is_empty() { meta.label = meta.shell.file_name().and_then(|s| s.to_str()).unwrap_or("Terminal").into(); }
         fs::create_dir_all(dir.join("input"))?;
         let history = history::History::open(&dir.join("history"))?;
         Ok(Arc::new(Self {
@@ -144,6 +161,8 @@ impl Terminal {
             meta: Mutex::new(meta),
             history: Mutex::new(history),
             live: Mutex::new(None),
+            viewers: Mutex::default(),
+            directory,
             changed: watch::channel(0).0,
         }))
     }
@@ -151,7 +170,13 @@ impl Terminal {
         let mut record = self.meta.lock().unwrap();
         let mut next = record.clone();
         f(&mut next);
+        if !matches!(next.status,Status::Running) || !next.has_running_subprocess {
+            next.has_running_subprocess=false;
+            next.label=next.shell.file_name().and_then(|s|s.to_str()).unwrap_or("Terminal").into();
+        }
+        next.updated_at_ms=Some(jiff::Timestamp::now().as_millisecond());
         write_json(&self.dir.join("session.json"), &next)?;
+        self.directory.update(&next);
         *record = next;
         self.notify();
         Ok(())
@@ -305,15 +330,21 @@ impl Terminal {
         Ok(TerminalEvent::Cleared { cursor: result? })
     }
     fn input(&self, id: Uuid, bytes: &[u8]) -> Result<InputReceipt> {
+        self.viewer_input(id, bytes, false, None)
+    }
+    fn viewer_input(
+        &self, id: Uuid, bytes: &[u8], reply: bool, viewer: Option<viewers::Viewer>,
+    ) -> Result<InputReceipt> {
         if bytes.is_empty() || bytes.len() > 65536 {
             return Err(Error::Refused("invalid terminal input length".into()));
         }
+        let mut views = self.viewers.lock().unwrap();
         let mut live = self.live.lock().unwrap();
         let path = self.dir.join("input").join(format!("{id}.json"));
         let digest = format!("{:x}", Sha256::digest(bytes));
         if path.try_exists()? {
             let previous: InputReceipt = read_json(&path)?;
-            if previous.sha256 != digest {
+            if previous.sha256 != digest || previous.reply != reply {
                 return Err(Error::Refused(
                     "input ID belongs to different terminal bytes".into(),
                 ));
@@ -327,8 +358,11 @@ impl Terminal {
             id,
             sha256: digest,
             delivered: false,
+            reply,
+            suppressed: reply && !views.can_answer(viewer),
         };
         write_json(&path, &receipt)?;
+        if receipt.suppressed {return Ok(receipt);}
         owner.writer.write_all(bytes)?;
         owner.writer.flush()?;
         receipt.delivered = true;
@@ -349,7 +383,7 @@ impl Terminal {
     }
     fn close(&self) -> Result<Meta> {
         if let Some(live) = self.live.lock().unwrap().as_mut() {
-            self.update(|m| m.status = Status::Closing)?;
+            self.update(|m| {m.closed=true; m.status=Status::Closing;})?;
             live.kill();
         } else if let Some(root) = self.snapshot().process
             && matches!(
@@ -361,6 +395,7 @@ impl Terminal {
         {
             process::stop_tree(root);
         }
+        if !self.snapshot().closed {self.update(|m| m.closed=true)?;}
         Ok(self.snapshot())
     }
 }
@@ -375,6 +410,7 @@ impl Drop for Terminal {
 pub(super) struct TerminalPreview {
     dir: PathBuf,
     terminals: Mutex<HashMap<Uuid, Arc<Terminal>>>,
+    directory: Arc<metadata::Metadata>,
     grants: preview::Grants,
     browsers: Arc<browser::Pool>,
     reports: browser::profiles::Reports,
@@ -399,6 +435,9 @@ impl TerminalPreview {
         let dir = state.join("terminals");
         fs::create_dir_all(&dir)?;
         let mut terminals = HashMap::new();
+        let directory = Arc::new(metadata::Metadata::default());
+        #[cfg(target_os = "macos")]
+        directory.monitor();
         for entry in fs::read_dir(&dir)? {
             let entry = entry?;
             let file = entry.path().join("session.json");
@@ -414,7 +453,7 @@ impl TerminalPreview {
                 m.status,
                 Status::Running | Status::Starting | Status::Closing
             );
-            let terminal = Terminal::new(entry.path(), m)?;
+            let terminal = Terminal::new(entry.path(), m, directory.clone())?;
             if interrupted {
                 terminal.update(|m| {
                     m.status = Status::Interrupted {
@@ -422,11 +461,13 @@ impl TerminalPreview {
                     }
                 })?;
             }
+            if !interrupted {directory.update(&terminal.snapshot());}
             terminals.insert(id, terminal);
         }
         Ok(Self {
             dir,
             terminals: Mutex::new(terminals),
+            directory,
             grants: preview::Grants::default(),
             reports: browser::profiles::Reports::new(state.join("preview-profile-lists")),
             browsers: Arc::new(browser::Pool::new(state.join("preview-browser-profiles"))),
@@ -518,9 +559,13 @@ impl Workbench {
             cols,
             rows,
             status: Status::Starting,
+            closed: false,
+            has_running_subprocess: false,
+            label: String::new(),
+            updated_at_ms: None,
             process: None,
         };
-        let term = Terminal::new(state.dir.join(id.to_string()), m)?;
+        let term = Terminal::new(state.dir.join(id.to_string()), m, state.directory.clone())?;
         term.update(|_| {})?;
         let handle = workspace.root_handle()?;
         known.insert(id, term.clone());
@@ -532,6 +577,8 @@ impl Workbench {
             })?;
             return Err(e);
         }
+        #[cfg(target_os = "macos")]
+        state.directory.track(&term);
         Ok(term.snapshot())
     }
 }

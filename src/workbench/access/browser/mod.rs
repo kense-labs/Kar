@@ -304,7 +304,8 @@ fn audience(path: &str) -> Option<&'static str> {
         ["devices", "screenshot" | "stream" | "video" | "input"]
         | ["projects", _, "previews", _, "screen" | "tunnel" | "stream"] => Some("media"),
         ["projects", _, "chats", _, "events"]
-        | ["projects", _, "terminals", _, "output"]
+        | ["projects", _, "terminals", _, "output" | "attach" | "observe"]
+        | ["projects", _, "terminals", "metadata"]
         | ["projects", _, "git", "events"]
         | ["projects", _, "preview-profiles", "report"] => Some("rpc"),
         _ => None,

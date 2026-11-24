@@ -1,4 +1,5 @@
 mod stream;
+mod views;
 use super::browser::{self, Adjust, Display, Viewport};
 use super::{
     InputReceipt, Meta, Page, Port, Status, TerminalEvent, Workbench, preview::Preview, process,
@@ -28,6 +29,9 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
 pub(in crate::workbench) fn routes() -> Router<Workbench> {
     Router::new()
         .route("/projects/{p}/terminals", get(list).post(create))
+        .route("/projects/{p}/terminals/metadata", get(views::directory))
+        .route("/projects/{p}/terminals/{id}/attach", post(views::attach))
+        .route("/projects/{p}/terminals/{id}/observe", get(views::observe))
         .route("/projects/{p}/terminals/{id}", get(info).delete(close))
         .route("/projects/{p}/terminals/{id}/output", get(output))
         .route("/projects/{p}/terminals/{id}/input", post(input))
@@ -183,35 +187,38 @@ async fn clear(
 #[derive(Deserialize)]
 struct Input {
     id: Uuid,
+    viewer_id: Option<Uuid>,
+    #[serde(default)] reply:bool,
     data_base64: String,
 }
 async fn input(
     State(app): State<Workbench>,
     Path((p, id)): Path<(Uuid, Uuid)>,
-    Json(q): Json<Input>,
+    device:Device, Json(q): Json<Input>,
 ) -> Reply<InputReceipt> {
     blocking(move || {
         app.project(p)?;
         let bytes = STANDARD
             .decode(q.data_base64)
             .map_err(|_| Error::Refused("invalid terminal input encoding".into()))?;
-        app.0.terminal_preview.find(p, id)?.input(q.id, &bytes)
+        app.0.terminal_preview.find(p, id)?.viewer_input(q.id, &bytes, q.reply, views::viewer(device,q.viewer_id))
     })
     .await
 }
 #[derive(Deserialize)]
 struct Size {
+    viewer_id: Option<Uuid>,
     cols: u16,
     rows: u16,
 }
 async fn resize(
     State(app): State<Workbench>,
     Path((p, id)): Path<(Uuid, Uuid)>,
-    Json(q): Json<Size>,
+    device:Device, Json(q): Json<Size>,
 ) -> Reply<Meta> {
     blocking(move || {
         app.project(p)?;
-        app.0.terminal_preview.find(p, id)?.resize(q.cols, q.rows)
+        app.0.terminal_preview.find(p, id)?.resize_view(views::viewer(device,q.viewer_id),q.cols, q.rows)
     })
     .await
 }
