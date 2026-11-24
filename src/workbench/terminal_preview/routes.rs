@@ -41,6 +41,16 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
             post(stop_listener),
         )
         .route("/projects/{p}/previews", get(previews).post(open_preview))
+        .route("/projects/{p}/previews/events", get(preview_events))
+        .route(
+            "/projects/{p}/previews/{id}/status",
+            axum::routing::put(report_status),
+        )
+        .route("/projects/{p}/preview-profiles", get(profile_catalog))
+        .route(
+            "/projects/{p}/preview-profiles/report",
+            get(report_profiles),
+        )
         .route(
             "/projects/{p}/previews/{id}",
             axum::routing::delete(close_preview),
@@ -251,7 +261,16 @@ async fn open_preview(
     Json(q): Json<Target>,
 ) -> Reply<Preview> {
     app.project(p)?;
-    let profile_id = q.profile_id.unwrap_or_else(|| "default".into());
+    let profile_id = match q.profile_id {
+        Some(id) => id,
+        None => {
+            app.0
+                .terminal_preview
+                .reports
+                .snapshot((p, device.as_ref().map(|d| d.id)))?
+                .default_profile_id
+        }
+    };
     browser::profile(&profile_id)?;
     q.display.validate()?;
     let state = &app.0.terminal_preview;
@@ -390,4 +409,125 @@ async fn clear_profile(
         .clear_profile(p, device.map(|d| d.id), profile)
         .await?;
     Ok(Json(()))
+}
+
+async fn report_status(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+    device: Device,
+    Json(nav): Json<super::preview::Navigation>,
+) -> Reply<Preview> {
+    let grant = grant(&app, p, id, device)?;
+    grant.report_status(nav)?;
+    Ok(Json(grant.snapshot()))
+}
+async fn profile_catalog(
+    State(app): State<Workbench>,
+    Path(p): Path<Uuid>,
+    device: Device,
+) -> Reply<browser::profiles::Catalog> {
+    blocking(move || {
+        app.project(p)?;
+        app.0
+            .terminal_preview
+            .reports
+            .snapshot((p, device.map(|d| d.id)))
+    })
+    .await
+}
+async fn report_profiles(
+    State(app): State<Workbench>,
+    Path(p): Path<Uuid>,
+    device: Device,
+    upgrade: WebSocketUpgrade,
+) -> std::result::Result<Response, ApiError> {
+    use axum::extract::ws::Message;
+    app.project(p)?;
+    let scope = (p, device.as_ref().map(|d| d.id));
+    Ok(upgrade.on_upgrade(move |mut socket| async move {
+        let client = Uuid::new_v4();
+        let read = async {
+            while let Some(Ok(msg)) = socket.recv().await {
+                match msg {
+                    Message::Text(body) => {
+                        let report = serde_json::from_str(&body)
+                            .map_err(Error::from)
+                            .and_then(|r| app.0.terminal_preview.reports.report(scope, client, r));
+                        let reply = match report {
+                            Ok(catalog) => serde_json::json!({"catalog":catalog}),
+                            Err(e) => serde_json::json!({"error":e.to_string()}),
+                        };
+                        if socket
+                            .send(Message::Text(reply.to_string().into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => continue,
+                }
+            }
+        };
+        let revoked = async {
+            match device {
+                Some(d) => d.0.revoked().await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {_=read=>{},_=revoked=>{}}
+        app.0.terminal_preview.reports.disconnect(scope, client);
+    }))
+}
+#[derive(Deserialize)]
+struct EventCursor {
+    after: Option<u64>,
+}
+async fn preview_events(
+    State(app): State<Workbench>,
+    Path(p): Path<Uuid>,
+    device: Device,
+    Query(q): Query<EventCursor>,
+    headers: axum::http::HeaderMap,
+) -> std::result::Result<Response, ApiError> {
+    use axum::response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    };
+    app.project(p)?;
+    let events = app.0.terminal_preview.grants.1.clone();
+    let rx = events.changed.subscribe();
+    let device = device.map(|d| d.id);
+    let after = q
+        .after
+        .or_else(|| headers.get("last-event-id")?.to_str().ok()?.parse().ok())
+        .unwrap_or(*rx.borrow());
+    let stream = futures_util::stream::unfold(
+        (events, rx, after, std::collections::VecDeque::new()),
+        move |(events, mut rx, mut after, mut queued)| async move {
+            loop {
+                if let Some((id, r)) = queued.pop_front() {
+                    let item = Event::default()
+                        .id(format!("{id}"))
+                        .event("preview")
+                        .json_data(r)
+                        .ok()?;
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(item),
+                        (events, rx, after, queued),
+                    ));
+                }
+                let (next, rows) = events.page(p, device, after);
+                after = next;
+                queued.extend(rows);
+                if queued.is_empty() && rx.changed().await.is_err() {
+                    return None;
+                }
+            }
+        },
+    );
+    Ok(Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response())
 }

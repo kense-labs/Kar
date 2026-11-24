@@ -117,7 +117,7 @@ pub(in super::super) struct Adjust {
     pub hard_reload: bool,
     pub clear: Option<Clear>,
 }
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(in super::super) enum Clear {
     Cookies,

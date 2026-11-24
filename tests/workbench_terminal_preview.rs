@@ -671,3 +671,83 @@ async fn managed_chromium_applies_controls_and_keeps_two_profiles_independent() 
     server.kill().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn profile_reports_merge_persist_and_preview_navigation_reaches_observers() -> Result<()> {
+    let t = tempfile::tempdir()?;
+    let root = t.path().join("roots");
+    fs::create_dir(&root)?;
+    let state = t.path().join("state");
+    let server = Server::start(&state, &root).await?;
+    let c = Client::new();
+    let f = launch(&server, &c, &root.join("project"), "reports").await?;
+    let url = format!("{}/preview-profiles/report", f.p).replacen("http://", "ws://", 1);
+    let connect = || async {
+        let mut req = url.as_str().into_client_request()?;
+        req.headers_mut()
+            .insert("authorization", format!("Bearer {TOKEN}").parse()?);
+        Result::Ok(tokio_tungstenite::connect_async(req).await?.0)
+    };
+    let mut a = connect().await?;
+    let mut b = connect().await?;
+    let report = |id: &str| {
+        Message::Text(
+            json!({"profiles":[{"id":id,"name":id,"kind":"persistent"}],"default_profile_id":id})
+                .to_string()
+                .into(),
+        )
+    };
+    a.send(report("alpha")).await?;
+    a.next()
+        .await
+        .ok_or("missing first profile report receipt")??;
+    b.send(report("beta")).await?;
+    b.next()
+        .await
+        .ok_or("missing second profile report receipt")??;
+    let profiles = format!("{}/preview-profiles", f.p);
+    let snapshot = api(c.get(&profiles)).await?;
+    assert_eq!(snapshot["profiles"].as_array().unwrap().len(), 4);
+    assert_eq!(snapshot["default_profile_id"], "beta");
+    let nav = json!({"nav_status":{"_tag":"Success","url":f.grant["url"],"title":"external preview"},"can_go_back":true,"can_go_forward":false});
+    let grant = format!("{}/previews/{}", f.p, f.grant["id"].as_str().unwrap());
+    api(c.put(format!("{grant}/status")).json(&nav)).await?;
+    let mut events = c
+        .get(format!("{}/previews/events?after=0", f.p))
+        .bearer_auth(TOKEN)
+        .send()
+        .await?
+        .error_for_status()?;
+    let text = tokio::time::timeout(Duration::from_secs(7), async {
+        let mut text = String::new();
+        while let Some(chunk) = events.chunk().await? {
+            text.push_str(&String::from_utf8_lossy(&chunk));
+            if text.contains("external preview") {
+                break;
+            }
+        }
+        Result::Ok(text)
+    })
+    .await??;
+    assert!(
+        text.find("\"type\":\"opened\"").unwrap() < text.find("\"type\":\"navigated\"").unwrap()
+    );
+    drop(events);
+    b.close(None).await?;
+    for _ in 0..60 {
+        if api(c.get(&profiles)).await?["default_profile_id"] == "alpha" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert_eq!(api(c.get(&profiles)).await?["default_profile_id"], "alpha");
+    a.close(None).await?;
+    let suffix = profiles.strip_prefix(&server.base).unwrap().to_owned();
+    api(c.delete(f.term)).await?;
+    server.kill().await?;
+    let reopened = Server::start(&state, &root).await?;
+    let saved = api(c.get(format!("{}{suffix}", reopened.base))).await?;
+    assert_eq!(saved, snapshot);
+    reopened.kill().await?;
+    Ok(())
+}

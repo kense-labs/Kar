@@ -1,3 +1,4 @@
+use super::events::Events;
 use super::{Port, ProcessId, Status, Terminal, browser::Display, process};
 use crate::{Error, Result, workbench::access::DeviceLease};
 use axum::{
@@ -12,7 +13,8 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use hyper_util::rt::TokioIo;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -37,11 +39,52 @@ pub(super) struct Preview {
     pub profile_id: String,
     #[serde(flatten)]
     pub display: Display,
+    #[serde(flatten)]
+    navigation: Navigation,
 }
 
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
+pub(super) struct Navigation {
+    pub nav_status: Value,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+}
+impl Default for Navigation {
+    fn default() -> Self {
+        Self {
+            nav_status: json!({"_tag":"Idle"}),
+            can_go_back: false,
+            can_go_forward: false,
+        }
+    }
+}
+impl Navigation {
+    pub fn validate(&self) -> Result<()> {
+        let v = &self.nav_status;
+        let valid = match v["_tag"].as_str() {
+            Some("Idle") => true,
+            Some(tag @ ("Loading" | "Success" | "LoadFailed")) => {
+                v["url"].as_str().is_some_and(|s| {
+                    !s.trim().is_empty() && s == s.trim() && s.chars().count() <= 2048
+                }) && v["title"]
+                    .as_str()
+                    .is_some_and(|s| s.chars().count() <= 512)
+                    && (tag != "LoadFailed" || (v["code"].is_i64() && v["description"].is_string()))
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(Error::Refused("invalid preview navigation status".into()));
+        }
+        Ok(())
+    }
+}
 pub(super) struct Grant {
     pub info: Preview,
     display: Mutex<Display>,
+    navigation: Mutex<(Navigation, bool)>,
+    events: Arc<Events>,
+    publishing: Mutex<()>,
     device: Option<DeviceLease>,
     terminal: Weak<Terminal>,
     root: ProcessId,
@@ -57,7 +100,14 @@ async fn stopped(mut rx: watch::Receiver<bool>) {
 
 impl Grant {
     fn revoke(&self) {
-        self.stop.send_replace(true);
+        let _publishing = self.publishing.lock().unwrap();
+        if !self.stop.send_replace(true) {
+            self.events.push(
+                self.info.project,
+                self.owner(),
+                json!({"type":"closed","id":self.info.id}),
+            );
+        }
     }
     fn active(&self) -> bool {
         !*self.stop.borrow() && self.device.as_ref().is_none_or(DeviceLease::active)
@@ -69,14 +119,63 @@ impl Grant {
     pub fn snapshot(&self) -> Preview {
         Preview {
             display: self.display(),
+            navigation: self.navigation.lock().unwrap().0.clone(),
             ..self.info.clone()
         }
     }
     pub fn display(&self) -> Display {
         self.display.lock().unwrap().clone()
     }
-    pub fn set_display(&self, value: Display) {
+    pub fn set_display(&self, value: Display, request: Value) {
+        let _publishing = self.publishing.lock().unwrap();
+        if !self.active() {
+            return;
+        }
         *self.display.lock().unwrap() = value;
+        self.events.push(
+            self.info.project,
+            self.owner(),
+            json!({"type":"resized","snapshot":self.snapshot(),"request":request}),
+        );
+    }
+    pub fn mark_managed(&self) {
+        self.navigation.lock().unwrap().1 = true;
+    }
+    fn report(&self, nav: Navigation, external: bool) -> Result<()> {
+        let _publishing = self.publishing.lock().unwrap();
+        if !self.active() {
+            return Err(super::missing());
+        }
+        let mut current = self.navigation.lock().unwrap();
+        if external && current.1 {
+            return Err(crate::workbench::denied());
+        }
+        if current.0 == nav {
+            return Ok(());
+        }
+        let failed = nav.nav_status["_tag"] == "LoadFailed";
+        current.0 = nav;
+        drop(current);
+        self.events.push(
+            self.info.project,
+            self.owner(),
+            json!({"type":if failed{"failed"}else{"navigated"},"snapshot":self.snapshot()}),
+        );
+        Ok(())
+    }
+    pub fn report_status(&self, nav: Navigation) -> Result<()> {
+        nav.validate()?;
+        self.report(nav, true)
+    }
+    pub fn native_status(&self, status: Value, back: bool, forward: bool) {
+        let _ = self.report(
+            Navigation {
+                nav_status: status,
+                can_go_back: back,
+                can_go_forward: forward,
+            },
+            false,
+        );
     }
     pub fn authority(&self) -> &str {
         &self.authority
@@ -167,7 +266,7 @@ impl Grant {
 }
 
 #[derive(Default)]
-pub(super) struct Grants(Mutex<HashMap<Uuid, Arc<Grant>>>);
+pub(super) struct Grants(Mutex<HashMap<Uuid, Arc<Grant>>>, pub Arc<Events>);
 impl Grants {
     pub async fn open(
         &self,
@@ -208,10 +307,14 @@ impl Grants {
             url: format!("http://{authority}/"),
             profile_id,
             display: display.clone(),
+            navigation: Navigation::default(),
         };
         let grant = Arc::new(Grant {
             info: info.clone(),
             display: Mutex::new(display),
+            navigation: Mutex::new((Navigation::default(), false)),
+            events: self.1.clone(),
+            publishing: Mutex::new(()),
             device: device.clone(),
             terminal: Arc::downgrade(&term),
             root,
@@ -220,6 +323,11 @@ impl Grants {
         });
         self.0.lock().unwrap().retain(|_, g| g.active());
         self.0.lock().unwrap().insert(id, grant.clone());
+        self.1.push(
+            project,
+            grant.owner(),
+            json!({"type":"opened","snapshot":info}),
+        );
         let app = Router::new().fallback(proxy).with_state(grant.clone());
         let stop = grant.stop.subscribe();
         tokio::spawn(async move {

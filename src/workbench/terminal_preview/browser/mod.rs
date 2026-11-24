@@ -1,6 +1,7 @@
 //! Server-managed browser tabs. A browser profile belongs to one project and device.
 mod cdp;
 mod network;
+pub(super) mod profiles;
 mod settings;
 use self::{
     cdp::Browser,
@@ -136,6 +137,11 @@ impl Pool {
     ) -> Result<Value> {
         let handle = self.bind(&grant);
         let mut slot = handle.lock().await;
+        let adjusted = viewport.is_some()
+            || adjust.zoom_factor.is_some()
+            || adjust.color_scheme.is_some()
+            || adjust.hard_reload
+            || adjust.clear.is_some();
         let mut display = grant.display();
         if let Some(viewport) = viewport {
             display.viewport = viewport;
@@ -186,13 +192,24 @@ impl Pool {
             conn.request("Page.reload", json!({"ignoreCache":true}), session)
                 .await?;
         }
-        grant.set_display(display.clone());
+        if adjusted {
+            grant.set_display(
+                display.clone(),
+                json!({"hard_reload":adjust.hard_reload,"clear":adjust.clear}),
+            );
+        }
         let metrics = conn
             .request("Page.getLayoutMetrics", json!({}), session)
             .await?;
         let info = conn
             .request("Target.getTargetInfo", json!({"targetId":tab.target}), None)
             .await?;
+        let history = conn
+            .request("Page.getNavigationHistory", json!({}), session)
+            .await?;
+        let index = history["currentIndex"].as_u64().unwrap_or(0);
+        grant.native_status(json!({"_tag":"Success","url":info["targetInfo"]["url"],"title":info["targetInfo"]["title"]}),
+            index>0,history["entries"].as_array().is_some_and(|a|index+1<a.len() as u64));
         Ok(
             json!({"preview":grant.snapshot(),"title":info["targetInfo"]["title"],"rendered_viewport":metrics["cssLayoutViewport"]}),
         )
@@ -246,6 +263,7 @@ impl Slot {
             });
         }
         let host = self.host.as_mut().unwrap();
+        grant.mark_managed();
         host.browser.network.allow(grant);
         if let std::collections::hash_map::Entry::Vacant(entry) = host.tabs.entry(grant.info.id) {
             let conn = &mut host.browser.conn;
