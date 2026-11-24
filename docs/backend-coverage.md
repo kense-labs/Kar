@@ -72,3 +72,9 @@ cargo run --locked --example backend_suite -- --runtime kar --execute --output /
 公共回合场景复用同一套 Rust 断言。每个本地适配器登记了显式与自动 UUID、带图与空输入、活动回合互斥、排队、撤回、插话、中止、关闭、原生恢复和订阅回放的现场命令。对同一会话的多回合、观察者隔离、游标续收、回合边界、结束后插话和关闭回执用 `session.framing-and-attribution` 合并采集，以便比较同一批原生记录。也可以将其中任一固定公共 ID 传给 `cargo run --locked --example backend_public -- --runtime <runtime> --case <id>` 重跑。模型菜单提供至少两档时，`session.effort-listed-levels-apply-across-resume` 完成一个真实回合，换档并在同一原生会话续聊。供应商未声明的能力和实际拒绝会保留在结果，编译和列出命令均不能代替现场证据。
 
 集中执行时，未显式指定的标准供应商程序由 Kar 的安装发现入口查找；解析出的实际路径传给子进程并写入每项记录。指定 daemon、worker、ACP 旧版本等变体仍用各自的环境变量指向对应发行包。Chrome 预览接受 `KAR_TEST_CHROME` 或 macOS 标准应用路径，缺少浏览器会保留为待配环境。
+
+### 社区服务的复验条件
+
+固定上游的 Cybion `community/cybion/thread.ts` 将新建时指定的标题和推理强度传给线程，恢复时读取已有线程，HTTP 404 携带请求位置和线程 ID。Kar 的普通 SDK、CLI 和聊天入口现共用这条路径。本轮 macOS 开发环境未提供 Cybion 部署地址、访问密钥和部署版本。协议用例使用本地 HTTP 服务。真实服务复验需由部署提供可用的模型 Worker 和可创建测试线程的凭据，设置 `KAR_CYBION_BASE_URL`、`KAR_CYBION_API_KEY` 及可核对的 `KAR_CYBION_DEPLOYMENT_VERSION`，执行 `cargo test --locked --test cybion deployed_thread_creation_and_resume -- --ignored --exact --nocapture`。可选 `KAR_CYBION_TEST_MODEL` 和 `KAR_CYBION_TEST_EFFORT` 应取自该部署支持的值。本轮已编译用例，实际创建跨会话的两轮与 404 证据待收集。
+
+固定上游的 Morph `community/morph/projection.ts` 从 Console 的重试轨迹读取当前尝试、最大尝试次数和可选等待毫秒数。Kar 已具备共享或外部 Console 的三条 macOS 原生恢复与投递用例，版本线索保存在原有台账中。本轮新增的重试投影覆盖秒、毫秒、缺省等待与缺失尝试字段。集中验收时用 `cargo test --locked --lib retry_uses_the_native_attempt_counts_and_delay_units` 检查投影，再用可触发重试的真实 Console 和模型服务核对原生轨迹与 Kar 事件。新增字段尚待真实重试观测。

@@ -225,10 +225,9 @@ async fn thread_control_and_replay_use_the_native_api() {
     let api = Cybion::new(&url, "local-fixture").unwrap();
     let mut opts = SessionOptions::new("/nonlocal/workspace");
     opts.model = Some("fixture".into());
-    let session = api
-        .open_thread(opts.clone(), Some("Review"), Some("high"))
-        .await
-        .unwrap();
+    opts.settings.name = Some("Review".into());
+    opts.settings.effort = Some("high".into());
+    let session = api.open(opts.clone()).await.unwrap();
     assert_eq!(
         state.lock().unwrap().created,
         json!({"title":"Review","model":"fixture","reasoning_effort":"high"})
@@ -391,10 +390,15 @@ async fn refusal_and_cli_resume() {
     let mut mismatch = opts.clone();
     mismatch.resume = Some("thread/42".into());
     mismatch.model = Some("other".into());
-    assert!(matches!(api.open(mismatch).await, Err(Error::Refused(_))));
+    assert!(matches!(
+        api.open(mismatch).await,
+        Err(Error::Unsupported(_))
+    ));
     let mut unknown = opts.clone();
     unknown.resume = Some("missing".into());
-    assert!(matches!(api.open(unknown).await,Err(Error::Refused(m)) if m.contains("404")));
+    assert!(
+        matches!(api.open(unknown).await,Err(Error::Open(e)) if matches!(e.as_ref(),kar::OpenError::SessionNotFound{session_id,cause,..} if session_id=="missing" && cause.method=="GET /v1/threads/{id}" && cause.native["status"]==404))
+    );
     let session = api.open(opts).await.unwrap();
     assert!(matches!(session.prompt("reject").await,Err(Error::Refused(m)) if m.contains("422")));
     assert!(session.abort().await.is_err());
@@ -412,4 +416,63 @@ async fn refusal_and_cli_resume() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("quick answer"));
+}
+
+#[tokio::test]
+#[ignore = "requires a real Cybion deployment, authorised test key, version label and a model-enabled worker"]
+async fn deployed_thread_creation_and_resume() {
+    let version =
+        std::env::var("KAR_CYBION_DEPLOYMENT_VERSION").expect("deployment release or commit label");
+    assert!(!version.trim().is_empty());
+    eprintln!("Cybion deployment version supplied by operator {version}");
+    let api = Cybion::from_env().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let mut opts = SessionOptions::new(workspace.path());
+    let name = format!("Kar acceptance {}", uuid::Uuid::new_v4());
+    opts.settings.name = Some(name);
+    opts.settings.effort = std::env::var("KAR_CYBION_TEST_EFFORT").ok();
+    opts.model = std::env::var("KAR_CYBION_TEST_MODEL").ok();
+    let first = api.open(opts.clone()).await.unwrap();
+    let id = first.id().to_owned();
+    assert!(!id.is_empty());
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(180),
+            first
+                .prompt("Reply with the word ready.")
+                .await
+                .unwrap()
+                .wait()
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        Outcome::Completed
+    );
+    let original = first.stream_id();
+    first.close().await.unwrap();
+    opts.resume = Some(id.clone());
+    let second = api.open(opts.clone()).await.unwrap();
+    assert_eq!(second.id(), id);
+    assert_ne!(second.stream_id(), original);
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(180),
+            second
+                .prompt("Reply with the word resumed.")
+                .await
+                .unwrap()
+                .wait()
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        Outcome::Completed
+    );
+    second.close().await.unwrap();
+    opts.resume = Some(format!("kar-absent-{}", uuid::Uuid::new_v4()));
+    let missing = opts.resume.clone().unwrap();
+    assert!(
+        matches!(api.open(opts).await,Err(Error::Open(e)) if matches!(e.as_ref(),kar::OpenError::SessionNotFound{session_id,cause,..} if session_id==&missing && cause.native["status"]==404))
+    );
 }

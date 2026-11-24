@@ -16,6 +16,7 @@ use uuid::Uuid;
 pub struct Cybion {
     base: Url,
     client: Client,
+    secret: std::sync::Arc<[String]>,
 }
 
 impl Cybion {
@@ -49,7 +50,11 @@ impl Cybion {
             .default_headers(headers)
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
-        Ok(Self { base, client })
+        Ok(Self {
+            base,
+            client,
+            secret: std::sync::Arc::from([api_key.to_owned()]),
+        })
     }
 
     pub fn from_env() -> Result<Self> {
@@ -70,6 +75,7 @@ impl Cybion {
             .expect("HTTP base URL")
             .pop_if_empty()
             .extend(path);
+        let reads_thread = method == Method::GET && matches!(path, ["v1", "threads", _]);
         let mut req = self.client.request(method, url).timeout(timeout);
         if let Some(body) = body {
             req = req.json(body);
@@ -78,18 +84,27 @@ impl Cybion {
         let status = response.status();
         if !status.is_success() {
             let reason = response.json::<Value>().await.unwrap_or(Value::Null);
+            let detail = reason["error"].as_str().unwrap_or("request rejected");
+            if reads_thread && status == reqwest::StatusCode::NOT_FOUND {
+                return Err(crate::OpenError::SessionNotFound {
+                    session_id: path[2].into(),
+                    message: "Cybion has no such thread".into(),
+                    cause: crate::NativeCause {
+                        method: "GET /v1/threads/{id}".into(),
+                        native: json!({"status":404,"error":detail}),
+                    },
+                }
+                .redacted(&self.secret));
+            }
             return Err(Error::Refused(format!(
                 "Cybion HTTP {status}: {}",
-                reason["error"].as_str().unwrap_or("request rejected")
+                detail.replace(&self.secret[0], "[redacted]")
             )));
         }
         Ok(response.json().await?)
     }
 
     pub async fn open(&self, options: SessionOptions) -> Result<Session> {
-        options
-            .settings
-            .validate(crate::Protocol::Cybion, "cybion")?;
         self.open_thread(options, None, None).await
     }
 
@@ -100,6 +115,11 @@ impl Cybion {
         title: Option<&str>,
         effort: Option<&str>,
     ) -> Result<Session> {
+        options
+            .settings
+            .validate(crate::Protocol::Cybion, "cybion")?;
+        let creation_title = title.or(options.settings.name.as_deref());
+        let effort = effort.or(options.settings.effort.as_deref());
         let journal = Journal::new(options.retained_bytes)?;
         if !options.launch_args.is_empty() {
             return Err(Error::Unsupported(
@@ -129,7 +149,7 @@ impl Cybion {
                 let mut fields = json!({});
                 for (key, value) in [
                     ("model", options.model.as_deref()),
-                    ("title", title),
+                    ("title", creation_title),
                     ("reasoning_effort", effort),
                 ] {
                     if let Some(value) = value {
@@ -158,9 +178,13 @@ impl Cybion {
                 if let (Some(expected), Some(actual)) = (requested, info[name].as_str())
                     && actual != expected
                 {
-                    return Err(Error::Refused(format!(
-                        "Cybion thread {id} reports {name}={actual}, requested {expected}"
-                    )));
+                    let detail =
+                        format!("Cybion thread {id} reports {name}={actual}, requested {expected}");
+                    return if options.resume.is_some() {
+                        Err(Error::Unsupported(detail))
+                    } else {
+                        Err(Error::Refused(detail))
+                    };
                 }
             }
             let history = self

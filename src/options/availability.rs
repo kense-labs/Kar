@@ -101,7 +101,7 @@ fn rules(protocol: Protocol, id: &str) -> [Setting; 16] {
         }),
         rule(
             "effort",
-            !matches!(protocol, Cybion | Morph),
+            protocol != Morph,
             "native effort on this adapter",
             |s| s.effort.is_some(),
         ),
@@ -113,7 +113,7 @@ fn rules(protocol: Protocol, id: &str) -> [Setting; 16] {
         ),
         rule(
             "name",
-            matches!(protocol, Codex | Claude | Pi) || dsh,
+            matches!(protocol, Codex | Claude | Pi | Cybion) || dsh,
             "session name on this adapter",
             |s| s.name.is_some(),
         ),

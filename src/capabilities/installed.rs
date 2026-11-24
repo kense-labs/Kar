@@ -317,6 +317,7 @@ fn declaration(
             _ => {}
         },
         Morph | Cybion => {
+            d.task_event_types = Some(&[]);
             let reason = if protocol == Morph {
                 "Morph's shared Console owns its environment and tools"
             } else {

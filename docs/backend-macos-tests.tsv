@@ -43,6 +43,7 @@ cursor	native_live	cursor::actual_cursor_missing_session_preserves_history_and_q
 cursor	native_live	cursor::actual_cursor_parameterized_models_and_legacy_variants	KAR_CURSOR_BIN	requires Cursor CLI with ACP and a parameterized model picker
 cursor	native_live	cursor::agent::actual_cursor_agent_turn	KAR_CURSOR_BIN	requires Cursor CLI with ACP; uses the local AgentService and native conversation store
 cursor	skill_inventory_live	cursor_skill_catalog::cursor_sdk_matches_native_discovery	KAR_CURSOR_OBSERVER_NODE,KAR_CURSOR_OBSERVER_TSX,KAR_CURSOR_SDK_OBSERVER	uses the upstream Cursor SDK observer, Node, tsx and the SDK's ripgrep
+cybion	cybion	deployed_thread_creation_and_resume	KAR_CYBION_BASE_URL,KAR_CYBION_API_KEY,KAR_CYBION_DEPLOYMENT_VERSION	Provisioned Cybion Agent API, authorised test key and deployment version label, worker able to process two prompts; persisted thread created on that deployment
 devin	setup_cli	devin	KAR_DEVIN_BIN	standalone macOS Devin CLI with a recognized distribution marker next to the installation; corresponding release manifest reachable; verifies read-only check and unchanged executable identity/version
 devin	skill_inventory_live	devin	KAR_DEVIN_BIN	requires KAR_DEVIN_BIN
 dsh	dsh_live	acp_scoped_writable_directories	KAR_DSH_ACP_ROOTS_BIN,KAR_DSH_ACP_BIN	requires official DeepSeek Harness 0.2.2-rc.3 with a working native process sandbox

@@ -38,6 +38,39 @@ fn exit_code_requires_the_shell_tools_complete_observation() {
     }
 }
 
+fn retry_event(reason: &str) -> Option<Event> {
+    use std::sync::LazyLock;
+    static COUNT: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\(([0-9]+)/([0-9]+)\)").unwrap());
+    static DELAY: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"in ([0-9]+(?:\.[0-9]+)?)(ms|s)\b").unwrap());
+    let count = COUNT.captures(reason)?;
+    let delay_ms = DELAY.captures(reason).and_then(|c| {
+        let duration = c[1].parse::<f64>().ok()? * if &c[2] == "s" { 1000. } else { 1. };
+        (duration.is_finite() && duration < u64::MAX as f64).then(|| duration.round() as u64)
+    });
+    Some(Event::Retry {
+        attempt: Some(count[1].parse().ok()?),
+        max_attempts: Some(count[2].parse().ok()?),
+        delay_ms,
+        reason: Some(reason.to_owned()),
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn retry_uses_the_native_attempt_counts_and_delay_units() {
+    for (text, delay) in [
+        ("Retrying in 1.5s (1/5).", Some(1500)),
+        ("Retrying in 12.5ms (1/5)", Some(13)),
+        ("Retrying (1/5)", None),
+    ] {
+        assert!(
+            matches!(retry_event(text),Some(Event::Retry{attempt:Some(1),max_attempts:Some(5),delay_ms,reason:Some(reason)}) if delay_ms==delay && reason==text)
+        );
+    }
+    assert!(retry_event("Waiting in 1s").is_none());
+}
 fn invocation(args: &Value) -> Option<String> {
     let fields = args.as_object().filter(|a| !a.is_empty())?;
     if fields.len() == 1
@@ -237,13 +270,8 @@ impl Projection {
                     });
                 }
                 Some("llm_retry") => {
-                    if let Some(reason) = e["text"].as_str() {
-                        events.push(Event::Retry {
-                            attempt: None,
-                            max_attempts: None,
-                            delay_ms: None,
-                            reason: Some(reason.into()),
-                        });
+                    if let Some(retry) = e["text"].as_str().and_then(retry_event) {
+                        events.push(retry);
                     }
                 }
                 _ => {}
