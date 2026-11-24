@@ -35,7 +35,7 @@ cargo build --release --locked
 | `kar tools codex --cwd .` | 查看 MCP 服务提供的工具和输入参数 |
 | `kar commands claude --cwd .` | 查看 Claude 在该目录下公布的斜杠命令 |
 | `kar run claude '解释这个函数' --json --record run.jsonl` | 实时输出事件并创建新的 JSONL 记录 |
-| `kar import voyage.jsonl run.jsonl` | 导入 OAR 的 `oar-voyage/3` 或 Kar 的 `kar-voyage/3` 会话记录，保留原始事件并写入新的 JSONL 文件 |
+| `kar import voyage.jsonl run.jsonl` | 导入 `kar-voyage/3` 会话记录，保留原始事件并写入新的 JSONL 文件，供 `kar replay run.jsonl` 回放 |
 | `kar replay run.jsonl` | 验证事件顺序并重放记录。可传 `--stream <UUID> --after <序号>` |
 | `kar mcp --runtimes codex,claude --max-sessions 4 --cwd .` | 向支持 MCP 的宿主提供一组可委派的 agent |
 

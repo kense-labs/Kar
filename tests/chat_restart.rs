@@ -509,7 +509,7 @@ fn restart() {
 
     let crash_id = Uuid::new_v4().to_string();
     let mut child = cli(&base)
-        .args(["send", "crash here", "--request-id", &crash_id])
+        .args(["resume", "crash here", "--request-id", &crash_id])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -528,7 +528,7 @@ fn restart() {
     }
     assert!(
         !cli(&base)
-            .args(["send", "concurrent"])
+            .args(["resume", "concurrent"])
             .output()
             .unwrap()
             .status
@@ -549,7 +549,7 @@ fn restart() {
         .unwrap();
     assert!(
         !cli(&base)
-            .args(["send", "crash here", "--request-id", &crash_id])
+            .args(["resume", "crash here", "--request-id", &crash_id])
             .output()
             .unwrap()
             .status
@@ -570,7 +570,12 @@ fn restart() {
     assert_eq!(recovered["items"][3]["id"], "restored-tool");
     assert_eq!(recovered["items"][3]["activity"]["result"]["exit_code"], 0);
     assert_eq!(recovered["items"][1]["text"], "native final");
-    success(cli(&base).args(["send", "after restart"]).output().unwrap());
+    success(
+        cli(&base)
+            .args(["resume", "after restart"])
+            .output()
+            .unwrap(),
+    );
     let chat = store.history(chat_id).unwrap();
     assert_eq!(chat.turns.len(), 4);
     assert_eq!(chat.turns[2].status, TurnStatus::Completed);
@@ -593,7 +598,7 @@ fn restart() {
     assert!(store.history(chat_id).is_err());
     assert!(
         !cli(&base)
-            .args(["send", "must not run"])
+            .args(["resume", "must not run"])
             .output()
             .unwrap()
             .status

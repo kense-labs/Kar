@@ -1,11 +1,11 @@
-//! Conformance against the pinned OAR KAP peer. This is a wire fixture, not a vendor binary.
+//! Conformance against the pinned upstream runtime’s KAP protocol fixture.
 #![cfg(unix)]
 use kar::{Event, Outcome, SessionOptions};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 fn peer(path: &Path) -> std::path::PathBuf {
-    let source = std::env::var_os("KAR_OAR_SOURCE")
-        .expect("checkout containing the OAR acceptance baseline");
+    let source = std::env::var_os("KAR_UPSTREAM_SOURCE")
+        .expect("checkout containing the upstream runtime acceptance baseline");
     for file in ["fake-kimi-kap.mjs", "fake-kimi-kap-ws.mjs"] {
         let contents = std::process::Command::new("git")
             .arg("-C")
@@ -63,7 +63,7 @@ async fn wait_for_start(events: &mut kar::Subscription) {
 }
 
 #[tokio::test]
-#[ignore = "requires Node and KAR_OAR_SOURCE with the fixed v0.130.1 protocol peer"]
+#[ignore = "requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer"]
 async fn aborted_or_absent_followup_releases_held_input() {
     let dir = tempfile::tempdir().unwrap();
     let mut rt = kar::runtime("kimi").unwrap();
@@ -145,7 +145,7 @@ async fn aborted_or_absent_followup_releases_held_input() {
 }
 
 #[tokio::test]
-#[ignore = "requires Node and KAR_OAR_SOURCE with the fixed v0.130.1 protocol peer"]
+#[ignore = "requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer"]
 async fn failed_web_spawn_releases_the_profile_and_deadline() {
     let dir = tempfile::tempdir().unwrap();
     let mut rt = kar::runtime("kimi").unwrap();
@@ -189,7 +189,7 @@ async fn failed_web_spawn_releases_the_profile_and_deadline() {
 }
 
 #[tokio::test]
-#[ignore = "requires Node and KAR_OAR_SOURCE with the fixed v0.130.1 protocol peer"]
+#[ignore = "requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer"]
 async fn accepted_cancel_without_native_end_is_bounded_across_retries() {
     let dir = tempfile::tempdir().unwrap();
     let mut rt = kar::runtime("kimi").unwrap();
@@ -245,7 +245,7 @@ async fn accepted_cancel_without_native_end_is_bounded_across_retries() {
 }
 
 #[tokio::test]
-#[ignore = "requires Node and KAR_OAR_SOURCE with the fixed v0.130.1 protocol peer"]
+#[ignore = "requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer"]
 async fn late_cancel_response_stays_with_the_cancelled_turn() {
     let dir = tempfile::tempdir().unwrap();
     let mut rt = kar::runtime("kimi").unwrap();

@@ -904,7 +904,7 @@ async fn explicit_native_refusal_and_handled_input_drain_in_order_after_restart(
 }
 
 #[tokio::test]
-#[ignore = "requires KAR_PI_BIN and KAR_OAR_PI_PREFLIGHT pointing to the fixed upstream support/pi-preflight.ts"]
+#[ignore = "requires KAR_PI_BIN and KAR_PI_PREFLIGHT_FIXTURE pointing to the fixed upstream support/pi-preflight.ts"]
 async fn admission_holds_while_a_second_input_queues_and_both_are_refused() {
     use sha2::{Digest, Sha256};
     use tokio::time::{Duration, sleep, timeout};
@@ -926,7 +926,8 @@ async fn admission_holds_while_a_second_input_queues_and_both_are_refused() {
     f.options.model = Some("aimock/aimock-model".into());
 
     // Instantiate the extension from the upstream test, changing only its temporary paths.
-    let original = fs::read_to_string(std::env::var_os("KAR_OAR_PI_PREFLIGHT").unwrap()).unwrap();
+    let original =
+        fs::read_to_string(std::env::var_os("KAR_PI_PREFLIGHT_FIXTURE").unwrap()).unwrap();
     assert_eq!(
         format!("{:x}", Sha256::digest(original.as_bytes())),
         "c8361424c55e6210a4993d941be4aea7ba06878ceb5f566b2a38773ec6d3b4ec"

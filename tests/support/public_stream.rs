@@ -1,4 +1,4 @@
-//! The OAR public cursor, observer-isolation, multi-turn and late-steer cases.
+//! The upstream runtime’s public cursor, observer-isolation, multi-turn and late-steer cases.
 #[path = "disposal.rs"]
 mod disposal;
 use kar::{Error, Event, Outcome, Record, RecordKind, Session, Subscription};

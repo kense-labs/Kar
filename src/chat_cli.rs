@@ -41,7 +41,6 @@ enum Action {
         model: Option<String>,
     },
     /// Continue the latest or selected chat in its saved workspace.
-    #[command(visible_alias = "send")]
     Resume {
         #[arg(long)]
         chat: Option<Uuid>,
