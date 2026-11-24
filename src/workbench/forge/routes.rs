@@ -1,0 +1,372 @@
+use super::*;
+use crate::workbench_git::ManagedWorktree;
+use axum::{
+    Router,
+    extract::{Path, Query, State},
+    routing::{get, post, put},
+};
+
+async fn drivers() -> Json<Value> {
+    Json(json!(DRIVER_KINDS.iter().map(|kind|json!({
+        "kind":kind,"issues_in_upstream":matches!(*kind,"github"|"gitlab"|"tanstack-source"|"forgejo"|"azure-devops"|"linear"),
+        "pulls_in_upstream":*kind!="linear","enabled":*kind!="tanstack-source" || std::env::var("KAR_TANSTACK_SOURCE").as_deref()==Ok("1")
+    })).collect::<Vec<_>>()))
+}
+
+#[derive(Deserialize)]
+struct Input {
+    id: Uuid,
+    chat: Uuid,
+    #[serde(flatten)]
+    operation: Operation,
+}
+async fn read(
+    State(app): State<Workbench>,
+    Path(project): Path<Uuid>,
+    Json(op): Json<Operation>,
+) -> Reply<Value> {
+    if op.mutates() {
+        return Err(ForgeError::bad(
+            "use /operations and a stable request ID for writes",
+        ));
+    }
+    let c = Context::open(app.clone(), project).await?;
+    if let Operation::Pull { number } = op {
+        return review::refresh(&app, project, &c, number).await.map(Json);
+    }
+    c.execute(&op).await.map(Json)
+}
+fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Reply<Value> {
+    Ok(Json(app.update(|db| {
+        let m = db
+            .forge
+            .operations
+            .get_mut(&id)
+            .ok_or_else(|| Error::Refused("unknown operation".into()))?;
+        if m.result.as_ref().is_some_and(Result::is_ok) {
+            return Ok(m.result.clone().unwrap());
+        }
+        if let Ok(v) = &result {
+            let (number, kind) = match m.operation {
+                Operation::CreatePull { .. } => (v["number"].as_u64(), "pull"),
+                Operation::SetIssueState { number, .. } => (Some(number), "issue"),
+                _ => unreachable!(),
+            };
+            let number = number.ok_or_else(|| {
+                Error::Refused("provider did not identify the new change request".into())
+            })?;
+            db.forge.bindings.insert(
+                id,
+                Binding {
+                    project: m.project,
+                    chat: m.chat,
+                    repository: m.repository.clone(),
+                    kind: kind.into(),
+                    number,
+                },
+            );
+        }
+        m.result = Some(result.clone());
+        Ok(result)
+    })??))
+}
+async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
+    app.binding(project, input.chat)?;
+    if !input.operation.mutates() {
+        return Err(ForgeError::bad("use /query for reads"));
+    }
+    let c = Context::open(app.clone(), project).await?;
+    let identity = c.identity();
+    let id = input.id;
+    let remembered = app.update(|db| {
+        if db.forge.bindings.contains_key(&id) && !db.forge.operations.contains_key(&id) {
+            return Err(Error::Refused(
+                "operation ID already belongs to a binding".into(),
+            ));
+        }
+        if let Some(old) = db.forge.operations.get(&id) {
+            if old.project != project
+                || old.repository != identity
+                || old.chat != input.chat
+                || old.operation != input.operation
+            {
+                return Err(Error::Refused(
+                    "operation ID already belongs to another request".into(),
+                ));
+            }
+            return Ok(Some(old.result.clone()));
+        }
+        db.forge.operations.insert(
+            id,
+            Mutation {
+                project,
+                chat: input.chat,
+                repository: identity,
+                operation: input.operation.clone(),
+                result: None,
+            },
+        );
+        Ok(None)
+    })?;
+    match remembered {
+        Some(Some(r)) => return r.map(Json),
+        Some(None) => {
+            return Err(ForgeError::uncertain(
+                "operation has already been claimed; reconcile its remote result",
+            ));
+        }
+        None => {}
+    }
+    let mut op = input.operation;
+    if let Operation::CreatePull { body, .. } = &mut op {
+        body.push_str(&format!("\n\n<!-- kar-operation:{id} -->"))
+    }
+    let result = c.execute(&op).await;
+    complete(&app, id, result)
+}
+async fn mutate(
+    State(app): State<Workbench>,
+    Path(project): Path<Uuid>,
+    Json(input): Json<Input>,
+) -> Reply<Value> {
+    tokio::spawn(execute(app, project, input))
+        .await
+        .map_err(|e| ForgeError::uncertain(e.to_string()))?
+}
+async fn operation(
+    State(app): State<Workbench>,
+    Path((project, id)): Path<(Uuid, Uuid)>,
+) -> Reply<Mutation> {
+    app.project(project)?;
+    let db = app.0.catalog.lock().unwrap();
+    Ok(Json(
+        db.forge
+            .operations
+            .get(&id)
+            .filter(|m| m.project == project)
+            .cloned()
+            .ok_or_else(|| ForgeError::remote(404, "unknown operation"))?,
+    ))
+}
+#[derive(Deserialize)]
+struct Reconcile {
+    number: u64,
+}
+async fn reconcile(
+    State(app): State<Workbench>,
+    Path((project, id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<Reconcile>,
+) -> Reply<Value> {
+    let Json(m) = operation(State(app.clone()), Path((project, id))).await?;
+    let c = Context::open(app.clone(), project).await?;
+    if c.identity() != m.repository {
+        return Err(ForgeError::bad(
+            "project origin changed since the operation",
+        ));
+    }
+    match m.result {
+        Some(Ok(value)) => return Ok(Json(value)),
+        Some(Err(ref e)) if e.kind != "needs_reconciliation" => return Err(e.clone()),
+        _ => {}
+    }
+    let value = match m.operation {
+        Operation::CreatePull { head, base, .. } => {
+            let v = c
+                .execute(&Operation::Pull {
+                    number: input.number,
+                })
+                .await?;
+            if v["head_ref"] != head
+                || v["base_ref"] != base
+                || !v["body"]
+                    .as_str()
+                    .is_some_and(|s| s.contains(&format!("<!-- kar-operation:{id} -->")))
+            {
+                return Err(ForgeError::uncertain(
+                    "remote pull request does not attest this operation ID and branch pair",
+                ));
+            }
+            v
+        }
+        Operation::SetIssueState { number, state } if number == input.number => {
+            let v = c.execute(&Operation::Issue { number }).await?;
+            if v["state"] != state {
+                return Err(ForgeError::uncertain(
+                    "issue has not confirmed the requested state",
+                ));
+            }
+            v
+        }
+        _ => return Err(ForgeError::bad("operation and object number disagree")),
+    };
+    complete(&app, id, Ok(value))
+}
+#[derive(Deserialize)]
+struct Link {
+    id: Uuid,
+    chat: Uuid,
+    kind: String,
+    number: u64,
+}
+async fn link(
+    State(app): State<Workbench>,
+    Path(project): Path<Uuid>,
+    Json(input): Json<Link>,
+) -> Reply<Binding> {
+    app.binding(project, input.chat)?;
+    let c = Context::open(app.clone(), project).await?;
+    let op = match input.kind.as_str() {
+        "pull" => Operation::Pull {
+            number: input.number,
+        },
+        "issue" => Operation::Issue {
+            number: input.number,
+        },
+        _ => return Err(ForgeError::bad("kind must be pull or issue")),
+    };
+    let object = c.execute(&op).await?;
+    if checked_number(&object)? != input.number {
+        return Err(ForgeError::bad("object identity mismatch"));
+    }
+    let binding = Binding {
+        project,
+        chat: input.chat,
+        kind: input.kind,
+        repository: c.identity(),
+        number: input.number,
+    };
+    Ok(Json(app.update(|db| {
+        if let Some(old) = db.forge.bindings.get(&input.id) {
+            if old == &binding {
+                return Ok(old.clone());
+            }
+            return Err(Error::Refused(
+                "binding ID already belongs to another request".into(),
+            ));
+        }
+        if db.forge.operations.contains_key(&input.id) {
+            return Err(Error::Refused(
+                "binding ID already belongs to an operation".into(),
+            ));
+        }
+        db.forge.bindings.insert(input.id, binding.clone());
+        Ok(binding)
+    })?))
+}
+async fn links(State(app): State<Workbench>, Path(project): Path<Uuid>) -> Reply<Value> {
+    app.project(project)?;
+    let db = app.0.catalog.lock().unwrap();
+    Ok(Json(json!(
+        db.forge
+            .bindings
+            .iter()
+            .filter(|(_, v)| v.project == project)
+            .map(|(id, b)| json!({"id":id,"binding":b}))
+            .collect::<Vec<_>>()
+    )))
+}
+
+#[derive(Deserialize, Default)]
+struct PathFilter {
+    path: Option<String>,
+}
+async fn diff(
+    State(app): State<Workbench>,
+    Path((project, n)): Path<(Uuid, u64)>,
+    Query(q): Query<PathFilter>,
+) -> Reply<Value> {
+    let c = Context::open(app.clone(), project).await?;
+    let pull = review::refresh(&app, project, &c, n).await?;
+    let key = review::key(project, &c, n);
+    let head = pull["head_sha"].as_str().unwrap_or_default();
+    let reviewed = app.0.catalog.lock().unwrap().forge.reviews[&key]
+        .checked
+        .get(head)
+        .cloned()
+        .unwrap_or_default();
+    tokio::task::spawn_blocking(move||{
+        match q.path{
+            Some(path)=>Ok(Json(json!({"patch":review::patch(&c,n,&pull,&path)?,"path":path,"pull":pull,"reviewed":reviewed.contains(&path)}))),
+            None=>Ok(Json(json!({"files":review::files(&c,n,&pull)?,"pull":pull,"reviewed":reviewed}))),
+        }
+    }).await.map_err(|e|ForgeError::bad(e.to_string()))?
+}
+#[derive(Deserialize)]
+struct Mark {
+    head: String,
+    path: String,
+    reviewed: bool,
+}
+async fn mark(
+    State(app): State<Workbench>,
+    Path((project, n)): Path<(Uuid, u64)>,
+    Json(input): Json<Mark>,
+) -> Reply<Value> {
+    let c = Context::open(app.clone(), project).await?;
+    let key = review::key(project, &c, n);
+    let pull = review::refresh(&app, project, &c, n).await?;
+    if pull["head_sha"] != input.head {
+        return Err(ForgeError::remote(409, "pull request head changed"));
+    }
+    let files = tokio::task::spawn_blocking(move || review::files(&c, n, &pull))
+        .await
+        .map_err(|e| ForgeError::bad(e.to_string()))??;
+    if !files.contains(&input.path) {
+        return Err(ForgeError::bad("path not present in this revision"));
+    }
+    Ok(Json(app.update(|db| {
+        let r = db.forge.reviews.get_mut(&key).expect("refreshed review");
+        if r.pull["head_sha"] != input.head {
+            return Err(Error::Busy);
+        }
+        let paths = r.checked.entry(input.head).or_default();
+        if input.reviewed {
+            paths.insert(input.path);
+        } else {
+            paths.remove(&input.path);
+        }
+        Ok(json!(paths))
+    })?))
+}
+#[derive(Deserialize)]
+struct Checkout {
+    id: Uuid,
+    directory: PathBuf,
+    head: String,
+}
+async fn checkout(
+    State(app): State<Workbench>,
+    Path((project, n)): Path<(Uuid, u64)>,
+    Json(input): Json<Checkout>,
+) -> Reply<ManagedWorktree> {
+    let c = Context::open(app.clone(), project).await?;
+    let pull = review::refresh(&app, project, &c, n).await?;
+    if pull["head_sha"] != input.head {
+        return Err(ForgeError::remote(409, "pull request head changed"));
+    }
+    tokio::task::spawn_blocking(move || {
+        review::worktree(&app, &c, n, &pull, input.id, input.directory)
+    })
+    .await
+    .map_err(|e| ForgeError::bad(e.to_string()))?
+    .map(Json)
+}
+
+pub(super) fn routes() -> Router<Workbench> {
+    Router::new()
+        .route("/forge/drivers", get(drivers))
+        .route("/projects/{project}/forge/query", post(read))
+        .route("/projects/{project}/forge/operations", post(mutate))
+        .route("/projects/{project}/forge/operations/{id}", get(operation))
+        .route(
+            "/projects/{project}/forge/operations/{id}/reconcile",
+            post(reconcile),
+        )
+        .route("/projects/{project}/forge/links", get(links).post(link))
+        .route("/projects/{project}/forge/pulls/{n}/diff", get(diff))
+        .route("/projects/{project}/forge/pulls/{n}/reviewed", put(mark))
+        .route(
+            "/projects/{project}/forge/pulls/{n}/worktree",
+            post(checkout),
+        )
+}

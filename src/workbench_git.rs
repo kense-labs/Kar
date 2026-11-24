@@ -73,7 +73,7 @@ fn checked(output: Output) -> Result<Vec<u8>> {
         )))
     }
 }
-fn git<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Vec<u8>> {
+pub(crate) fn git<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Vec<u8>> {
     checked(command(cwd).args(args).output()?)
 }
 fn line(buf: &[u8]) -> &[u8] {

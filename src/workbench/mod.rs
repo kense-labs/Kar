@@ -2,6 +2,7 @@
 mod access;
 mod documents;
 mod files;
+mod forge;
 mod handoff;
 mod http;
 mod search;
@@ -33,6 +34,8 @@ pub struct Project {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
+    #[serde(default)]
+    forge: forge::ForgeState,
     projects: BTreeMap<Uuid, Project>,
     archived: BTreeSet<Uuid>,
 }

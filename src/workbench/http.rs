@@ -71,6 +71,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         )
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
         .merge(super::documents::routes())
+        .merge(super::forge::routes())
         .merge(super::terminal_preview::routes())
         .route("/projects/{project}/search", get(search_project))
         .route("/search/chats", get(search_chats))
