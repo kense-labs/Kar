@@ -2,11 +2,11 @@
 use super::{Project, Workbench, denied, http::ApiError};
 use crate::{
     Error, Result,
-    workbench_git::{Repository, Status},
+    workbench_git::{BranchPage, BranchQuery, Repository, Status},
 };
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -92,6 +92,15 @@ async fn clone_project(
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Action {
+    Init,
+    CreateBranch {
+        branch: String,
+        #[serde(default)]
+        switch: bool,
+    },
+    SwitchBranch {
+        branch: String,
+    },
     Stage {
         paths: Vec<PathBuf>,
     },
@@ -116,8 +125,18 @@ async fn change(
     Json(op): Json<Action>,
 ) -> std::result::Result<Json<Value>, ApiError> {
     super::http::blocking(move || {
+        if let Action::Init = op {
+            let project = app.project(project)?;
+            let ws = app.workspace(&project)?;
+            return Ok(json!(Repository::init(&ws.root)?.status()?));
+        }
         let repo = app.repository(project)?;
         match op {
+            Action::Init => unreachable!(),
+            Action::CreateBranch { branch, switch } => repo.create_branch(&branch, switch)?,
+            Action::SwitchBranch { branch } => {
+                repo.switch_branch(&branch)?;
+            }
             Action::Stage { paths } => repo.stage(&paths)?,
             Action::Commit { message } => return Ok(json!({"commit":repo.commit(&message)?})),
             Action::Push => repo.push()?,
@@ -151,6 +170,29 @@ async fn status(
     Path(project): Path<Uuid>,
 ) -> std::result::Result<Json<Status>, ApiError> {
     super::http::blocking(move || app.repository(project)?.status()).await
+}
+async fn refs(
+    State(app): State<Workbench>,
+    Path(project): Path<Uuid>,
+    Query(query): Query<BranchQuery>,
+) -> std::result::Result<Json<BranchPage>, ApiError> {
+    super::http::blocking(move || {
+        let project = app.project(project)?;
+        let ws = app.workspace(&project)?;
+        let mut page =
+            Repository::branches_in_if(&ws.root, &query, |root| app.allowed(root).map(|_| ()))?;
+        for branch in &mut page.refs {
+            if branch
+                .worktree_path
+                .as_ref()
+                .is_some_and(|p| app.allowed(p).is_err())
+            {
+                branch.worktree_path = None;
+            }
+        }
+        Ok(page)
+    })
+    .await
 }
 async fn watch(
     State(app): State<Workbench>,
@@ -190,5 +232,6 @@ pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .route("/projects/clone", post(clone_project))
         .route("/projects/{project}/git", get(status).post(change))
+        .route("/projects/{project}/git/refs", get(refs))
         .route("/projects/{project}/git/events", get(watch))
 }

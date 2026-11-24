@@ -41,6 +41,11 @@ async fn scenario() {
         .await;
         let project = registered["id"].as_str().unwrap().to_string();
         let scope = format!("{base}/projects/{project}");
+        let refs = format!("{scope}/git/refs");
+        assert_eq!(json(b.get(&refs)).await["is_repo"], false);
+        json(a.post(format!("{scope}/git")).json(&json!({"op":"init"}))).await;
+        assert_eq!(json(b.get(&refs)).await["is_at_repository_root"], true);
+        assert!(path.join(".git/HEAD").is_file());
         let file_url = format!("{scope}/file?path=notes%2Fsame.txt");
         json(
             a.put(&file_url)

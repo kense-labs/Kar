@@ -27,6 +27,12 @@ struct Record {
     tree: ManagedWorktree,
     start: String,
     phase: Phase,
+    // Original creation arguments remain immutable for retries. A switch records both
+    // possible HEADs before Git writes any working files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current_head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_head: Option<String>,
 }
 
 struct Registry {
@@ -93,6 +99,7 @@ struct Registration {
     path: PathBuf,
     branch: Option<Vec<u8>>,
     lock: Option<Vec<u8>>,
+    prunable: bool,
 }
 fn refused(s: &str) -> Error {
     Error::Refused(s.to_owned())
@@ -202,6 +209,8 @@ impl Repository {
                 row.path = path(p)?;
             } else if let Some(b) = field.strip_prefix(b"branch ") {
                 row.branch = Some(b.to_vec());
+            } else if field == b"prunable" || field.starts_with(b"prunable ") {
+                row.prunable = true;
             } else if field == b"locked" {
                 row.lock = Some(Vec::new());
             } else if let Some(l) = field.strip_prefix(b"locked ") {
@@ -211,14 +220,78 @@ impl Repository {
         Ok(rows)
     }
 
+    pub(super) fn branch_paths(&self) -> Result<std::collections::HashMap<Vec<u8>, PathBuf>> {
+        Ok(self
+            .registrations()?
+            .into_iter()
+            .filter(|r| !r.prunable)
+            .filter_map(|r| Some((r.branch?, r.path)))
+            .collect())
+    }
+
+    pub(super) fn changing_head(
+        &self,
+        expected: &str,
+        action: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let Some(id) = self.worktree_id else {
+            return action();
+        };
+        let registry = Registry::open(self)?;
+        let mut record = registry
+            .load(id)?
+            .ok_or_else(|| refused("worktree has no creation record"))?;
+        if record.phase != Phase::Ready {
+            return Err(refused("worktree is not ready"));
+        }
+        let registration = || {
+            self.registrations()?
+                .into_iter()
+                .find(|r| r.path == self.root)
+                .ok_or_else(|| refused("Git registration is missing"))
+        };
+        let before = registration()?;
+        self.verify_worktree(&record, &before, false)?;
+        let before = before
+            .branch
+            .as_deref()
+            .map(utf8)
+            .transpose()?
+            .unwrap_or("HEAD")
+            .to_string();
+        record.current_head = Some(before);
+        record.pending_head = Some(expected.into());
+        registry.save(&record)?;
+        let result = action();
+        let after = registration()?;
+        self.verify_worktree(&record, &after, false)?;
+        record.current_head = Some(
+            after
+                .branch
+                .as_deref()
+                .map(utf8)
+                .transpose()?
+                .unwrap_or("HEAD")
+                .to_string(),
+        );
+        record.pending_head = None;
+        registry.save(&record)?;
+        result
+    }
+
     fn verify_worktree(
         &self,
-        tree: &ManagedWorktree,
+        record: &Record,
         entry: &Registration,
         unlocking: bool,
     ) -> Result<PathBuf> {
+        let tree = &record.tree;
         let lock = reason(tree.id);
-        if entry.branch.as_deref() != Some(format!("refs/heads/{}", tree.branch).as_bytes())
+        let initial = format!("refs/heads/{}", tree.branch);
+        let expected = record.current_head.as_deref().unwrap_or(&initial);
+        let actual = entry.branch.as_deref().unwrap_or(b"HEAD");
+        if (actual != expected.as_bytes()
+            && record.pending_head.as_deref().map(str::as_bytes) != Some(actual))
             || (entry.lock.as_deref() != Some(lock.as_bytes())
                 && !(unlocking && entry.lock.is_none()))
         {
@@ -295,6 +368,8 @@ impl Repository {
                     },
                     start: start.into(),
                     phase: Phase::Preparing,
+                    current_head: None,
+                    pending_head: None,
                 };
                 registry.save(&r)?;
                 r
@@ -304,7 +379,7 @@ impl Repository {
             return Err(refused("worktree is being removed or has been retired"));
         }
         let admin = if let Some(entry) = entries.iter().find(|e| e.path == dir) {
-            self.verify_worktree(&record.tree, entry, false)?
+            self.verify_worktree(&record, entry, false)?
         } else {
             if record.phase == Phase::Ready || exists(&dir)? {
                 return Err(refused(
@@ -329,7 +404,7 @@ impl Repository {
                 .into_iter()
                 .find(|e| e.path == dir)
                 .ok_or_else(|| refused("Git did not register the checkout"))?;
-            self.verify_worktree(&record.tree, &entry, false)?
+            self.verify_worktree(&record, &entry, false)?
         };
         if record.phase == Phase::Preparing {
             // Git can leave an initializing registration if the Git process itself was
@@ -396,7 +471,7 @@ impl Repository {
         Ok(())
     }
 
-    fn ref_exists(&self, name: &str) -> Result<bool> {
+    pub(super) fn ref_exists(&self, name: &str) -> Result<bool> {
         let out = command(&self.root)
             .args(["show-ref", "--verify", "--quiet", name])
             .output()?;
@@ -436,7 +511,7 @@ impl Repository {
             if self.root.starts_with(path) {
                 return Err(refused("remove this worktree from another checkout"));
             }
-            let admin = self.verify_worktree(&r.tree, &entry, r.phase == Phase::Removing)?;
+            let admin = self.verify_worktree(&r, &entry, r.phase == Phase::Removing)?;
             let pin = File::open(admin.join(ID_FILE))?;
             pin.try_lock().map_err(lock_error)?;
             if marker_id(&pin)? != id {

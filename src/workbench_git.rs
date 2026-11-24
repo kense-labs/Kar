@@ -7,7 +7,9 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
+mod branches;
 mod worktrees;
+pub use branches::{Branch, BranchKind, BranchPage, BranchQuery};
 pub use worktrees::ManagedWorktree;
 pub(crate) use worktrees::pin_checkout;
 

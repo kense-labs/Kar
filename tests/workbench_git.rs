@@ -357,6 +357,81 @@ fn ownership_and_cleanup() {
     }
 }
 
+fn branch_actions() {
+    let f = Fixture::new();
+    fs::create_dir(f.p("plain")).unwrap();
+    fs::write(f.p("plain/keep"), "existing").unwrap();
+    assert_eq!(json(output(f.kar("plain").arg("refs")))["is_repo"], false);
+    for _ in 0..2 {
+        assert_eq!(
+            json(output(f.kar("plain").arg("init")))["head"],
+            Value::Null
+        );
+        assert!(f.p("plain/.git/HEAD").is_file());
+    }
+    assert_eq!(fs::read(f.p("plain/keep")).unwrap(), b"existing");
+    assert_eq!(json(output(f.kar("plain").arg("refs")))["total_count"], 0);
+    let branch = |args: &[&str]| json(output(f.kar("local").args(args)))["branch"].clone();
+    assert_eq!(branch(&["create-branch", "topic-one"]), "main");
+    assert_eq!(
+        branch(&["create-branch", "topic-two", "--switch"]),
+        "topic-two"
+    );
+    f.commit("local", "topic contents");
+    assert_eq!(branch(&["switch-branch", "main"]), "main");
+    fs::write(f.p("local/file"), "local changes").unwrap();
+    reject(f.kar("local").args(["switch-branch", "topic-two"]));
+    assert_eq!(fs::read(f.p("local/file")).unwrap(), b"local changes");
+    assert_eq!(branch(&["status"]), "main");
+    output(f.raw("local").args(["restore", "file"]));
+    for name in ["topic-one", "topic-three", "four"] {
+        output(
+            f.raw("local")
+                .args(["update-ref", &format!("refs/remotes/origin/{name}"), "HEAD"]),
+        );
+    }
+    let page = |extra: &[&str]| {
+        json(output(
+            f.kar("local")
+                .args(["refs", "--query", "ToPiC"])
+                .args(extra),
+        ))
+    };
+    let first = page(&["--limit", "2"]);
+    assert_eq!(first["total_count"], 3);
+    assert_eq!(first["next_cursor"], 2);
+    let last = page(&["--limit", "2", "--cursor", "2", "--refresh"]);
+    assert_eq!(last["refs"][0]["name"], "origin/topic-three");
+    assert_eq!(last["next_cursor"], Value::Null);
+    assert_eq!(
+        page(&["--kind", "remote", "--include-matching-remote-refs"])["total_count"],
+        2
+    );
+    assert_eq!(
+        branch(&["switch-branch", "origin/topic-three"]),
+        "topic-three"
+    );
+    assert_eq!(branch(&["switch-branch", "four"]), "four");
+    assert_eq!(
+        string(output(f.raw("local").args([
+            "rev-parse",
+            "--abbrev-ref",
+            "@{upstream}"
+        ]))),
+        "origin/four"
+    );
+    let id = Uuid::new_v4();
+    let created = json(output(&mut f.add("managed", id)));
+    output(f.kar("managed").args(["switch-branch", "topic-one"]));
+    assert_eq!(json(output(&mut f.add("managed", id))), created);
+    reject(f.kar("local").args(["switch-branch", "topic-one"]));
+    output(&mut f.remove(id));
+    output(
+        f.raw("local")
+            .args(["show-ref", "--verify", "refs/heads/topic-one"]),
+    );
+}
+
 fn interruption() {
     let f = Fixture::new();
     for (name, before) in [("early", true), ("late", false)] {
@@ -396,6 +471,7 @@ fn main() {
         git_wrapper();
     }
     remote_and_status();
+    branch_actions();
     println!("remote verification, watch, conflicting pull and non-fast-forward push passed");
     ownership_and_cleanup();
     println!("isolated indices, paths, ownership and protected cleanup passed");

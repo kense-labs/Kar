@@ -1,5 +1,8 @@
 use clap::{Args, Subcommand};
-use kar::{Result, workbench_git::Repository};
+use kar::{
+    Result,
+    workbench_git::{BranchQuery, Repository},
+};
 use std::{ffi::OsString, path::PathBuf, time::Duration};
 use uuid::Uuid;
 
@@ -13,6 +16,18 @@ pub struct Git {
 }
 #[derive(Subcommand)]
 enum Action {
+    /// Initialize Git in an existing directory, preserving its files.
+    Init,
+    /// List branches in this checkout, with optional filtering and paging.
+    Refs(BranchQuery),
+    CreateBranch {
+        branch: String,
+        #[arg(long)]
+        switch: bool,
+    },
+    SwitchBranch {
+        branch: String,
+    },
     Clone {
         source: OsString,
         destination: PathBuf,
@@ -57,10 +72,28 @@ impl Git {
             let repo = Repository::clone_into(&source, &destination)?;
             return super::json_line(&repo.status()?, std::io::stdout());
         }
-        let repo = Repository::open(&self.repo)?;
+        if let Action::Refs(query) = &self.command {
+            return super::json_line(
+                &Repository::branches_in(&self.repo, query)?,
+                std::io::stdout(),
+            );
+        }
+        let repo = if matches!(self.command, Action::Init) {
+            Repository::init(&self.repo)?
+        } else {
+            Repository::open(&self.repo)?
+        };
         match self.command {
-            Action::Clone { .. } => unreachable!(),
-            Action::Status => super::json_line(&repo.status()?, std::io::stdout()),
+            Action::Clone { .. } | Action::Refs(_) => unreachable!(),
+            Action::Init | Action::Status => super::json_line(&repo.status()?, std::io::stdout()),
+            Action::CreateBranch { branch, switch } => {
+                repo.create_branch(&branch, switch)?;
+                super::json_line(&repo.status()?, std::io::stdout())
+            }
+            Action::SwitchBranch { branch } => {
+                repo.switch_branch(&branch)?;
+                super::json_line(&repo.status()?, std::io::stdout())
+            }
             Action::Watch { interval_ms } => {
                 repo.watch(Duration::from_millis(interval_ms), |status| {
                     super::json_line(status, std::io::stdout())?;
