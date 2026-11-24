@@ -1,0 +1,51 @@
+kind	upstream	locator	commit	kar_file	anchor	scope	command	operation	expected
+cli-argument	packages/cli/src/index.ts#L136	<kind>	f4a54ae	src/inventory_cli.rs	pub(super) enum Kind	所选安装	kar commands claude	选择目录种类	通过 skills、commands、mcp-servers 或 tools 选定目录
+cli-argument	packages/cli/src/index.ts#L137	[runtime]	f4a54ae	src/inventory_cli.rs	if let Some(id) = self.runtime	所选安装	kar tools	省略或指定供应商	省略时返回每种安装结果；指定时保留该供应商的原始结果形状
+cli-command	packages/cli/src/index.ts#L96	installation [runtime]	f4a54ae	src/main.rs	Action::List {	所选安装	kar list codex	列出一个或所有本地安装	输出安装来源、实际可执行文件、版本及已知会话能力
+cli-command	packages/cli/src/index.ts#L113	account	f4a54ae	src/main.rs	let Some(id) = id else	所选安装	kar account --help	查看账户子命令	列出 status、usage、login 与 logout；后两者要求指定运行时
+cli-command	packages/cli/src/index.ts#L119	usage [runtime]	f4a54ae	src/account_cli.rs	Self::Usage(opts) => {	所选安装	kar account usage	并行查询全部可用账户额度	每个运行时有独立额度、未安装、不可用或错误结果
+cli-command	packages/cli/src/index.ts#L134	inventory	f4a54ae	src/inventory_cli.rs	async fn query(self,	所选安装	kar skills --cwd .	查询指定工作目录的原生清单	四种预打开目录各有独立 Kar 命令，单供应商与批量查询均可用
+cli-command	packages/cli/src/index.ts#L160	models [runtime]	f4a54ae	src/models_cli.rs	pub(super) async fn run(self)	所选安装	"kar models --cwd ""$WORK"""	查询一个或全部运行时的模型	每个安装有独立结果，选择器可读取模型与推理能力
+cli-command	packages/cli/src/install.ts#L103	install <runtime>	f4a54ae	src/setup.rs	let plan = self.install_plan_for(line)?;	macOS 隔离安装环境及官方来源	kar install opencode --line v2	在可还原的无安装环境运行供应商安装器	已有可用副本返回原版本；新装后重新探测已选可执行文件
+cli-command	packages/cli/src/login.ts#L155	status [runtime]	f4a54ae	src/account_cli.rs	Self::Status(opts) => {	所选安装	kar account status --json	查询全部可用账号状态	独立返回每个安装的状态、明确不支持或不可用
+cli-command	packages/cli/src/login.ts#L180	login <runtime>	f4a54ae	src/main.rs	let result = rt.login(&options, &mut present)	需要真实身份服务与测试账号	kar account claude login --json	在隔离账号中通过供应商流程登录	交互事件可交付浏览器地址、设备代码或用户输入请求
+cli-command	packages/cli/src/logout.ts#L70	logout <runtime>	f4a54ae	src/main.rs	let result = runtime(&id)?.logout(&options)	已登录供应商测试账号	kar account claude logout --json	在可恢复的测试账号退出	原生退出后核对所选配置中的账号状态
+cli-command	packages/cli/src/mcp-command.ts#L30	mcp	f4a54ae	src/mcp.rs	pub(super) async fn serve(	所选安装	kar mcp --runtimes codex,claude	通过标准输入输出启动 MCP 服务	初始化、工具列表和调用均按请求 ID 返回
+cli-command	packages/cli/src/run.ts#L24	run <runtime> <prompt>	f4a54ae	src/main.rs	let outcome = match session.prompt_image_paths	所选安装	"kar run codex hello --cwd ""$WORK"""	运行一轮提示词	正常完成时返回原生模型结果，超时和失败可见
+cli-command	packages/cli/src/upgrade.ts#L124	upgrade [runtime]	f4a54ae	src/main.rs	match rt.update_with(timeout).await	macOS 隔离安装环境及官方来源	kar update	在可还原的测试安装中逐个运行官方更新器	对同一可执行文件做前后探测；跳过未安装项并保留失败行
+cli-inventory-kind	packages/cli/src/index.ts#L132	commands	f4a54ae	src/inventory_cli.rs	Self::Commands => serde_json::to_value	所选安装	"kar commands codex --cwd ""$WORK"""	读取工作区 commands 清单	返回已发现、已注册、部分结果，或此供应商的明确拒绝
+cli-inventory-kind	packages/cli/src/index.ts#L132	mcps	f4a54ae	src/inventory_cli.rs	Self::McpServers => serde_json::to_value	所选安装	"kar mcp-servers codex --cwd ""$WORK"""	读取工作区 mcp-servers 清单	返回已发现、已注册、部分结果，或此供应商的明确拒绝
+cli-inventory-kind	packages/cli/src/index.ts#L132	skills	f4a54ae	src/inventory_cli.rs	Self::Skills => serde_json::to_value	所选安装	"kar skills codex --cwd ""$WORK"""	读取工作区 skills 清单	返回已发现、已注册、部分结果，或此供应商的明确拒绝
+cli-inventory-kind	packages/cli/src/index.ts#L132	tools	f4a54ae	src/inventory_cli.rs	Self::Tools => serde_json::to_value	所选安装	"kar tools codex --cwd ""$WORK"""	读取工作区 tools 清单	返回已发现、已注册、部分结果，或此供应商的明确拒绝
+cli-option	packages/cli/src/index.ts#L98	--json	f4a54ae	src/main.rs	"let mut row = json!({""id"":rt.id,""protocol"":rt.protocol"	所选安装	kar list	读取结构化安装清单	默认输出逐行 JSON
+cli-option	packages/cli/src/index.ts#L121	--json	f4a54ae	src/main.rs	return json_line(&rt.account_usage	所选安装	kar account codex usage --json	读取指定账户的 JSON 额度	输出账号快照及该供应商报告的用量窗口
+cli-option	packages/cli/src/index.ts#L138	--cwd <directory>	f4a54ae	src/inventory_cli.rs	cwd: Some(self.cwd)	所选安装	"kar skills pi --cwd ""$WORK"""	传入工作区目录	运行时使用指定目录及其项目配置发现条目
+cli-option	packages/cli/src/index.ts#L139	--timeout <ms>	f4a54ae	src/inventory_cli.rs	if let Some(timeout) = options.timeout	所选安装	"kar tools --cwd ""$WORK"" --timeout-ms 15000"	为各运行时设置毫秒期限	单个运行时超时会独立结算；拒绝零值
+cli-option	packages/cli/src/index.ts#L162	--json	f4a54ae	src/models_cli.rs	return json_line(	所选安装	kar models codex --picker	读取结构化模型选择器	默认输出 JSON，包含供应商确认的可选项
+cli-option	packages/cli/src/index.ts#L163	--cwd <directory>	f4a54ae	src/models_cli.rs	let opts = listing_options(self.args, timeout)?	所选安装	"kar models --cwd ""$WORK"""	传入模型查询的工作区	读取指定目录可见的项目设置与模型目录
+cli-option	packages/cli/src/index.ts#L164	--timeout <ms>	f4a54ae	src/models_cli.rs	Some(limit) => tokio::time::timeout(limit, result)	所选安装	kar models codex --timeout-ms 15000	限制模型查询时间	超时后结束所选运行时查询，拒绝零值
+cli-option	packages/cli/src/install.ts#L105	--plan	f4a54ae	src/main.rs	json_line(&r.install_plan_for	所选安装	kar install claude --plan	只查看官方安装步骤	返回结构化安装方式；不下载或启动安装器
+cli-option	packages/cli/src/install.ts#L106	--line <line>	f4a54ae	src/setup.rs	pub fn install_plan_for(	OpenCode v1 或 v2	kar install opencode --line v1 --plan	选择 OpenCode 发行线	v1、v2 返回对应的安装源；缺失或未知发行线有明确错误
+cli-option	packages/cli/src/install.ts#L107	--json	f4a54ae	src/main.rs	json_line(&r.install_plan_for	所选安装	kar install claude --plan	读取 JSON 安装计划	默认 JSON 与安装器诊断流分开
+cli-option	packages/cli/src/install.ts#L108	--timeout <ms>	f4a54ae	src/setup.rs	tokio::time::timeout(timeout, self.run_installer(plan))	macOS 隔离安装环境	kar install opencode --line v2 --timeout-ms 600000	限制下载与安装总时间	超过期限停止本次安装进程组；完成后重新探测
+cli-option	packages/cli/src/login.ts#L157	--json	f4a54ae	src/main.rs	let status = runtime(&id)?.auth_status(&options)	所选安装	kar account claude status --json	读取已选账号状态	输出独立登录状态，不披露令牌
+cli-option	packages/cli/src/login.ts#L158	--timeout <ms>	f4a54ae	src/main.rs	Account::Status { json, timeout_ms }	所选安装	kar account codex status --json --timeout-ms 5000	指定账号状态查询期限	安装发现与供应商查询共享期限
+cli-option	packages/cli/src/login.ts#L182	--json	f4a54ae	src/main.rs	json_line(&event, std::io::stdout())	需要真实身份服务与测试账号	kar account codex login --json	逐行读取登录过程	以 JSON 行报告原生事件和最后结果
+cli-option	packages/cli/src/login.ts#L183	--timeout <ms>	f4a54ae	src/main.rs	Account::Login { json, timeout_ms }	供应商登录程序	kar account codex login --json --timeout-ms 5000	限制登录交互期限	超时或取消向本次登录结算并收尾子进程
+cli-option	packages/cli/src/logout.ts#L72	--json	f4a54ae	src/main.rs	Account::Logout { json, timeout_ms }	已登录供应商测试账号	kar account claude logout --json	读取结构化退出结果	获得已退出、失败或供应商不支持
+cli-option	packages/cli/src/logout.ts#L73	--timeout <ms>	f4a54ae	src/main.rs	Account::Logout { json, timeout_ms }	已登录供应商测试账号	kar account claude logout --json --timeout-ms 5000	限制退出流程时间	将期限传入退出和确认阶段
+cli-option	packages/cli/src/mcp-command.ts#L32	--runtimes <ids>	f4a54ae	src/mcp.rs	runtimes: runtimes.into_iter().map	所选安装	kar mcp --runtimes codex,claude	按 ID 筛选可委派供应商	工具目录只报告已选择的运行时，其他 ID 被拒绝
+cli-option	packages/cli/src/mcp-command.ts#L33	--max-running <n>	f4a54ae	src/mcp.rs	with_running_limit(limits.running)	所选安装	kar mcp --max-running 1	限制当前活动的子代理数	活动时达上限会拒绝启动；变为空闲后可接纳后续任务
+cli-option	packages/cli/src/mcp-command.ts#L34	--max-depth <n>	f4a54ae	src/mcp.rs	if limits.depth >= limits.max_depth	所选安装	kar mcp --max-depth 2	设置子代理嵌套深度	子代理继承层级和上限，超过上限会在原生程序启动前拒绝
+cli-option	packages/cli/src/mcp-command.ts#L35	--cwd <directory>	f4a54ae	src/mcp.rs	cwd: std::fs::canonicalize(cwd)?	所选安装	"kar mcp --cwd ""$WORK"""	配置委派任务的工作目录	新建或恢复子代理时传入选定工作目录
+cli-option	packages/cli/src/mcp-command.ts#L36	--log-dir <directory>	f4a54ae	src/mcp.rs	crew = crew.with_log_directory(&dir)?	所选安装	"kar mcp --log-dir ""$LOGS"""	持续录制各子代理原生记录	每个代理各写一个私有 Kar 文件，经 kar import 与 replay 可按序回放
+cli-option	packages/cli/src/run.ts#L26	--model <model>	f4a54ae	src/main.rs	opts.model = self.model	所选安装	"kar run codex hello --model ""$MODEL"""	选择已安装供应商的模型	发送所选模型，供应商拒绝会有结构化失败
+cli-option	packages/cli/src/run.ts#L27	--effort <level>	f4a54ae	src/main.rs	effort: self.effort	所选安装	"kar run codex hello --effort ""$EFFORT"""	设置推理强度	按供应商支持范围应用或返回拒绝
+cli-option	packages/cli/src/run.ts#L28	--service-tier <tier>	f4a54ae	src/main.rs	service_tier: self.service_tier	所选安装	"kar run codex hello --service-tier ""$TIER"""	设置服务档位	所选运行时接收档位或明确拒绝
+cli-option	packages/cli/src/run.ts#L29	--resume <sessionId>	f4a54ae	src/main.rs	opts.resume = self.resume	所选安装	"kar run codex hello --resume ""$SESSION"""	恢复已保存原生会话	相同供应商与工作区继续原上下文
+cli-option	packages/cli/src/run.ts#L30	--json	f4a54ae	src/main.rs	json_line(&*r, &mut out)?	所选安装	kar run codex hello --json	逐条流式读取 JSON	每一行是可反序列化、带游标的 Kar 记录
+cli-option	packages/cli/src/run.ts#L31	--record <file>	f4a54ae	src/main.rs	let mut file = record.as_deref().map(create_record)	所选安装	"kar run codex hello --record ""$NEW_RECORDING"""	将本次流录到新文件	已存在文件拒绝覆盖，kar replay 按顺序回放
+cli-option	packages/cli/src/run.ts#L32	--image <file...>	f4a54ae	src/main.rs	session.prompt_image_paths(prompt, &images)	原生供应商与可读图片	"kar run claude hello --image ""$IMAGE1"" --image ""$IMAGE2"""	发送多个图像输入	重复 --image 标志保持输入顺序并保留原生接收或拒绝结果
+cli-option	packages/cli/src/upgrade.ts#L126	--check	f4a54ae	src/main.rs	let checks = providers.iter().map(|rt| rt.check_update(timeout))	所选安装	kar update --check	只读查询全部安装的更新	并发采集每个供应商的可升级版本或明确的不可用原因
+cli-option	packages/cli/src/upgrade.ts#L127	--json	f4a54ae	src/main.rs	Ok(check) => json!	所选安装	kar update grok --check	读取 JSON 版本查询结果	默认输出所选供应商的安装版本、候选版本、判定和来源
+cli-option	packages/cli/src/upgrade.ts#L128	--timeout <ms>	f4a54ae	src/setup.rs	"run.map_err(|_| Error::Timeout(format!(""{} updater"", self.id)))"	macOS 隔离安装环境及官方来源	kar update grok --timeout-ms 60000	为所选原生更新设置总期限	超时回收更新进程组；成功须核对同一可执行文件的版本

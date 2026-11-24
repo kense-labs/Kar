@@ -123,8 +123,11 @@ fn check_sources(repo: &Path, index: &[Row]) -> Result<(), String> {
                 .checked_sub(1)
                 .and_then(|i| files[path].get(i))
                 .ok_or_else(|| format!("invalid {path} line {line}"))?;
-            if row[0] == "public-case" && line == start && !content.contains(&row[2]) {
-                return Err(format!("public case {} missing at {}", row[2], row[1]));
+            if (row[0] == "public-case" || row[0].starts_with("cli-"))
+                && line == start
+                && !content.contains(&row[2])
+            {
+                return Err(format!("source locator {} missing at {}", row[2], row[1]));
             }
         }
     }
@@ -172,6 +175,33 @@ fn run() -> Result<(), String> {
         "docs/backend-assertion-map.tsv",
         "source\tlines\tcommit\truntimes\tevidence_kind\tkar_file\tanchor\tnote",
     )?;
+    let cli_rows = read(
+        "docs/backend-cli-map.tsv",
+        "kind	upstream	locator	commit	kar_file	anchor	scope	command	operation	expected",
+    )?;
+    let mut cli = BTreeMap::new();
+    let mut cli_files = BTreeMap::new();
+    for row in &cli_rows {
+        let key = (&row[0], &row[1], &row[2]);
+        let text = cli_files
+            .entry((&row[3], &row[4]))
+            .or_insert_with(|| git_file(Path::new("."), &row[3], &row[4]))
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let line = anchor_line(text, &row[5])
+            .ok_or_else(|| format!("missing CLI anchor in {}:{}: {}", row[3], row[4], row[5]))?;
+        if cli.insert(key, (row, line)).is_some() {
+            return Err(format!("duplicate CLI locator {key:?}"));
+        }
+    }
+    let indexed: BTreeSet<_> = index
+        .iter()
+        .filter(|row| row[0].starts_with("cli-"))
+        .map(|row| (&row[0], &row[1], &row[2]))
+        .collect();
+    if cli.keys().any(|key| !indexed.contains(key)) || cli.len() != indexed.len() {
+        return Err("CLI map and pinned source index contain different locators".into());
+    }
     if let Some(repo) = upstream {
         check_sources(Path::new(&repo), &index)?;
     }
@@ -263,6 +293,30 @@ fn run() -> Result<(), String> {
             continue;
         }
         emitted = true;
+        if let Some((row, at)) = cli.get(&(&r[0], &r[1], &r[2])) {
+            let local = format!("{}#L{at}", row[4]);
+            print_row(&[
+                &r[0],
+                &r[1],
+                &r[2],
+                "",
+                "CLI 实现位置",
+                "CLI",
+                &row[6],
+                "待记录",
+                "Kar CLI",
+                "macOS",
+                &row[3],
+                &local,
+                &row[7],
+                &row[8],
+                &row[9],
+                "固定上游和 Kar 源码位置已核对，逐命令运行留待统一验收",
+                "未完成或失败",
+                "环境及版本须随执行结果登记",
+            ]);
+            continue;
+        }
         let mut occurrences = BTreeMap::new();
         for line in r[3].split(',') {
             let occurrence = occurrences.entry(line).or_insert(0);
@@ -323,11 +377,12 @@ fn run() -> Result<(), String> {
         return Err(format!("no indexed source or locator matching {filter:?}"));
     }
     eprintln!(
-        "{} source rows, {} evidence rows ({} exact duplicates), {} reviewed mappings",
+        "{} source rows, {} evidence rows ({} exact duplicates), {} reviewed assertion mappings, {} CLI mappings",
         index.len(),
         evidence.len(),
         evidence.len() - unique.len(),
-        links.len()
+        links.len(),
+        cli.len()
     );
     Ok(())
 }
