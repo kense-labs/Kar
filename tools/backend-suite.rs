@@ -128,6 +128,40 @@ fn catalog() -> Result<Vec<Case>> {
             "installed provider, isolated profile and MCP services",
         );
     }
+    for rt in kar::runtimes() {
+        let binary = format!("KAR_{}_BIN", rt.id.to_ascii_uppercase());
+        for public_case in [
+            "installation.snapshot",
+            "account-usage.snapshot",
+            "session.capabilities-match-declaration",
+            "session.effort-never-substituted",
+            "session.resume-or-loud-rejection",
+        ] {
+            if public_case == "account-usage.snapshot" && !rt.supports_account_usage() {
+                continue;
+            }
+            append(
+                &rt.id,
+                "backend_public",
+                public_case,
+                &[&binary],
+                "cargo",
+                &[
+                    "run",
+                    "--locked",
+                    "--quiet",
+                    "--example",
+                    "backend_public",
+                    "--",
+                    "--runtime",
+                    &rt.id,
+                    "--case",
+                    public_case,
+                ],
+                "installed native runtime in a disposable workspace; session turns require its configured model/account",
+            );
+        }
+    }
     append(
         "pi-durable",
         "browser",

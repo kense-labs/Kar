@@ -60,3 +60,5 @@ cargo run --locked --example backend_suite -- --runtime kar --execute --output /
 `kimi-peer` 是固定上游 KAP 协议对端，需设置 `KAR_UPSTREAM_SOURCE`。浏览器 `pi-durable` 场景另需依 README 准备 Wasm、Chromium、固定 Harness 和 Node。记录浏览器与 Harness 版本时使用该宿主的运行日志。CLI 与部署 API 的逐项操作、外部认证和未建立 Kar 测试的上游断言，仍在固定源码对照和证据表中逐项核对。统一入口的命令成功后，按实际日志登记供应商断言结果。
 
 `kar` 的 `ignored-inventory` 项检查当前候选实际编译出的第一阶段标准 libtest 名称。它读取 Cargo 清单排除自带入口的测试程序，调用标准测试程序的列举功能，报告遗漏与失效的名字。若供应商可执行文件存在但版本探测未确认，入口继续保留实际场景输出并标为 `command_succeeded_version_unconfirmed`；显式要求某版本时须匹配主程序的探测结果。
+
+在统一入口使用 `--runtime <供应商> --filter backend_public` 可以列出该供应商的公共契约场景。14 个本地进程适配器均登记了安装快照、能力声明、未知推理级别、原生会话恢复四项。声明账户用量的适配器另有账户快照。每条命令单独建立临时工作区，使用所选原生程序，可由 `KAR_PUBLIC_<供应商大写>_MODEL` 指定模型。能力测试按声明检查无鉴权 HTTP MCP、真实回合后的上下文或会话文件。命令记录原生会话 ID 或明确拒绝的原因。登记及编译仅表示用例可以进入集中验收。

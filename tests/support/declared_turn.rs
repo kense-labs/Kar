@@ -9,18 +9,26 @@ pub async fn prepare(runtime: &Runtime, opts: &SessionOptions) -> SessionCapabil
         let mut opts = opts.clone();
         let name = "kar_cap_http";
         if transports.contains(&McpTransport::Http) {
-            let host = kar::serve_mcp_tools(name, Vec::new(), None).await.unwrap();
-            let McpServer::HostedHttp { url, headers } = host.server.clone() else {
-                panic!("expected a local HTTP endpoint");
-            };
-            opts.mcp_servers
-                .insert(name.into(), McpServer::Http { url, headers });
+            // Transport support and support for secret HTTP headers are independent.
+            // This probe checks the transport alone, as in the fixed public case.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+            let router = axum::Router::new().route("/mcp", axum::routing::post(http_echo));
+            let mut peers = tokio::task::JoinSet::new();
+            peers.spawn(async move { axum::serve(listener, router).await.unwrap() });
+            opts.mcp_servers.insert(
+                name.into(),
+                McpServer::Http {
+                    url,
+                    headers: Default::default(),
+                },
+            );
             let session = runtime
                 .open(opts)
                 .await
                 .expect("declared HTTP MCP support must open");
             session.close().await.unwrap();
-            host.close().await;
+            peers.shutdown().await;
         } else {
             opts.mcp_servers.insert(
                 name.into(),
@@ -42,6 +50,31 @@ pub async fn prepare(runtime: &Runtime, opts: &SessionOptions) -> SessionCapabil
         }
     }
     declared
+}
+
+async fn http_echo(axum::Json(packet): axum::Json<serde_json::Value>) -> axum::response::Response {
+    use axum::{http::StatusCode, response::IntoResponse};
+    use serde_json::json;
+    let Some(id) = packet.get("id") else {
+        return StatusCode::ACCEPTED.into_response();
+    };
+    let result = match packet["method"].as_str() {
+        Some("initialize") => {
+            json!({"protocolVersion":packet["params"]["protocolVersion"],"capabilities":{"tools":{}},"serverInfo":{"name":"kar-cap-http","version":"1"}})
+        }
+        Some("tools/list") => {
+            json!({"tools":[{"name":"echo","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]})
+        }
+        Some("tools/call") => {
+            json!({"content":[{"type":"text","text":packet["params"]["arguments"]["text"]}]})
+        }
+        Some("ping") => json!({}),
+        _ => return axum::Json(
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}}),
+        )
+        .into_response(),
+    };
+    axum::Json(json!({"jsonrpc":"2.0","id":id,"result":result})).into_response()
 }
 
 pub async fn completed(declared: &SessionCapabilityDeclaration, session: &Session) {

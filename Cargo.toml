@@ -152,5 +152,9 @@ name = "backend_suite"
 path = "tools/backend-suite.rs"
 
 [[example]]
+name = "backend_public"
+path = "tools/backend-public.rs"
+
+[[example]]
 name = "backend_coverage"
 path = "tools/backend-coverage.rs"
