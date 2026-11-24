@@ -1,6 +1,7 @@
 //! Project-bound durable workflows. An attempt is committed before an external call.
 //! Only a receipt, or explicit reconciliation, allows that step to advance.
 mod mailbox;
+pub(in crate::workbench) mod model_schedules;
 pub(in crate::workbench) use mailbox::Message;
 mod routes;
 mod runner;
@@ -133,6 +134,8 @@ pub struct Receipt {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    model_schedule:Option<model_schedules::Binding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_due_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,7 +163,11 @@ impl Run {
         let step = &self.steps[self.cursor];
         let attempt = Attempt {
             id: Uuid::new_v4(),
-            chat: matches!(step, Step::Agent { .. }).then(Uuid::new_v4),
+            chat: matches!(step,Step::Agent{..}).then(||match &self.model_schedule {
+                Some(b) if b.bind => b.owner,
+                Some(b) if !b.fresh => crate::chat::stable_id([self.workflow.as_bytes().as_slice(),b"scheduled chat"]),
+                _=>Uuid::new_v4(),
+            }),
             step: self.cursor,
             started_ms: now,
         };
@@ -228,6 +235,10 @@ pub enum Action {
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Data {
     #[serde(default)]
+    model_schedules:BTreeMap<Uuid,model_schedules::Binding>,
+    #[serde(default)]
+    model_schedule_commands:BTreeMap<Uuid,model_schedules::Command>,
+    #[serde(default)]
     mailbox:mailbox::Mailbox,
     #[serde(default)]
     revision: u64,
@@ -258,6 +269,7 @@ pub(super) struct Engine {
 impl Engine {
     pub(super) fn owns_agent_chat(&self, chat: Uuid) -> bool {
         self.db.lock().unwrap().runs.values().any(|run| {
+            if run.model_schedule.as_ref().is_some_and(|binding|binding.bind){return false;}
             run.attempt.iter().chain(run.receipts.iter().map(|r| &r.attempt))
                 .any(|attempt| attempt.chat == Some(chat))
         })
@@ -290,6 +302,10 @@ impl Engine {
         {
             engine.update(|d| {
                 for run in d.runs.values_mut().filter(|r| r.status == Status::Running) {
+                    if run.model_schedule.is_some() && run.attempt.is_some() {
+                        run.status=Status::Ready;
+                        continue;
+                    }
                     run.status = Status::Reconcile;
                     run.detail =
                         Some("host stopped before the external result was committed".into());
@@ -352,6 +368,7 @@ fn insert_run(d: &mut Data, w: &Workflow, trigger: Trigger, input: Value, now: i
         return Err(Error::Refused("workflow disabled".into()));
     }
     let run = Run {
+        model_schedule:d.model_schedules.get(&w.id).cloned(),
         webhook_due_ms: None,
         webhook_templates: None,
         webhook_rendered: false,

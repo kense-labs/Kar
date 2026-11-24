@@ -74,6 +74,10 @@ struct Catalog {
     model_worktree_moves: BTreeMap<Uuid, mcp::worktree::Move>,
     #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
     model_thread_commands:BTreeMap<Uuid,mcp::operations::Record>,
+    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
+    model_tasks:BTreeMap<Uuid,mcp::orchestrator::Task>,
+    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
+    model_thread_batches:BTreeMap<Uuid,(Uuid,Uuid,serde_json::Value)>,
     #[serde(default)]
     model_project_commands: BTreeMap<Uuid, mcp::project_tools::Receipt>,
     #[serde(default)]

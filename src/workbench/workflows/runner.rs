@@ -123,7 +123,8 @@ impl Workbench {
                     }
                     run.webhook_due_ms = None;
                     run.webhook_templates = None;
-                    run.begin(now);
+                    if run.model_schedule.is_some() && run.attempt.is_some() {run.status=Status::Running;}
+                    else {run.begin(now);}
                     d.mailbox.consume(run,now);
                     if external {
                         remaining -= 1;
@@ -265,6 +266,7 @@ impl Workbench {
                 prompt,
             } => {
                 let chat = a.chat.unwrap();
+                if let Some(binding)=&run.model_schedule{return self.execute_model_schedule(run,a,binding,runtime,model.as_deref(),prompt).await;}
                 if let Err(e) = self
                     .create_chat(run.project, chat, runtime, model.clone())
                     .await
@@ -311,6 +313,37 @@ impl Workbench {
         }
     }
 
+    async fn execute_model_schedule(&self,run:&Run,a:&Attempt,binding:&super::model_schedules::Binding,rt:&str,model:Option<&str>,prompt:&str)->Result<Outcome>{
+        let chat=a.chat.unwrap();let input=a.id;
+        let owner=self.binding(run.project,binding.owner)?;
+        let allowed=super::super::mcp::orchestrator::scheduled_execution(self,run.project,binding.owner,&owner,rt,model);
+        if !allowed || binding.bind && (owner.runtime!=rt || owner.model.as_deref()!=model) || owner.workspace!=binding.workspace || owner.approvals!=binding.approvals || owner.settings!=binding.settings {
+            return Ok(Outcome::Known(false,json!({"refused":"scheduled chat permission or execution settings changed"})));
+        }
+        if !binding.bind {
+            self.bind_model_checkout(run.project,chat,&binding.workspace)?;
+            self.create_chat_with_settings(run.project,chat,rt,model.map(str::to_owned),binding.approvals,binding.settings.clone()).await?;
+        }
+        let text=if matches!(run.trigger,Trigger::Webhook(_)) && !run.webhook_rendered {
+            format!("{prompt}\n\nUntrusted webhook data (JSON):\n{}",String::from_utf8_lossy(&context(run)?))
+        } else {prompt.to_owned()};
+        self.0.chats.enqueue(chat,input,text)?;
+        self.wake_queue();
+        loop {
+            if let Some(t)=self.0.chats.history(chat)?.turns.iter().find(|t|t.id==input && t.status!=TurnStatus::Running){return Ok(turn_result(t));}
+            let receipt=self.0.chats.queued_inputs(chat)?.into_iter().find(|q|q.id==input).ok_or_else(missing)?;
+            if self.workflow_run(run.project,run.id)?.cancel_requested {
+                if receipt.status==crate::chat::InputStatus::Pending{self.0.chats.withdraw(chat,input)?;return Ok(Outcome::Known(false,json!({"cancelled":true})));}
+                if let Some(s)=self.active_control(run.project,chat)?{ let _=s.abort_turn(input,None).await; }
+            }
+            match receipt.status{
+                crate::chat::InputStatus::Uncertain=>return Ok(Outcome::Unknown("scheduled input has no confirmed native receipt".into())),
+                crate::chat::InputStatus::Cancelled|crate::chat::InputStatus::Refused|crate::chat::InputStatus::TooLarge|crate::chat::InputStatus::Withdrawn=>return Ok(Outcome::Known(false,json!({"receipt":receipt.status}))),
+                _=>{}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
     async fn script(&self, run: &Run, a: &Attempt, source: &str) -> Result<Outcome> {
         let project = self.project(run.project)?;
         let space = self.workspace(&project)?;

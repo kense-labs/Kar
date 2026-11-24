@@ -15,6 +15,8 @@ mod environment;
 mod workflow;
 #[path = "workbench_mcp/operations.rs"]
 mod operations;
+#[path="workbench_mcp/orchestrator.rs"]
+mod orchestrator;
 #[allow(dead_code)]
 #[path = "support/codex_chat_peer.rs"]
 mod peer;
@@ -224,6 +226,7 @@ async fn scenario() {
     preview_tools::public_page(&url,&a,p,chat,call).await;
     workflow::exercise(&url, &a, p, chat, call).await;
     operations::exercise(&url, &a, p, chat, &observer, call).await;
+    orchestrator::exercise(&url,&a,p,chat,&observer,call).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")
             .header("mcp-protocol-version", "2026-07-28")

@@ -130,6 +130,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
         });
     }
     tools.extend(super::collaboration_tools::tools(caller));
+    tools.extend(super::orchestrator::tools(caller));
     tools.extend(super::operations::tools(caller));
     tools.extend(super::forge_tools::tools(caller));
     tools.extend(preview_tools::tools(caller));
@@ -282,6 +283,7 @@ pub(super) async fn call(
         if let Some(g)=&caller.grant {super::operations::may_run(&app,p,g.project,g.chat,t)?;}
         return Ok(json!(super::super::interactions::steer_queued(app,p,t,q.input_id,q.command_id,crate::chat::SteerTarget{turn:q.turn_id,request_id:q.request_id}).await?));
     }
+    if super::orchestrator::handles(name){return super::orchestrator::call(app,caller,name,input).await;}
     if super::operations::handles(name) {return super::operations::call(app,caller,name,input).await;}
     if super::forge_tools::handles(name) {return super::forge_tools::call(app,caller,name,input).await;}
     if name.starts_with("kar_worktree_") {return super::worktree::call(app,caller,name,input).await;}

@@ -12,10 +12,12 @@ use toolkit::Tool;
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Scope {
     pub(super) write: bool,
+    pub(super) delegate:bool,
+    pub(super) schedule:bool,
     project_wide: bool,
     targets: BTreeSet<Uuid>,
     /// Only listed native providers/models can be selected for an existing chat.
-    models: BTreeMap<String, BTreeSet<String>>,
+    pub(super) models: BTreeMap<String, BTreeSet<String>>,
 }
 impl Scope {
     pub(super) fn validate(&self, app: &Workbench, p: Uuid) -> Result<()> {
@@ -27,7 +29,7 @@ impl Scope {
 }
 fn child_project(db: &Catalog, caller: Uuid, chat: Uuid) -> Option<Uuid> {
     super::project_tools::launched_project(db, caller, chat)
-        .or_else(|| transfer::fork_project(db, caller, chat))
+        .or_else(|| transfer::fork_project(db, caller, chat)).or_else(||super::orchestrator::owned(db,caller,chat))
 }
 pub(super) fn list_project(
     app: &Workbench,
