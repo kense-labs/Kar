@@ -109,6 +109,34 @@ async fn scenario() {
     assert_eq!(fs::read(target.join("shared")).unwrap(), b"shared-next");
     server.kill().await.unwrap();
     let (mut next, url) = serve(&state, &allowed, &native).await;
+    let root_diff = format!("{url}{parent_path}/checkpoints/diff");
+    let full = ok(b.get(format!("{root_diff}?to=3"))).await;
+    assert!(full["diff"].as_str().unwrap().contains("+shared-next"));
+    assert!(full["diff"].as_str().unwrap().contains("-base"));
+    let single = ok(b.get(format!("{root_diff}?from=1&to=2"))).await;
+    assert!(single["diff"].as_str().unwrap().contains("+shared-child"));
+    let inherited = ok(b.get(format!("{url}{child_path}/checkpoints/diff?from=1&to=2"))).await;
+    assert_eq!(inherited["diff"], single["diff"]);
+    assert_eq!(
+        ok(b.get(format!("{root_diff}?from=2&to=2"))).await["diff"],
+        ""
+    );
+    assert!(
+        !b.get(format!("{root_diff}?from=4&to=2"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    assert!(
+        !b.get(format!("{root_diff}?to=5"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
     let forks = format!("{url}{parent_path}/forks");
     let replay = ok(b.post(&forks).json(&request)).await;
     assert_eq!(

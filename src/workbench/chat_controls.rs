@@ -248,6 +248,30 @@ async fn rollback(
     }
     blocking(move || app.0.chats.rollback(c, point, q.dry_run)).await
 }
+#[derive(Deserialize)]
+struct DiffRange {
+    #[serde(default)]
+    from: usize,
+    to: usize,
+    ignore_whitespace: Option<bool>,
+}
+async fn turn_diff(
+    State(app): State<Workbench>,
+    Path((project, chat)): Path<(Uuid, Uuid)>,
+    axum::extract::Query(range): axum::extract::Query<DiffRange>,
+) -> std::result::Result<Json<crate::chat::TurnDiff>, ApiError> {
+    blocking(move || {
+        app.binding(project, chat)?;
+        app.0.chats.turn_diff(
+            chat,
+            range.from,
+            range.to,
+            range.ignore_whitespace.unwrap_or(true),
+        )
+    })
+    .await
+}
+
 async fn checkpoints(
     State(app): State<Workbench>,
     Path((p, c)): Path<(Uuid, Uuid)>,
@@ -376,6 +400,10 @@ pub(super) fn routes() -> Router<Workbench> {
         .route(
             "/projects/{project}/chats/{chat}/checkpoints",
             get(checkpoints),
+        )
+        .route(
+            "/projects/{project}/chats/{chat}/checkpoints/diff",
+            get(turn_diff),
         )
         .route("/projects/{project}/chats/{chat}/rollback", post(rollback))
         .route("/projects/{project}/chats/{chat}/forks", post(fork))

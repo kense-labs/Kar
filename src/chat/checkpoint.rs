@@ -9,6 +9,8 @@ use std::{
 };
 use uuid::Uuid;
 
+mod diff;
+pub use diff::TurnDiff;
 mod restore;
 pub use restore::RollbackReport;
 

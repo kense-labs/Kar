@@ -11,7 +11,9 @@ pub use timeline::{Edit as ChatEdit, Frame as ChatFrame, MorphProgress};
 mod fork;
 pub use fork::{ForkOrigin, ForkWorktreeBase};
 mod import;
-pub use checkpoint::{ChangeKind, Checkpoint, CheckpointPoint, FileChange, RollbackReport};
+pub use checkpoint::{
+    ChangeKind, Checkpoint, CheckpointPoint, FileChange, RollbackReport, TurnDiff,
+};
 mod log;
 pub(crate) use log::pi::recover as recover_pi;
 mod queue;
