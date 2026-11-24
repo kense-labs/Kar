@@ -6,6 +6,7 @@ initial_kar_comparison = "deb7091eaccefacef2221a0489d7b73499cfe24e"
 runtime_inventory = "backend-source-index.tsv"
 workbench_rpc_inventory = "backend-workbench-source-index.tsv"
 sdk_member_mapping = "backend-sdk-map.tsv"
+workbench_command_mapping = "backend-workbench-command-map.tsv"
 forge_driver_mapping = "backend-workbench-forge-source-map.tsv"
 path_convention = "upstream 路径相对相应固定提交的仓库根；sdk: 相对运行时发布包根目录，由导出 ./agents 且含 src/contracts 的包定位。kar 路径相对 Kar 仓库根。"
 
@@ -322,7 +323,8 @@ phase = 2
 name = "组合操作的独立推送远端与分支基线"
 upstream = ["apps/server/src/vcs/GitVcsDriverCore.ts", "apps/server/src/git/GitManager.ts"]
 kar = ["src/workbench_git/stacked.rs", "src/workbench/git_actions.rs"]
-status = "普通组合操作已接入，独立发布目标待补齐"
+status = "独立发布远端、保留拉取跟踪关系及分叉 PR 头识别已集成，待统一验收"
+implementation_ref = "ccb39db"
 test_target = "cargo test --locked --test workbench_forge"
 accept = "在具有独立 branch.pushRemote 和不同拉取基线的仓库执行 create_pr。检查真实发布分支与原拉取跟踪配置、已存在的分叉 PR 及同名外部 PR 的区分。"
 
@@ -343,7 +345,8 @@ phase = 2
 name = "工作区、独立工作树和仓库范围的联动回滚"
 upstream = ["apps/server/src/orchestration-v2/CheckpointRollbackService.ts", "apps/server/src/orchestration-v2/CheckpointRollbackService.taskFolder.test.ts", "apps/server/src/orchestration-v2/CheckpointRestoreSafety.ts"]
 kar = ["src/chat/checkpoint/restore.rs", "src/chat/fork/worktree.rs"]
-status = "单工作区恢复和分仓库快照已集成，多仓库文件与模型切点联动待补"
+status = "根目录、受管仓库、跨目录分叉基线及全仓库冲突预检已接入，待统一验收"
+implementation_ref = "0efe2ce, 772a249"
 test_target = "cargo test --locked --test chat_restart -- workbench-task-folders"
 accept = "两个受管仓库在同一回合修改。预览指出各自的路径；存在冲突时所有仓库都维持原内容。落盘恢复、重启重试及在独立目录分叉后继续聊时，逐一读取文件、原生会话和父工作区。"
 
@@ -364,7 +367,8 @@ phase = 2
 name = "已排队回合的编辑、重新排序、提升、延迟启动与重启投递"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/QueuedRunOrder.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
 kar = ["src/chat/queue.rs", "src/workbench/chat_controls.rs"]
-status = "持久 FIFO 及撤回已集成；原子编辑、排序、立即开始、暂停后继续及提升待补"
+status = "持久 FIFO、撤回、暂停、编辑、改序、指定开始和恢复已集成；提升及附件编辑待补"
+implementation_ref = "7c6ae33"
 test_target = "cargo test --locked --test chat_restart -- workbench-queue"
 accept = "活动回合中排入 A/B/C，编辑 B、调整顺序并重启。接收回执前后分别撤回、改序和提升为 steer，检查原生投递顺序、文本、ID 和是否重复。"
 
@@ -388,3 +392,73 @@ status = "克隆、隔离目标、取消、进度和重启重试已集成，待�
 implementation_ref = "5740f5c, 0800f7f"
 test_target = "cargo test --locked --test workbench_forge"
 accept = "克隆含实际文件的 Git 源，中途断开观察者、取消或终止服务，重连进度并重试。核对克隆完成前聊天被拒绝、完成目录原子发布、无关目录内容保留。"
+
+[[gap]]
+id = "thread-metadata"
+phase = 2
+name = "聊天生命周期、收藏排序、已读、标签、标题及暂缓"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/workbench/mod.rs"]
+status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "两端创建聊天、修改标题与标签、固定及重排、访问及标为未读、暂缓、恢复和归档。按命令 ID 重试并重启，比对有序列表、可见性、侧聊天、删除及旧客户端恢复投影。"
+
+[[gap]]
+id = "thread-provider-selection"
+phase = 2
+name = "按聊天修改模型与运行模式，切换和分离原生会话"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/workbench/handoff.rs"]
+status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
+test_target = "cargo test --locked --test workbench_handoff"
+accept = "改变模型、运行模式及交互模式，区分下一回合应用与中断在途回合。脱离和重新连接后核对原生会话、已选供应商、模型、设置和历史回合绑定。"
+
+[[gap]]
+id = "dispatch-preparation"
+phase = 2
+name = "派发模式、延迟回合、准备进度、失败重试及结构化输出"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/workbench/chat_controls.rs"]
+status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
+test_target = "cargo test --locked --test chat_restart -- workbench-queue"
+accept = "遍历普通、排队、续写、重启活动回合和延迟启动。模拟准备失败，先后报告进度及重试，重复释放只发一次；按声明的输出 schema 检查返回及错误，重新连接核对投影与通知接受状态。"
+
+[[gap]]
+id = "request-lifecycle"
+phase = 2
+name = "用户问题关闭、请求送达失败和来自供应商的链接/反馈/秘密请求记录"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/workbench/interactions.rs"]
+status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
+test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+accept = "用两个客户端答复或关闭同一请求，重试旧回复。把用户输入取消、交付失败和成功关联至正确请求，并核对服务重启后可见范围及机密值脱敏。"
+
+[[gap]]
+id = "delegated-delivery"
+phase = 2
+name = "委派子任务的唤醒、交付确认、远端完成与合并回父聊天"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/agents.rs"]
+status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
+test_target = "cargo test --locked --test protocol"
+accept = "并发启动两个委派任务，设置唤醒条件，停止或完成子任务，从子聊天合并回父聊天。重放完成通知和确认，检查代次、目标父回合以及不会重复投递。"
+
+[[gap]]
+id = "thread-forge-associations"
+phase = 2
+name = "聊天关联 Issue/PR、监听状态、检查结果重开和解绑"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/workbench/forge/mod.rs"]
+status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
+test_target = "cargo test --locked --test workbench_forge"
+accept = "同仓库的两个聊天关联同一个 PR，另一聊天关联同编号但不同仓库的对象。执行绑定、状态同步、检查失败、重新开放和解绑；比对未归档及归档聊天和远端对象的对应关系。"
+
+[[gap]]
+id = "guest-chat-delivery"
+phase = 2
+name = "访客提议、会话分享关闭及撤销未发送消息"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/workbench/access/guest.rs"]
+status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
+test_target = "cargo test --locked --test workbench_remote_access"
+accept = "打开、兑换并关闭分享；访客提交两则消息，所有者关闭一则、接受另一则，服务端使用已保存正文。断线/重启后核对投影、客户端权限及真实供应商投递次数。"
