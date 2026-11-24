@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 type Reply<T> = oneshot::Sender<Result<T>>;
 struct Turn {
+    request_id: Uuid,
     done: Reply<TurnReport>,
     text: Vec<String>,
     failure: Option<crate::TurnFailure>,
@@ -240,6 +241,7 @@ impl Actor {
             self.turns.insert(
                 id.to_string(),
                 Turn {
+                    request_id: request,
                     done,
                     text: vec![],
                     failure: None,
@@ -684,8 +686,22 @@ impl Actor {
                 };
                 Self::ack(ack, result)?;
             }
-            Command::Steer(input_id, input, ack) => {
-                let request = self.journal.steer_request(input_id, &input, &self.secrets);
+            Command::Steer(input_id, input, target, ack) => {
+                let Some((request, ack)) = self.journal.admit_steer(
+                    input_id,
+                    &input,
+                    target,
+                    self.compacting.is_none()
+                        && target.is_none_or(|t| {
+                            self.turns
+                                .get(&t.input_id.to_string())
+                                .is_some_and(|turn| Some(turn.request_id) == t.request_id)
+                        }),
+                    &self.secrets,
+                    ack,
+                ) else {
+                    return Ok(());
+                };
                 let r = if self.compacting.is_some() {
                     Err(Error::Busy)
                 } else if self.busy() {

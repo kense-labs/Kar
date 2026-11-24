@@ -781,7 +781,7 @@ impl State {
                         && (child || known_tools || steering_update))
                         || (self.info.runtime == "cursor" && (child || known_tools))
                         || (self.info.protocol == Protocol::Claude && steering_update)
-                        || ((self.info.runtime == "grok" || self.info.protocol == Protocol::Pi) && steering_update
+                        || ((self.info.runtime == "grok" || matches!(self.info.protocol,Protocol::Pi | Protocol::Codex)) && steering_update
                             && frame.edits.iter().any(|e| matches!(e, super::ChatEdit::SteeringInput {id, ..} if turn.steered_inputs.contains_key(id))));
                     let late_followup_child =
                         turn.steered_from.is_some() && !frame.source.path.is_empty();

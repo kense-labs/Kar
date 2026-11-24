@@ -265,4 +265,56 @@ mod tests {
             Some((input.to_string(), next.to_string()))
         );
     }
+    #[tokio::test]
+    async fn stale_steer_returns_one_local_refusal_and_never_targets_the_next_attempt() {
+        let (session, journal, mut rx) = session();
+        let (owner, initial, next, input) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        dispatch(&journal, owner, initial);
+        let sending = tokio::spawn(async move {
+            session
+                .steer_turn(owner, None, input, "follow up", vec![])
+                .await
+        });
+        let Some(Command::Steer(id, message, target, ack)) = rx.recv().await else {
+            panic!("expected targeted steer")
+        };
+        let request = message.request_id;
+        assert_eq!(id, input);
+        assert_eq!(target.unwrap().request_id, Some(initial));
+        journal.push(
+            Direction::FromRuntime,
+            RecordKind::Frame,
+            Some("owner".into()),
+            vec![],
+            Value::Null,
+            vec![Event::TurnEnded {
+                outcome: Outcome::Completed,
+            }],
+        );
+        dispatch(&journal, owner, next);
+        assert!(
+            journal
+                .admit_steer(id, &message, target, true, &[], ack)
+                .is_none()
+        );
+        assert!(
+            matches!(sending.await.unwrap(), Err(Error::Refused(ref message)) if message == "prompt no longer owns the active turn")
+        );
+        let refusal = journal.control_receipt(&request.to_string()).unwrap();
+        assert_eq!(
+            refusal.request.native["targetRequestId"],
+            initial.to_string()
+        );
+        assert_eq!(refusal.request.native["inputId"], input.to_string());
+        assert_eq!(refusal.response.native["code"], "no_active_turn");
+        assert_eq!(
+            journal.active_prompt(),
+            Some((owner.to_string(), next.to_string()))
+        );
+    }
 }

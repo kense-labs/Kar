@@ -5,7 +5,24 @@ use uuid::Uuid;
 pub async fn check(session: &Session, text: &str) {
     let from = session.records().len();
     let input = Uuid::new_v4();
-    session.steer_with_id(input, text).await.unwrap();
+    let kar::observe::AgentStatus::Running {
+        input_id: Some(owner),
+        request_id: Some(attempt),
+        ..
+    } = session.status()
+    else {
+        panic!("expected a running root prompt with a confirmed identity");
+    };
+    session
+        .steer_turn(
+            owner.parse().unwrap(),
+            Some(attempt.parse().unwrap()),
+            input,
+            text,
+            vec![],
+        )
+        .await
+        .unwrap();
     let records = session.records();
     let rows = &records[from..];
     let request = rows
@@ -18,6 +35,8 @@ pub async fn check(session: &Session, text: &str) {
         })
         .unwrap();
     assert_eq!(request.native["input"], text);
+    assert_eq!(request.native["targetInputId"], owner);
+    assert_eq!(request.native["targetRequestId"], attempt);
     let replies = rows
         .iter()
         .filter(|r| {

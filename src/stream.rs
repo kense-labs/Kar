@@ -750,11 +750,61 @@ impl Journal {
         &self,
         input_id: Uuid,
         input: &crate::input::Input,
+        target: Option<crate::transport::TurnTarget>,
+        native_owner: bool,
         secrets: &[String],
-    ) -> Uuid {
-        let mut body = serde_json::json!({"type":"steer","inputId":input_id,"input":input.text,"imageCount":input.images.len()});
+    ) -> Result<Uuid> {
+        let request = input.request_id;
+        let mut body = serde_json::json!({"type":"steer","id":request,"inputId":input_id,"input":input.text,"imageCount":input.images.len()});
+        if let Some(images) = ImageSubmission::loaded(&input.text, &input.images, secrets) {
+            body["images"] = serde_json::to_value(images.images)?;
+        }
+        if let Some(target) = target {
+            body["targetInputId"] = target.input_id.to_string().into();
+            if let Some(id) = target.request_id {
+                body["targetRequestId"] = id.to_string().into();
+            }
+        }
         crate::transport::redact(&mut body, secrets);
-        self.control_request(body)
+        if target.is_some_and(|t| !native_owner || t.request_id.is_none() || t.pin(self).is_none())
+        {
+            let reason = "prompt no longer owns the active turn";
+            self.refused_input(
+                Direction::ToRuntime.into(),
+                body,
+                request,
+                "no_active_turn",
+                reason,
+            )?;
+            return Err(Error::Refused(reason.into()));
+        }
+        self.push(
+            Direction::ToRuntime,
+            RecordKind::Request,
+            None,
+            vec![],
+            body,
+            vec![],
+        );
+        Ok(request)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn admit_steer(
+        &self,
+        id: Uuid,
+        input: &crate::input::Input,
+        target: Option<crate::transport::TurnTarget>,
+        native_owner: bool,
+        secrets: &[String],
+        reply: tokio::sync::oneshot::Sender<Result<Value>>,
+    ) -> Option<(Uuid, tokio::sync::oneshot::Sender<Result<Value>>)> {
+        match self.steer_request(id, input, target, native_owner, secrets) {
+            Ok(request) => Some((request, reply)),
+            Err(err) => {
+                let _ = reply.send(Err(err));
+                None
+            }
+        }
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn control_result<T>(&self, request: Uuid, result: &Result<T>, secrets: &[String]) {

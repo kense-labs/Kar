@@ -1775,6 +1775,58 @@ async fn background_child_replay() {
 }
 
 #[tokio::main]
+async fn codex_steer_receipt_survives_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().canonicalize().unwrap();
+    for dir in ["work", "native"] {
+        fs::create_dir(base.join(dir)).unwrap();
+    }
+    let db = base.join("store");
+    let store = ChatStore::open(&db).unwrap();
+    let mut options = kar::SessionOptions::new(base.join("work"));
+    options
+        .env
+        .insert("FIXTURE_NATIVE_DB".into(), base.join("native").into());
+    let chat = store
+        .create("codex", Some(&std::env::current_exe().unwrap()), options)
+        .await
+        .unwrap();
+    let (owner, refused, landed) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let mut events = chat.subscribe(None).unwrap();
+    let drive = async {
+        while let Some(record) = events.next().await {
+            if record.native["method"] == "turn/started" {
+                break;
+            }
+        }
+        assert!(chat.steer_with_id(refused, "refused steer").await.is_err());
+        chat.steer_with_id(landed, "accepted steer").await.unwrap();
+    };
+    let (turn, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(chat.send(owner, "hold for scoped steer"), drive)
+    })
+    .await
+    .unwrap();
+    assert_eq!(turn.unwrap().id, owner);
+    let chat_id = chat.info().id;
+    chat.close().await.unwrap();
+    let history = ChatStore::open(db).unwrap().history(chat_id).unwrap();
+    assert_eq!(history.turns.len(), 1);
+    let turn = &history.turns[0];
+    for (input, text, status) in [
+        (landed, "accepted steer", kar::SteerStatus::Received),
+        (refused, "refused steer", kar::SteerStatus::Refused),
+    ] {
+        assert_eq!(turn.steered_inputs.get(&input), Some(&status));
+        let rows: Vec<_> = turn.items.iter().filter(|row| matches!(&row.item, Item::Message {role: Role::User,text:value,..} if value == text)).collect();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            matches!(&rows[0].item, Item::Message {provider_id:Some(id),..} if id == &input.to_string())
+        );
+    }
+}
+
+#[tokio::main]
 async fn manual_compaction_replay() {
     use kar::chat::ChatReplica;
     use kar::{CompactionFailure, CompactionStatus, CompactionUnconfirmed};
@@ -2025,6 +2077,7 @@ fn main() {
     restart();
     durable_inputs();
     live_feed();
+    codex_steer_receipt_survives_reopen();
     manual_compaction_replay();
     background_child_replay();
     cursor_children::run();

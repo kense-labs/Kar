@@ -473,7 +473,7 @@ mod tests {
             if !initial_busy {
                 assert!(matches!(send.await.unwrap(),Err(Error::Refused(s)) if s=="bad prompt"));
             } else {
-                let Some(Command::Steer(id, message, reply)) = rx.recv().await else {
+                let Some(Command::Steer(id, message, None, reply)) = rx.recv().await else {
                     panic!("expected steer on busy")
                 };
                 assert_eq!((id, message.text.as_str()), (input, "next"));

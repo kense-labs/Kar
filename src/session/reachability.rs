@@ -37,7 +37,16 @@ impl Command {
                             );
                         }
                         Self::Queue(..) => body["type"] = "queue".into(),
-                        _ => body["type"] = "steer".into(),
+                        Self::Steer(_, _, target, _) => {
+                            body["type"] = "steer".into();
+                            if let Some(target) = target {
+                                body["targetInputId"] = target.input_id.to_string().into();
+                                if let Some(id) = target.request_id {
+                                    body["targetRequestId"] = id.to_string().into();
+                                }
+                            }
+                        }
+                        _ => unreachable!("input controls matched above"),
                     }
                     (request, body)
                 }

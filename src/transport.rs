@@ -104,8 +104,28 @@ impl HostAnswer {
         }
     }
 }
-/// An observer can interrupt only its own accepted prompt. The actor validates
-/// ownership at dispatch, including after another prompt reuses an input ID.
+/// Identity of one active root prompt. Pin it again at actor dispatch so a
+/// later attempt cannot inherit a delayed steer or interrupt.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TurnTarget {
+    pub input_id: uuid::Uuid,
+    pub request_id: Option<uuid::Uuid>,
+}
+impl TurnTarget {
+    pub(crate) fn pin(self, journal: &Journal) -> Option<Self> {
+        let (input, request) = journal.active_prompt()?;
+        let request = uuid::Uuid::parse_str(&request).ok()?;
+        if self.input_id.to_string() != input
+            || self.request_id.is_some_and(|target| target != request)
+        {
+            return None;
+        }
+        Some(Self {
+            request_id: Some(request),
+            ..self
+        })
+    }
+}
 pub(crate) struct AbortRequest {
     pub target_request: Option<String>,
     pub reply: Reply<Value>,
@@ -154,7 +174,12 @@ pub(crate) enum Command {
     Withdraw(uuid::Uuid, Reply<()>),
     Abort(AbortRequest),
     StopTask(String, Reply<Value>),
-    Steer(uuid::Uuid, crate::input::Input, Reply<Value>),
+    Steer(
+        uuid::Uuid,
+        crate::input::Input,
+        Option<TurnTarget>,
+        Reply<Value>,
+    ),
     Respond(Value, HostAnswer, Reply<()>),
     Close(Reply<()>),
 }
@@ -215,6 +240,9 @@ impl SteeringReceipt {
         let mut text = match method {
             "steer" if matches!(intent, RpcIntent::Steer { .. }) => {
                 params["message"].as_str()?.to_owned()
+            }
+            "turn/steer" if matches!(intent, RpcIntent::Steer { .. }) => {
+                crate::observe::input_text(&params["input"]).unwrap_or_default()
             }
             wire::opencode::STEER | OPENCODE_V1_STEER | ANTIGRAVITY_STEER => params["prompt"]
                 .as_array()?
@@ -759,7 +787,10 @@ impl Actor {
         self.write_packet(
             packet,
             RecordKind::Request,
-            if self.protocol == Protocol::Pi && method == "steer" {
+            if matches!(
+                (self.protocol, method),
+                (Protocol::Pi, "steer") | (Protocol::Codex, "turn/steer")
+            ) {
                 self.pending
                     .get(&id)
                     .and_then(|p| p.steer.as_ref())
@@ -1167,7 +1198,9 @@ impl Actor {
                     self.abort(reply).await?;
                 }
             }
-            Command::Steer(input, message, tx) => self.steer(input, message, tx).await?,
+            Command::Steer(input, message, target, tx) => {
+                self.steer(input, message, target, tx).await?
+            }
         }
         Ok(true)
     }
@@ -1327,11 +1360,23 @@ impl Actor {
         &mut self,
         input_id: uuid::Uuid,
         message: crate::input::Input,
+        target: Option<TurnTarget>,
         tx: Reply<Value>,
     ) -> Result<()> {
-        let request = self
-            .journal
-            .steer_request(input_id, &message, &self.secrets);
+        let native_owner = target.is_none_or(|target| {
+            self.pi_independent.is_none()
+                && !self.claude_notifications.active()
+                && self
+                    .turn
+                    .as_ref()
+                    .is_some_and(|t| Some(t.prompt_request) == target.request_id)
+        });
+        let Some((request, tx)) =
+            self.journal
+                .admit_steer(input_id, &message, target, native_owner, &self.secrets, tx)
+        else {
+            return Ok(());
+        };
         let intent = RpcIntent::Steer { input_id, request };
         let id = self.session();
         let result = if self.manual_compaction.is_some() {
@@ -1422,7 +1467,7 @@ impl Actor {
                         .and_then(|t| t.native.as_deref())
                         .or_else(|| self.observed_root_turn())
                     {
-                        return self.rpc("turn/steer",json!({"threadId":id,"expectedTurnId":turn_id,"input":message.blocks(Protocol::Codex)}),Some(tx),intent).await;
+                        return self.rpc("turn/steer",json!({"threadId":id,"expectedTurnId":turn_id,"clientUserMessageId":input_id,"input":message.blocks(Protocol::Codex)}),Some(tx),intent).await;
                     }
                     Err(Error::Refused(
                         "runtime has not acknowledged this turn".into(),
@@ -2182,6 +2227,8 @@ impl Actor {
                     .refused(request_id, v["error"]["code"].as_i64());
             if let Some(steer) = p.steer {
                 match (&result, p.method.as_str()) {
+                    (Ok(_), "turn/steer") => events.push(steer.event(crate::SteerStatus::Received)),
+                    (Err(_), "turn/steer") => events.push(steer.event(crate::SteerStatus::Refused)),
                     (Ok(data), "steer") if self.protocol == Protocol::Pi => {
                         let status = match data["disposition"].as_str() {
                             Some("handled") => crate::SteerStatus::Handled,
@@ -3170,7 +3217,7 @@ impl Actor {
             .filter(|p| {
                 matches!(
                     p.method.as_str(),
-                    ANTIGRAVITY_STEER | OPENCODE_V1_STEER | "steer"
+                    ANTIGRAVITY_STEER | OPENCODE_V1_STEER | "steer" | "turn/steer"
                 )
             })
             .filter_map(|p| p.steer.as_ref())

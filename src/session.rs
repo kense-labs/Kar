@@ -1687,10 +1687,52 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<()> {
-        let input = crate::input::Input::new(text.into(), images);
+        self.steer_input(id, text.into(), images, None).await
+    }
+    /// Send a new stable input only to the named root attempt. Omit the target request
+    /// UUID to pin the current matching input; the actor rechecks that attempt before dispatch.
+    pub async fn steer_turn(
+        &self,
+        target_input_id: Uuid,
+        target_request_id: Option<Uuid>,
+        input_id: Uuid,
+        text: impl Into<String>,
+        images: Vec<crate::InputImage>,
+    ) -> Result<()> {
+        self.steer_input(
+            input_id,
+            text.into(),
+            images,
+            Some(crate::transport::TurnTarget {
+                input_id: target_input_id,
+                request_id: target_request_id,
+            }),
+        )
+        .await
+    }
+    async fn steer_input(
+        &self,
+        id: Uuid,
+        text: String,
+        images: Vec<crate::InputImage>,
+        target: Option<crate::transport::TurnTarget>,
+    ) -> Result<()> {
+        let input = crate::input::Input::new(text, images);
         self.check_input("steer", id, input.request_id, &input.text, &input.images)?;
         crate::input::check_text(&input.text, self.text_limit)?;
-        self.call(|tx| Command::Steer(id, input, tx))
+        let target = match target {
+            Some(target) => match target.pin(&self.journal) {
+                Some(pinned) => Some(pinned),
+                None => {
+                    return self
+                        .journal
+                        .steer_request(id, &input, Some(target), false, &self.preflight_secrets)
+                        .map(drop);
+                }
+            },
+            None => None,
+        };
+        self.call(|tx| Command::Steer(id, input, target, tx))
             .await
             .map(drop)
     }
@@ -1718,11 +1760,14 @@ impl Session {
     /// Providing its request UUID also distinguishes attempts that reuse the input UUID.
     /// The actor rechecks the selected attempt immediately before issuing the native control.
     pub async fn abort_turn(&self, input_id: Uuid, request_id: Option<Uuid>) -> Result<()> {
-        let observed = self.journal.active_prompt().filter(|(input, request)| {
-            input == &input_id.to_string() && request_id.is_none_or(|id| id.to_string() == *request)
-        });
-        let (_, request) = observed.ok_or_else(crate::transport::AbortRequest::stale)?;
-        self.abort_prompt(Some(request)).await
+        let target = crate::transport::TurnTarget {
+            input_id,
+            request_id,
+        }
+        .pin(&self.journal)
+        .and_then(|t| t.request_id)
+        .ok_or_else(crate::transport::AbortRequest::stale)?;
+        self.abort_prompt(Some(target.to_string())).await
     }
     async fn abort_prompt(&self, target_request: Option<String>) -> Result<()> {
         self.call(|reply| {

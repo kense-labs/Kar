@@ -339,6 +339,7 @@ pub(crate) fn history_events(row: &Value) -> Vec<Event> {
 
 type Report = oneshot::Sender<Result<TurnReport>>;
 struct Active {
+    request_id: Uuid,
     done: Report,
     after: u64,
     worked: bool,
@@ -441,6 +442,7 @@ impl ThreadActor {
     }
 
     async fn start(&mut self, id: Uuid, input: Input, done: Report) -> Result<()> {
+        let request_id = input.request_id;
         let answer = match self.submit(input, Some(id)).await {
             Ok(value) => value,
             Err(error) => {
@@ -452,6 +454,7 @@ impl ThreadActor {
             }
         };
         self.turn = Some(Active {
+            request_id,
             done,
             after: answer["record_idx"].as_u64().unwrap_or(self.seen),
             worked: false,
@@ -465,7 +468,8 @@ impl ThreadActor {
             messages: vec![],
         });
         self.record(
-            Direction::Host,
+            crate::stream::RecordStamp::from(Direction::Host)
+                .with_prompt_request(id, false, request_id, None),
             RecordKind::Frame,
             Value::Null,
             vec![Event::TurnStarted],
@@ -676,8 +680,21 @@ impl ThreadActor {
             Command::Withdraw(id, ack) => {
                 let _ = ack.send(self.journal.withdraw_held(&mut self.queue, id));
             }
-            Command::Steer(input_id, input, ack) => {
-                let request = self.journal.steer_request(input_id, &input, &[]);
+            Command::Steer(input_id, input, target, ack) => {
+                let Some((request, ack)) = self.journal.admit_steer(
+                    input_id,
+                    &input,
+                    target,
+                    target.is_none_or(|t| {
+                        self.turn
+                            .as_ref()
+                            .is_some_and(|active| Some(active.request_id) == t.request_id)
+                    }),
+                    &[],
+                    ack,
+                ) else {
+                    return true;
+                };
                 let answer = if self.turn.is_some() {
                     self.submit(input, None).await
                 } else {

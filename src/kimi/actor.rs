@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 type Reply<T> = oneshot::Sender<Result<T>>;
 struct Turn {
+    request_id: Uuid,
     done: Reply<TurnReport>,
     span: Option<String>,
     prompt: String,
@@ -187,6 +188,7 @@ impl Actor {
         self.sent.insert(id.clone());
         if let Some(done) = done {
             self.turn = Some(Turn {
+                request_id: request,
                 done,
                 span: None,
                 prompt: id,
@@ -576,8 +578,21 @@ impl Actor {
             Command::Withdraw(id, ack) => {
                 let _ = ack.send(self.journal.withdraw_held(&mut self.queue, id));
             }
-            Command::Steer(input_id, input, ack) => {
-                let request = self.journal.steer_request(input_id, &input, &self.secrets);
+            Command::Steer(input_id, input, target, ack) => {
+                let Some((request, ack)) = self.journal.admit_steer(
+                    input_id,
+                    &input,
+                    target,
+                    target.is_none_or(|t| {
+                        self.turn
+                            .as_ref()
+                            .is_some_and(|turn| Some(turn.request_id) == t.request_id)
+                    }) && self.compaction.is_none(),
+                    &self.secrets,
+                    ack,
+                ) else {
+                    return Ok(());
+                };
                 let res = if self.compaction.is_some() {
                     Err(Error::Busy)
                 } else if self.projection.active().is_none() && self.turn.is_none() {

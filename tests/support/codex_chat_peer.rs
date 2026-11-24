@@ -179,6 +179,26 @@ pub(crate) fn agent() {
                     reply(json!({}));
                 }
             }
+            Some("turn/steer") => {
+                let params = &v["params"];
+                assert!(
+                    params["clientUserMessageId"]
+                        .as_str()
+                        .is_some_and(|id| Uuid::parse_str(id).is_ok())
+                );
+                let turn = params["expectedTurnId"].as_str().unwrap();
+                if params["input"][0]["text"] == "refused steer" {
+                    emit(
+                        json!({"id":v["id"], "error":{"code":-32602,"message":"steering refused"}}),
+                    );
+                } else {
+                    // Deliberately deliver the RPC reply after its root turn is over.
+                    emit(
+                        json!({"method":"turn/completed","params":{"threadId":session,"turn":{"id":turn,"status":"completed"}}}),
+                    );
+                    reply(json!({"turnId":turn}));
+                }
+            }
             Some("turn/start") => {
                 let text = v.pointer("/params/input/0/text").unwrap().as_str().unwrap();
                 match text {
@@ -295,6 +315,9 @@ pub(crate) fn agent() {
                     emit(
                         json!({"method":"turn/completed","params":{"threadId":session,"turn":{"id":turn,"status":"interrupted"}}}),
                     );
+                    continue;
+                }
+                if text == "hold for scoped steer" {
                     continue;
                 }
                 if text == "ask clients" {

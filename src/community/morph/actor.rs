@@ -24,7 +24,7 @@ use uuid::Uuid;
 type Report = oneshot::Sender<Result<TurnReport>>;
 struct Follow {
     id: String,
-    done: Option<Report>,
+    done: Option<(Uuid, Report)>,
     status: String,
     projection: Projection,
     adopted: bool,
@@ -114,22 +114,20 @@ impl Actor {
             .call(Method::POST, &["tasks"], Some(&body))
             .await;
         match &answer {
-            Ok(native) => self.record(
-                native["id"].as_str(),
-                Direction::FromRuntime,
-                RecordKind::Response,
-                native.clone(),
-                if input_id.is_some()
+            Ok(native) => {
+                let mut stamp = crate::stream::RecordStamp::from(Direction::FromRuntime);
+                let mut events = vec![];
+                if let Some(input) = input_id
                     && required_id(native).is_ok()
                     && native["steer_target_task_id"]
                         .as_str()
-                        .is_none_or(|s| s.is_empty())
+                        .is_none_or(str::is_empty)
                 {
-                    vec![Event::PromptDispatched]
-                } else {
-                    vec![]
-                },
-            ),
+                    stamp = stamp.with_prompt_request(input, false, request, None);
+                    events.push(Event::PromptDispatched);
+                }
+                self.record(None, stamp, RecordKind::Response, native.clone(), events)
+            }
             Err(err) => self.record(
                 None,
                 Direction::Host,
@@ -151,7 +149,7 @@ impl Actor {
         }
         answer
     }
-    fn follow(&mut self, id: &str, done: Option<Report>, saved: Option<Projection>) {
+    fn follow(&mut self, id: &str, done: Option<(Uuid, Report)>, saved: Option<Projection>) {
         if self.tasks.iter().any(|t| t.id == id) {
             return;
         }
@@ -195,6 +193,7 @@ impl Actor {
         Ok(Value::Null)
     }
     async fn start(&mut self, id: Uuid, input: Input, done: Report) -> Result<()> {
+        let request_id = input.request_id;
         let answer = match self.submit(input, Some(id)).await {
             Ok(answer) => answer,
             Err(error) => {
@@ -206,7 +205,7 @@ impl Actor {
             .as_str()
             .filter(|s| !s.is_empty())
             .unwrap_or(required_id(&answer)?);
-        self.follow(carrier, Some(done), None);
+        self.follow(carrier, Some((request_id, done)), None);
         Ok(())
     }
     async fn steer(&mut self, input: Input) -> Result<Value> {
@@ -368,7 +367,7 @@ impl Actor {
                 events,
             );
             self.answered.retain(|_, task| task != &id);
-            if let Some(done) = task.done {
+            if let Some((_, done)) = task.done {
                 let _ = done.send(Ok(TurnReport {
                     native_input_receipt: None,
                     structured_output: None,
@@ -422,8 +421,22 @@ impl Actor {
             Command::Withdraw(id, ack) => {
                 let _ = ack.send(self.journal.withdraw_held(&mut self.queue, id));
             }
-            Command::Steer(input_id, input, ack) => {
-                let request = self.journal.steer_request(input_id, &input, &[]);
+            Command::Steer(input_id, input, target, ack) => {
+                let Some((request, ack)) = self.journal.admit_steer(
+                    input_id,
+                    &input,
+                    target,
+                    target.is_none_or(|t| {
+                        self.tasks
+                            .front()
+                            .and_then(|task| task.done.as_ref())
+                            .is_some_and(|(request, _)| Some(*request) == t.request_id)
+                    }),
+                    &[],
+                    ack,
+                ) else {
+                    return;
+                };
                 let result = self.steer(input).await;
                 self.journal.control_result(request, &result, &[]);
                 let _ = ack.send(result);
@@ -530,7 +543,7 @@ impl Actor {
             let _ = tokio::time::timeout(Duration::from_secs(3), self.settle()).await;
         }
         for task in self.tasks.drain(..) {
-            if let Some(done) = task.done {
+            if let Some((_, done)) = task.done {
                 let _ = done.send(Err(Error::Closed(reason.clone())));
             }
         }

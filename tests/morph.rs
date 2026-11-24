@@ -193,7 +193,24 @@ async fn stream_controls_approval_and_resume() {
     assert!(withdrawn.report().await.is_err());
     let (_, queued) = session.queue("quick").await.unwrap();
     assert!(matches!(session.prompt("busy").await, Err(Error::Busy)));
-    session.steer("steer").await.unwrap();
+    session
+        .steer_turn(
+            turn.input_id(),
+            Some(
+                turn.admission()
+                    .unwrap()
+                    .request
+                    .control_request_id()
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            ),
+            uuid::Uuid::new_v4(),
+            "steer",
+            vec![],
+        )
+        .await
+        .unwrap();
     assert!(session.steer("late-refusal").await.is_err());
     let approval = tokio::time::timeout(Duration::from_secs(5), async {
         loop {

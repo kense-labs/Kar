@@ -238,7 +238,10 @@ async fn thread_control_and_replay_use_the_native_api() {
     assert_eq!(session.capabilities().mcp_transports, Some([].as_slice()));
     assert!(matches!(session.models().await, Err(Error::Unsupported(_))));
     let image = InputImage::from_bytes(b"GIF89a...").unwrap();
-    let turn = session.prompt_images("hold", vec![image]).await.unwrap();
+    let turn = session
+        .prompt_images("hold", vec![image.clone()])
+        .await
+        .unwrap();
     assert!(matches!(session.prompt("overlap").await, Err(Error::Busy)));
     let (_, queued) = session.queue("quick").await.unwrap();
     let (id, withdrawn) = session.queue("discard").await.unwrap();
@@ -252,9 +255,32 @@ async fn thread_control_and_replay_use_the_native_api() {
     assert_eq!(admission.response.native["queued"], "adapter");
     session.withdraw(id).await.unwrap();
     assert!(withdrawn.wait().await.is_err());
-    session.steer("follow-up").await.unwrap();
+    session
+        .steer_turn(
+            turn.input_id(),
+            Some(
+                turn.admission()
+                    .unwrap()
+                    .request
+                    .control_request_id()
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            ),
+            uuid::Uuid::new_v4(),
+            "follow-up",
+            vec![image],
+        )
+        .await
+        .unwrap();
     {
         let mut s = state.lock().unwrap();
+        assert!(s.submissions.iter().any(|v| {
+            v["input"] == "follow-up"
+                && v["images"][0]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("data:image/gif;base64,"))
+        }));
         assert!(
             s.submissions[0]["images"][0]
                 .as_str()
