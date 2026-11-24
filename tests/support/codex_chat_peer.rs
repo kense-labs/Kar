@@ -127,6 +127,15 @@ pub(crate) fn agent() {
                     .unwrap_or(json!([]));
                 reply(json!({"cwd":cwd,"thread":{"id":session,"turns":turns}}));
             }
+            Some("thread/read") => {
+                assert_eq!(v["params"]["threadId"], session);
+                assert_eq!(v["params"]["includeTurns"], true);
+                let turns: Value = fs::read(database.join("read-turns"))
+                    .ok()
+                    .map(|b| serde_json::from_slice(&b).unwrap())
+                    .unwrap_or(json!([]));
+                reply(json!({"thread":{"id":session,"turns":turns}}));
+            }
             Some("thread/compact/start") => {
                 let mode = fs::read_to_string(database.join("compact-mode")).unwrap_or_default();
                 let turn = Uuid::new_v4().to_string();
@@ -277,7 +286,7 @@ pub(crate) fn agent() {
                     .create(true)
                     .open(database.join("calls"))
                     .unwrap();
-                writeln!(calls, "{}", json!({"id":session,"cwd":cwd,"text":text})).unwrap();
+                writeln!(calls, "{}", json!({"id":session,"cwd":cwd,"text":text,"input":v["params"]["clientUserMessageId"]})).unwrap();
                 if text == "hold without reply" {
                     continue;
                 }

@@ -1,5 +1,6 @@
 mod acp_children;
 mod claude;
+mod codex;
 pub(crate) mod pi;
 use super::checkpoint::RepositoryCheckpoint;
 use super::{
@@ -961,7 +962,7 @@ impl State {
             ChatUpdate::Reconciled { id, mut frame } => {
                 let native_proves_input = match self.info.protocol {
                     Protocol::Dsh => true,
-                    Protocol::KimiKap => {
+                    Protocol::KimiKap | Protocol::Codex => {
                         frame.source.path.is_empty()
                             && frame.source.session_id.as_deref()==Some(self.info.native_id.as_str())
                             && frame.edits.iter().any(|edit|matches!(edit,
@@ -1400,6 +1401,8 @@ impl Log {
                     last,
                 )
                 .await?
+            } else if session.protocol() == Protocol::Codex {
+                codex::recover(session, last).await
             } else if session.protocol() == Protocol::Pi {
                 session.recover_pi_turn(options, last).await?
             } else if session.protocol() == Protocol::Morph {
@@ -1438,9 +1441,6 @@ impl Log {
                     .records()
                     .iter()
                     .find_map(|r| match session.protocol() {
-                        Protocol::Codex => {
-                            Frame::codex_recovery(last.native_turn_id.as_deref()?, session.id(), r)
-                        }
                         Protocol::KimiKap => Frame::kimi_recovery(last, session.id(), r),
                         Protocol::Dsh => crate::dsh::recovery::frame(last, session.id(), r),
                         _ => None,

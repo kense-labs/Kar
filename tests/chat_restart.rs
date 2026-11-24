@@ -10,6 +10,8 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "chat_restart/codex_admission.rs"]
+mod codex_admission;
 #[path = "support/codex_chat_peer.rs"]
 mod codex_chat_peer;
 use codex_chat_peer::{agent, emit};
@@ -2085,6 +2087,7 @@ fn main() {
     environment_across_controllers();
     restart();
     durable_inputs();
+    codex_admission::reopen();
     live_feed();
     codex_steer_receipt_survives_reopen();
     manual_compaction_replay();

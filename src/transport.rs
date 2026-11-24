@@ -2395,8 +2395,8 @@ impl Actor {
                         Some((request, json!({"type":"accepted","native":native})));
                 } else {
                     // No evidence identifies the native turn. An uncertain write is not a native refusal.
-                    result = Err(Error::Protocol(
-                        "Codex turn/start returned no turn id".into(),
+                    result = Err(Error::Closed(
+                        "Codex turn/start returned no turn id; admission is unconfirmed".into(),
                     ));
                     invalid_codex_admission = true;
                 }
@@ -2451,6 +2451,7 @@ impl Actor {
                     tx,
                     result.as_ref().map(|_| ()).map_err(|e| match e {
                         Error::Protocol(reason) => Error::Protocol(reason.clone()),
+                        Error::Closed(reason) => Error::Closed(reason.clone()),
                         Error::Refused(reason) => Error::Refused(reason.clone()),
                         e => Error::Refused(e.to_string()),
                     }),

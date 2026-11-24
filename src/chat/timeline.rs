@@ -859,23 +859,80 @@ impl Frame {
             edits,
         })
     }
-    /// Reconcile only a known turn, using a terminal snapshot in the real thread/resume response.
-    pub(super) fn codex_recovery(id: &str, root: &str, record: &Record) -> Option<Self> {
+    /// Recover by a stored native turn or a unique, natively echoed opening input.
+    pub(super) fn codex_recovery(local: &ChatTurn, root: &str, record: &Record) -> Option<Self> {
         let thread = record.native.pointer("/result/thread")?;
-        if thread["id"].as_str() != Some(root) {
+        if record.direction != crate::Direction::FromRuntime
+            || !record.agent_path.is_empty()
+            || record.session_id.as_deref() != Some(root)
+            || thread["id"].as_str() != Some(root)
+        {
             return None;
         }
-        let turn = thread["turns"]
-            .as_array()?
-            .iter()
-            .find(|v| v["id"].as_str() == Some(id))?;
+        let turns = thread["turns"].as_array()?;
+        let user_id = |item: &Value| {
+            (item["type"] == "userMessage")
+                .then(|| item["clientId"].as_str()?.parse::<Uuid>().ok())
+                .flatten()
+        };
+        let mut echoes = turns.iter().flat_map(|turn| {
+            turn["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter_map(move |(idx, item)| {
+                    (user_id(item) == Some(local.id)).then_some((turn, idx))
+                })
+        });
+        let opener = echoes
+            .next()
+            .filter(|(_, idx)| *idx == 0 && !local.native_continuation && !record.elided)
+            .filter(|_| echoes.next().is_none())
+            .map(|(turn, _)| turn);
+        let id = local
+            .native_turn_id
+            .as_deref()
+            .or_else(|| opener?["id"].as_str())?;
+        if id.is_empty() {
+            return None;
+        }
+        let mut matching = turns.iter().filter(|turn| turn["id"] == id);
+        let turn = matching.next()?;
+        if matching.next().is_some() {
+            return None;
+        }
+        let claimed = opener.is_some_and(|candidate| candidate["id"] == id);
+        let mut edits = Vec::new();
+        if claimed {
+            edits.push(Edit::Activity {
+                event: Event::NativeInput {
+                    input_id: local.id,
+                    receipt: crate::InputReceipt::Started,
+                },
+            });
+        }
+        let mut frame = Self {
+            elided: record.elided,
+            cursor: record.cursor(),
+            morph_progress: None,
+            native_turn: Some(id.into()),
+            source: Agent {
+                session_id: Some(root.into()),
+                path: Vec::new(),
+            },
+            edits,
+        };
         let outcome = match turn["status"].as_str()? {
             "completed" => Outcome::Completed,
             "interrupted" => Outcome::Aborted,
             "failed" => Outcome::Failed,
+            "inProgress" if claimed && (!local.input_sent || local.native_turn_id.is_none()) => {
+                return Some(frame);
+            }
             _ => return None,
         };
-        let mut edits = vec![];
+        let edits = &mut frame.edits;
         let mut seen = std::collections::HashSet::new();
         for item in turn["items"].as_array().into_iter().flatten() {
             let Some(key) = item["id"].as_str() else {
@@ -948,18 +1005,8 @@ impl Frame {
         edits.push(Edit::Activity {
             event: Event::TurnEnded { outcome },
         });
-        snapshot_tools(&mut edits, record.elided);
-        Some(Self {
-            elided: record.elided,
-            cursor: record.cursor(),
-            morph_progress: None,
-            native_turn: Some(id.into()),
-            source: Agent {
-                session_id: Some(root.into()),
-                path: vec![],
-            },
-            edits,
-        })
+        snapshot_tools(edits, record.elided);
+        Some(frame)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1399,6 +1446,47 @@ impl MessageIds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_recovers_only_an_unambiguous_opening_item_in_its_own_full_snapshot() {
+        use serde_json::json;
+        let local = ChatTurn::new(Uuid::new_v4(), 0, "root", Some("same words".into()));
+        let turn = json!({"id":"native","status":"completed","items":[
+            {"type":"userMessage","id":"u","clientId":local.id}, {"type":"agentMessage","id":"a","text":"reply"}]});
+        let journal = crate::stream::Journal::new(None).unwrap();
+        journal.bind_root("root");
+        journal.push(
+            crate::Direction::FromRuntime,
+            crate::RecordKind::Response,
+            None,
+            vec![],
+            json!({"id":4,"result":{"thread":{"id":"root","turns":[turn]}}}),
+            vec![],
+        );
+        let record = &journal.records()[0];
+        assert_eq!(
+            Frame::codex_recovery(&local, "root", record)
+                .unwrap()
+                .native_turn
+                .as_deref(),
+            Some("native")
+        );
+        let mut other = record.as_ref().clone();
+        other.agent_path.push("child".into());
+        assert!(Frame::codex_recovery(&local, "root", &other).is_none());
+        other.agent_path.clear();
+        other.elided = true;
+        assert!(Frame::codex_recovery(&local, "root", &other).is_none());
+        other.elided = false;
+        other.native["result"]["thread"]["id"] = json!("different");
+        assert!(Frame::codex_recovery(&local, "root", &other).is_none());
+        other.native["result"]["thread"]["id"] = json!("root");
+        other.native["result"]["thread"]["turns"][0]["items"][0]["clientId"] = Value::Null;
+        assert!(Frame::codex_recovery(&local, "root", &other).is_none());
+        let mut legacy = local;
+        legacy.native_turn_id = Some("native".into());
+        assert!(Frame::codex_recovery(&legacy, "root", &other).is_some());
+    }
 
     #[test]
     fn kimi_recovery_requires_one_matching_root_opener_before_a_host_receipt() {

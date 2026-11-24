@@ -2646,10 +2646,10 @@ wire_api = "responses"
     assert_eq!(result.chat.native_id, native);
     assert_eq!(result.turns.len(), 2);
     let first_turn = result.turns[0].id.to_string();
-    if provider == "claude" {
+    if !managed_checkout && matches!(provider, "claude" | "codex") {
         // Recreate a host crash just after the durable Begin. Keep the real
         // vendor transcript intact and replay the crash in a second host store.
-        let lost = base.join("lost-claude-ack");
+        let lost = base.join(format!("lost-{provider}-ack"));
         let restored = kar::chat::ChatStore::open(&lost).unwrap();
         for suffix in ["lock", "inputs", "inputs.lock"] {
             let name = format!("{id}.{suffix}");
@@ -2701,7 +2701,10 @@ wire_api = "responses"
         tokio::time::timeout(Duration::from_secs(5), async {
             while replay.cursor() != snapshot.cursor {
                 let event = feed.recv().await.unwrap();
-                if matches!(event.update, kar::chat::ChatUpdate::InputSent { id } if id == blue_id)
+                if matches!(&event.update, kar::chat::ChatUpdate::InputSent { id } if *id == blue_id)
+                    || matches!(&event.update, kar::chat::ChatUpdate::Reconciled { id, frame } if
+                        *id == blue_id && frame.edits.iter().any(|e| matches!(e,
+                            kar::chat::ChatEdit::Activity { event: Event::NativeInput { input_id, receipt: kar::InputReceipt::Started }} if *input_id == blue_id)))
                 {
                     receipts += 1;
                 }
@@ -2713,7 +2716,17 @@ wire_api = "responses"
         .unwrap();
         assert_eq!(receipts, 1);
         assert_eq!(replay.turns(), snapshot.history.turns);
-        assert_eq!(replay.turns()[1].status, kar::chat::TurnStatus::Interrupted);
+        if provider == "codex" {
+            let recovered = &replay.turns()[1];
+            assert_eq!(recovered.status, kar::chat::TurnStatus::Completed);
+            assert_eq!(recovered.id, blue_id);
+            assert_eq!(recovered.native_turn_id, result.turns[1].native_turn_id);
+            assert_eq!(recovered.fork_anchor, result.turns[1].fork_anchor);
+            assert_eq!(recovered.items.iter().filter(|item| matches!(&item.item,
+                kar::chat::Item::Message { role:kar::chat::Role::Assistant,text,.. } if text=="blue-answer-only")).count(), 1);
+        } else {
+            assert_eq!(replay.turns()[1].status, kar::chat::TurnStatus::Interrupted);
+        }
         assert_eq!(log.lock().unwrap().len(), calls);
     }
     for (index, turn) in result.turns.into_iter().enumerate() {
