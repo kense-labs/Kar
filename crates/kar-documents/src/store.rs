@@ -151,7 +151,26 @@ impl Manifest {
     }
 }
 
+/// I/O for the registered working file. A workspace implementation can
+/// keep all lookups, temporary files and renames relative to its directory
+/// capability. Publication must atomically replace the entire file.
+pub trait WorkingFile: Send + Sync {
+    fn read(&self) -> Result<Vec<u8>>;
+    fn publish(&self, bytes: &[u8]) -> Result<()>;
+}
+
+struct LocalFile(PathBuf);
+impl WorkingFile for LocalFile {
+    fn read(&self) -> Result<Vec<u8>> {
+        Ok(fs::read(&self.0)?)
+    }
+    fn publish(&self, bytes: &[u8]) -> Result<()> {
+        atomic_write(&self.0, bytes)
+    }
+}
+
 pub struct DocumentStore {
+    working: Box<dyn WorkingFile>,
     dir: PathBuf,
     file: PathBuf,
     // Held for the lifetime of the writable store. The release is automatic on process exit.
@@ -162,6 +181,17 @@ impl DocumentStore {
     pub fn open(state: &Path, file: &Path) -> Result<Self> {
         let file = file.canonicalize()?;
         ensure!(file.is_file(), "expected a regular working file");
+        Self::open_with_file(state, &file, Box::new(LocalFile(file.clone())))
+    }
+
+    /// Register an already validated canonical identity. Working content
+    /// is read and published exclusively through the supplied I/O object.
+    pub fn open_with_file(
+        state: &Path,
+        identity: &Path,
+        working: Box<dyn WorkingFile>,
+    ) -> Result<Self> {
+        let file = identity.to_path_buf();
         fs::create_dir_all(state)?;
         let dir = state.canonicalize()?;
         ensure!(
@@ -177,6 +207,7 @@ impl DocumentStore {
         lock.try_lock()
             .context("another writer owns this document store")?;
         let store = Self {
+            working,
             dir,
             file,
             _lock: lock,
@@ -184,7 +215,7 @@ impl DocumentStore {
         let path = store.dir.join("manifest.json");
         fs::create_dir_all(store.dir.join("blobs"))?;
         if !path.try_exists()? {
-            let bytes = fs::read(&store.file)?;
+            let bytes = store.working.read()?;
             let empty = store.empty_edits()?;
             crate::prepare(&bytes, &bytes, &empty)?;
             let digest = store.put_blob(&bytes)?;
@@ -264,14 +295,14 @@ impl DocumentStore {
             m.format == "kar-documents/1" && m.file == self.file && !m.revisions.is_empty(),
             "unexpected document manifest"
         );
-        let live = fs::read(&self.file)?;
+        let live = self.working.read()?;
         let digest = hash(&live);
         let previous = m.revision(m.head())?.digest.clone();
         if let Some(mut pending) = m.pending.take() {
             if digest == previous || digest == pending.candidate {
                 if digest != pending.candidate {
                     let candidate = self.blob(&pending.candidate)?;
-                    atomic_write(&self.file, &candidate)?;
+                    self.working.publish(&candidate)?;
                 }
                 m.revisions.push(Revision {
                     grid: pending.grid,

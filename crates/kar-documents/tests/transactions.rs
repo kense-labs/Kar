@@ -181,3 +181,34 @@ fn interrupted_publication_recovers_on_either_side_of_the_file_rename() -> Resul
     }
     Ok(())
 }
+
+#[test]
+fn capability_backend_uses_identity_only_for_metadata_and_format() -> Result<()> {
+    use kar_documents::store::WorkingFile;
+    use std::sync::{Arc, Mutex};
+    struct Handle(Arc<Mutex<Vec<u8>>>);
+    impl WorkingFile for Handle {
+        fn read(&self) -> Result<Vec<u8>> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+        fn publish(&self, bytes: &[u8]) -> Result<()> {
+            *self.0.lock().unwrap() = bytes.to_vec();
+            Ok(())
+        }
+    }
+    let dir = tempdir()?;
+    let identity = dir.path().join("metadata-only.docx");
+    let mut doc = Document::new();
+    doc.insert_text(Selection::default(), "一", None);
+    let bytes = Arc::new(Mutex::new(doc.to_docx_bytes()?));
+    let mut store = DocumentStore::open_with_file(
+        &dir.path().join("state"),
+        &identity,
+        Box::new(Handle(bytes.clone())),
+    )?;
+    let receipt = store.submit(edit("change", 0, 0, "一", "三"))?;
+    assert_eq!(receipt.revision, 1);
+    assert_eq!(store.snapshot(1)?, *bytes.lock().unwrap());
+    assert!(!identity.try_exists()?);
+    Ok(())
+}
