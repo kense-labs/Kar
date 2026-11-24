@@ -591,11 +591,13 @@ impl Actor {
                         .await
                         .map(|_| Value::Null)
                 };
-                self.journal.steer_decision(request, &res, &self.secrets);
+                self.journal.control_result(request, &res, &self.secrets);
                 Self::acknowledge_input(ack, res)?;
             }
             Command::Abort(ack) => {
+                let request = self.journal.request_abort();
                 let res = self.abort().await;
+                self.journal.control_result(request, &res, &self.secrets);
                 let _ = ack.send(res);
             }
             Command::StopTask(id, ack) => {

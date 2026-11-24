@@ -1,3 +1,5 @@
+#[path = "support/abort_turn.rs"]
+mod abort_turn;
 #[path = "support/busy_prompt.rs"]
 mod busy_prompt;
 #[path = "support/declaration.rs"]
@@ -218,14 +220,7 @@ async fn actual_qwen_turn_catalog_history_and_interrupt() {
     })
     .await
     .unwrap();
-    resumed.abort().await.unwrap();
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(10), slow.wait())
-            .await
-            .unwrap()
-            .unwrap(),
-        Outcome::Aborted
-    );
+    assert_eq!(abort_turn::check(&resumed, slow).await, Outcome::Aborted);
     resumed.close().await.unwrap();
     opts.settings.system_prompt = None;
     opts.settings.append_system_prompt = None;

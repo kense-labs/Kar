@@ -594,6 +594,9 @@ impl Actor {
     }
 
     async fn abort(&mut self) -> Result<Value> {
+        if !self.busy() {
+            return Err(Error::Refused("no active turn".into()));
+        }
         if self.compacting.as_ref().is_some_and(|op| !op.can_abort()) {
             return Err(Error::Refused("no running DSH compaction to cancel".into()));
         }
@@ -679,7 +682,7 @@ impl Actor {
                 } else {
                     Err(Error::Refused("no active DSH turn".into()))
                 };
-                self.journal.steer_decision(request, &r, &self.secrets);
+                self.journal.control_result(request, &r, &self.secrets);
                 Self::ack(ack, r)?;
             }
             Command::Queue(id, text, ack, done) => {
@@ -695,7 +698,9 @@ impl Actor {
                 let _ = ack.send(r);
             }
             Command::Abort(ack) => {
+                let request = self.journal.request_abort();
                 let r = self.abort().await;
+                self.journal.control_result(request, &r, &self.secrets);
                 let _ = ack.send(r);
             }
             Command::StopTask(id, ack) => {

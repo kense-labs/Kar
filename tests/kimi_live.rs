@@ -1,3 +1,5 @@
+#[path = "support/abort_turn.rs"]
+mod abort_turn;
 #[path = "support/busy_prompt.rs"]
 mod busy_prompt;
 #[path = "support/declaration.rs"]
@@ -27,6 +29,8 @@ struct Requests {
     messages: Arc<Mutex<Vec<Value>>>,
     saw_live_tool: Arc<tokio::sync::Notify>,
     model_started: Arc<tokio::sync::Notify>,
+    abort_started: Arc<tokio::sync::Notify>,
+    release_abort: Arc<tokio::sync::Notify>,
     finish_model: Arc<tokio::sync::Notify>,
 }
 fn tool_arguments() -> Value {
@@ -42,11 +46,16 @@ async fn model(State(requests): State<Requests>, Json(body): Json<Value>) -> Res
         .filter(|m| m["role"] == "user")
         .filter_map(|m| {
             let text = m["content"].to_string();
-            ["KAP_HOLD", "KAP_STEER", "KAP_FIFO"]
+            ["KAP_ABORT_PROBE", "KAP_HOLD", "KAP_STEER", "KAP_FIFO"]
                 .into_iter()
                 .find(|v| text.contains(*v))
         })
         .next_back();
+    if marker == Some("KAP_ABORT_PROBE") && body["tools"].as_array().is_some_and(|t| !t.is_empty())
+    {
+        requests.abort_started.notify_one();
+        requests.release_abort.notified().await;
+    }
     if marker == Some("KAP_HOLD") {
         requests.model_started.notify_one();
         requests.finish_model.notified().await;
@@ -592,6 +601,27 @@ async fn exercise(kap: bool) {
         "KAP_FIFO"
     );
     disposal::check(&controls, "exited").await.unwrap();
+    let session = runtime.open(opts.clone()).await.unwrap();
+    let cancel = session.prompt("KAP_ABORT_PROBE").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), requests.abort_started.notified())
+        .await
+        .unwrap();
+    assert_eq!(
+        abort_turn::check(&session, cancel).await,
+        kar::Outcome::Aborted
+    );
+    requests.release_abort.notify_waiters();
+    assert_eq!(
+        session
+            .prompt("KAP_FIFO after abort")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        kar::Outcome::Completed
+    );
+    session.close().await.unwrap();
     let active = runtime.open(opts.clone()).await.unwrap();
     let _held = active.prompt("KAP_HOLD").await.unwrap();
     tokio::time::timeout(Duration::from_secs(10), requests.model_started.notified())

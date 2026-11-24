@@ -1,4 +1,6 @@
 //! Installed agent binaries, isolated homes and loopback model endpoints.
+#[path = "support/abort_turn.rs"]
+mod abort_turn;
 #[path = "native_live/claude_history.rs"]
 mod claude_history;
 #[path = "native_live/cursor.rs"]
@@ -37,9 +39,6 @@ fn interrupted_copy(
 
 fn output_schema() -> Value {
     json!({"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"],"additionalProperties":false})
-}
-fn respond(stream: TcpStream) -> std::io::Result<()> {
-    respond_with_tool(stream, None, None)
 }
 fn respond_with_tool(
     stream: TcpStream,
@@ -522,14 +521,17 @@ fn send_events(mut stream: TcpStream, events: &[Value]) -> std::io::Result<()> {
 #[ignore = "requires an installed Codex CLI; uses only a loopback model fixture"]
 async fn actual_codex_turn_and_resume() {
     let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir(&work).unwrap();
     let home = dir.path().join("codex-home");
     std::fs::create_dir(&home).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         for conn in listener.incoming().flatten() {
+            let work = work.clone();
             std::thread::spawn(move || {
-                let _ = respond(conn);
+                let _ = respond_in_workspace(conn, None, None, Some(&work), false);
             });
         }
     });
@@ -741,6 +743,21 @@ multi_agent_v2 = true
     let own = measured.usage.total.unwrap();
     let all = measured.usage.with_children.unwrap();
     assert_eq!((all.input, all.output), (own.input + 7, own.output + 3));
+    let gate = dir.path().join("native-goal-gate");
+    std::fs::create_dir(&gate).unwrap();
+    let held = resumed
+        .prompt("Wait for a model response before interrupting.")
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !gate.join("requested").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Codex did not reach the loopback model");
+    assert_eq!(abort_turn::check(&resumed, held).await, Outcome::Aborted);
+    std::fs::write(gate.join("release"), "").unwrap();
     resumed.close().await.unwrap();
 }
 
@@ -1049,14 +1066,7 @@ async fn actual_claude_turn_and_resume() {
         .unwrap();
     let before_cancel = session.records().len();
     let pending = session.prompt("interrupt this input").await.unwrap();
-    session.abort().await.unwrap();
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(6), pending.wait())
-            .await
-            .unwrap()
-            .unwrap(),
-        Outcome::Aborted
-    );
+    assert_eq!(abort_turn::check(&session, pending).await, Outcome::Aborted);
     let after_cancel = session.records();
     let cancellation = &after_cancel[before_cancel..];
     let receipts: Vec<_> = cancellation

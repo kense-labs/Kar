@@ -579,6 +579,19 @@ fn peer(protocol: &str) {
                         );
                     }
                 }
+                Some("abort") => {
+                    let id: u64 = req.as_str().unwrap().parse().unwrap();
+                    for (wire, command) in [
+                        (json!(id), "abort"),
+                        (json!(format!("0{id}")), "abort"),
+                        (req.clone(), "steer"),
+                    ] {
+                        emit(json!({"type":"response","id":wire,"command":command,"success":true}));
+                    }
+                    emit(
+                        json!({"type":"response","id":req,"command":"abort","success":false,"error":"native abort refused"}),
+                    );
+                }
                 Some("extension_ui_response") => {
                     assert_eq!(
                         v,
@@ -898,7 +911,7 @@ async fn failures() -> kar::Result<()> {
     }
     Ok(())
 }
-async fn pi_steer_reply_identity() -> kar::Result<()> {
+async fn pi_control_reply_identity() -> kar::Result<()> {
     let (_dir, rt, opts) = rig(Protocol::Pi, ApprovalMode::Host);
     let session = rt.open(opts).await?;
     let _turn = session.prompt("hold steer").await?;
@@ -945,6 +958,31 @@ async fn pi_steer_reply_identity() -> kar::Result<()> {
         assert!(rows.iter().any(
             |r| r.native["requestId"] == request.native["id"] && r.native["type"] == "rejected"
         ));
+        if status == kar::SteerStatus::Refused {
+            let from = rows.len();
+            assert!(
+                matches!(session.abort().await, Err(Error::Refused(reason)) if reason.contains("native abort refused"))
+            );
+            let rows = session.records();
+            let rows = &rows[from..];
+            let request = rows
+                .iter()
+                .find(|r| {
+                    r.native["type"] == "abort"
+                        && r.native["id"]
+                            .as_str()
+                            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                })
+                .unwrap();
+            let decisions: Vec<_> = rows
+                .iter()
+                .filter(|r| r.native["requestId"] == request.native["id"])
+                .collect();
+            assert_eq!(decisions.len(), 1);
+            assert_eq!(decisions[0].native["type"], "rejected");
+            assert_eq!(decisions[0].native["code"], "runtime_refused");
+            assert!(session.status().is_running());
+        }
     }
     Ok(())
 }
@@ -1451,7 +1489,7 @@ async fn main() {
         .unwrap()
         .unwrap();
     opening::run().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(6), pi_steer_reply_identity())
+    tokio::time::timeout(Duration::from_secs(6), pi_control_reply_identity())
         .await
         .unwrap()
         .unwrap();

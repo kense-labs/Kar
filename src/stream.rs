@@ -580,7 +580,7 @@ impl Journal {
         self.control_request(body)
     }
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn steer_decision<T>(&self, request: Uuid, result: &Result<T>, secrets: &[String]) {
+    pub(crate) fn control_result<T>(&self, request: Uuid, result: &Result<T>, secrets: &[String]) {
         match result {
             Ok(_) => self.control_decision(request, None),
             Err(Error::Refused(reason))
@@ -588,6 +588,8 @@ impl Journal {
                     reason.as_str(),
                     "no active turn"
                         | "no active DSH turn"
+                        | "no running DSH compaction to cancel"
+                        | "turn ended before the interrupt was sent"
                         | "runtime has not acknowledged this turn"
                 ) =>
             {
@@ -595,25 +597,13 @@ impl Journal {
             }
             Err(Error::Unsupported(_)) => self.control_decision(
                 request,
-                Some((
-                    "unsupported",
-                    "runtime does not support this steering operation",
-                )),
+                Some(("unsupported", "runtime does not support this operation")),
             ),
             Err(error) => self.prompt_error(request, error, secrets),
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn reject_idle_control(
-        &self,
-        mut body: Value,
-        reason: &str,
-        secrets: &[String],
-    ) -> Error {
-        crate::transport::redact(&mut body, secrets);
-        let id = self.control_request(body);
-        self.control_decision(id, Some(("no_active_turn", reason)));
-        Error::Refused(reason.to_owned())
+    pub(crate) fn request_abort(&self) -> Uuid {
+        self.control_request(serde_json::json!({"type":"abort"}))
     }
     pub(crate) fn request_dispose(&self) -> Uuid {
         self.control_request(serde_json::json!({"type":"dispose"}))

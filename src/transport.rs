@@ -35,6 +35,17 @@ const CONTEXT_QUERY_PREFIX: &str = "kar-context-";
 type RuntimeLines = tokio::io::Lines<BufReader<ChildStdout>>;
 type BufferedLines = VecDeque<std::io::Result<String>>;
 type Reply<T> = oneshot::Sender<Result<T>>;
+struct AbortReply {
+    request: uuid::Uuid,
+    client: Reply<Value>,
+}
+impl AbortReply {
+    fn finish(self, journal: &Journal, result: Result<Value>) {
+        journal.control_result(self.request, &result, &[]);
+        let _ = self.client.send(result);
+    }
+}
+
 pub(crate) enum HostAnswer {
     Native(Value),
     Checked(crate::Cursor, Value),
@@ -202,6 +213,7 @@ impl SteeringReceipt {
 #[derive(Clone, Copy)]
 enum RpcIntent {
     Control,
+    Abort(uuid::Uuid),
     Prompt,
     Steer {
         input_id: uuid::Uuid,
@@ -215,7 +227,7 @@ struct Pending {
     reply: Option<Reply<Value>>,
     prompt_ack: Option<Reply<()>>,
     prompt_request: Option<uuid::Uuid>,
-    steer_request: Option<uuid::Uuid>,
+    control_request: Option<uuid::Uuid>,
     starts_turn: bool,
     steer: Option<SteeringReceipt>,
 }
@@ -627,7 +639,8 @@ impl Actor {
                     None
                 },
                 method: method.to_owned(),
-                steer_request: match intent {
+                control_request: match intent {
+                    RpcIntent::Abort(request) => Some(request),
                     RpcIntent::Steer { request, .. } => Some(request),
                     _ => None,
                 },
@@ -812,12 +825,12 @@ impl Actor {
         }
         Ok(())
     }
-    async fn codex_interrupt(&mut self, turn: &str, tx: Reply<Value>) -> Result<()> {
+    async fn codex_interrupt(&mut self, turn: &str, abort: AbortReply) -> Result<()> {
         self.rpc(
             "turn/interrupt",
             json!({"threadId":self.session(),"turnId":turn}),
-            Some(tx),
-            RpcIntent::Control,
+            Some(abort.client),
+            RpcIntent::Abort(abort.request),
         )
         .await?;
         if let Some(guard) = &mut self.codex_processes {
@@ -1092,131 +1105,156 @@ impl Actor {
                 self.journal.control_decision(request, None);
                 let _ = tx.send(Ok(()));
             }
-            Command::Abort(tx) if self.idle_for_interrupt() => {
-                let error = self.journal.reject_idle_control(
-                    json!({"type":"abort"}),
-                    "no active turn",
-                    &self.secrets,
-                );
-                let _ = tx.send(Err(error));
-            }
-            Command::Abort(tx)
-                if self.protocol == Protocol::Pi
-                    && self.pi_independent.is_none()
-                    && self.awaiting_pi_admission() =>
-            {
-                let id = self.journal.control_request(json!({"type":"abort"}));
-                self.turn.as_mut().expect("pending prompt").aborted = true;
-                self.journal.control_decision(id, None);
-                let _ = tx.send(Ok(Value::Null));
-            }
-            Command::Abort(tx) => match self.protocol {
-                Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
-                    return Err(Error::Protocol("expected a stdio runtime".into()));
-                }
-                Protocol::Codex => {
-                    let turn_id = match self.manual_compaction.as_ref() {
-                        Some(op) => op.codex_turn(),
-                        None => self
-                            .turn
-                            .as_ref()
-                            .and_then(|t| t.native.as_deref())
-                            .or_else(|| self.observed_root_turn()),
-                    };
-                    let Some(turn_id) = turn_id else {
-                        let _ = tx.send(Err(Error::Refused(
-                            "runtime has not acknowledged this turn".into(),
-                        )));
-                        return Ok(true);
-                    };
-                    let turn_id = turn_id.to_owned();
-                    let tx = if let Some(guard) = &mut self.codex_processes {
-                        let baseline = self
-                            .turn
-                            .as_ref()
-                            .filter(|t| t.native.as_ref() == Some(&turn_id))
-                            .and_then(|t| t.process_baseline.clone());
-                        guard.request(&turn_id, baseline, tx)
-                    } else {
-                        Some(tx)
-                    };
-                    if let Some(tx) = tx {
-                        self.codex_interrupt(&turn_id, tx).await?;
-                    }
-                }
-                Protocol::Claude | Protocol::Qoder | Protocol::Qwen => {
-                    let cancel_queued = self.claude_cancel_queued
-                        && (self.claude_steering.waiting()
-                            || self
-                                .turn
-                                .as_ref()
-                                .and_then(|t| t.claude_input.as_ref())
-                                .is_some_and(|i| i.unstarted()));
-                    let params = if cancel_queued {
-                        json!({"cancel_queued":true})
-                    } else {
-                        json!({})
-                    };
-                    self.rpc("interrupt", params, Some(tx), RpcIntent::Control)
-                        .await?
-                }
-                Protocol::Factory => {
-                    self.rpc(
-                        "droid.interrupt_session",
-                        json!({}),
-                        Some(tx),
-                        RpcIntent::Control,
-                    )
-                    .await?
-                }
-                Protocol::Pi => {
-                    self.rpc("abort", json!({}), Some(tx), RpcIntent::Control)
-                        .await?
-                }
-                Protocol::Acp => {
-                    let cancel = json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":id}});
-                    if self.end_turn_processes
-                        && self.manual_compaction.is_none()
-                        && let Some(turn) = self
-                            .grok
-                            .as_ref()
-                            .and_then(GrokTurns::active_prompt)
-                            .map(str::to_owned)
-                    {
-                        self.next += 1;
-                        let request_id = self.next;
-                        self.write_packet(
-                            cancel,
-                            RecordKind::Request,
-                            Some(vec![Event::TurnAbortRequested {
-                                turn_id: turn.clone(),
-                                request_id,
-                            }]),
-                        )
-                        .await?;
-                        self.grok_terminals
-                            .as_mut()
-                            .expect("Grok terminal host")
-                            .aborted(&turn, request_id);
-                    } else {
-                        self.write(cancel, RecordKind::Request).await?;
-                    }
-                    if let Some(grok) = &mut self.grok {
-                        grok.abort();
-                    }
-                    if (self.grok.is_some()
-                        || self.identity.lock().unwrap().acp_steering
-                            == Some(Steering::SupersedingPrompt))
-                        && let Some(turn) = &mut self.turn
-                    {
-                        turn.aborted = true;
-                    }
-                    let _ = tx.send(Ok(Value::Null));
-                }
-            },
+            Command::Abort(tx) => self.abort(tx).await?,
             Command::Steer(input, message, tx) => self.steer(input, message, tx).await?,
         }
         Ok(true)
+    }
+    async fn abort(&mut self, client: Reply<Value>) -> Result<()> {
+        let abort = AbortReply {
+            request: self.journal.request_abort(),
+            client,
+        };
+        if self.idle_for_interrupt() {
+            abort.finish(&self.journal, Err(Error::Refused("no active turn".into())));
+            return Ok(());
+        }
+        if self.protocol == Protocol::Pi
+            && self.pi_independent.is_none()
+            && self.awaiting_pi_admission()
+        {
+            self.turn.as_mut().expect("pending prompt").aborted = true;
+            abort.finish(&self.journal, Ok(Value::Null));
+            return Ok(());
+        }
+        match self.protocol {
+            Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
+                return Err(Error::Protocol("expected a stdio runtime".into()));
+            }
+            Protocol::Codex => {
+                let turn_id = match self.manual_compaction.as_ref() {
+                    Some(op) => op.codex_turn(),
+                    None => self
+                        .turn
+                        .as_ref()
+                        .and_then(|t| t.native.as_deref())
+                        .or_else(|| self.observed_root_turn()),
+                };
+                let Some(turn_id) = turn_id else {
+                    abort.finish(
+                        &self.journal,
+                        Err(Error::Refused(
+                            "runtime has not acknowledged this turn".into(),
+                        )),
+                    );
+                    return Ok(());
+                };
+                let turn_id = turn_id.to_owned();
+                let tx = if let Some(guard) = &mut self.codex_processes {
+                    let baseline = self
+                        .turn
+                        .as_ref()
+                        .filter(|t| t.native.as_ref() == Some(&turn_id))
+                        .and_then(|t| t.process_baseline.clone());
+                    guard.request(&turn_id, baseline, abort)
+                } else {
+                    Some(abort)
+                };
+                if let Some(tx) = tx {
+                    self.codex_interrupt(&turn_id, tx).await?;
+                }
+            }
+            Protocol::Claude | Protocol::Qoder | Protocol::Qwen => {
+                let cancel_queued = self.claude_cancel_queued
+                    && (self.claude_steering.waiting()
+                        || self
+                            .turn
+                            .as_ref()
+                            .and_then(|t| t.claude_input.as_ref())
+                            .is_some_and(|i| i.unstarted()));
+                let params = if cancel_queued {
+                    json!({"cancel_queued":true})
+                } else {
+                    json!({})
+                };
+                self.rpc(
+                    "interrupt",
+                    params,
+                    Some(abort.client),
+                    RpcIntent::Abort(abort.request),
+                )
+                .await?
+            }
+            Protocol::Factory => {
+                self.rpc(
+                    "droid.interrupt_session",
+                    json!({}),
+                    Some(abort.client),
+                    RpcIntent::Abort(abort.request),
+                )
+                .await?
+            }
+            Protocol::Pi => {
+                self.rpc(
+                    "abort",
+                    json!({}),
+                    Some(abort.client),
+                    RpcIntent::Abort(abort.request),
+                )
+                .await?
+            }
+            Protocol::Acp => {
+                if let Err(error) = self.cancel_acp().await {
+                    abort.finish(
+                        &self.journal,
+                        Err(Error::Closed("could not send ACP cancellation".into())),
+                    );
+                    return Err(error);
+                }
+                if let Some(grok) = &mut self.grok {
+                    grok.abort();
+                }
+                if (self.grok.is_some()
+                    || self.identity.lock().unwrap().acp_steering
+                        == Some(Steering::SupersedingPrompt))
+                    && let Some(turn) = &mut self.turn
+                {
+                    turn.aborted = true;
+                }
+                abort.finish(&self.journal, Ok(Value::Null));
+            }
+        }
+        Ok(())
+    }
+    async fn cancel_acp(&mut self) -> Result<()> {
+        let cancel = json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.session()}});
+        if self.end_turn_processes
+            && self.manual_compaction.is_none()
+            && let Some(turn) = self
+                .grok
+                .as_ref()
+                .and_then(GrokTurns::active_prompt)
+                .map(str::to_owned)
+        {
+            self.next += 1;
+            let request_id = self.next;
+            self.write_packet(
+                cancel,
+                RecordKind::Request,
+                Some(vec![Event::TurnAbortRequested {
+                    turn_id: turn.clone(),
+                    request_id,
+                }]),
+            )
+            .await?;
+            self.grok_terminals
+                .as_mut()
+                .expect("Grok terminal host")
+                .aborted(&turn, request_id);
+        } else {
+            self.write(cancel, RecordKind::Request).await?;
+        }
+        Ok(())
     }
     async fn steer(
         &mut self,
@@ -1327,7 +1365,7 @@ impl Actor {
                 _ => Err(Error::Unsupported("steering on this transport".into())),
             }
         };
-        self.journal.steer_decision(request, &result, &self.secrets);
+        self.journal.control_result(request, &result, &self.secrets);
         // A failed write may have reached the process in part. Stop this transport
         // after publishing the decision, as for a failed RPC write.
         let transport = match &result {
@@ -1489,11 +1527,11 @@ impl Actor {
         }
         if let Some(id) = number
             && let Some(pending) = self.pending.get(&id)
-            && (pending.prompt_request.is_some() || pending.steer_request.is_some())
+            && (pending.prompt_request.is_some() || pending.control_request.is_some())
         {
             let exact_id = match self.protocol {
                 Protocol::Codex | Protocol::Acp => v["id"].as_u64() == Some(id),
-                _ => v["id"].as_str() == Some(id.to_string().as_str()),
+                _ => wire_id.as_ref().and_then(Value::as_str) == Some(id.to_string().as_str()),
             };
             // Pi also echoes the command. Preserve unrelated public input frames
             // without consuming an attempt or exposing a private query's payload.
@@ -1515,7 +1553,7 @@ impl Actor {
         let response = number.and_then(|id| self.pending.remove(&id));
         if let Some(request) = response
             .as_ref()
-            .and_then(|p| p.steer_request.or(p.prompt_request))
+            .and_then(|p| p.control_request.or(p.prompt_request))
         {
             received.response_to = Some(request.to_string());
         }
@@ -2301,7 +2339,7 @@ impl Actor {
                 }
             }
             if let Some(tx) = p.reply {
-                reply = Some((tx, result, p.steer_request));
+                reply = Some((tx, result, p.control_request));
             }
         }
         let reported_turn = v
@@ -2631,7 +2669,7 @@ impl Actor {
         }
         if let Some((tx, result, request)) = reply {
             if let Some(request) = request {
-                self.journal.steer_decision(request, &result, &self.secrets);
+                self.journal.control_result(request, &result, &self.secrets);
             }
             let _ = tx.send(result);
         }
@@ -2919,8 +2957,8 @@ impl Actor {
                     if let Some((turn, waiting)) = prepared {
                         let mut result = Ok(());
                         for tx in waiting {
-                            result = self.codex_interrupt(&turn, tx).await;
-                            if result.is_err() { break; }
+                            if result.is_ok() { result = self.codex_interrupt(&turn, tx).await; }
+                            else { tx.finish(&self.journal, Err(Error::Closed("could not send interrupt".into()))); }
                         }
                         if let Err(error) = result { break error.to_string(); }
                     }
@@ -3033,7 +3071,7 @@ impl Actor {
         for p in self.pending.values() {
             if let Some(request) = p
                 .prompt_request
-                .or(p.steer_request.filter(|_| p.reply.is_some()))
+                .or(p.control_request.filter(|_| p.reply.is_some()))
             {
                 self.journal.prompt_error(request, &closed, &self.secrets);
             }

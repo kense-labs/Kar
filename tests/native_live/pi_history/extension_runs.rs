@@ -726,3 +726,25 @@ async fn late_steer_receipt_remains_on_the_completed_chat_turn() {
     assert!(saved.notifications.is_empty());
     assert_eq!(f.calls.lock().unwrap().len(), 2);
 }
+
+#[tokio::test]
+#[ignore = "requires real KAR_PI_BIN; holds a real model request open during abort"]
+async fn abort_active_then_idle_preserves_the_original_outcome() {
+    let (f, rt) = setup().await;
+    let s = rt.open(f.options.clone()).await.unwrap();
+    let turn = s.prompt(HELD).await.unwrap();
+    wait_for(|| f.options.cwd.join("requested").exists()).await;
+    assert_eq!(super::abort_turn::check(&s, turn).await, Outcome::Aborted);
+    fs::write(f.options.cwd.join("release"), "").unwrap();
+    assert_eq!(
+        s.prompt("after late abort")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        Outcome::Completed
+    );
+    assert_eq!(f.calls.lock().unwrap().len(), 2);
+    s.close().await.unwrap();
+}

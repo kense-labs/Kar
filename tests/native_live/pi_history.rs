@@ -1,3 +1,4 @@
+use super::abort_turn;
 #[path = "../support/adapter_queue.rs"]
 mod adapter_queue;
 #[path = "../support/busy_prompt.rs"]

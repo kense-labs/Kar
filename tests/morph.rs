@@ -1,3 +1,5 @@
+#[path = "support/abort_turn.rs"]
+mod abort_turn;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -279,8 +281,7 @@ async fn stream_controls_approval_and_resume() {
     assert_eq!(state.lock().unwrap().decisions, ["approve"]);
     assert!(state.lock().unwrap().socket_auth > 0);
     let active = session.prompt("wait").await.unwrap();
-    session.abort().await.unwrap();
-    assert_eq!(active.wait().await.unwrap(), Outcome::Aborted);
+    assert_eq!(abort_turn::check(&session, active).await, Outcome::Aborted);
     session.close().await.unwrap();
     opts.resume = Some(session.id().into());
     opts.approvals = ApprovalMode::Deny;

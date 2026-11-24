@@ -79,6 +79,32 @@ pub(super) async fn lookup(h: &JsValue, id: &JsValue, input: String) -> JsResult
     invoke(h, "commit", &[read.as_ref().clone(), ctx()]).await
 }
 
+/// Pi Durable acknowledges the control after ten seconds even if the native
+/// cancellation is still settling. The submission receipt owns its outcome.
+pub(super) async fn abort(conv: &JsValue) -> JsResult<()> {
+    let abort = Promise::resolve(&call(conv, "abort", &[ctx()])?);
+    let global = js_sys::global();
+    let mut timer = None;
+    let timeout = Promise::new(&mut |resolve, reject| match call(
+        &global,
+        "setTimeout",
+        &[resolve.into(), 10_000.into()],
+    ) {
+        Ok(id) => timer = Some(id),
+        Err(err) => {
+            let _ = reject.call1(&JsValue::UNDEFINED, &err);
+        }
+    });
+    let racers = Array::new();
+    racers.push(&abort);
+    racers.push(&timeout);
+    let result = JsFuture::from(Promise::race(&racers)).await;
+    if let Some(id) = timer {
+        call(&global, "clearTimeout", &[id])?;
+    }
+    result.map(drop)
+}
+
 pub(super) async fn running(conv: &JsValue, id: &JsValue) -> JsResult<bool> {
     let id = id.clone();
     let read = Closure::once(move |tx: JsValue| {

@@ -3,7 +3,7 @@ mod native;
 mod projection;
 
 use crate::{Cursor, Direction, Event, Outcome, RecordKind, stream::Journal};
-use js_sys::{Array, Object, Promise};
+use js_sys::{Array, Object};
 use native::{JsResult, call, ctx, error, get, invoke, js, json, set};
 use projection::Projection;
 use serde::Deserialize;
@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::sync::{Mutex, oneshot};
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::{JsFuture, spawn_local};
+use wasm_bindgen_futures::spawn_local;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -572,21 +572,35 @@ impl DurableSession {
     pub async fn abort(&self) -> JsResult<()> {
         let _serial = self.core.admissions.lock().await;
         self.core.open()?;
-        if !native::running(&self.core.conv, &self.core.id).await? {
-            return Err(error("no active turn"));
+        let request = self.core.journal.request_abort();
+        let mut code = "error";
+        let result = async {
+            if !native::running(&self.core.conv, &self.core.id).await? {
+                code = "no_active_turn";
+                return Err(error("no active turn"));
+            }
+            native::abort(&self.core.conv).await
         }
-        let abort = Promise::resolve(&call(&self.core.conv, "abort", &[ctx()])?);
-        let timeout = Promise::new(&mut |resolve, _| {
-            let global = js_sys::global();
-            let _ = call(&global, "setTimeout", &[resolve.into(), 10_000.into()]);
-        });
-        let racers = Array::new();
-        racers.push(&abort);
-        racers.push(&timeout);
-        JsFuture::from(Promise::race(&racers)).await?;
+        .await;
+        match &result {
+            Ok(()) => self.core.journal.control_decision(request, None),
+            Err(err) => {
+                let reason = native::summary(err);
+                self.core.journal.control_decision(
+                    request,
+                    Some((
+                        code,
+                        reason["message"]
+                            .as_str()
+                            .unwrap_or("native cancellation failed"),
+                    )),
+                );
+            }
+        }
+        // Projected changes also acquire admissions while reading submissions.
         drop(_serial);
         self.core.flush().await;
-        Ok(())
+        result
     }
     pub async fn close(&self) -> JsResult<()> {
         let _serial = self.core.admissions.lock().await;

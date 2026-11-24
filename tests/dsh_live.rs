@@ -1,3 +1,5 @@
+#[path = "support/abort_turn.rs"]
+mod abort_turn;
 #[path = "support/busy_prompt.rs"]
 mod busy_prompt;
 #[path = "dsh_live/cli_routing.rs"]
@@ -1641,5 +1643,30 @@ async fn public_prompt_readbacks() {
         public_readbacks::stream::dispose_mid_turn(&active)
             .await
             .unwrap();
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires KAR_DSH_BIN and KAR_DSH_ACP_BIN; aborts an active native model request"]
+async fn public_abort_active_then_idle() {
+    for protocol in [Protocol::Dsh, Protocol::Acp] {
+        let f = testbed(protocol).await;
+        let s = f.runtime.open(f.opts.clone()).await.unwrap();
+        let turn = s.prompt("DSH_HOLD").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(15), f.data.held.notified())
+            .await
+            .unwrap();
+        assert_eq!(abort_turn::check(&s, turn).await, kar::Outcome::Aborted);
+        f.data.release.notify_waiters();
+        assert_eq!(
+            s.prompt("DSH_KEEP after abort")
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap(),
+            kar::Outcome::Completed
+        );
+        s.close().await.unwrap();
     }
 }

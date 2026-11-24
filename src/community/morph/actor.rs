@@ -433,14 +433,16 @@ impl Actor {
             Command::Steer(input_id, input, ack) => {
                 let request = self.journal.steer_request(input_id, &input, &[]);
                 let result = self.steer(input.text).await;
-                self.journal.steer_decision(request, &result, &[]);
+                self.journal.control_result(request, &result, &[]);
                 let _ = ack.send(result);
             }
             Command::Abort(ack) => {
+                let request = self.journal.request_abort();
                 let result = match self.tasks.front() {
                     Some(t) => self.stop(&t.id).await,
                     None => Err(Error::Refused("no active turn".into())),
                 };
+                self.journal.control_result(request, &result, &[]);
                 let _ = ack.send(result);
             }
             Command::Respond(id, result, ack) => {

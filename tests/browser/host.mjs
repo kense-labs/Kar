@@ -2,7 +2,7 @@ import init, { PiDurable } from "kar-test-bindings";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
-import { Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { Harness, LiveDoc, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { IndexedDbStorage } from "@earendil-works/pi-durable/storage/indexeddb";
 
 const check = (ok, reason) => { if (!ok) throw Error(reason); };
@@ -57,6 +57,7 @@ export async function exercise() {
             e.reported === (model ? "fixture/other" : null) && !("catalogSelectorIds" in e),
             "lost model confirmation evidence");
     }
+    await checkRetriesAndAdoption(runtime,harness,open);
     const s = await runtime.open({...open, appendSystemPrompt:"DURABLE-ORIGINAL-RS"});
     const sub = s.subscribe();
     const first = await sub.next();
@@ -134,12 +135,51 @@ export async function exercise() {
     const resumed = await runtime.open({...open,resume:id,appendSystemPrompt:"DURABLE-CHANGED-RS"});
     const changed = await resumed.prompt("probe changed instructions","changed-instructions");
     check((await resumed.wait(changed.id)).status==="done","changed-instruction probe failed");
-    const abort = await resumed.prompt("slow cancel","cancel");
+    const fromPrompt = resumed.records().length;
+    const abort = await resumed.prompt("slow cancel");
+    const submitted = resumed.records().slice(fromPrompt).find(r=>r.prompt);
+    check(submitted && /^[0-9a-f-]{36}$/.test(submitted.prompt.input_id) &&
+        resumed.records().some(r=>r.native?.requestId===submitted.prompt.request_id && r.native.type==="accepted"),
+        "aborted submission lost its generated input ID or acceptance");
+    await rejects(()=>resumed.prompt("busy during cancel","cancel-busy"),"accepted a concurrent prompt");
+    const removable = await resumed.queue("withdraw before abort","cancel-remove");
+    await resumed.withdraw("cancel-remove");
+    check((await resumed.wait(removable.id)).status === "unanswered", "withdrawn input ran during abort");
     const pending = await resumed.queue("must not run","abort-queued");
+    const firstAbort = resumed.records().length;
+    const verifyAbort = (from, kind) => {
+        const rows = resumed.records().slice(from);
+        const requests = rows.filter(r => r.kind === "request" && r.native?.type === "abort");
+        check(requests.length === 1, "expected a single abort request");
+        const request = requests[0];
+        const decisions = rows.filter(r => r.kind === "response" && r.native?.requestId === request.native.id);
+        check(decisions.length === 1 && decisions[0].seq > request.seq && decisions[0].native.type === kind,
+            "abort decision is missing or belongs to another request");
+        return decisions[0];
+    };
     await resumed.abort();
+    const acceptedAbort = verifyAbort(firstAbort, "accepted");
     check((await resumed.wait(abort.id)).status==="unanswered","abort did not settle native receipt");
     check((await resumed.wait(pending.id)).status==="unanswered","abort dispatched a waiting follow-up");
     check(resumed.records().flatMap(r=>r.events).some(e=>e.kind==="input_dropped" && e.input_id==="abort-queued"),"interrupted queued input was not reported");
+    const ends = () => resumed.records().slice(firstAbort).flatMap(r => r.events.filter(e => e.kind === "turn_ended").map(e => [r.seq, e.outcome]));
+    check(ends().length === 1 && ends()[0][1] === "aborted" && resumed.snapshot().status.kind === "idle",
+        "native abort ended differently: "+JSON.stringify(ends()));
+    const previousEnds = JSON.stringify(ends());
+    const lateAbort = resumed.records().length;
+    await rejects(()=>resumed.abort(),"accepted late abort");
+    const lateDecision = verifyAbort(lateAbort,"rejected");
+    check(lateDecision.native.code === "no_active_turn" && lateDecision.native.requestId !== acceptedAbort.native.requestId,
+        "late abort lost its reason or identity");
+    check(JSON.stringify(ends()) === previousEnds,"late abort changed the turn outcome");
+    for(const frame of resumed.records().filter(r=>r.kind==="frame")) {
+        let closed = false;
+        for(const e of frame.events) {
+            if(e.kind==="turn_started") closed=false;
+            check(!closed,"event after turn end at seq "+frame.seq);
+            closed=e.kind==="turn_ended";
+        }
+    }
     const malformed = await rejects(()=>runtime.open({...open,resume:"01"}),"accepted malformed conversation id");
     check(malformed.name!=="SessionNotFoundError","malformed id was reported as missing");
     const missing = await rejects(()=>runtime.open({...open,resume:"989898"}),"created a replacement conversation");
@@ -183,4 +223,47 @@ export async function exercise() {
     }
     await recovered.close();await reopened.close(ctx);
     return {records:records.length,conversation:id};
+}
+
+async function checkRetriesAndAdoption(runtime,harness,options) {
+    const session = await runtime.open(options);
+    const original = crypto.randomUUID();
+    const seed = await session.prompt("DURABLE_RETRY_SEED",original);
+    check((await session.wait(seed.id)).status==="done","seed input did not complete");
+    const retry = async () => {
+        const start = session.records().length;
+        const same = await session.prompt("DURABLE_RETRY_DUPLICATE",original);
+        check(same.id===seed.id && (await session.wait(same.id)).status==="done","retry lost its completed submission");
+        const rows = session.records().slice(start);
+        const request = rows.find(r=>r.prompt?.input_id===original);
+        check(request && rows.filter(r=>r.kind==="response" && r.native?.type==="accepted" &&
+            r.native.requestId===request.prompt.request_id).length===1,"missing retry decision");
+    };
+    await retry();
+    check(session.snapshot().status.kind==="idle","idle retry opened a model run");
+    check(session.records().flatMap(r=>r.events).filter(e=>e.kind==="user_message").length===1,"duplicate user message");
+    const active = await session.prompt("DURABLE_GATE_retry");
+    try {
+        await fetch("/gate/retry",{signal:AbortSignal.timeout(15000)});
+        await retry();
+        check(session.snapshot().status.kind==="running","retry ended the active run");
+    } finally { await fetch("/gate/retry",{method:"POST"}); }
+    check((await session.wait(active.id)).status==="done","active input lost its outcome");
+    await session.close();
+
+    const first = await runtime.open({...options,appendSystemPrompt:"DURABLE-ADOPT-SAVED"});
+    const held = await first.prompt("DURABLE_GATE_adopt");
+    try {
+        await fetch("/gate/adopt",{signal:AbortSignal.timeout(15000)});
+        await first.close();
+        const changed = await rejects(()=>runtime.open({...options,resume:first.id,cwd:"/changed",appendSystemPrompt:"changed"}),
+            "changed the settings of an active run");
+        check(changed.message.includes("cannot reconfigure"),"unexpected active resume refusal");
+        const observer = await runtime.open({...options,resume:first.id,appendSystemPrompt:"DURABLE-ADOPT-SAVED"});
+        check(observer.id===first.id && observer.snapshot().status.kind==="running","resumed observer missed the active run");
+        check((await harness.snapshot(LiveDoc,Number(observer.id),ctx))?.run,"native active run missing");
+        await observer.abort();
+        check((await observer.wait(held.id)).status==="unanswered" && observer.snapshot().status.kind==="idle","adopted input did not abort");
+        await observer.close();
+    } finally { await fetch("/gate/adopt",{method:"POST"}); }
 }

@@ -1,3 +1,5 @@
+#[path = "support/abort_turn.rs"]
+mod abort_turn;
 #[path = "support/busy_prompt.rs"]
 mod busy_prompt;
 #[path = "support/declaration.rs"]
@@ -475,11 +477,7 @@ async fn native_control_receipts_and_settings() {
         .await
         .unwrap();
     mid_turn_steer::check(&session, "FACTORY_DISCARD").await;
-    session.abort().await.unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(15), held.wait())
-        .await
-        .unwrap()
-        .unwrap();
+    let outcome = abort_turn::check(&session, held).await;
     assert_eq!(outcome, Outcome::Aborted);
     let file = session.native_session_file().await.unwrap().unwrap();
     assert_eq!(file.file_stem().unwrap().to_str(), Some(session.id()));

@@ -1,5 +1,5 @@
 //! Keep pre-interrupt observations, RPC replies and native ends tied to their turn.
-use super::{Journal, Reply, Value};
+use super::{AbortReply, Journal};
 use crate::resources::turn::{Baseline, Evidence, failed};
 use crate::{Error, TurnProcessCleanup};
 use std::collections::{BTreeMap, HashMap};
@@ -9,7 +9,7 @@ type Observation = Result<Evidence, String>;
 #[derive(Default)]
 struct Attempt {
     reader: Option<tokio::task::Id>,
-    waiting: Vec<Reply<Value>>,
+    waiting: Vec<AbortReply>,
     observation: Option<Observation>,
     requests: BTreeMap<u64, bool>,
     ended: Option<String>,
@@ -36,8 +36,8 @@ impl Guard {
         &mut self,
         turn: &str,
         baseline: Option<Baseline>,
-        tx: Reply<Value>,
-    ) -> Option<Reply<Value>> {
+        tx: AbortReply,
+    ) -> Option<AbortReply> {
         use std::collections::hash_map::Entry;
         let attempt = match self.attempts.entry(turn.to_owned()) {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -50,9 +50,12 @@ impl Guard {
             }
         };
         if attempt.ended.is_some() {
-            let _ = tx.send(Err(Error::Refused(
-                "turn ended before the interrupt was sent".into(),
-            )));
+            tx.finish(
+                &self.journal,
+                Err(Error::Refused(
+                    "turn ended before the interrupt was sent".into(),
+                )),
+            );
         } else if attempt.observation.is_some() {
             return Some(tx);
         } else {
@@ -64,7 +67,7 @@ impl Guard {
     pub(super) fn reading(&self) -> bool {
         !self.reading.is_empty()
     }
-    pub(super) async fn prepared(&mut self) -> Option<(String, Vec<Reply<Value>>)> {
+    pub(super) async fn prepared(&mut self) -> Option<(String, Vec<AbortReply>)> {
         let (reader, observation) = match self.reading.join_next_with_id().await? {
             Ok(result) => result,
             Err(error) => (
@@ -115,9 +118,12 @@ impl Guard {
         if let Some(attempt) = self.attempts.get_mut(turn) {
             attempt.ended.get_or_insert_with(|| status.to_owned());
             for tx in attempt.waiting.drain(..) {
-                let _ = tx.send(Err(Error::Refused(
-                    "turn ended before the interrupt was sent".into(),
-                )));
+                tx.finish(
+                    &self.journal,
+                    Err(Error::Refused(
+                        "turn ended before the interrupt was sent".into(),
+                    )),
+                );
             }
             self.settle(turn, session);
         }
@@ -173,9 +179,10 @@ impl Guard {
         self.reading.abort_all();
         for (turn, attempt) in std::mem::take(&mut self.attempts) {
             for tx in attempt.waiting {
-                let _ = tx.send(Err(Error::Closed(
-                    "app-server closed before interrupt".into(),
-                )));
+                tx.finish(
+                    &self.journal,
+                    Err(Error::Closed("app-server closed before interrupt".into())),
+                );
             }
             if let Some((&id, _)) = attempt.requests.first_key_value() {
                 self.publish(
@@ -198,7 +205,18 @@ mod tests {
 
     async fn issue(guard: &mut Guard, turn: &str, request: u64) {
         let (tx, _rx) = oneshot::channel();
-        assert!(guard.request(turn, None, tx).is_none());
+        assert!(
+            guard
+                .request(
+                    turn,
+                    None,
+                    AbortReply {
+                        request: uuid::Uuid::new_v4(),
+                        client: tx
+                    }
+                )
+                .is_none()
+        );
         let (observed, waiters) = guard.prepared().await.unwrap();
         assert_eq!(observed, turn);
         assert_eq!(waiters.len(), 1);
@@ -220,12 +238,26 @@ mod tests {
         guard.reply(51, false, Some("root".into()));
         guard.ended(Some("refused"), "interrupted", Some("root".into()));
         let (tx, rx) = oneshot::channel();
-        guard.request("too late", None, tx);
+        let late = journal.request_abort();
+        guard.request(
+            "too late",
+            None,
+            AbortReply {
+                request: late,
+                client: tx,
+            },
+        );
         guard.ended(Some("too late"), "completed", Some("root".into()));
         assert!(rx.await.unwrap().is_err());
         guard.exited(Some("root".into())).await;
         let records = journal.records();
-        assert_eq!(records.len(), 2);
+        assert!(
+            records
+                .iter()
+                .any(|r| r.native["requestId"] == late.to_string()
+                    && r.native["code"] == "no_active_turn")
+        );
+        assert_eq!(records.len(), 4);
         for (id, turn, reason) in [(31, "old", None), (41, "next", Some("completed"))] {
             let record = records
                 .iter()

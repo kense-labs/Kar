@@ -1,3 +1,5 @@
+#[path = "support/abort_turn.rs"]
+mod abort_turn;
 #[path = "support/disposal.rs"]
 mod disposal;
 use axum::{
@@ -353,8 +355,7 @@ async fn thread_control_and_replay_use_the_native_api() {
     let resumed = api.open(opts).await.unwrap();
     assert_ne!(session.stream_id(), resumed.stream_id());
     let turn = resumed.prompt("another").await.unwrap();
-    resumed.abort().await.unwrap();
-    assert_eq!(turn.wait().await.unwrap(), Outcome::Aborted);
+    assert_eq!(abort_turn::check(&resumed, turn).await, Outcome::Aborted);
     assert!(
         !resumed
             .records()

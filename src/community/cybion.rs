@@ -655,10 +655,11 @@ impl ThreadActor {
                     active.quiet = 0;
                     active.due = Instant::now();
                 }
-                self.journal.steer_decision(request, &answer, &[]);
+                self.journal.control_result(request, &answer, &[]);
                 let _ = ack.send(answer);
             }
             Command::Abort(ack) => {
+                let request = self.journal.request_abort();
                 let result = if self.turn.is_none() {
                     Err(Error::Refused("no active turn".into()))
                 } else {
@@ -684,6 +685,7 @@ impl ThreadActor {
                     }
                     answer
                 };
+                self.journal.control_result(request, &result, &[]);
                 let _ = ack.send(result);
             }
             Command::Close(ack) => {
