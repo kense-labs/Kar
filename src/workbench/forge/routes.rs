@@ -327,7 +327,14 @@ async fn reconcile(
         }
         Operation::SetIssueState { number, state } if number == input.number => {
             let v = c.execute(&Operation::Issue { number }).await?;
-            if v["state"] != state {
+            let confirmed = match c.kind.as_str() {
+                "github" => github::state_matches(&v, &state)?,
+                "gitlab" | "forgejo" | "tanstack-source" => v["state"]
+                    .as_str()
+                    .is_some_and(|s| s.eq_ignore_ascii_case(&state)),
+                _ => v["state"] == state,
+            };
+            if !confirmed {
                 return Err(ForgeError::uncertain(
                     "issue has not confirmed the requested state",
                 ));

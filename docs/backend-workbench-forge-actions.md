@@ -101,3 +101,5 @@ A missing write receipt can be reconciled by reading the same viewer, issue, sub
 ### GitHub Issue 详情与评论
 
 `GET /projects/{project}/forge/issues/{n}/detail` 与 `GET /projects/{project}/forge/issues/{n}/comments?cursor=...` 返回富文本数据所需的 Markdown 正文、结构化作者、反应及权限。项目内选定已登记的 tracker、host 和 scope 才可标为可写，同一 host 的其他 repository 显示为只读。GitHub 驱动读完标签、受理人、关闭引用的所有后续页，再合并时间线里的引用。同一个 PR 同时引用并关闭 Issue 时保留关闭关系。评论游标向较早的记录翻页，反应计数包括自己，展示的用户列表剔除自己。复验入口为 `cargo test --locked --test workbench_forge`，当前仅完成 macOS 编译。
+
+GitHub 状态操作接受 Open、Completed、Not planned 和 Duplicate，并在写回及对账时核对远端编号、state 和 state_reason。对已关闭 Issue 改变关闭原因会返回明确错误。GitLab、Forgejo 和 TanStack Source 接受详情展示的 Open 与 Closed。

@@ -253,11 +253,11 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         Operation::Pulls => list(c, "pulls").await,
         Operation::Issues => list(c, "issues").await,
         Operation::SetIssueState { number, state } => {
-            if !matches!(state.as_str(), "open" | "closed") {
-                return Err(ForgeError::bad(
-                    "TanStack Source issue state must be open or closed",
-                ));
-            }
+            let state = match state.as_str() {
+                "Open" | "open" => "open",
+                "Closed" | "closed" => "closed",
+                _ => return Err(ForgeError::bad("expected Open or Closed")),
+            };
             detail(c, "issues", *number).await?;
             send(
                 c,
@@ -270,7 +270,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
             let result = detail(c, "issues", *number)
                 .await
                 .map_err(|_| ForgeError::uncertain("could not confirm the updated issue"))?;
-            if result["state"] != *state {
+            if result["state"] != state {
                 return Err(ForgeError::uncertain("issue state is unconfirmed"));
             }
             Ok(result)

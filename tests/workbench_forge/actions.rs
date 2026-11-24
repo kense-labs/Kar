@@ -26,6 +26,15 @@ pub(super) async fn post_comment(State(mock): State<Mock>, Json(input): Json<Val
 }
 pub(super) async fn issue(client: &reqwest::Client, forge: &str, chat: Uuid) {
     let operations = format!("{forge}/operations");
+    for state in ["Open", "Not planned"] {
+        let op = json!({"id":Uuid::new_v4(),"chat":chat,"op":"set_issue_state","number":7,"state":state});
+        let value = ok(client.post(&operations).json(&op)).await;
+        if state == "Not planned" {
+            assert_eq!(value["state_reason"], "not_planned");
+        }
+    }
+    let refused=client.post(&operations).json(&json!({"id":Uuid::new_v4(),"chat":chat,"op":"set_issue_state","number":7,"state":"Completed"})).send().await.unwrap();
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     let edit = json!({"id":Uuid::new_v4(),"chat":chat,"op":"update_issue","number":7,"body":"","labels":[],"assignees":["fixture-bot"]});
     for _ in 0..2 {
         assert_eq!(ok(client.post(&operations).json(&edit)).await["number"], 7);

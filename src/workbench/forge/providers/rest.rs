@@ -320,9 +320,11 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
                 .map_err(|_| ForgeError::uncertain("created pull request identity is unconfirmed"))
         }
         Operation::SetIssueState { number: n, state } => {
-            if !matches!(state.as_str(), "open" | "closed") {
-                return Err(ForgeError::bad("expected open or closed"));
-            }
+            let state = match state.as_str() {
+                "Open" | "open" => "open",
+                "Closed" | "closed" => "closed",
+                _ => return Err(ForgeError::bad("expected Open or Closed")),
+            };
             let u = project_resource(c, coll, Some(*n))?;
             verify(item(c, &get(c, u.clone()).await?, false)?, *n)?;
             let (method, body) = if gitlab {
@@ -340,7 +342,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
                 *n,
             )
             .map_err(|_| ForgeError::uncertain("updated issue identity unconfirmed"))?;
-            if confirmed["state"] != *state {
+            if confirmed["state"] != state {
                 return Err(ForgeError::uncertain(
                     "forge did not confirm the requested issue state",
                 ));

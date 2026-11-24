@@ -125,6 +125,7 @@ async fn patch_issue(State(mock): State<Mock>, Json(body): Json<Value>) -> Json<
     let mut db = mock.lock().unwrap();
     if let Some(value) = body.get("state") {
         db.issue["state"] = value.clone();
+        db.issue["state_reason"] = body["state_reason"].clone();
     }
     for field in ["title", "body", "labels", "assignees"] {
         if let Some(value) = body.get(field)

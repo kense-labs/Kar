@@ -20,8 +20,22 @@ fn issue(v: &Value) -> Result<Value, ForgeError> {
         return Err(ForgeError::remote(404, "number denotes a pull request"));
     }
     Ok(
-        json!({"number":checked_number(v)?,"title":v["title"],"body":v["body"],"state":v["state"],"url":v["html_url"],"updated_at":v["updated_at"]}),
+        json!({"number":checked_number(v)?,"title":v["title"],"body":v["body"],"state":v["state"],"state_reason":v["state_reason"],"url":v["html_url"],"updated_at":v["updated_at"]}),
     )
+}
+pub(super) fn state_target(name: &str) -> Result<(&'static str, Option<&'static str>), ForgeError> {
+    match name {
+        "open" | "Open" => Ok(("open", None)),
+        "closed" | "Closed" => Ok(("closed", None)),
+        "Completed" => Ok(("closed", Some("completed"))),
+        "Not planned" => Ok(("closed", Some("not_planned"))),
+        "Duplicate" => Ok(("closed", Some("duplicate"))),
+        _ => Err(ForgeError::bad("unknown GitHub issue state")),
+    }
+}
+pub(super) fn state_matches(row: &Value, name: &str) -> Result<bool, ForgeError> {
+    let (state, reason) = state_target(name)?;
+    Ok(row["state"] == state && reason.is_none_or(|reason| row["state_reason"] == reason))
 }
 pub(super) async fn request(
     c: &Context,
@@ -191,13 +205,38 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
             })
         }
         Operation::SetIssueState { number, state } => {
-            if !matches!(state.as_str(), "open" | "closed") {
-                return Err(ForgeError::bad("GitHub issue state must be open or closed"));
-            }
+            let (category, reason) = state_target(state)?;
             let n = number.to_string();
             parts.extend(["issues", &n]);
-            issue(&request(c, Method::GET, &parts, &[], None).await?)?;
-            issue(&request(c, Method::PATCH, &parts, &[], Some(json!({"state":state}))).await?)
+            let old = issue(&request(c, Method::GET, &parts, &[], None).await?)?;
+            if old["number"] != *number {
+                return Err(ForgeError::remote(
+                    404,
+                    "GitHub issue number does not match",
+                ));
+            }
+            if state_matches(&old, state)? {
+                return Ok(old);
+            }
+            if category == "closed" && old["state"] == "closed" && reason.is_some() {
+                return Err(ForgeError::bad(
+                    "GitHub requires reopening an issue before changing its close reason",
+                ));
+            }
+            let mut body = json!({"state":category});
+            if let Some(reason) = reason {
+                body["state_reason"] = json!(reason);
+            }
+            let result = issue(&request(c, Method::PATCH, &parts, &[], Some(body)).await?)
+                .map_err(|_| {
+                    ForgeError::uncertain("GitHub returned an invalid issue-state receipt")
+                })?;
+            if result["number"] != *number || !state_matches(&result, state)? {
+                return Err(ForgeError::uncertain(
+                    "GitHub did not confirm the requested issue state and reason",
+                ));
+            }
+            Ok(result)
         }
     }
 }
