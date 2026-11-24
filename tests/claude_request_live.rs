@@ -385,6 +385,17 @@ async fn side_questions_leave_running_and_stopped_native_transcripts_intact() {
     side.env = opts.env;
     side.model = opts.model;
     side.timeout = Duration::from_secs(30);
+    let mut cancelled = side.clone();
+    cancelled.signal = tokio_util::sync::CancellationToken::new();
+    cancelled.signal.cancel();
+    let before = calls.lock().unwrap().len();
+    let bytes = std::fs::read(&file).unwrap();
+    assert!(matches!(
+        rt.side_question(source.id(), "cancel before fork", &cancelled).await,
+        Err(kar::Error::Refused(reason)) if reason == "side question cancelled"
+    ));
+    assert_eq!(calls.lock().unwrap().len(), before);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
     let ask = |question: &'static str, running: bool| {
         let (rt, side, source, file, marker, calls) = (&rt, &side, &source, &file, &marker, &calls);
         async move {

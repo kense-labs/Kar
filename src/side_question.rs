@@ -11,6 +11,7 @@ pub struct SideQuestionOptions {
     pub unset_env: std::collections::BTreeSet<String>,
     pub model: Option<String>,
     pub timeout: Duration,
+    pub signal: tokio_util::sync::CancellationToken,
     pub system_prompt: Option<String>,
     pub append_system_prompt: Option<String>,
     pub exclude_user_configuration: std::collections::BTreeSet<crate::UserConfigurationCategory>,
@@ -23,6 +24,7 @@ impl SideQuestionOptions {
             unset_env: Default::default(),
             model: None,
             timeout: Duration::from_secs(60),
+            signal: Default::default(),
             system_prompt: None,
             append_system_prompt: None,
             exclude_user_configuration: Default::default(),
@@ -58,6 +60,19 @@ impl Runtime {
                 "side questions require text and a positive timeout".into(),
             ));
         }
+        tokio::select! {
+            biased;
+            () = opts.signal.cancelled() => Err(Error::Refused("side question cancelled".into())),
+            answer = self.side_answer(source, question, opts) => answer,
+        }
+    }
+
+    async fn side_answer(
+        &self,
+        source: Uuid,
+        question: &str,
+        opts: &SideQuestionOptions,
+    ) -> Result<String> {
         let cwd = opts.cwd.canonicalize()?;
         let mut launch = crate::SessionOptions::new(&cwd);
         launch.env.clone_from(&opts.env);
