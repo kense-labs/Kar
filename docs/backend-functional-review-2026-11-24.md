@@ -2,6 +2,10 @@
 
 复核对象为 GitHub `main` 的 `d02239d9234a`、上游运行时 `v0.130.1`（`2b15859a13dc`）及 T3 Code `2808e878de91`。以下结论来自固定提交的实际处理逻辑。列出的操作供独立验收复现，当前候选的统一实测仍待执行。
 
+## 本次结论
+
+本地功能候选为 `7111a73`。首次报告的 16 个操作已有对应实现。第二次复核还发现原聊天仅回退模型上下文、第三方 ACP 注册表管理、模型工具的进一步操作以及 Muse 后台事件存在差异。输入投递历史已在本次复核期间补入候选。以下相对路径对应本地分支 `kar/functional-repairs`。
+
 ## 本地修复与 GitHub 版本
 
 GitHub `main` 复查时指向 `d02239d9234a`。下表给出本地分支 `kar/functional-repairs` 对首次复核中 16 个具体操作的实现提交和独立验收入口。提交及开发编译能证明代码已接入。供应商返回、真实强杀、断线和重投仍需由统一验收取证。
@@ -19,7 +23,7 @@ GitHub `main` 复查时指向 `d02239d9234a`。下表给出本地分支 `kar/fun
 | 10. 提供方不能原生分叉时从选定回合便携交接 | `71bd1b3` | `workbench_handoff` 的 `portable_fork`；另对严格原生策略复验 |
 | 11. Codex 父聊天仍在生成时分叉早先已完成回合 | `bb83299` | `chat_restart` 的独立工作树场景 |
 | 12. 同一聊天切换同运行时、同模型的不同实例 | `d3d9e17` | `workbench_handoff` 的 `named_instances` |
-| 13. 把失联后台命令说明发回模型、区分主动关闭 | `cec3da6` | `tests/support/workbench_background.rs` 所在工作台场景 |
+| 13. 把失联后台命令说明发回模型、区分主动关闭 | `cec3da6` | `chat_restart` 中的工作台后台任务场景 |
 | 14. 模型创建 Issue 及发表评论 | `634e11f` | `workbench_mcp`，同时核对计划模式、撤权及重复命令 |
 | 15. 选择 Kiro、Fx 和 Muse 创建及恢复普通聊天 | `3f45a88`、`4f13d55` | `workbench_provider_chat`，真机分别选 `installed kiro`、`installed fx`、`installed muse` |
 | 16. 工作台本地和云端语音转录 | `708d683` | `workbench_voice`，本地需转录引擎及模型，云端需测试账号 |
@@ -74,11 +78,11 @@ Muse 的独立协议还要区分具体行为。固定 T3 对已结束回合的�
 | 额外核实的操作 | 上游用户可以做什么 | Kar 已有入口与剩余差异 | 验收操作 |
 | --- | --- | --- | --- |
 | 从第三方 ACP 注册表准备和卸载代理 | T3 可以搜索代理清单，按条目准备可执行文件，卸载由工作台管理的二进制。 | Kar 有固定的运行时目录及本机会话扫描、导入，也可配置自定义运行环境。尚未找到连接第三方目录并执行上述生命周期的工作台入口。已有清单编号 `registry-agents`，此次确认了其中三个操作的差异。 | 从干净环境搜索一个不在内置目录的条目，准备后开启会话，再卸载该受管安装。核对实际文件和调用入口。 |
-| 从录制记录读取一条输入的完整投递历史 | 上游公开的会话投影按逻辑输入归集多次投递、撤回、逐次回执和运行时回显，支持从录制重新计算。 | Kar 提供按请求查回执、按输入读终态、回放原始记录。当前公开读回接口未发现按输入直接取得全部尝试及相应回显的投影。调用方自行拼原始记录可以获得部分相同事实。 | 以同一输入 ID 完成排队、撤回、再次投递，从重放返回完整尝试顺序，区分控制接纳和原生回显，核对来源与会话归属。 |
+| 从录制记录读取一条输入的完整投递历史 | 上游公开的会话投影按逻辑输入归集多次投递、撤回、逐次回执和运行时回显，支持从录制重新计算。 | Kar 提供按请求查回执、按输入读终态、回放原始记录。在本节对照截点尚缺整条投递历史的公共投影。后续提交 `7111a73` 已将其接入 `Session::conversation`、游标订阅及 `kar replay <记录.jsonl> --conversation`。 | 以同一输入 ID 完成排队、撤回、再次投递，从重放返回完整尝试顺序，区分控制接纳和原生回显，核对来源与会话归属。 |
 
 ACP 条目对应 [T3 工作台处理函数](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/ws.ts#L2437)、[Kar 运行时目录](../src/runtime.rs) 和 [Kar 原生会话扫描与导入](../src/workbench/agent_sessions/mod.rs)。
 
-输入历史对应 [上游运行时会话投影](https://github.com/botiverse/oar/blob/2b15859a13dcc50e8b66cbaee5a007832aa00e08/packages/oar/src/observe/conversation.ts#L239)、[Kar 请求回执](../src/stream.rs)、[Kar 输入终态](../src/observe/turn_end/input.rs) 和 [Kar 会话视图](../src/observe.rs)。
+输入历史对应 [上游运行时会话投影](https://github.com/botiverse/oar/blob/2b15859a13dcc50e8b66cbaee5a007832aa00e08/packages/oar/src/observe/conversation.ts#L239)、[Kar 请求回执](../src/stream.rs)、[Kar 输入终态](../src/observe/turn_end/input.rs) 和 [Kar 会话视图](../src/observe.rs) 及 [本地新增的输入历史投影](../src/observe/conversation/mod.rs)。
 
 ### 用模型会话实际可发现的工具复核
 
