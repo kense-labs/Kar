@@ -181,7 +181,7 @@ async fn unexpected_exit() -> kar::Result<()> {
     let marker = dir.path().join("exit-now");
     opts.env.insert(
         "KAR_TEST_DELIVERY_EXIT".into(),
-        marker.display().to_string(),
+        marker.clone().into_os_string(),
     );
     let session = runtime.open(opts).await?;
     let mut journal = session.subscribe(None)?;

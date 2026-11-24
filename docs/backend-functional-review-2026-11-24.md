@@ -2,6 +2,30 @@
 
 复核对象为 GitHub `main` 的 `d02239d9234a`、上游运行时 `v0.130.1`（`2b15859a13dc`）及 T3 Code `2808e878de91`。以下结论来自固定提交的实际处理逻辑。列出的操作供独立验收复现，当前候选的统一实测仍待执行。
 
+## 本地修复与 GitHub 版本
+
+GitHub `main` 复查时指向 `d02239d9234a`。下表给出本地分支 `kar/functional-repairs` 对首次复核中 16 个具体操作的实现提交和独立验收入口。提交及开发编译能证明代码已接入。供应商返回、真实强杀、断线和重投仍需由统一验收取证。
+
+| 首次复核中的操作 | 本地提交 | macOS 复验入口 |
+| --- | --- | --- |
+| 1. Pi 图文及仅图片回合的强杀恢复 | `9235948` | `tests/native_live/pi_history.rs` 的图文恢复场景 |
+| 2–3. 访客读取可见附件、主人接纳后原生带图投递 | `62d6a4c`、`c6c85d0` | `workbench_remote_access` 和 `chat_restart` 的分叉用例 |
+| 4. 从只有非 origin 远端的项目 PR 建工作树 | `9a7367b` | `workbench_forge` |
+| 5. 等价修改计划后保留到期任务 | `f35cb55` | `workbench_workflows` |
+| 6. 已知 Kimi KAP 版本开会话前的能力 | `943f651` | `cargo test --locked --lib capabilities::installed`，另用指定二进制查看能力 |
+| 7. 立即、轮后、空闲和中断合并投递 | `c5d93e5`、`f381a7f`、`78addec` | `tests/protocol/delivery.rs`，含根回合、并发、拒绝和退出切点 |
+| 8. 输入的用户、通知或自动化来源 | `c6fa4fd`、`5742659` | `cybion` 中的来源回放及原生请求比对 |
+| 9. Pi 项目包预检和默认离线启动 | `56682fe` | `pi_provider_live` 的 `packages::native_rpc_package_preflight_and_install_opt_in`，需本机 Pi |
+| 10. 提供方不能原生分叉时从选定回合便携交接 | `71bd1b3` | `workbench_handoff` 的 `portable_fork`；另对严格原生策略复验 |
+| 11. Codex 父聊天仍在生成时分叉早先已完成回合 | `bb83299` | `chat_restart` 的独立工作树场景 |
+| 12. 同一聊天切换同运行时、同模型的不同实例 | `d3d9e17` | `workbench_handoff` 的 `named_instances` |
+| 13. 把失联后台命令说明发回模型、区分主动关闭 | `cec3da6` | `tests/support/workbench_background.rs` 所在工作台场景 |
+| 14. 模型创建 Issue 及发表评论 | `634e11f` | `workbench_mcp`，同时核对计划模式、撤权及重复命令 |
+| 15. 选择 Kiro、Fx 和 Muse 创建及恢复普通聊天 | `3f45a88`、`4f13d55` | `workbench_provider_chat`，真机分别选 `installed kiro`、`installed fx`、`installed muse` |
+| 16. 工作台本地和云端语音转录 | `708d683` | `workbench_voice`，本地需转录引擎及模型，云端需测试账号 |
+
+Muse 的独立协议还要区分具体行为。固定 T3 对已结束回合的原生分叉明确拒绝，但能接收自主启动的回合，并在父回合结束后继续处理后台子代理审批。Kar 已有普通聊天和前台审批，这两种后台操作仍有差异。[Muse 逐项源码定位与实测入口](workbench-provider-chat.md)
+
 ## 清单内的操作
 
 下列差异直接影响原 12 项或 8 项中的用户操作。
