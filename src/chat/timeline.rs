@@ -152,7 +152,9 @@ impl ChatTurn {
     pub(crate) fn transcript_adds_content(&self, root: &str, edits: &[Edit]) -> Option<bool> {
         use std::collections::HashMap;
         let mut messages = HashMap::new();
+        let mut accepted = HashMap::new();
         let mut tools = HashMap::new();
+        let mut changed = false;
         for edit in edits {
             match edit {
                 Edit::Text {
@@ -166,10 +168,28 @@ impl ChatTurn {
                 Edit::ToolSnapshot { id, activity } => {
                     tools.insert(id.as_str(), (activity, false));
                 }
+                Edit::SteeringInput {
+                    id,
+                    text,
+                    status: crate::SteerStatus::Accepted,
+                } => {
+                    if accepted
+                        .insert(id.to_string(), (text.as_str(), false))
+                        .is_some()
+                    {
+                        return None;
+                    }
+                    match self.steered_inputs.get(id)? {
+                        crate::SteerStatus::Submitted
+                        | crate::SteerStatus::Queued
+                        | crate::SteerStatus::Unconfirmed => changed = true,
+                        crate::SteerStatus::Accepted => {}
+                        _ => return None,
+                    }
+                }
                 _ => {}
             }
         }
-        let mut changed = false;
         for item in self
             .items
             .iter()
@@ -177,8 +197,20 @@ impl ChatTurn {
         {
             match &item.item {
                 Item::Message {
-                    role: Role::User, ..
-                } => {}
+                    role: Role::User,
+                    provider_id,
+                    text,
+                    ..
+                } => {
+                    if let Some((expected, seen)) =
+                        provider_id.as_ref().and_then(|id| accepted.get_mut(id))
+                    {
+                        if *seen || *expected != text {
+                            return None;
+                        }
+                        *seen = true;
+                    }
+                }
                 Item::Message {
                     role,
                     text,
@@ -214,6 +246,9 @@ impl ChatTurn {
                 }
                 _ => {}
             }
+        }
+        if accepted.values().any(|(_, seen)| !seen) {
+            return None;
         }
         Some(
             changed

@@ -200,3 +200,231 @@ async fn replay_native_blocks_after_controller_crash() {
     assert_eq!(calls.lock().unwrap().len(), before);
     server.abort();
 }
+
+pub(super) async fn check_steering(
+    source: &ChatStore,
+    dir: &std::path::Path,
+    opening: chat::ChatCursor,
+    live: &chat::ChatFeedSnapshot,
+    env: &BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+) {
+    let chat = live.history.chat.id;
+    let origin = &live.history.turns[0];
+    let child = live.history.turns.get(1);
+    let mut feed = source.follow(chat, Some(opening)).unwrap();
+    let mut cuts = BTreeMap::new();
+    while feed.cursor() != live.cursor {
+        let event = feed.recv().await.unwrap();
+        match &event.update {
+            ChatUpdate::Begin { .. } => {
+                cuts.insert("before-steering", event.cursor);
+            }
+            ChatUpdate::NativeBegin {
+                steered_from: Some(_),
+                ..
+            } => {
+                cuts.insert("moved-first", event.cursor);
+            }
+            ChatUpdate::Frame { id, frame } => {
+                for edit in &frame.edits {
+                    let label = match edit {
+                        ChatEdit::SteeringInput {
+                            text,
+                            status: kar::SteerStatus::Submitted,
+                            ..
+                        } if text == "KAR-LIVE-FOLLOWUP" => "submitted-one",
+                        ChatEdit::SteeringInput {
+                            text,
+                            status: kar::SteerStatus::Submitted,
+                            ..
+                        } if text == "KAR-LIVE-SECOND" => "submitted-both",
+                        ChatEdit::Activity {
+                            event: Event::SteeringMoved { .. },
+                        } => "moved-both",
+                        ChatEdit::NativeResult { .. } if *id == origin.id && child.is_some() => {
+                            "parent-result"
+                        }
+                        ChatEdit::Text {
+                            role: chat::Role::Assistant,
+                            final_text: false,
+                            ..
+                        } if child.is_some_and(|t| t.id == *id) => "child-text",
+                        _ => continue,
+                    };
+                    cuts.entry(label).or_insert(event.cursor);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(cuts.contains_key("submitted-both"), "{cuts:?}");
+    if child.is_some() {
+        assert!(
+            ["parent-result", "moved-first", "moved-both", "child-text"]
+                .iter()
+                .all(|key| cuts.contains_key(key)),
+            "{cuts:?}"
+        );
+    }
+    for label in ["before-steering", "submitted-one"] {
+        let cut = cuts.remove(label).unwrap();
+        let prefix = interrupted_copy(&dir.join("chats"), &dir.join(label), chat, cut);
+        let reopened = prefix
+            .resume_with(chat, |o| o.env = env.clone())
+            .await
+            .unwrap();
+        let history = reopened.history().unwrap();
+        assert_eq!(
+            history.turns.len(),
+            1,
+            "unregistered input crossed an attribution boundary"
+        );
+        let turn = &history.turns[0];
+        assert_eq!(turn.status, TurnStatus::Interrupted);
+        assert_eq!(
+            turn.steered_inputs.len(),
+            usize::from(label == "submitted-one")
+        );
+        assert!(
+            turn.steered_inputs
+                .values()
+                .all(|s| *s == kar::SteerStatus::Unconfirmed)
+        );
+        assert!(!turn.items.iter().any(|item|matches!(&item.item,chat::Item::Message{text,..} if text=="saw the follow-up" || text=="KAR-LIVE-SECOND")));
+        reopened.close().await.unwrap();
+    }
+    if let Some(expected) = child {
+        // A second crash can leave only the tool request on disk. Opening twice
+        // against the same bytes must not publish another repair for that tool.
+        let native = &live.history.chat.native_id;
+        let file = fs::read_dir(dir.join("projects"))
+            .unwrap()
+            .flatten()
+            .map(|p| p.path().join(format!("{native}.jsonl")))
+            .find(|p| p.is_file())
+            .unwrap();
+        let full = fs::read_to_string(&file).unwrap();
+        let mut prefix = String::new();
+        let mut followup = false;
+        for line in full.split_inclusive('\n') {
+            prefix.push_str(line);
+            let row: serde_json::Value = serde_json::from_str(line).unwrap();
+            followup |= row["type"] == "user" && row["mergedSendUuids"].is_array();
+            if followup
+                && row["type"] == "assistant"
+                && row["message"]["content"]
+                    .as_array()
+                    .is_some_and(|blocks| blocks.iter().any(|b| b["type"] == "tool_use"))
+            {
+                break;
+            }
+        }
+        assert!(followup && prefix.len() < full.len());
+        fs::write(&file, prefix).unwrap();
+        let cut = cuts["submitted-both"];
+        let growing =
+            interrupted_copy(&dir.join("chats"), &dir.join("growing-steering"), chat, cut);
+        for attempt in 0..3 {
+            if attempt == 2 {
+                fs::write(&file, &full).unwrap();
+            }
+            let start = growing.feed_snapshot(chat).unwrap().cursor;
+            let reopened = growing
+                .resume_with(chat, |o| o.env = env.clone())
+                .await
+                .unwrap();
+            let history = reopened.history().unwrap();
+            let turn = &history.turns[1];
+            assert_eq!(turn.id, expected.id);
+            if attempt == 2 {
+                assert_eq!(turn.items, expected.items);
+            } else {
+                assert!(turn.items.iter().any(
+                    |i| matches!(&i.item,chat::Item::Tool{activity,..} if activity.result.is_none())
+                ));
+            }
+            reopened.close().await.unwrap();
+            let end = growing.feed_snapshot(chat).unwrap().cursor;
+            let mut stream = growing.follow(chat, Some(start)).unwrap();
+            let mut groups = 0;
+            while stream.cursor() != end {
+                groups += usize::from(matches!(
+                    stream.recv().await.unwrap().update,
+                    ChatUpdate::ClaudeFollowUp { .. }
+                ));
+            }
+            assert_eq!(groups, usize::from(attempt != 1));
+        }
+    }
+    for (label, cut) in cuts {
+        let destination = dir.join(label);
+        let store = interrupted_copy(&dir.join("chats"), &destination, chat, cut);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let router = chat::event_router(store.clone(), chat);
+        let http = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut a = ChatReplica::from_snapshot(store.feed_snapshot(chat).unwrap());
+        let mut b = ChatReplica::from_snapshot(store.feed_snapshot(chat).unwrap());
+        let mut online = SseClient::open(&url, &a.cursor().to_string(), None).await;
+        let mut between = None;
+        for attempt in 0..2 {
+            let reopened = store
+                .resume_with(chat, |o| o.env = env.clone())
+                .await
+                .unwrap();
+            let history = reopened.history().unwrap();
+            assert_eq!(history.turns.len(), live.history.turns.len(), "{label}");
+            for (index, (actual, expected)) in
+                history.turns.iter().zip(&live.history.turns).enumerate()
+            {
+                assert_eq!(actual.items, expected.items, "{label} turn {index}");
+                assert_eq!(actual.steered_from, expected.steered_from, "{label}");
+                assert_eq!(actual.id, expected.id, "{label}");
+                assert_eq!(actual.steered_inputs, expected.steered_inputs, "{label}");
+                if index == 1 || label == "submitted-both" {
+                    assert_eq!(actual.status, TurnStatus::Interrupted, "{label}");
+                    assert!(actual.native_result_id.is_none());
+                }
+                if index == 1 {
+                    assert!(
+                        actual
+                            .checkpoint
+                            .as_ref()
+                            .is_none_or(|c| c.after_tree.is_none())
+                    );
+                }
+            }
+            reopened.close().await.unwrap();
+            if attempt == 0 {
+                between = Some(store.feed_snapshot(chat).unwrap().cursor);
+            }
+        }
+        let tip = store.feed_snapshot(chat).unwrap();
+        let mut resumed =
+            SseClient::open(&url, &opening.to_string(), Some(&b.cursor().to_string())).await;
+        for (replica, client) in [(&mut a, &mut online), (&mut b, &mut resumed)] {
+            let mut first = true;
+            let mut repaired = false;
+            while replica.cursor() != tip.cursor {
+                let event = client.next().await;
+                if matches!(
+                    event.update,
+                    ChatUpdate::Reconciled { .. } | ChatUpdate::ClaudeFollowUp { .. }
+                ) {
+                    assert!(first, "duplicate repair on second restart at {label}");
+                    repaired = true;
+                }
+                assert!(replica.apply(event.clone()).unwrap());
+                assert!(!replica.apply(event).unwrap());
+                if Some(replica.cursor()) == between {
+                    first = false;
+                }
+            }
+            assert!(repaired, "expected native transcript repair at {label}");
+            assert_eq!(replica.turns(), tip.history.turns);
+        }
+        let journal = fs::read_to_string(destination.join(format!("{chat}.karchat"))).unwrap();
+        assert!(!journal.contains("iVBORw0KGgoAAAANS"));
+        http.abort();
+    }
+}

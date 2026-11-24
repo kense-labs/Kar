@@ -1,5 +1,7 @@
 //! Reconcile host inputs with Claude's persistent root conversation.
 mod blocks;
+mod followup;
+mod steering;
 use crate::{
     Error, Result, SessionOptions,
     chat::{ChatEdit, ChatInfo, ChatTurn, TurnStatus},
@@ -19,6 +21,8 @@ use uuid::Uuid;
 pub(super) struct History {
     pub received: Vec<Uuid>,
     pub edits: Vec<ChatEdit>,
+    pub groups: Vec<(steering::Batch, Vec<ChatEdit>)>,
+    pub origin: Option<Uuid>,
 }
 
 pub(super) async fn history(
@@ -36,21 +40,39 @@ pub(super) async fn history(
         })
         .filter_map(|t| Some((t.id, t.prompt()?.to_owned())))
         .collect();
-    let recovery = turns
-        .last()
-        .filter(|t| {
-            matches!(t.status, TurnStatus::Interrupted | TurnStatus::Running)
-                && !t.native_continuation
-                && t.steered_from.is_none()
-                && t.steered_inputs.is_empty()
-                && t.native_result_id.is_none()
-                && t.native_input_receipt
-                    .is_none_or(|r| r.dropped_outcome().is_none())
-        })
-        .and_then(|t| {
-            inputs.insert(t.id, t.prompt()?.to_owned());
-            Some(blocks::Transcript::new(t, &chat.native_id))
+    let last = turns.last();
+    let recovery = last.and_then(|last| {
+        let origin = match last.steered_from {
+            Some(id) => turns.iter().find(|t| t.id == id)?,
+            None => last,
+        };
+        let unfinished = matches!(last.status, TurnStatus::Interrupted | TurnStatus::Running)
+            && last.native_result_id.is_none();
+        let pending = origin.steered_inputs.iter().any(|(id, s)| {
+            s.is_waiting()
+                || *s == crate::SteerStatus::Unconfirmed
+                || (*s == crate::SteerStatus::FollowUp
+                    && !turns.iter().any(|t| {
+                        t.steered_from == Some(origin.id)
+                            && (t.id == *id || t.steered_inputs.contains_key(id))
+                    }))
         });
+        if !(unfinished || pending)
+            || origin.native_continuation
+            || origin.steered_from.is_some()
+            || origin
+                .native_input_receipt
+                .is_some_and(|r| r.dropped_outcome().is_some())
+        {
+            return None;
+        }
+        inputs.insert(origin.id, origin.prompt()?.to_owned());
+        Some(blocks::Transcript::for_family(
+            origin,
+            turns,
+            &chat.native_id,
+        ))
+    });
     let Ok(session) = Uuid::parse_str(&chat.native_id) else {
         return Ok(History::default());
     };
@@ -161,7 +183,7 @@ fn read(
                 && id == t.input
             {
                 if matches {
-                    t.start();
+                    t.start(&row);
                 } else {
                     recovery = None;
                 }
@@ -191,16 +213,71 @@ fn read(
     }
     let mut ids: Vec<_> = confirmed.into_iter().collect();
     ids.sort_unstable();
-    Ok(History {
-        received: ids,
-        edits: recovery.map_or_else(Vec::new, |t| t.finish()),
-    })
+    let mut result = recovery.map_or_else(History::default, |t| t.finish());
+    result.received = ids;
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn queued_input_needs_a_subsequent_model_block_on_its_own_chain() {
+        use crate::{
+            SteerStatus,
+            chat::{Item, Role},
+        };
+        let origin = Uuid::new_v4();
+        let steering = Uuid::new_v4();
+        let root = "native-session";
+        let mut turn = ChatTurn::new(origin, 1, root, Some("original".into()));
+        let mut message = turn.items[0].clone();
+        message.item = Item::Message {
+            role: Role::User,
+            provider_id: Some(steering.to_string()),
+            text: "queued".into(),
+            complete: true,
+        };
+        turn.items.push(message);
+        turn.steered_inputs
+            .insert(steering, SteerStatus::Unconfirmed);
+        let queued = Uuid::new_v4();
+        let attachment = json!({"type":"attachment","parentUuid":origin,"attachment":{
+            "type":"queued_command","source_uuid":steering,"commandMode":"prompt","prompt":"queued"}});
+        let after_input = || {
+            let mut transcript =
+                blocks::Transcript::for_family(&turn, std::slice::from_ref(&turn), root);
+            transcript.start(&json!({}));
+            transcript.push(queued, &attachment).unwrap();
+            transcript
+        };
+        assert!(after_input().finish().edits.is_empty());
+        let mut assistant = json!({"type":"assistant","parentUuid":queued,"message":{"id":"model-id","model":"fixture","role":"assistant","content":[{"type":"text","text":"response"}]}});
+        let mut accepted = after_input();
+        accepted.push(Uuid::new_v4(), &assistant).unwrap();
+        let edits = accepted.finish().edits;
+        assert_eq!(turn.transcript_adds_content(root, &edits), Some(true));
+        let accepted_only = &edits[1..];
+        assert!(
+            matches!(accepted_only,[ChatEdit::SteeringInput{id,status:SteerStatus::Accepted,..}] if *id==steering)
+        );
+        let barrier = Uuid::new_v4();
+        let mut unrelated = after_input();
+        unrelated.push(barrier,&json!({"type":"attachment","parentUuid":queued,"attachment":{"type":"task_notification"}})).unwrap();
+        assistant["parentUuid"] = json!(barrier);
+        unrelated.push(Uuid::new_v4(), &assistant).unwrap();
+        assert!(unrelated.finish().edits.is_empty());
+        assistant["parentUuid"] = json!(queued);
+        assistant["message"]["model"] = json!("<synthetic>");
+        assert!(after_input().push(Uuid::new_v4(), &assistant).is_none());
+        let mut duplicate = turn.clone();
+        duplicate.items.push(duplicate.items[1].clone());
+        assert_eq!(duplicate.transcript_adds_content(root, accepted_only), None);
+        turn.items.pop();
+        assert_eq!(turn.transcript_adds_content(root, accepted_only), None);
+    }
 
     #[test]
     fn transcript_requires_a_single_root_chain_and_stays_with_its_input() {
@@ -228,7 +305,11 @@ mod tests {
                 &cwd,
                 session,
                 &HashMap::from([(input, "same".into())]),
-                Some(blocks::Transcript::new(&local, &root)),
+                Some(blocks::Transcript::for_family(
+                    &local,
+                    std::slice::from_ref(&local),
+                    &root,
+                )),
             )
             .unwrap()
             .edits

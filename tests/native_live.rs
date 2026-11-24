@@ -1867,6 +1867,10 @@ async fn live_steering(provider: &str, tool: bool) {
         resumed.close().await.unwrap();
     }
     if provider == "claude" {
+        let before = requests.lock().unwrap().len();
+        claude_history::check_steering(&store, dir.path(), initial.parse().unwrap(), &tip, &env)
+            .await;
+        assert_eq!(requests.lock().unwrap().len(), before);
         let capture = dir.path().join("recording.jsonl");
         let mut file = std::io::BufWriter::new(std::fs::File::create(&capture).unwrap());
         for r in &rec {

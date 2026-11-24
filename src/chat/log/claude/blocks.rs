@@ -1,4 +1,8 @@
 //! Read only visible SDK blocks on the parent chain descending from the host input.
+use super::{
+    History,
+    steering::{Batch, Submissions, uuid},
+};
 use crate::{
     Protocol,
     chat::{ChatEdit, ChatTurn, Item, Role},
@@ -11,6 +15,13 @@ use uuid::Uuid;
 pub(super) struct Transcript {
     pub(super) input: Uuid,
     leaf: Option<Uuid>,
+    prompt: Option<Uuid>,
+    submissions: Submissions,
+    pending: Vec<(Uuid, String)>,
+    group: Option<Batch>,
+    completed: History,
+    group_keys: HashMap<Uuid, HashSet<String>>,
+
     past_input: bool,
     rows: HashSet<Uuid>,
     text_keys: HashSet<String>,
@@ -20,29 +31,45 @@ pub(super) struct Transcript {
 }
 
 impl Transcript {
-    pub(super) fn new(turn: &ChatTurn, root: &str) -> Self {
-        let local_keys = turn
-            .items
+    fn keys(turn: &ChatTurn, root: &str) -> HashSet<String> {
+        turn.items
             .iter()
             .filter(|i| i.source.path.is_empty() && i.source.session_id.as_deref() == Some(root))
             .filter_map(|i| match &i.item {
                 Item::Message { provider_id, .. } => provider_id.clone(),
                 _ => None,
             })
-            .collect();
+            .collect()
+    }
+
+    pub(super) fn for_family(turn: &ChatTurn, turns: &[ChatTurn], root: &str) -> Self {
         Self {
             input: turn.id,
+            prompt: None,
+            group: None,
+            pending: vec![],
+            submissions: Submissions::new(turn, turns, root),
+            completed: History {
+                origin: Some(turn.id),
+                ..History::default()
+            },
+            group_keys: turns
+                .iter()
+                .filter(|t| t.steered_from == Some(turn.id))
+                .map(|t| (t.id, Self::keys(t, root)))
+                .collect(),
             leaf: None,
             past_input: false,
             rows: HashSet::new(),
             text_keys: HashSet::new(),
-            local_keys,
+            local_keys: Self::keys(turn, root),
             tools: HashMap::new(),
             edits: vec![],
         }
     }
 
-    pub(super) fn start(&mut self) {
+    pub(super) fn start(&mut self, row: &Value) {
+        self.prompt = uuid(&row["promptId"]);
         self.leaf = Some(self.input);
         self.rows.insert(self.input);
     }
@@ -66,15 +93,37 @@ impl Transcript {
             return Some(());
         }
         if kind == "attachment" {
-            // A notification or queued input may start another native model loop.
-            self.past_input = matches!(
-                row.pointer("/attachment/type")?.as_str()?,
-                "task_notification" | "queued_command"
-            );
+            match row.pointer("/attachment/type")?.as_str()? {
+                "task_notification" => self.past_input = true,
+                "queued_command" => match self.submissions.in_turn(&row["attachment"]) {
+                    Some(input) if self.group.is_none() => self.pending.push(input),
+                    _ => self.past_input = true,
+                },
+                _ => {}
+            }
             return Some(());
         }
         if kind == "user" && row["promptSource"] == "sdk" && row["message"]["role"] == "user" {
-            self.past_input = true;
+            let Some(batch) = self.submissions.next_turn(id, row) else {
+                self.past_input = true;
+                return Some(());
+            };
+            self.finish_segment();
+            self.local_keys = self.group_keys.remove(&batch.inputs[0]).unwrap_or_default();
+            self.text_keys.clear();
+            self.tools.clear();
+            self.pending.clear();
+            self.prompt = uuid(&row["promptId"]);
+            self.group = Some(batch);
+            return Some(());
+        }
+        // A Claude image-paste companion has no host input or model output.
+        if kind == "user"
+            && row["turnCompanion"] == true
+            && row["isMeta"] == true
+            && self.prompt.is_some()
+            && uuid(&row["promptId"]) == self.prompt
+        {
             return Some(());
         }
         if row["isMeta"] == true
@@ -83,7 +132,16 @@ impl Transcript {
         {
             return None;
         }
+        if kind == "assistant" {
+            row["message"]["id"]
+                .as_str()
+                .filter(|id| !id.trim().is_empty())?;
+            row["message"]["model"]
+                .as_str()
+                .filter(|model| !model.is_empty() && *model != "<synthetic>")?;
+        }
         let blocks = row["message"]["content"].as_array()?;
+        let before = self.edits.len();
         for (i, block) in blocks.iter().enumerate() {
             match (kind, block["type"].as_str()?) {
                 ("assistant", "text" | "thinking") => {
@@ -93,9 +151,6 @@ impl Transcript {
                         (Role::Assistant, block["text"].as_str()?)
                     };
                     let message = row["message"]["id"].as_str()?.trim();
-                    if message.is_empty() || row["message"]["model"] == "<synthetic>" {
-                        return None;
-                    }
                     // The wire stream uses the model id and block index. An SDK
                     // envelope without its stream uses the packet UUID instead.
                     let packet_key = format!("{id}#{i}");
@@ -158,11 +213,33 @@ impl Transcript {
                 _ => return None,
             }
         }
+        // A queued attachment alone does not prove a model step consumed it.
+        if kind == "assistant" && self.edits.len() > before {
+            self.edits.extend(
+                self.pending
+                    .drain(..)
+                    .map(|(id, text)| ChatEdit::SteeringInput {
+                        id,
+                        text,
+                        status: crate::SteerStatus::Accepted,
+                    }),
+            );
+        }
         Some(())
     }
 
-    pub(super) fn finish(self) -> Vec<ChatEdit> {
-        self.edits
+    fn finish_segment(&mut self) {
+        let edits = std::mem::take(&mut self.edits);
+        match self.group.take() {
+            Some(batch) if !edits.is_empty() => self.completed.groups.push((batch, edits)),
+            None => self.completed.edits = edits,
+            _ => {}
+        }
+    }
+
+    pub(super) fn finish(mut self) -> History {
+        self.finish_segment();
+        self.completed
     }
 }
 

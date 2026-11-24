@@ -81,6 +81,12 @@ pub enum ChatUpdate {
     },
     NotificationsInterrupted,
     SteeringUnconfirmed,
+    ClaudeFollowUp {
+        from: Uuid,
+        inputs: Vec<Uuid>,
+        at: u64,
+        frame: Frame,
+    },
     InputSent {
         id: Uuid,
     },
@@ -527,6 +533,20 @@ impl State {
                 }
                 self.pending_requests.clear();
                 self.stream = Some(stream);
+            }
+            ChatUpdate::ClaudeFollowUp {
+                from,
+                inputs,
+                at,
+                frame,
+            } => {
+                self.claude_group(from, &inputs, at)
+                    .ok_or_else(|| {
+                        Error::Protocol(
+                            "Claude follow-up does not match its submitted inputs".into(),
+                        )
+                    })?
+                    .apply(self, &frame)?;
             }
             ChatUpdate::InputSent { id } => {
                 let index = *self
@@ -1077,6 +1097,7 @@ impl Log {
             }
             if !history.edits.is_empty()
                 && let Some(last) = self.state.unfinished_turn()
+                && history.origin == Some(last.id)
                 && let Some(frame) = session.recover_transcript(
                     "claude/transcript",
                     last.id.to_string(),
@@ -1086,6 +1107,33 @@ impl Log {
                 )?
             {
                 self.commit(ChatUpdate::Reconciled { id: last.id, frame })?;
+            }
+            if let Some(from) = history.origin {
+                for (batch, edits) in history.groups {
+                    let Some(group) = self.state.claude_group(from, &batch.inputs, batch.at) else {
+                        continue;
+                    };
+                    let membership_changed = group.changed(&self.state);
+                    if let Some(frame) = session.recover_transcript(
+                        "claude/follow-up",
+                        group.turn.id.to_string(),
+                        edits,
+                        options,
+                        |edits| {
+                            group
+                                .turn
+                                .transcript_adds_content(session.id(), edits)
+                                .is_some_and(|content| content || membership_changed)
+                        },
+                    )? {
+                        self.commit(ChatUpdate::ClaudeFollowUp {
+                            from,
+                            inputs: batch.inputs,
+                            at: batch.at,
+                            frame,
+                        })?;
+                    }
+                }
             }
         }
         if let Some(last) = self.state.unfinished_turn()
