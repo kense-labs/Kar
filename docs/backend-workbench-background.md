@@ -19,7 +19,11 @@
 
 开发阶段在 macOS 执行了 `cargo check --locked --offline --tests --example backend_suite`。上表两条运行命令及供应商版本结果留待统一验收。
 
-## 仍需移植或联调
+## 当前实现
+
+Claude、Antigravity 和 OpenCode 均有按原生任务归属等待的入口。OpenCode 在能核验本机进程身份的版本上还可定向停止。Cursor 的固定工作台适配器使用带补丁的 SDK shell 句柄，Kar 的 Cursor ACP 路径尚无等价的停止回调。版本、原始证据及分开的实机命令见 [OpenCode 与 Cursor 对照](backend-opencode-background-shells.md)。本机与已授权远端委派的取消及回执见 `194c43c`。下表之后的早期判断保留作版本记录。
+
+## 早期对照记录
 
 - `packages/provider-acp/src/server/adapter.ts:10240`、`provider-cursor/src/server/adapter.ts:3396`、`provider-opencode/src/server/v2/adapter.ts:5271` 均定义自己的任务标识和匹配方式。`AntigravityAdapterV2.test.ts:1777` 还断言跟踪过的命令可匹配。Kar 当前等待入口支持 Claude。其他适配器的公开契约是实现缺口；逐个使用该供应商的真实命令与工作台复验。
 - `ThreadManagementService.ts:1743` 按子线程去重递归停止应用托管的委派任务，包括远程子环境、已有结果后的后续工作和部分失败汇总。`ClaudeAdapterV2.ts:14892` 处理原生子代理停止，`provider-opencode/src/server/v2/adapter.ts:5299` 实现该适配器的任务停止。Kar 当前单个工作流停止尚未覆盖这些调用链。

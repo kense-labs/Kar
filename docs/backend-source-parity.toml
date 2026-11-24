@@ -4,6 +4,7 @@ runtime_commit = "2b15859a13dcc50e8b66cbaee5a007832aa00e08"
 workbench_commit = "2808e878de91aacc7fb82887f18414976be7ae34"
 initial_kar_comparison = "deb7091eaccefacef2221a0489d7b73499cfe24e"
 functional_review = "backend-functional-review-2026-11-24.md"
+# 首次公开主线复核的历史基线。当前功能候选记录于 functional_review。
 functional_review_kar_commit = "d02239d9234abb382d0a35c084d25dacc557738c"
 runtime_inventory = "backend-source-index.tsv"
 workbench_rpc_inventory = "backend-workbench-source-index.tsv"
@@ -467,8 +468,9 @@ phase = 2
 name = "访客提议、会话分享关闭及撤销未发送消息"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
 kar = ["src/workbench/access/guest.rs"]
-status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
-test_target = "cargo test --locked --test workbench_remote_access"
+implementation_commit = "c6c85d0"
+status = "访客授权、提议、撤销、主人接纳及与原消息的重试对账有正常入口。详见工作台综合场景。"
+test_target = "cargo test --locked --test workbench_acceptance"
 accept = "打开、兑换并关闭分享；访客提交两则消息，所有者关闭一则、接受另一则，服务端使用已保存正文。断线/重启后核对投影、客户端权限及真实供应商投递次数。"
 
 [[gap]]
@@ -520,8 +522,9 @@ phase = 2
 name = "供应商与 MCP 登录、反馈、额度及凭据交接"
 upstream = ["apps/server/src/provider/ProviderAuthService.ts"]
 kar = ["src/workbench/interactions.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test protocol"
+implementation_commit = "ac76ef5"
+status = "内置供应商和动态 ACP 的状态、登录、交互、取消及可用额度走供应商原生入口，交互流可绑定发起客户端。共享凭据停机会话、账号导入/重新连接、供应商反馈及第三方 MCP 服务登录另核，见 backend-account-workbench.md。"
+test_target = "cargo test --locked --test workbench_acp_registry"
 accept = "从两个客户端启动、响应、完成、取消、观察授权流；验证来源客户端绑定。检查凭据移除、退出、MCP 登录、账号导入/重连、反馈和额度结果。"
 
 [[gap]]
@@ -530,8 +533,9 @@ phase = 2
 name = "供应商安装、取消、进度续收及移除"
 upstream = ["apps/server/src/provider/providerInstallation.ts", "apps/server/src/provider/ProviderInstallationGate.ts"]
 kar = ["src/workbench/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test protocol"
+implementation_commit = "4a22f65"
+status = "Codex 和 Antigravity 原生包的下载校验、运行时复验、独占任务、进度、取消、重启读回和受管删除已接入。真实发布源与已安装程序待 macOS 统一验收。"
+test_target = "cargo test --locked --test workbench_managed_providers"
 accept = "两个客户端观察同一安装任务，核对路径、版本、并发请求、取消及重试。卸载只清理该实例拥有的二进制文件。"
 
 [[gap]]
@@ -540,8 +544,9 @@ phase = 2
 name = "工作台配置、更新任务、快捷键和服务生命周期"
 upstream = ["apps/server/src/serverSettings.ts", "apps/server/src/keybindings.ts", "apps/server/src/ws.ts"]
 kar = ["src/workbench/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+implementation_commit = "01a1d6e"
+status = "配置、两客户端修订订阅、快捷键优先级、外部文件变更和损坏修复已接入。桌面更新准备和提交需要独立桌面更新宿主。"
+test_target = "cargo test --locked --test workbench_configuration"
 accept = "重启后读取设置、实例更新与快捷键；验证版本探测、进度、准备/提交桌面更新、配置与生命周期订阅的初始状态及变更。使用 Kar 更新来源。"
 
 [[gap]]
@@ -550,8 +555,9 @@ phase = 2
 name = "存储分析、局部清理、报告和数据库空间回收"
 upstream = ["apps/server/src/storageCleanup.ts", "apps/server/src/ws.ts"]
 kar = ["src/workbench/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+implementation_commit = "87a335a"
+status = "已接入分类占用与清理前后报告，按授权回收过期暂存附件、轮转日志和未绑定干净工作树，保留聊天历史。Kar 持久化后端使用追加日志。"
+test_target = "cargo test --locked --test workbench_remote_access -- host-storage"
 accept = "记录清理前分类占用、可回收量及跳过的活动记录。执行显式清理、复读报告、核对剩余历史游标、附件及回收空间。"
 
 [[gap]]
@@ -560,8 +566,9 @@ phase = 2
 name = "环境链接、配对、授权应答及远程聊天窗口"
 upstream = ["apps/server/src/peer/PeerLinks.ts", "apps/server/src/peer/PeerLinkRequests.ts"]
 kar = ["src/workbench/access/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test workbench_remote_access"
+implementation_commit = "194c43c"
+status = "明确授权的链接可读取远端聊天历史、单条与游标事件，取消链接结束流。执行权另按项目和模板聊天批准，委派按稳定命令对账并回传结果。"
+test_target = "cargo test --locked --test workbench_mcp"
 accept = "相互授权两个环境，获取名称、远程历史分页、单条详情和实时更新；拒绝请求、撤销链接及远端离线时核对权限与游标。"
 
 [[gap]]
@@ -582,8 +589,9 @@ phase = 2
 name = "主机与进程资源、追踪、使用量和诊断"
 upstream = ["apps/server/src/diagnostics/ProcessDiagnostics.ts", "apps/server/src/diagnostics/TraceDiagnostics.ts", "apps/server/src/resourceTelemetry/ResourceTelemetry.ts", "apps/server/src/usage/UsageService.ts", "apps/server/src/triage/TriageService.ts"]
 kar = ["src/workbench/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+implementation_commit = "09a0dc4"
+status = "浏览器 OTLP 接收、工作台跟踪、诊断查询和可配置的外部收集器已接入，实际外部收集器投递待验。"
+test_target = "cargo test --locked --test workbench_remote_access -- host-storage"
 accept = "以 macOS 本机服务读取进程、主机负载、活动和历史窗口。核对 telemetry 首帧、重试、OTLP 检查、费用刷新、triage 和进程信号的授权目标与结果。"
 
 [[gap]]
@@ -592,8 +600,9 @@ phase = 2
 name = "远程中继程序状态、安装与进度"
 upstream = ["apps/server/src/cloud/RelayClientLedger.ts", "apps/server/src/ws.ts"]
 kar = ["src/workbench/access/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+implementation_commit = "2a35be3"
+status = "按固定 macOS 版本与摘要校验，确认所选路径和进程身份，安装进度可订阅；真实供应商中继需可授权的账号。"
+test_target = "cargo test --locked --test workbench_remote_access"
 accept = "检查中继程序状态，订阅安装进度，成功后重新发现同一版本。分别记录断线、失败和缺少远端环境。"
 
 [[gap]]
@@ -634,7 +643,8 @@ phase = 2
 name = "分支和托管变更请求的准备与评审"
 upstream = ["apps/server/src/review/ReviewService.ts", "apps/server/src/ws.ts"]
 kar = ["src/workbench/git.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+implementation_commit = "6bcd328"
+status = "以聊天所属仓库及头提交定位审阅、评论和检查。各驱动的可用动作须分别核对，托管仓库和测试凭据另列。"
 test_target = "cargo test --locked --test workbench_forge"
 accept = "对本地分支和托管 PR 读取提交、文件与变更前后内容；检查空文件、冲突、缓存、独立工作树和当前工作区被占用的行为。"
 
@@ -818,8 +828,8 @@ name = "工作台 MCP 编排、委派、定时、秘密和环境链接"
 upstream = ["apps/server/src/mcp/toolkits/orchestrator/tools.ts", "apps/server/src/mcp/toolkits/orchestrator/handlers.ts"]
 kar = ["src/workbench/mcp"]
 operation_mapping = "backend-workbench-mcp-map.tsv"
-implementation_commit = "d0affd2"
-status = "本机委派、状态与取消、批量新聊、定时或手动任务及工作流停止已有入口。远端委派和各供应商后台等待另核。 待 macOS 统一实测。"
+implementation_commit = "194c43c"
+status = "本机与远端委派、取消及返回父聊天、批量新聊、定时及立即触发、私密输入和环境链接已接入。远端需要两侧授权。"
 implementation_ref = "03ffd3d,19a75e5,addd68e"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "逐行检查目标、权限、运行模式上限、取消和超时；跨实例任务由对应实例应答，取消不会影响其他任务。"
@@ -868,8 +878,8 @@ name = "工作台 MCP 拉取请求、指南、监听和 CI"
 upstream = ["apps/server/src/mcp/toolkits/pullRequests/tools.ts", "apps/server/src/mcp/toolkits/pullRequests/handlers.ts"]
 kar = ["src/workbench/forge"]
 operation_mapping = "backend-workbench-mcp-map.tsv"
-implementation_commit = "71cadf9"
-status = "聊天与 PR 的关联、详情、审阅、GitHub 合并及 CI 已接到模型。逐驱动写入能力、watch 与 guide 独立核。 待 macOS 统一实测。"
+implementation_commit = "242fd6a"
+status = "已接入当前工作树发布及关联、持久监视和 CI 唤醒、不可变头提交的审阅指引、原生远端修改及 CI 动作。按具体托管服务、权限和版本验收。"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "逐项检查单个及批量关联、向导读写、订阅、审批、合并和 CI 操作归属及真实托管端回执。"
 
@@ -905,9 +915,10 @@ name = "工作台 MCP 调用方工具发现"
 upstream = ["apps/server/src/mcp/toolkits/toolSearch/tools.ts", "apps/server/src/mcp/toolkits/toolSearch/handlers.ts"]
 kar = ["src/workbench/mcp"]
 operation_mapping = "backend-workbench-mcp-map.tsv"
-status = "Claude、Codex 延迟加载、搜索评分和双监听的工具目录通知已接入。跨协议和供应商实测待统一执行。"
+implementation_commit = "4606209"
+status = "延迟工具发现、清单变更及授权调用已接入。支持的传输和拒绝按实际供应商协商，包括动态 ACP；需在真实客户端复验。"
 implementation_ref = "03ffd3d"
-test_target = "cargo test --locked --test workbench_mcp"
+test_target = "cargo test --locked --test workbench_provider_chat"
 accept = "仅搜索可见工具，按名称和描述排序取最多十项，一个供应商会话加载的工具不会出现于另一会话，列表变更可订阅。"
 
 [[gap]]
@@ -943,8 +954,9 @@ name = "环境元数据发现"
 upstream = ["apps/server/src/http.ts"]
 kar = ["src/workbench/access"]
 operation_mapping = "backend-workbench-http-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
-test_target = "cargo test --locked --test workbench_remote_access"
+implementation_commit = "0ebc2c9"
+status = "环境身份、版本、标签、偏好和远端读取已接入；登记配对前校验返回的环境身份。"
+test_target = "cargo test --locked --test workbench_mcp"
 accept = "读取实例标识、版本和能力的公开范围，再次登录同实例核对标识。"
 
 [[gap]]
@@ -954,8 +966,9 @@ name = "环境浏览器会话、配对与用途绑定票据"
 upstream = ["apps/server/src/auth/http.ts"]
 kar = ["src/workbench/access"]
 operation_mapping = "backend-workbench-http-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
-test_target = "cargo test --locked --test workbench_remote_access"
+implementation_commit = "61db96e"
+status = "已接入有期限的浏览器会话、定向票据、设备证明及撤销。托管账号与设备分别核验。"
+test_target = "cargo test --locked --test workbench_oauth"
 accept = "按表内各路由核对配对凭证、浏览器会话、刷新、撤销、媒体与订阅票据，错用票据及并发重放被拒绝。"
 
 [[gap]]
@@ -965,8 +978,9 @@ name = "MCP 客户端注册与授权"
 upstream = ["apps/server/src/auth/mcpOAuthHttp.ts"]
 kar = ["src/workbench/access"]
 operation_mapping = "backend-workbench-http-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
-test_target = "cargo test --locked --test workbench_mcp"
+implementation_commit = "60c432c"
+status = "外部客户端注册、授权同意、PKCE 换令牌和撤销已接入；用户授权必须匹配作用域和链接用途。"
+test_target = "cargo test --locked --test workbench_oauth"
 accept = "核对发现元数据、动态注册、用户同意、拒绝、授权码与 PKCE、令牌撤销，确认回调和实际权限范围。"
 
 [[gap]]
@@ -976,7 +990,8 @@ name = "工具传输、会话认证及作用域"
 upstream = ["apps/server/src/mcp/McpHttpServer.ts"]
 kar = ["src/workbench/mcp"]
 operation_mapping = "backend-workbench-http-map.tsv"
-status = "已实现有状态初始化、双订阅、工具发现和关闭，以及无状态发现和基本调用。Kar 供应商凭证当前接入 Claude、Codex；外部 OAuth、里程碑流以及其余供应商仍待补。"
+implementation_commit = "4606209"
+status = "有状态及无状态发现、调用、关闭，外部 OAuth、动态 ACP 原生协商及注册拒绝回执均有入口。外部里程碑事件是独立操作。"
 implementation_ref = "03ffd3d"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "以两个独立客户端初始化、列出、调用及关闭工具会话，验证会话撤销、来源限制、访问边界和延迟加载。"
@@ -1000,8 +1015,9 @@ name = "云端连接注册、连接偏好与可达性"
 upstream = ["apps/server/src/cloud/http.ts", "apps/server/src/cloud/CliTokenManager.ts"]
 kar = ["src/workbench/access"]
 operation_mapping = "backend-workbench-http-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
-test_target = "cargo test --locked --test workbench_remote_access"
+implementation_commit = "61db96e"
+status = "有签名的环境链接、设备批准、撤销、HTTPS 转发及受监督的隧道凭据交接已接入。真实托管账户、外部中继和域名端到端仍待实测。"
+test_target = "cargo test --locked --test workbench_oauth"
 accept = "检查带状态的回调、关联证明、配置、偏好、健康、凭证签发和解除关联，验证旧凭证失效。"
 
 [[gap]]
@@ -1011,7 +1027,8 @@ name = "访客历史、单项内容、命令输出及媒体"
 upstream = ["apps/server/src/guest/http.ts"]
 kar = ["src/workbench/access/guest.rs"]
 operation_mapping = "backend-workbench-http-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+implementation_commit = "c6c85d0"
+status = "已有访客授权、当前聊天视图、附件及提议投递；跨设备公开入口和网络条件待独立实测。"
 test_target = "cargo test --locked --test workbench_remote_access"
 accept = "用访客仅查看共享窗口的已发布内容，分页、续收、媒体范围读取和关闭共享后吊销分别复验。"
 
@@ -1034,7 +1051,8 @@ name = "代理开发服务预览隧道"
 upstream = ["apps/server/src/preview/PreviewTunnel.ts"]
 kar = ["src/workbench/terminal_preview"]
 operation_mapping = "backend-workbench-http-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+implementation_commit = "8cbba10"
+status = "项目与设备限定的 TCP 隧道、媒体票据和预览会话已接入，原授权失效后结束流。"
 test_target = "cargo test --locked --test workbench_terminal_preview"
 accept = "校验当前服务和授权端口，打开及断开隧道，检查其他项目和到期票据被拒绝。"
 
@@ -1045,8 +1063,9 @@ name = "服务端浏览器视频、输入及文件上传"
 upstream = ["apps/server/src/preview/ServerBrowserStream.ts"]
 kar = ["src/workbench/terminal_preview"]
 operation_mapping = "backend-workbench-http-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
-test_target = "cargo test --locked --test workbench_terminal_preview"
+implementation_commit = "8cbba10"
+status = "预览帧经有界 ACK 的 WebSocket 传输，导航、视口、操作和选择上传文件走同一授权。需要可用 Chromium。"
+test_target = "cargo test --locked --test workbench_terminal_preview managed_chromium_applies_controls_and_keeps_two_profiles_independent -- --ignored --exact"
 accept = "两个客户连接同一标签页，核对帧、输入、文件选择、过期请求、断线后重新订阅。"
 
 [[gap]]
@@ -1077,9 +1096,9 @@ phase = 2
 name = "供应商后台命令的等待标记"
 upstream = ["packages/provider-acp/src/server/adapter.ts:10240", "packages/provider-cursor/src/server/adapter.ts:3396", "packages/provider-opencode/src/server/v2/adapter.ts:5271"]
 kar = ["src/workbench/background.rs", "src/transport/background.rs"]
-implementation_commit = "7a94979"
-status = "Claude 支持原生后台任务表；Antigravity 匹配仍在执行的非守护命令或定时唤醒。Cursor 与 OpenCode 的实际原生生命周期单列。 待 macOS 统一实测。"
-test_target = "cargo test --locked --test chat_restart -- workbench-background"
+implementation_commit = "a5c103e"
+status = "Claude、Antigravity 和受支持版本 OpenCode 的后台状态与等待已接入。Cursor 的 ACP 连接缺少固定工作台 SDK 的 shell 句柄与停止回调，见 backend-opencode-background-shells.md。"
+test_target = "cargo test --locked --lib transport::background::shells::tests"
 accept = "对各适配器启动并跟踪一个真实命令，以原生命令的别名和任务 ID 标记/撤销等待。列出真实版本和 matched/unmatched，检查另外一个聊天的同名任务保持原状。"
 
 [[gap]]
@@ -1088,9 +1107,9 @@ phase = 2
 name = "按实际委派关系递归停止并汇总部分失败"
 upstream = ["apps/server/src/orchestration-v2/ThreadManagementService.ts:1743", "packages/provider-opencode/src/server/v2/adapter.ts:5299"]
 kar = ["src/workbench/interactions.rs", "src/workbench/workflows"]
-implementation_commit = "d0affd2"
-status = "已有本机委派及取消入口。跨环境子任务、递归深度、同一子会话去重及部分失败须独立核对。 待 macOS 统一实测。"
-test_target = "cargo test --locked --test workbench_handoff"
+implementation_commit = "194c43c"
+status = "本机和已授权远端的委派、取消及结果归属已接入。验收需覆盖同一子任务重复出现、多级后代、部分失败、已结束后仍有后续工作的情形。"
+test_target = "cargo test --locked --test workbench_mcp"
 accept = "同一子聊天从多个入口可达时只停止一次。覆盖已返回结果后再次活动、远程子环境不可达、一个子任务已结束和另一个停止失败；回执保留成功与失败两组。"
 
 [[gap]]
@@ -1125,3 +1144,37 @@ implementation_commit = "2300804"
 status = "安装探测按实际启动器报告缺依赖、宿主或 Node 版本不支持及原生执行失败。 待 macOS 统一实测。"
 test_target = "cargo test --locked --test protocol installation"
 accept = "对实际需要宿主依赖的启动模式分别制造缺依赖、找不到程序、程序版本过旧，检查客户端读取的具体原因。"
+
+
+[[gap]]
+id = "native-lease-release-evidence"
+phase = 1
+name = "共享原生进程、远端线程及控制器释放的退出证据"
+upstream = ["packages/oar/src/contracts/placement.ts","packages/oar/src/shared/process-session.ts","packages/oar/src/community/morph/session.ts","packages/oar/src/community/cybion/session.ts"]
+kar = ["src/placement.rs","src/community/morph/actor.rs","src/community/cybion.rs"]
+implementation_commit = "ee61e23"
+status = "主动释放可携带原因及继续运行标志。共享、外部或远端未退出时不再产生虚假的进程退出事件。协议及真实部署分开验收。"
+test_target = "cargo test --locked --test cybion"
+accept = "启动两个共享控制器，先关一个，另一端继续同一原生工作。核对关闭请求的关联回执、释放事件和新输入拒绝。关闭最后的自有进程时单独核对实际退出状态。"
+
+[[gap]]
+id = "runtime-install-plan-result"
+phase = 1
+name = "原生安装计划说明与实际执行结果"
+upstream = ["packages/oar/src/contracts/install.ts","packages/oar/src/contracts/update.ts"]
+kar = ["src/setup.rs","src/setup/plan.rs","src/setup/update.rs"]
+implementation_commit = "1a01ff5"
+status = "可读和可编程的计划包含来源、命令步骤、网络及执行身份；拒绝原因、已安装/新安装分类和原样输出必须按实际返回单独核实。"
+test_target = "cargo test --locked --test setup_cli"
+accept = "对选择和缺少发布线、缺少依赖、权限不足及已安装和新安装分别运行。计划不得下载；真实执行在可丢弃的受管目录核对返回分类、来源、版本和诊断。"
+
+[[gap]]
+id = "runtime-session-attribution"
+phase = 1
+name = "按实际传输报告原生子代理归属"
+upstream = ["packages/oar/src/contracts/session.ts","packages/oar/src/runtimes/kimi/kap-controls.ts","packages/oar/src/runtimes/opencode/session.ts"]
+kar = ["src/session.rs","src/browser/mod.rs"]
+implementation_commit = "57c8d2c"
+status = "本机 SDK 在已核实的传输报告归属层级；未核实的动态 ACP 保留未知。Pi Durable 的绑定另外报告其原生队列与归属。"
+test_target = "cargo test --locked --lib native_attribution_uses_the_selected_transport_and_release"
+accept = "切换 Kimi KAP/ACP、OpenCode v1/v2、自定义 ACP；对照声明、实际子事件、父子关联是否能恢复。"
