@@ -1,7 +1,9 @@
+mod codex;
 use crate::{
     Cursor, Event, Outcome, Protocol, Record,
     observe::{Agent, Tool},
 };
+pub(super) use codex::History as CodexHistory;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
@@ -907,50 +909,14 @@ impl Frame {
             edits,
         })
     }
-    /// Recover by a stored native turn or a unique, natively echoed opening input.
-    pub(super) fn codex_recovery(local: &ChatTurn, root: &str, record: &Record) -> Option<Self> {
-        let thread = record.native.pointer("/result/thread")?;
-        if record.direction != crate::Direction::FromRuntime
-            || !record.agent_path.is_empty()
-            || record.session_id.as_deref() != Some(root)
-            || thread["id"].as_str() != Some(root)
-        {
-            return None;
-        }
-        let turns = thread["turns"].as_array()?;
-        let user_id = |item: &Value| {
-            (item["type"] == "userMessage")
-                .then(|| item["clientId"].as_str()?.parse::<Uuid>().ok())
-                .flatten()
-        };
-        let mut echoes = turns.iter().flat_map(|turn| {
-            turn["items"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .enumerate()
-                .filter_map(move |(idx, item)| {
-                    (user_id(item) == Some(local.id)).then_some((turn, idx))
-                })
-        });
-        let opener = echoes
-            .next()
-            .filter(|(_, idx)| *idx == 0 && !local.native_continuation && !record.elided)
-            .filter(|_| echoes.next().is_none())
-            .map(|(turn, _)| turn);
-        let id = local
-            .native_turn_id
-            .as_deref()
-            .or_else(|| opener?["id"].as_str())?;
-        if id.is_empty() {
-            return None;
-        }
-        let mut matching = turns.iter().filter(|turn| turn["id"] == id);
-        let turn = matching.next()?;
-        if matching.next().is_some() {
-            return None;
-        }
-        let claimed = opener.is_some_and(|candidate| candidate["id"] == id);
+    fn codex_turn(
+        local: &ChatTurn,
+        root: &str,
+        record: &Record,
+        id: &str,
+        turn: &Value,
+        claimed: bool,
+    ) -> Option<Self> {
         let mut edits = Vec::new();
         if claimed {
             edits.push(Edit::Activity {
@@ -1508,6 +1474,8 @@ mod tests {
     #[test]
     fn codex_recovers_only_an_unambiguous_opening_item_in_its_own_full_snapshot() {
         use serde_json::json;
+        let recover =
+            |local: &ChatTurn, root: &str, r: &Record| CodexHistory::new(root, r)?.frame(local);
         let local = ChatTurn::new(Uuid::new_v4(), 0, "root", Some("same words".into()));
         let turn = json!({"id":"native","status":"completed","items":[
             {"type":"userMessage","id":"u","clientId":local.id}, {"type":"agentMessage","id":"a","text":"reply"}]});
@@ -1523,7 +1491,7 @@ mod tests {
         );
         let record = &journal.records()[0];
         assert_eq!(
-            Frame::codex_recovery(&local, "root", record)
+            recover(&local, "root", record)
                 .unwrap()
                 .native_turn
                 .as_deref(),
@@ -1531,19 +1499,19 @@ mod tests {
         );
         let mut other = record.as_ref().clone();
         other.agent_path.push("child".into());
-        assert!(Frame::codex_recovery(&local, "root", &other).is_none());
+        assert!(recover(&local, "root", &other).is_none());
         other.agent_path.clear();
         other.elided = true;
-        assert!(Frame::codex_recovery(&local, "root", &other).is_none());
+        assert!(recover(&local, "root", &other).is_none());
         other.elided = false;
         other.native["result"]["thread"]["id"] = json!("different");
-        assert!(Frame::codex_recovery(&local, "root", &other).is_none());
+        assert!(recover(&local, "root", &other).is_none());
         other.native["result"]["thread"]["id"] = json!("root");
         other.native["result"]["thread"]["turns"][0]["items"][0]["clientId"] = Value::Null;
-        assert!(Frame::codex_recovery(&local, "root", &other).is_none());
+        assert!(recover(&local, "root", &other).is_none());
         let mut legacy = local;
         legacy.native_turn_id = Some("native".into());
-        assert!(Frame::codex_recovery(&legacy, "root", &other).is_some());
+        assert!(recover(&legacy, "root", &other).is_some());
     }
 
     #[test]

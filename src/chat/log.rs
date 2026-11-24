@@ -1003,9 +1003,21 @@ impl State {
                     }
                     _ => false,
                 };
-                let last = self
-                    .turns
-                    .last_mut()
+                let target = if self.info.protocol == Protocol::Codex {
+                    if !frame.source.path.is_empty()
+                        || frame.source.session_id.as_deref() != Some(&self.info.native_id)
+                    {
+                        return Err(Error::Protocol(
+                            "Codex reconciliation belongs to another native thread".into(),
+                        ));
+                    }
+                    self.ids
+                        .get(&id)
+                        .and_then(|index| self.turns.get_mut(*index))
+                } else {
+                    self.turns.last_mut()
+                };
+                let last = target
                     .filter(|t| {
                         t.id == id
                             && frame.native_turn.is_some()
@@ -1384,7 +1396,11 @@ impl Log {
             }
         }
         let recovery = self.state.recovery_turns(store);
-        if let Some(last) = recovery
+        if session.protocol() == Protocol::Codex {
+            for (id, frame) in codex::recover(session, &recovery).await {
+                self.commit(ChatUpdate::Reconciled { id, frame })?;
+            }
+        } else if let Some(last) = recovery
             .last()
             .filter(|t| matches!(t.status, TurnStatus::Running | TurnStatus::Interrupted))
             && let Some(frame) = if session.protocol() == Protocol::Factory {
@@ -1401,8 +1417,6 @@ impl Log {
                     last,
                 )
                 .await?
-            } else if session.protocol() == Protocol::Codex {
-                codex::recover(session, last).await
             } else if session.protocol() == Protocol::Pi {
                 session.recover_pi_turn(options, last).await?
             } else if session.protocol() == Protocol::Morph {

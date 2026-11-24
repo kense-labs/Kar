@@ -71,6 +71,8 @@ pub(super) fn reopen() {
         assert_eq!(queue()[0]["status"], "uncertain");
     }
 
+    let next = run(&["resume", "later round", "--chat", chat]);
+    assert_eq!(next["status"], "completed");
     write(json!([pending]));
     resume();
     assert_eq!(queue()[0]["status"], "sent");
@@ -90,7 +92,8 @@ pub(super) fn reopen() {
         resume();
         let history = run(&["history", "--chat", chat]);
         let turns = history["turns"].as_array().unwrap();
-        assert_eq!(turns.len(), 1);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1], next);
         assert_eq!(turns[0]["id"], input);
         assert_eq!(turns[0]["fork_anchor"], "target");
         assert_eq!(turns[0]["status"], "completed");
@@ -98,5 +101,5 @@ pub(super) fn reopen() {
         assert_eq!(turns[0]["items"][1]["text"], "found once");
         assert_eq!(queue()[0]["status"], "sent");
     }
-    assert_eq!(fs::read_to_string(calls).unwrap().lines().count(), 1);
+    assert_eq!(fs::read_to_string(calls).unwrap().lines().count(), 2);
 }
