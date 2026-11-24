@@ -5,6 +5,8 @@ mod abort_turn;
 mod chat_replay;
 #[path = "native_live/claude_history.rs"]
 mod claude_history;
+#[path = "native_live/codex_startup.rs"]
+mod codex_startup;
 #[path = "native_live/cursor.rs"]
 mod cursor;
 #[path = "native_live/pi_history.rs"]
