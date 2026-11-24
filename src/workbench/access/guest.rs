@@ -80,6 +80,17 @@ impl Proposal {
         view
     }
 }
+impl super::AccessStore {
+    pub(in crate::workbench) fn pending_guest_counts(&self,at:u64)->BTreeMap<Uuid,usize> {
+        let registry=self.registry.lock().unwrap();
+        let mut counts=BTreeMap::new();
+        for share in registry.shares.values().filter(|s|!s.revoked && at<s.expires_ms){
+            let count=share.proposals.values().filter(|p|p.status==Decision::Pending).count();
+            *counts.entry(share.chat).or_default()+=count;
+        }
+        counts
+    }
+}
 impl Share {
     fn active(&self, app: &Workbench) -> bool {
         !self.revoked

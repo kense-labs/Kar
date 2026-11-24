@@ -33,12 +33,21 @@ pub struct Metadata {
     pub auto_settle_disabled_ms: Option<u64>,
     pub snoozed_until_ms: Option<u64>,
     pub snoozed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snooze_observation: Option<SnoozeObservation>,
     pub last_wake_ms: Option<u64>,
     pub visited_ms: Option<u64>,
     pub last_opened_ms: Option<u64>,
     pub last_search_query: Option<String>,
     pub updated_ms: u64,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SnoozeObservation {
+    command: Uuid,
+    host_turn: Option<Uuid>,
+    questions: Vec<crate::Cursor>,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
@@ -126,6 +135,20 @@ fn now() -> u64 {
         .as_millis() as u64
 }
 impl Metadata {
+    pub(super) fn acknowledges_question(&self, cursor: &crate::Cursor) -> bool {
+        self.snooze_observation
+            .as_ref()
+            .is_some_and(|seen| seen.questions.contains(cursor))
+    }
+    pub(super) fn new_host_turn(&self, host: Option<(Uuid, u64)>) -> bool {
+        host.is_some_and(|(id, started)| {
+            self.snoozed_ms
+                .is_some_and(|at| match &self.snooze_observation {
+                    Some(seen) => seen.host_turn != Some(id) && started >= at,
+                    None => started > at,
+                })
+        })
+    }
     fn settle(&mut self, t: u64) {
         if self.settled_override.as_deref() != Some("settled")
             || self.settled_ms.is_none()
@@ -138,6 +161,7 @@ impl Metadata {
         self.pin_order = None;
         self.active_order = None;
         self.unsettled_ms = None;
+        self.snooze_observation = None;
         self.snoozed_ms = None;
         self.snoozed_until_ms = None;
     }
@@ -145,10 +169,12 @@ impl Metadata {
         if self.snoozed_until_ms.take().is_some() {
             self.last_wake_ms = Some(at);
         }
+        self.snooze_observation = None;
         self.snoozed_ms = None;
     }
     fn mutate(
         &mut self,
+        command: Uuid,
         action: &Action,
         history: &ChatHistory,
         queued: bool,
@@ -247,9 +273,36 @@ impl Metadata {
                 }
             }
             Action::Snooze { until_ms } => {
-                if queued || active || *until_ms <= at {
-                    return Err(bad("snooze needs an idle chat and a future time"));
+                let approval = history
+                    .pending_requests
+                    .iter()
+                    .any(|r| r.kind != crate::RequestKind::Question || !r.agent_path.is_empty());
+                let held_by_quota = latest.is_some_and(|t| {
+                    t.status == TurnStatus::Failed
+                        && t.failure.as_ref().is_some_and(|f| {
+                            f.class == crate::FailureClass::Quota
+                                && f.resets_at_ms.is_some_and(|end| end > at)
+                        })
+                });
+                if approval || (queued && !held_by_quota) || *until_ms <= at {
+                    return Err(bad(
+                        "snooze requires a future time, with no pending approval or dispatchable queued input",
+                    ));
                 }
+                self.snooze_observation = Some(SnoozeObservation {
+                    command,
+                    host_turn: history
+                        .turns
+                        .iter()
+                        .rev()
+                        .find(|t| !t.native_continuation)
+                        .map(|t| t.id),
+                    questions: history
+                        .pending_requests
+                        .iter()
+                        .map(|r| r.cursor.clone())
+                        .collect(),
+                });
                 self.snoozed_until_ms = Some(*until_ms);
                 self.snoozed_ms = Some(at);
             }
@@ -330,7 +383,7 @@ async fn change(
             let s = &mut db.thread_state;
             let m = s.rows.entry(c).or_default();
             app.0.chats.with_admission_state(c, |history, queued| {
-                m.mutate(&req.action, &history, queued, now())
+                m.mutate(req.command_id, &req.action, &history, queued, now())
             })?;
             let idx = s.changes.len();
             let change = Change {
@@ -361,6 +414,45 @@ async fn metadata(
     .await
 }
 impl Workbench {
+    pub(super) fn wake_sent_chat(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        seen: &Metadata,
+        at: u64,
+    ) -> Result<Metadata> {
+        let meta = self.update(|db| {
+            let store = &mut db.thread_state;
+            let row = store.rows.entry(chat).or_default();
+            // A send observed before a later snooze cannot wake the newer command.
+            if row.snoozed_ms != seen.snoozed_ms
+                || row.snoozed_until_ms != seen.snoozed_until_ms
+                || row.snooze_observation.as_ref().map(|v| v.command)
+                    != seen.snooze_observation.as_ref().map(|v| v.command)
+            {
+                return Ok((row.clone(), None));
+            }
+            row.snoozed_ms = None;
+            row.snoozed_until_ms = None;
+            row.snooze_observation = None;
+            row.updated_ms = row.updated_ms.max(at);
+            let metadata = row.clone();
+            let sequence = store.sequence() + 1;
+            store.changes.push(Change {
+                sequence,
+                project,
+                chat,
+                metadata: metadata.clone(),
+            });
+            Ok((metadata, Some(sequence)))
+        })?;
+        if let Some(sequence) = meta.1 {
+            self.0
+                .thread_updates
+                .send_modify(|seen| *seen = (*seen).max(sequence));
+        }
+        Ok(meta.0)
+    }
     pub(super) fn thread_metadata(&self, id: Uuid) -> Metadata {
         self.0
             .catalog

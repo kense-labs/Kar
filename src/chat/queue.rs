@@ -140,7 +140,7 @@ struct Inbox {
     commands: std::collections::BTreeMap<Uuid, commands::SavedCommand>,
 }
 impl ChatStore {
-    fn inbox_path(&self, id: Uuid) -> std::path::PathBuf {
+    pub(crate) fn inbox_path(&self, id: Uuid) -> std::path::PathBuf {
         self.dir.join(format!("{id}.inputs"))
     }
     fn read_inbox(&self, chat: &ChatInfo) -> Result<Inbox> {
@@ -324,6 +324,13 @@ impl ChatStore {
             )
         });
         f(self.history_from_state(id, state)?, queued)
+    }
+    pub(crate) fn shell_queue_count(&self, replica: &super::ChatReplica) -> Result<usize> {
+        let state = &replica.state;
+        let _lock = self.inbox_lock(state.info.id)?;
+        Ok(self.read_inbox(&state.info)?.entries.iter().filter(|e| {
+            matches!(e.status(state), InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain)
+        }).count())
     }
     /// Read all queued inputs, including earlier delivery and withdrawal receipts.
     pub fn queued_inputs(&self, chat: Uuid) -> Result<Vec<QueuedInput>> {

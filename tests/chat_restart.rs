@@ -2030,7 +2030,13 @@ mod workbench_cloud_live;
 mod workbench_usage;
 #[path = "support/workbench_observability.rs"]
 mod workbench_observability;
+#[path = "support/workbench_shell.rs"]
+mod workbench_shell;
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("workbench-shell") {
+        workbench_shell::run();
+        return;
+    }
     let mode = std::env::args().nth(1);
     if matches!(mode.as_deref(), Some("workbench-simlock-live" | "workbench-expo-live")) {
         workbench_cloud_live::run(mode.as_deref() == Some("workbench-expo-live"));

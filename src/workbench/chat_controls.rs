@@ -108,6 +108,7 @@ impl Workbench {
     }
 
     pub(super) fn start_services(&self) -> Result<()> {
+        self.0.shell.start(self);
         self.start_workflows()?;
         self.0.devices.maintain(self);
         self.0.task_folders.recover(self);

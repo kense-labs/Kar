@@ -47,6 +47,9 @@ pub(super) struct State {
 }
 
 impl State {
+    pub(in crate::workbench) fn ownership_snapshot(&self) -> Self {
+        Self { owners: self.owners.clone(), ..Self::default() }
+    }
     pub(super) fn can_bind_import(&self, project: Uuid, chat: Uuid, cwd: &Path) -> bool {
         self.owners
             .get(&chat)
@@ -72,7 +75,13 @@ impl Workbench {
         p: &Project,
         info: &ChatInfo,
     ) -> Result<bool> {
-        if let Some(b) = catalog.lifecycle.owners.get(&info.id) {
+        self.owns_chat_in(&catalog.lifecycle, p, info)
+    }
+
+    pub(in crate::workbench) fn owns_chat_in(
+        &self, ownership: &State, p: &Project, info: &ChatInfo,
+    ) -> Result<bool> {
+        if let Some(b) = ownership.owners.get(&info.id) {
             if b.project != p.id || b.cwd != info.workspace {
                 return Ok(false);
             }
@@ -87,7 +96,7 @@ impl Workbench {
         if let Some(parent) = info
             .forked_from
             .as_ref()
-            .and_then(|f| catalog.lifecycle.owners.get(&f.chat))
+            .and_then(|f| ownership.owners.get(&f.chat))
             && parent.cwd == info.workspace
         {
             return Ok(parent.project == p.id);

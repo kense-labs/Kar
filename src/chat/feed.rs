@@ -91,7 +91,7 @@ pub struct ChatFeedSnapshot {
 
 /// A client-side view using the same message identity and tool projection as chat history.
 pub struct ChatReplica {
-    state: log::State,
+    pub(super) state: log::State,
     cursor: ChatCursor,
 }
 impl ChatReplica {
@@ -103,6 +103,27 @@ impl ChatReplica {
     }
     pub fn cursor(&self) -> ChatCursor {
         self.cursor
+    }
+    /// Advance a directory projection to the prefix available at the start of this scan.
+    pub(crate) fn refresh(&mut self, store: &ChatStore) -> Result<()> {
+        if self.state.needs_controller() {
+            store.settle_abandoned(self.cursor.chat)?;
+        }
+        let mut file = File::open(store.path(self.cursor.chat))?;
+        let length = file.metadata()?.len();
+        while self.cursor.offset < length {
+            let batch = log::with_lock(&mut file, false, |f| read_batch(f, self.cursor))?;
+            if batch.is_empty() {
+                break;
+            }
+            for event in batch {
+                self.apply(event)?;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn needs_controller(&self) -> bool {
+        self.state.needs_controller()
     }
     pub fn pending_requests(&self) -> &[crate::PendingRequest] {
         &self.state.pending_requests

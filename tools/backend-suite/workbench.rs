@@ -50,6 +50,7 @@ pub(super) fn cases() -> Vec<Case> {
     local.switches.insert("KAR_HANDOFF_LIVE".into(), "0".into());
     cases.push(local);
     for (mode, requires) in [
+        ("workbench-shell","two independent HTTP clients, persisted directory cursor, activity, snooze expiry and restart"),
         (
             "workbench-usage",
             "isolated HOME, native-format usage records and a local HTTP price source",

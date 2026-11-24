@@ -16,6 +16,7 @@ mod http;
 mod interactions;
 mod project_lifecycle;
 mod search;
+mod shell;
 mod task_folders;
 mod terminal_preview;
 mod thread_find;
@@ -88,6 +89,7 @@ impl Controller {
 }
 
 struct Inner {
+    shell: shell::Service,
     observability: observability::Service,
     chats: ChatStore,
     roots: Vec<Root>,
@@ -166,6 +168,7 @@ impl Workbench {
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
         let workflows = workflows::Engine::open(&state, clock)?;
         let tracker_accounts=forge::trackers::Store::open(&state)?;
+        let shell = shell::Service::open(&state,&allowed)?;
         let access = access::AccessStore::open(&state)?;
         let devices = devices::Service::open(&state)?;
         let app = Self(Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
@@ -177,6 +180,7 @@ impl Workbench {
                 task_folders::checkpoints::repositories(&Workbench(inner), chat)
             }));
             Inner {
+                shell,
                 observability: observability::Service::open(&state),
                 workflows,
                 terminal_preview,
@@ -254,6 +258,7 @@ impl Workbench {
         tmp.persist(self.0.state.join("projects.json"))
             .map_err(|e| e.error)?;
         *saved = next;
+        self.0.shell.changed();
         #[cfg(unix)]
         File::open(&self.0.state)?.sync_all()?;
         Ok(result)
