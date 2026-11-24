@@ -429,8 +429,9 @@ phase = 2
 name = "派发模式、延迟回合、准备进度、失败重试及结构化输出"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/ThreadLaunchService.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
 kar = ["src/workbench/chat_controls.rs", "src/workbench/mcp/orchestrator/threads.rs", "src/chat/queue.rs"]
-status = "排队、工作树启动和结构化输出有实现。尚缺启动任务按同一 run ID 报告 worktree/setup 进度、记录失败、恢复后重试及幂等放行的完整操作。"
-test_target = "cargo test --locked --test workbench_mcp"
+implementation_commit = "b682eae"
+status = "准备状态、阶段、失败及显式重试、两个客户端按游标观察和同 ID 幂等放行已接入。真实 Git、PTY 及原生协议夹具已编译，等待 macOS 统一执行。"
+test_target = "cargo test --locked --test workbench_mcp -- prepared-runs"
 accept = "在工作树准备时让初始化脚本失败，两个客户端读取同一 run 的失败与阶段；修复脚本并重启，重试同一 run，两端重复放行后核对原生首次输入只发一次并保留附件、schema。"
 
 [[gap]]
@@ -526,7 +527,7 @@ name = "供应商与 MCP 登录、反馈、额度及凭据交接"
 upstream = ["apps/server/src/provider/ProviderAuthService.ts", "apps/server/src/provider/CodexChatGptAuth.ts", "apps/server/src/mcpApps/McpSignIn.ts", "apps/server/src/ws.ts"]
 kar = ["src/workbench/acp_registry/auth/builtin.rs", "src/account/binding.rs", "src/workbench/provider_controls.rs", "src/account/quota"]
 implementation_commit = "61650ba"
-status = "本机内置账号变更会按有效凭据目录协调同一工作台的聊天。Codex/Claude 可在活动会话中完成第三方 MCP 登录；Codex 支持供应商诊断反馈。ChatGPT 档案导入、重连及交接订阅仍缺；额度重置有 CLI 和 SDK 接口，工作台 HTTP 尚缺同等操作。"
+status = "本机内置账号变更会按有效凭据目录协调同一工作台的聊天。Codex/Claude 可在活动会话中完成第三方 MCP 登录；Codex 支持供应商诊断反馈。ChatGPT 档案导入、重连及交接订阅仍缺；额度重置已通过 eab019b 接入工作台 HTTP，使用凭据目录级别的互斥、稳定请求 ID 与待确认处理。"
 test_target = "cargo test --locked --test workbench_mcp -- provider-controls"
 accept = "从两个客户端启动、响应、完成、取消、观察授权流；验证来源客户端绑定。检查凭据移除、退出、MCP 登录、账号导入/重连、反馈和额度结果。"
 
@@ -625,7 +626,8 @@ phase = 2
 name = "多客户端终端显示、观察及元数据流"
 upstream = ["apps/server/src/terminal/Manager.ts", "apps/server/src/ws.ts"]
 kar = ["src/workbench/terminal_preview/routes.rs", "src/workbench/terminal_preview/mod.rs"]
-status = "可按输出游标重连并长轮询，支持清屏、输入与尺寸调整。Kar 的 resize 直接设置 PTY；尚缺随已连接观看者取最小行列、单客户端应答终端查询、以及单独订阅终端目录元数据。"
+implementation_commit = "36f89aa"
+status = "已实现 viewer 租约、最小行列、单端应答、只读观察及目录元数据订阅，跨设备相同 viewer ID 隔离。待统一实测。"
 test_target = "cargo test --locked --test workbench_terminal_preview"
 accept = "连接 120×40 和 80×24 两端，共享 PTY 取 80×24；小端离开恢复 120×40。向终端发送设备查询，两端回应时仅接受选定端的应答，另一个只看元数据的客户端见创建及关闭。"
 

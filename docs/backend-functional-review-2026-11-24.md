@@ -19,12 +19,16 @@
 
 **源码对照已执行。** 本轮运行 Kar 的 Rust 静态覆盖检查器，对固定上游 Git 对象复核了 233 个来源文件、192 项断言映射和 50 项 CLI 映射。工作台另核对了 16 组共 94 个业务工具声明及独立的工具搜索；逐行表新增可用的 Kar 模型调用名称或动作。一个工具通常包含多个子操作，入口映射不能证明每个供应商或平台实测通过。
 
+**复核后已合入的修复**
+
+- 工作区准备可在同一个 run 上显示 worktree/setup 阶段、保留失败、重启后重试和幂等放行（`b682eae`）。同步脚本退出成功才放行，异步脚本启动后可以继续。 [准备和重试的入口](backend-prepared-runs.md)
+- 双端终端按已连接观看者取最小行列、选取唯一的设备查询应答端。另有被动观察与终端目录元数据流（`36f89aa`）。 [多端终端复验](backend-terminal-views.md)
+- Codex 和 Claude 的额度重置已有工作台 HTTP 入口及持久领取回执（`eab019b`）。 [额度重置与结果核对](backend-quota-http.md)
+
 **仍有可观察的差异。**
 
-- 固定工作台对 Cursor 的后台 shell 有专门的等待与停止回调。Kar 的 Cursor ACP 未取得等价原生句柄，该项目前是传输实现缺口。 [固定 SDK 补丁](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/patches/%40cursor__sdk%401.4.2.patch)
-- 工作树初始化脚本失败后，T3 可以显示 worktree/setup 阶段、保留同一个 run、重试并放行。Kar 已有工作树启动、FIFO 与结构化输出，但还缺少这组可恢复的操作。 [上游启动和重试处理](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/orchestration-v2/ThreadLaunchService.ts#L1644)
-- 两个不同尺寸的客户端同时看一个终端时，上游取已连接观看者的最小行列，并由单一观看者应答终端查询。Kar 的输出游标可重连，但调整尺寸直接作用于 PTY；独立订阅终端目录元数据也缺少入口。 [上游观看者约定](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/terminal/Manager.ts#L187)
-- Codex/ChatGPT 的账号档案导入、重新连接和交接订阅仍缺少等价入口。上游核验身份签名、受众与授权范围。Kar 已支持供应商原生登录、退出、读额度，并在内置账号变更前按凭据目录协调本工作台的聊天（`89e872e`）。Codex 和 Claude 的额度重置已有 Kar CLI / Rust SDK 入口，工作台 HTTP 当前只可查询额度。 [上游账号交接](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/provider/CodexChatGptAuth.ts) · [Kar 账号入口](backend-account-workbench.md)
+- 固定工作台对 Cursor 后台 shell 有专门的等待与停止回调。Kar 的 Cursor ACP 未取得等价原生句柄。 [固定 SDK 补丁](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/patches/%40cursor__sdk%401.4.2.patch)
+- Codex/ChatGPT 的账号档案导入、重新连接和交接订阅仍缺少等价入口。Kar 已支持供应商原生登录、退出、读额度，并在内置账号变更前按凭据目录协调共享该目录的聊天。 [上游账号交接](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/provider/CodexChatGptAuth.ts) · [Kar 账号入口](backend-account-workbench.md)
 
 **本轮已接入的其他操作**
 
