@@ -167,6 +167,8 @@ enum Phase {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Entry {
+    #[serde(default)]
+    dispatched_prompt: Option<String>,
     request: NativeRequest,
     document: String,
     workspace: Workspace,
@@ -240,7 +242,10 @@ impl NativeJob {
         self.entry.request.input_id(&self.entry.document)
     }
     pub fn prompt(&self) -> String {
-        self.entry.request.prompt(self.filename())
+        self.entry
+            .dispatched_prompt
+            .clone()
+            .unwrap_or_else(|| self.entry.request.prompt(self.filename()))
     }
     /// Persist admission intent before dispatching the prompt. An interrupted
     /// turn must be reconciled using the same native session and input ID.
@@ -249,6 +254,7 @@ impl NativeJob {
             matches!(self.entry.phase, Phase::Prepared),
             "native prompt already dispatched"
         );
+        self.entry.dispatched_prompt = Some(self.prompt());
         self.entry.phase = Phase::Dispatched {
             session_id: native_session_id,
         };
@@ -324,7 +330,9 @@ impl DocumentStore {
                         .workspace
                         .reopen()
                         .context("retained native workspace is unavailable or has changed")?;
-                    let prompt = entry.request.prompt(&entry.workspace.filename);
+                    let prompt = entry
+                        .dispatched_prompt
+                        .unwrap_or_else(|| entry.request.prompt(&entry.workspace.filename));
                     return Ok(NativeBegin::Interrupted {
                         native_session_id: session_id,
                         cwd: entry.workspace.path,
@@ -344,6 +352,7 @@ impl DocumentStore {
         let document = self.state()?.document;
         let (workspace, directory) = Workspace::create(&self.native_file_extension()?, &base)?;
         let entry = Entry {
+            dispatched_prompt: None,
             request,
             document,
             workspace,
