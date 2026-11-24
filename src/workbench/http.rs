@@ -59,6 +59,13 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
     if token.is_empty() {
         return Err(Error::Refused("empty workbench token".into()));
     }
+    let lazy_start = if tokio::runtime::Handle::try_current().is_ok() {
+        app.start_workflows()?;
+        None
+    } else {
+        Some(app.clone())
+    };
+    let hooks = super::workflows::hooks().with_state(app.clone());
     let auth = super::access::Auth::new(app.clone(), token);
     let access = super::access::routes(app.clone(), auth.clone());
     let router = Router::new()
@@ -72,6 +79,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
             get(handoffs).post(handoff),
         )
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
+        .merge(super::workflows::routes())
         .merge(super::documents::routes())
         .merge(super::forge::routes())
         .merge(super::git::routes())
@@ -84,7 +92,21 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
             auth,
             super::access::authorize,
         ))
-        .merge(access);
+        .merge(access)
+        .merge(hooks);
+    if let Some(app) = lazy_start {
+        return Ok(router.layer(middleware::from_fn(
+            move |req: axum::extract::Request, next: middleware::Next| {
+                let app = app.clone();
+                async move {
+                    if let Err(e) = app.start_workflows() {
+                        return ApiError(e).into_response();
+                    }
+                    next.run(req).await
+                }
+            },
+        )));
+    }
     Ok(router)
 }
 

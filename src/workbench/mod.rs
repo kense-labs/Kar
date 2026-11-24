@@ -8,6 +8,7 @@ mod handoff;
 mod http;
 mod search;
 mod terminal_preview;
+pub mod workflows;
 pub use search::{Hit, SearchKind};
 
 use crate::{
@@ -56,6 +57,7 @@ struct Inner {
     access: access::AccessStore,
     documents: documents::Documents,
     terminal_preview: terminal_preview::TerminalPreview,
+    workflows: workflows::Engine,
     _lease: File,
     controllers: Mutex<HashMap<Uuid, Controller>>,
 }
@@ -78,6 +80,14 @@ fn denied() -> Error {
 impl Workbench {
     /// Root authorization comes from the host, independently of registration over HTTP.
     pub fn open(chats: ChatStore, roots: &[PathBuf]) -> Result<Self> {
+        Self::open_with_workflow_clock(chats, roots, Arc::new(workflows::SystemClock))
+    }
+
+    pub fn open_with_workflow_clock(
+        chats: ChatStore,
+        roots: &[PathBuf],
+        clock: Arc<dyn workflows::Clock>,
+    ) -> Result<Self> {
         let state = chats.directory().join("workbench");
         std::fs::create_dir_all(&state)?;
         let lease = OpenOptions::new()
@@ -108,6 +118,7 @@ impl Workbench {
         };
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
         Ok(Self(Arc::new(Inner {
+            workflows: workflows::Engine::open(&state, clock)?,
             terminal_preview,
             chats,
             roots: allowed,
