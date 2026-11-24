@@ -386,6 +386,10 @@ impl Runtime {
     }
 }
 
+pub(crate) async fn devin_auth_status(probe: &Probe, path: &std::path::Path) -> Result<AuthStatus> {
+    native::query(Reader::Devin, probe, path).await
+}
+
 pub(crate) async fn antigravity_auth_status(
     probe: &Probe,
     path: &std::path::Path,

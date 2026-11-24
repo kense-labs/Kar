@@ -36,6 +36,8 @@ mod opening;
 pub use context::{ContextBreakdown, ContextCategory, ContextItem, ContextKind, ContextUsage};
 #[cfg(not(target_arch = "wasm32"))]
 mod cursor_models;
+#[cfg(not(target_arch = "wasm32"))]
+mod acp_models;
 mod failure;
 mod goal;
 #[cfg(not(target_arch = "wasm32"))]

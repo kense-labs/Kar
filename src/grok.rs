@@ -18,6 +18,9 @@ impl Runtime {
     ) -> crate::forms::ModelListing {
         use crate::forms::{ListingReason, ModelListing};
         let read = async {
+            if let Some(menu) = crate::acp_models::Menu::for_runtime(self) {
+                return menu.list(self, options).await;
+            }
             if self.protocol == crate::Protocol::Claude && self.id == "claude" {
                 let rows = crate::inventory::claude_models(&self.selected(options).await?, options)
                     .await?;

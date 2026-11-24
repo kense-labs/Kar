@@ -7,6 +7,8 @@ use std::{
 use tempfile::TempDir;
 #[path = "protocol/account.rs"]
 mod account;
+#[path = "protocol/acp_model_list.rs"]
+mod acp_model_list;
 #[path = "protocol/acp_failures.rs"]
 mod acp_failures;
 #[path = "protocol/antigravity_steering.rs"]
@@ -1466,6 +1468,7 @@ async fn main() {
         std::fs::write(path, serde_json::to_vec(&args[1..]).unwrap()).unwrap();
     }
     match args.get(1).map(String::as_str) {
+        Some("acp-picker") => return acp_model_list::run().await.unwrap(),
         Some("codex-catalog") => return codex_catalog::run().await.unwrap(),
         Some("opencode-model-listing") => return opencode_models::run().await.unwrap(),
         Some("launch-args") => return launch_args::run().await.unwrap(),
@@ -1477,6 +1480,9 @@ async fn main() {
         Some("environment-sessions") => return environment::sessions().await,
         Some("peer") => environment::capture(),
         _ => {}
+    }
+    if let Ok(vendor) = std::env::var("KAR_TEST_MENU") {
+        return acp_model_list::peer(&vendor, &args[1..]);
     }
     if let Ok(mode) = std::env::var("KAR_TEST_CODEX_CATALOG") {
         return codex_catalog::peer(&mode);
@@ -1553,6 +1559,7 @@ async fn main() {
         peer(&args[2]);
         return;
     }
+    acp_model_list::run().await.unwrap();
     codex_catalog::run().await.unwrap();
     environment::exercise(&std::env::current_exe().unwrap());
     launch_args::run().await.unwrap();
