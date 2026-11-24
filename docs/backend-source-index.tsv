@@ -1738,7 +1738,7 @@ vendor-test	sea-trial/vendor/claude-partials.vendor.test.ts#L23	text and thinkin
 vendor-test	sea-trial/vendor/claude-partials.vendor.test.ts#L64	slow tool arguments keep the stall clock moving without starting a tool twice	76,80,81,82,83,85,86,87,89,90	待逐项核销
 vendor-test	sea-trial/vendor/claude-partials.vendor.test.ts#L95	native background child completed blocks retain attribution after the root result	106,110,113,114,115,116,118	待逐项核销
 vendor-test	sea-trial/vendor/claude-permissions.vendor.test.ts#L78	Claude %s completes without an approval request and Write allowed=%s	88	待逐项核销
-vendor-test	sea-trial/vendor/claude-permissions.vendor.test.ts#L92	Claude resume reapplies a restricted mode; omitting it restores OAR bypass	102,106	待逐项核销
+vendor-test	sea-trial/vendor/claude-permissions.vendor.test.ts#L92	恢复时重新应用受限权限模式，省略设置时恢复上游运行时的默认免审批模式	102,106	待逐项核销
 vendor-test	sea-trial/vendor/claude-permissions.vendor.test.ts#L114	Claude plan Bash built-in classifier severity %s retains its native effect	122,123	待逐项核销
 vendor-test	sea-trial/vendor/claude-permissions.vendor.test.ts#L129	Claude plan Bash without an available safety check denies before classifier severity %s	137,138,144,159	待逐项核销
 vendor-test	sea-trial/vendor/claude-prompt-files.vendor.test.ts#L10	long multiline prompts reach the provider with user configuration %s	20,22,23	待逐项核销
@@ -1772,7 +1772,7 @@ vendor-test	sea-trial/vendor/codex-abort-processes.vendor.test.ts#L255	a first t
 vendor-test	sea-trial/vendor/codex-abort-processes.vendor.test.ts#L263	without the option an abort of %s records no cleanup and leaves what native leaves	270,271,274	待逐项核销
 vendor-test	sea-trial/vendor/codex-collaboration.vendor.test.ts#L20	wait_agent projects the native operation and null prompt without invented recipients	42,45,47	待逐项核销
 vendor-test	sea-trial/vendor/codex-goals.vendor.test.ts#L23	read, set, rejected update, resume and clear reflect native state without inferring completion	30,31,32,33,35,36,37,38,39,43,44,45,46,47,48,49	待逐项核销
-vendor-test	sea-trial/vendor/codex-goals.vendor.test.ts#L53	native continuation and completion need no OAR prompt loop	70,71,72,73,74,75,76	待逐项核销
+vendor-test	sea-trial/vendor/codex-goals.vendor.test.ts#L53	原生继续与结束回合时，上游运行时无需循环提示	70,71,72,73,74,75,76	待逐项核销
 vendor-test	sea-trial/vendor/codex-goals.vendor.test.ts#L80	native budget exhaustion reports its counters and stops continuation	92,93,94,95,96,97	待逐项核销
 vendor-test	sea-trial/vendor/codex-goals.vendor.test.ts#L101	pause changes the goal while a slow native turn continues to its own end	114,115,116,117,118,119,120,121,122,123	待逐项核销
 vendor-test	sea-trial/vendor/codex-idle-queue.vendor.test.ts#L12	queue after a completed turn starts and finishes without a later prompt	18,20,21,23,24	待逐项核销
@@ -1802,7 +1802,7 @@ vendor-test	sea-trial/vendor/credential-redaction.vendor.test.ts#L98	Pi provider
 vendor-test	sea-trial/vendor/credential-redaction.vendor.test.ts#L113	Pi short local-provider keys preserve model IDs and response text	126,127,128,129	待逐项核销
 vendor-test	sea-trial/vendor/cursor-skills.vendor.test.ts#L14	same fixtures in a Git workspace: %s	24,26,29,30,35,37,41,42,43,44,45,46	待逐项核销
 vendor-test	sea-trial/vendor/devin-skills.vendor.test.ts#L13	empty home, builtin metadata, user/project roots and malformed-file omission	15,20,21,23,25,26,29,31,32,33,37,39,42,43,44,45,46,47,48,50	待逐项核销
-vendor-test	sea-trial/vendor/disallowed-tools-antigravity.vendor.test.ts#L25	CLI built-ins remain available; OAR refuses an unenforceable denylist on create and resume	30,31,32,33	待逐项核销
+vendor-test	sea-trial/vendor/disallowed-tools-antigravity.vendor.test.ts#L25	保留 CLI 内置工具；创建及恢复时拒绝无法执行的禁用列表	30,31,32,33	待逐项核销
 vendor-test	sea-trial/vendor/disallowed-tools-codex.vendor.test.ts#L25	session MCP deny works on create/resume, preserves existing user denies and leaves config unchanged	33,34,40,41,42,44,45,46,48,49,50	待逐项核销
 vendor-test	sea-trial/vendor/disallowed-tools-codex.vendor.test.ts#L58	a denied MCP tool the model calls anyway is refused; a resume that omits the list restores it	71,72,73,75	待逐项核销
 vendor-test	sea-trial/vendor/disallowed-tools.vendor.test.ts#L28	Pi resumed tools equal a fresh open with current defaults, extensions and MCP; session_start override=%s	33,49,51,56	待逐项核销
@@ -1939,7 +1939,7 @@ vendor-test	sea-trial/vendor/mcp-servers-pi.vendor.test.ts#L119	a name another e
 vendor-test	sea-trial/vendor/mcp-servers.vendor.test.ts#L60	a stdio and an http server attach, the agent calls both, and a resume attaches them again	67,78,94,104,105	待逐项核销
 vendor-test	sea-trial/vendor/mcp-servers.vendor.test.ts#L112	on a name clash the session's server replaces the user's own for that session; the user's others stay	118,127,142	待逐项核销
 vendor-test	sea-trial/vendor/mcp-servers.vendor.test.ts#L159	a stdio and an http server attach, the agent calls both, and a resume attaches them again on the thread's own model	166,179,189,190,194,195,196	待逐项核销
-vendor-test	sea-trial/vendor/mcp-servers.vendor.test.ts#L203	on a name clash codex merges the session's server into the user's: oar's command, args and enabled win, the user's others stay	224,234,235	待逐项核销
+vendor-test	sea-trial/vendor/mcp-servers.vendor.test.ts#L203	Codex 合并同名 MCP 配置，采用上游运行时提供的命令、参数和启用状态，其余字段来自用户配置	224,234,235	待逐项核销
 vendor-test	sea-trial/vendor/mcp-tools-list-changed.vendor.test.ts#L41	a running session takes a change to the served tools as the runtime declares	49,50,54,56	待逐项核销
 vendor-test	sea-trial/vendor/missing-resume.vendor.test.ts#L15	Codex missing rollout rejects with the public error before a model request	20,21,22	待逐项核销
 vendor-test	sea-trial/vendor/missing-resume.vendor.test.ts#L26	Pi missing file rejects with the public error and the searched cwd	31,32,33	待逐项核销
@@ -1975,7 +1975,7 @@ vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L109	append provided=%s a
 vendor-test	sea-trial/vendor/pi-empty-system-prompt.vendor.test.ts#L29	rejects an empty replacement instead of silently sending the native default	39,41,42,43,44	待逐项核销
 vendor-test	sea-trial/vendor/pi-empty-system-prompt.vendor.test.ts#L51	a whitespace-only replacement still removes the native base prompt	56,58,61,62	待逐项核销
 vendor-test	sea-trial/vendor/pi-empty-system-prompt.vendor.test.ts#L66	an empty append keeps the native prompt and its configured instructions	72,74,77,78	待逐项核销
-vendor-test	sea-trial/vendor/pi-exit-code.vendor.test.ts#L11	Pi's real CodingTools exit status survives the OAR projection and JSON storage	28,31,35,36,39,40,42	待逐项核销
+vendor-test	sea-trial/vendor/pi-exit-code.vendor.test.ts#L11	Pi 的 CodingTools 真实退出状态保留到上游运行时投影和 JSON 存储	28,31,35,36,39,40,42	待逐项核销
 vendor-test	sea-trial/vendor/pi-extension-lifecycle.vendor.test.ts#L45	new and resumed sessions bind and await shutdown, mcpServers=%s	56,60,64,65,69	待逐项核销
 vendor-test	sea-trial/vendor/pi-extension-shutdown.vendor.test.ts#L42	a never-settling user hook warns and releases the native session after ten seconds	52,53,54,55,59,61,62	待逐项核销
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L10	handled input resolves without a model turn, including an already aborted caller signal	14,15,15,16,17,18,20,21,23	见 backend-evidence.tsv 同址记录
@@ -1987,7 +1987,7 @@ vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L114	handled steer 
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L128	handled command errors remain separate native facts, never a successful turn	132,133,133,134,135	见 backend-evidence.tsv 同址记录
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L138	abort accepted during a command preflight cancels the run started by that command	147,148,149,150,151,152,153	见 backend-evidence.tsv 同址记录
 vendor-test	sea-trial/vendor/pi-input-handled.vendor.test.ts#L157	settlement-triggered compaction refuses held inputs with their own receipts and reaches idle	166,172,174,175,177,178,179	待逐项核销
-vendor-test	sea-trial/vendor/pi-native-abort.vendor.test.ts#L13	a Pi extension's native abort is reported without an OAR abort request	20,32,33,34,36,37	待逐项核销
+vendor-test	sea-trial/vendor/pi-native-abort.vendor.test.ts#L13	Pi 扩展原生中止时，即使上游运行时没有发起中止，也能收到状态	20,32,33,34,36,37	待逐项核销
 vendor-test	sea-trial/vendor/pi-preflight.vendor.test.ts#L7	native Pi missing-key refusal drains queued work and leaves the next prompt usable	12,13,14,15,16,18,19	见 backend-evidence.tsv 同址记录
 vendor-test	sea-trial/vendor/pi-project-resolution.vendor.test.ts#L17	autoload delta uses its %s user package	33,34,35,36,37,39	待逐项核销
 vendor-test	sea-trial/vendor/pi-project-resolution.vendor.test.ts#L43	the conservative policy also refuses unrelated missing user packages	55,57,58,59	待逐项核销
@@ -2003,7 +2003,7 @@ vendor-test	sea-trial/vendor/pi-resume-tools.vendor.test.ts#L145	only explicitly
 vendor-test	sea-trial/vendor/pi-resume-tools.vendor.test.ts#L156	a removed transcript tool does not become pending during a tool-free resume	161,162,163	待逐项核销
 vendor-test	sea-trial/vendor/pi-resume-tools.vendor.test.ts#L167	session_start may deliberately activate a default-inactive tool	176,177	待逐项核销
 vendor-test	sea-trial/vendor/pi-resume-tools.vendor.test.ts#L181	the first provider request excludes the late default-inactive tool on both fresh and resumed opens	191,193,196,199	待逐项核销
-vendor-test	sea-trial/vendor/pi-rpc-bundled.vendor.test.ts#L10	a single-file OAR host starts a selected native Pi without adjacent OAR source or dependencies	18,20,23,25	待逐项核销
+vendor-test	sea-trial/vendor/pi-rpc-bundled.vendor.test.ts#L10	单文件宿主在没有相邻上游运行时源码及依赖时启动指定的原生 Pi	18,20,23,25	待逐项核销
 vendor-test	sea-trial/vendor/pi-rpc-diagnostics.vendor.test.ts#L10	diagnostics retain native Pi stderr without its session credential	14,21,27,28	待逐项核销
 vendor-test	sea-trial/vendor/pi-rpc-prompt-files.vendor.test.ts#L85	long multiline prompts reach the provider through the %s entry	97,98,99,100,101,103,104,105,106,107,109	待逐项核销
 vendor-test	sea-trial/vendor/pi-rpc-prompt-files.vendor.test.ts#L113	an unreadable %s fails before the session process starts	119,120,121,122,123	待逐项核销
@@ -2049,7 +2049,7 @@ vendor-test	sea-trial/vendor/qwen-native-memory.vendor.test.ts#L46	user settings
 vendor-test	sea-trial/vendor/qwen-native-memory.vendor.test.ts#L62	merges an existing QWEN_CODE_SYSTEM_DEFAULTS_PATH without mutating it	70,73,74,75,76	待逐项核销
 vendor-test	sea-trial/vendor/qwen-provider-auth.vendor.test.ts#L34	existingConfig reports settings metadata, not environment credentials or authentication	39,44,45,49,50	待逐项核销
 vendor-test	sea-trial/vendor/qwen-provider-auth.vendor.test.ts#L54	connect persists in native %s scope and reuses a key across reader processes	69,71,72,73,76,77,78,79	待逐项核销
-vendor-test	sea-trial/vendor/qwen-skills.vendor.test.ts#L36	unsigned ACP metadata matches OAR, including disabled, hidden, bundled, user and project skills	58,58,64,65,68,70,73,74,75,76,77,78,79,80,81,83,83,84,86,87,88,89,90,92	待逐项核销
+vendor-test	sea-trial/vendor/qwen-skills.vendor.test.ts#L36	未签名 ACP 元数据与上游运行时一致，覆盖禁用、隐藏、内置、用户及项目技能	58,58,64,65,68,70,73,74,75,76,77,78,79,80,81,83,83,84,86,87,88,89,90,92	待逐项核销
 vendor-test	sea-trial/vendor/qwen-tool-ids.vendor.test.ts#L74	a reused provider id with %s arguments is recorded under its normalized identity on resume	90,91,98,99,100,101,103,104,106,116,117	待逐项核销
 vendor-test	sea-trial/vendor/qwen-tool-ids.vendor.test.ts#L123	same-response duplicate ids with %s argument deltas retain the native outcome	153,156,157,164,167,168,169,170,174,177,178	待逐项核销
 vendor-test	sea-trial/vendor/qwen.vendor.test.ts#L53	text is emitted once with reasoning=%s, including repeated paragraphs and consecutive identical turns	65,66,69	待逐项核销

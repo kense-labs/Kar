@@ -11,7 +11,7 @@
 | `docs/spec/session-graph-and-cursor.md`、`session.cursor-replays-without-loss-or-duplication` 对应的聊天事件行为 | realtime · 两个独立 HTTP 客户端 | Kimi 2.7.2-botiverse.1，KAP HTTP/WebSocket，实机 | 两端订阅同一聊天，分别在工具参数仍不完整和第一轮结束时断开；停止 SSE 服务，关闭并重开原生会话，另一个聊天也产生事件。两端以各自的 Last-Event-ID 重连 | K1。本次断线前分别收到 17、5 条，续收后各 32 条。两端补齐后的事件与磁盘日志在游标、前驱、内容、顺序和数量上逐项相等。重复应用同一事件返回 false。最终两轮时间线相同；另一个真实聊天的游标返回 HTTP 400。 |
 | `tests/kimi/kimi-kap-projection.test.ts` 的三个工具输入断言 | tools · 流式参数与最终输入 | Kimi 2.7.2-botiverse.1，KAP 实机；另有 Rust 协议投影测试 | 分两段返回 Bash 参数。在工具运行期间观察已收到的文本；原生结构化参数到达后清除 partial 标记。重复快照、缺少 updated、ended 重放均须归入同一个调用 | K1、K3。工具卡保留完整的 command 和 description。原生结果存在，半截 JSON 保持 partial；结束帧提供的最终参数只发布一次。 |
 | `docs/runtimes/crash-resume.md`、`session.resume-or-loud-rejection` | restart / queue · 恢复有原生证据的回合并续聊 | Kimi 2.7.2-botiverse.1，KAP 实机 | 复制截至真实工具执行中的宿主日志前缀，重新打开，读取原生历史。随后恢复原聊天，用同一排队 UUID 连续两次 drain | K1。第一轮恢复出的消息、工具卡、状态与完整运行一致，恢复期间模型调用计数不变。排队输入只新增一次模型请求，保留原生会话 ID 和队列 UUID。此次故障切点通过日志前缀重建。 |
-| `tests/kimi/kimi-kap-controls.test.ts` 的 steer handoff / cancelled false / server interrupt / late reply 断言 | queue / lifecycle · 中止与后续 FIFO | 固定 OAR v0.130.1 的 KAP 协议对端，macOS 原生 Rust 控制器，协议实验 | 在父回合和追加回合交接时中止。分别返回取消成功、没有活动回合以及原生主动中断；再测试延迟回执之后的连续插话 | K2。修复前 cancelled=false 时队列等待 5 秒超时。修复后，后续输入各只发一次，原生 POST 的 UUID 等于 queue 返回值。晚到的取消回执不影响下一回合；空闲时再次中止在本地得到拒绝。 |
+| `tests/kimi/kimi-kap-controls.test.ts` 的 steer handoff / cancelled false / server interrupt / late reply 断言 | queue / lifecycle · 中止与后续 FIFO | 固定上游运行时 v0.130.1 的 KAP 协议对端，macOS 原生 Rust 控制器，协议实验 | 在父回合和追加回合交接时中止。分别返回取消成功、没有活动回合以及原生主动中断；再测试延迟回执之后的连续插话 | K2。修复前 cancelled=false 时队列等待 5 秒超时。修复后，后续输入各只发一次，原生 POST 的 UUID 等于 queue 返回值。晚到的取消回执不影响下一回合；空闲时再次中止在本地得到拒绝。 |
 | `packages/oar/src/shared/abort-fallback.ts`、`tests/kimi/kap-protocol-spawn.test.ts` | lifecycle · 有界中止与启动失败 | KAP 协议对端及 macOS 实际子进程 | 反复中止一个只确认取消、一直不发终态的回合；另测版本探针成功后执行权限消失、子进程退出未给端点、原配置目录立即重开 | K2。首次中止的 10 秒期限生效，重复中止没有延期，每对已确认请求和回执 ID 匹配，观察到控制器退出。启动失败在 4 秒断言内返回，使用同一配置成功重开。 |
 | `docs/runtimes/kimi.md`、`session.resume-or-loud-rejection` | restart / interaction_settings · 旧版本恢复及工作目录 | 官方 Kimi 2.7.2，ACP stdio，实机 | 按能力选择 ACP；在新会话添加一个工作目录，在恢复后再提交一轮，核对模型收到的上下文 | K4。两轮均结束，模型在恢复后的请求中同时看到了前后两轮的标记，并在两次请求中看到了指定目录。只允许在创建时设置的操作得到了明确拒绝。 |
 | `docs/runtimes/claude.md`、`docs/runtimes/steer-delivery.md` | realtime / restart · 中断时归并 Claude 原生内容 | Claude Code 2.1.330，stream-json，实机 | 在普通回合及包含多条追加指令的回合截断宿主日志，恢复消息、推理、工具及输入归属，再重开一次 | C1。两个客户端重建的内容与原始时间线相同，未知输入没有冒充已接纳；缺少 SDK 终态时仍为 interrupted。包括第一条指令已移到子回合而第二条尚未移走的切点。 |
@@ -28,7 +28,7 @@
 | 编号 | 所需环境 | 命令 |
 | --- | --- | --- |
 | K1 | `KAR_KIMI_BIN` 指向 2.7.2-botiverse.1 | `cargo test --locked --test kimi_live kap_tool_turn_replay_and_native_resume -- --ignored --nocapture` |
-| K2 | `KAR_OAR_SOURCE` 指向含固定运行时提交的 Git 仓库；Node 在 PATH | `cargo test --locked --test kimi_controls -- --ignored` |
+| K2 | `KAR_UPSTREAM_SOURCE` 指向含固定运行时提交的 Git 仓库；Node 在 PATH | `cargo test --locked --test kimi_controls -- --ignored` |
 | K3 | Rust | `cargo test --locked --lib kimi::projection::tests` |
 | K4 | `KAR_KIMI_ACP_BIN` 指向官方 2.7.2 | `cargo test --locked --test kimi_live official_cli_falls_back_and_resumes_over_acp -- --ignored` |
 | C1 | PATH 中的 `claude` 为 2.1.330 | `cargo test --locked --test native_live claude -- --ignored --test-threads=2` |
@@ -54,7 +54,7 @@
 
 ## 子任务、技能目录与浏览器 / CLI
 
-以下测试运行在同一台 macOS arm64 主机。源码断言均指固定的 OAR v0.130.1。
+以下测试运行在同一台 macOS arm64 主机。源码断言均指固定的上游运行时 v0.130.1。
 
 | 上游契约 / Kar 验收项 | 供应商、版本及传输 / Kar 提交 | 操作及期望 | 复验命令与实际结果 | 状态 |
 | --- | --- | --- | --- | --- |
@@ -113,7 +113,7 @@ macOS 同一公共用例通过 Pi 1.6.0、Claude 2.1.330、Qwen 0.28.4、Factory
 
 ## 固定源码索引与逐项证据
 
-[源码索引](backend-source-index.tsv) 固定到 OAR v0.130.1 的 `2b15859a13dcc50e8b66cbaee5a007832aa00e08`。通过 TypeScript 语法树与包导出表提取了 40 个契约文件、221 个顶层契约声明、481 个具名接口成员、849 个按入口区分的导出、12 条 CLI 命令声明、32 个选项、2 个显式参数和 4 个 inventory 选择。20 个公共用例与 suite 注册表一致。149 个供应商测试文件内有 381 个测试定义，另有 53 组文件级共享断言。供应商部分索引了 2621 处直接断言或断言辅助函数调用。参数化测试在运行时可产生多个实例；类型别名和共享辅助函数须结合引用处逐项验收。
+[源码索引](backend-source-index.tsv) 固定到上游运行时 v0.130.1 的 `2b15859a13dcc50e8b66cbaee5a007832aa00e08`。通过 TypeScript 语法树与包导出表提取了 40 个契约文件、221 个顶层契约声明、481 个具名接口成员、849 个按入口区分的导出、12 条 CLI 命令声明、32 个选项、2 个显式参数和 4 个 inventory 选择。20 个公共用例与 suite 注册表一致。149 个供应商测试文件内有 381 个测试定义，另有 53 组文件级共享断言。供应商部分索引了 2621 处直接断言或断言辅助函数调用。参数化测试在运行时可产生多个实例；类型别名和共享辅助函数须结合引用处逐项验收。
 
 [逐项证据](backend-evidence.tsv) 用固定源码路径和行号关联实际运行。每行给出供应商、版本、平台、操作、期望、Kar 提交、命令和观察结果。索引中的“待逐项核销”表示此表尚未登记对应证据。此前按场景执行的结果仍见上文。
 
@@ -140,7 +140,7 @@ macOS 同一公共用例通过 Pi 1.6.0、Claude 2.1.330、Qwen 0.28.4、Factory
 
 ## 关闭请求和回执
 
-提交 `a0bda94` 核对了 OAR 的 `session.dispose-is-recorded` 和 `session.dispose-mid-turn-settles`。修复前，ACP 协议回归在查找 dispose 请求时失败。修复后，显式关闭记录请求 UUID，观察到进程退出后记录同一 UUID 的回执及操作系统退出码。信号终止的退出码为 null。自发退出不会生成关闭请求。
+提交 `a0bda94` 核对了上游运行时 的 `session.dispose-is-recorded` 和 `session.dispose-mid-turn-settles`。修复前，ACP 协议回归在查找 dispose 请求时失败。修复后，显式关闭记录请求 UUID，观察到进程退出后记录同一 UUID 的回执及操作系统退出码。信号终止的退出码为 null。自发退出不会生成关闭请求。
 
 | 平台与程序 | 操作与实际证据 |
 | --- | --- |
@@ -166,13 +166,15 @@ Pi 上游 handled 系列还包含预先取消的调用者、扩展独立启动�
 
 ## Pi 原生接纳检查期间排队
 
-提交 `e8d223c` 在 Pi 已进入扩展的输入检查、尚未答复 A 时提交 B。固定 OAR 的测试扩展在隔离目录移除 A、B 的模型凭据，处理 C 时恢复。修复前，原生程序已拒绝 A、B，Kar 发布的队列丢弃事件数为 0。修复后，A 有对应的 `runtime_refused` 拒绝回执，B 有且仅有一次带自己输入 ID 的丢弃事件，两次都保留 Pi 的缺少凭据错误。此期间没有模型请求和模型回合。空闲时中止返回 `no_active_turn`，C 完成且模型只收到一次请求。
+提交 `e8d223c` 在 Pi 已进入扩展的输入检查、尚未答复 A 时提交 B。固定上游运行时 的测试扩展在隔离目录移除 A、B 的模型凭据，处理 C 时恢复。修复前，原生程序已拒绝 A、B，Kar 发布的队列丢弃事件数为 0。修复后，A 有对应的 `runtime_refused` 拒绝回执，B 有且仅有一次带自己输入 ID 的丢弃事件，两次都保留 Pi 的缺少凭据错误。此期间没有模型请求和模型回合。空闲时中止返回 `no_active_turn`，C 完成且模型只收到一次请求。
 
-macOS arm64 的 Pi 1.6.0 和 Ubuntu arm64 的 Pi 1.4.0、1.6.0 均通过。设置 `KAR_PI_BIN` 和 `KAR_OAR_PI_PREFLIGHT` 后，执行 `cargo test --locked --test native_live admission_holds -- --ignored --nocapture`。后一个变量指向固定 OAR 源码中的 `sea-trial/vendor/support/pi-preflight.ts`，测试核验文件摘要，并使用其中的原生 Pi 扩展。完整运行 `pi_history::` 还需要前述发行包自带的 `KAR_PI_INPUT_EXTENSION`。三组各通过 10 项。相同提交还复验了两个平台上的 Pi、Factory、Claude 和 DSH Web 在空闲时拒绝插话，每次都有一对可从日志关联的请求与回执。
+macOS arm64 的 Pi 1.6.0 和 Ubuntu arm64 的 Pi 1.4.0、1.6.0 均通过。设置 `KAR_PI_BIN` 和 `KAR_PI_PREFLIGHT_FIXTURE` 后，执行 `cargo test --locked --test native_live admission_holds -- --ignored --nocapture`。后一个变量指向固定上游运行时 源码中的 `sea-trial/vendor/support/pi-preflight.ts`，测试核验文件摘要，并使用其中的原生 Pi 扩展。完整运行 `pi_history::` 还需要前述发行包自带的 `KAR_PI_INPUT_EXTENSION`。三组各通过 10 项。相同提交还复验了两个平台上的 Pi、Factory、Claude 和 DSH Web 在空闲时拒绝插话，每次都有一对可从日志关联的请求与回执。
 
-## OAR 会话录制文件导入
+## Kar 录制导入与回放
 
-提交 `6c07423` 兼容 OAR v0.130.1 和既有 Kar 的 v3 文件头。macOS、Ubuntu 的 Rust CLI 均成功导入固定 OAR 的 `openVoyage` 写出的文件。三个样例事件的完整上游记录及顺序均保留，命令输出包含原始头和结束行。对已有目标再次执行会保留原文件，遇到不连续序号会报错且不留下半成品。这里验证了官方写入器与 Kar 的格式兼容性，输入事件由测试提供。设置 `KAR_OAR_SOURCE` 为解包的固定源码或检出目录，Node 24 加入 PATH，运行 `cargo test --locked --test voyage_compat -- --ignored`。仅需 Rust 的截断、版本及历史兼容测试为 `cargo test --locked --lib voyage::`。
+提交 `8e9d19c` 修正 `6c07423` 放宽文件头检查的问题。Kar v3 录制使用 `kar-voyage/3`。在 macOS arm64 和 Ubuntu arm64，使用实际 Kar CLI 从三条输入记录生成 JSONL，完整回放三条，从第一条之后的游标回放两条。已有目标得到保护。旧 v3 文件头在发布目标前返回格式错误，目标目录没有输出或临时文件。断序输入同样被拒绝。运行 `cargo test --locked --test kar_voyage`（2 项）及 `cargo test --locked --lib voyage::`（2 项）可复验。
+
+同一提交在两个平台运行了 `cargo test --locked --test chat_restart` 和 `cargo test --locked --test protocol`，覆盖 Kar 自有聊天的导入、恢复、实时回放与断线游标，以及 `kar run --record` 的常规录制。聊天续接命令统一为 `kar chat resume`。固定源码测试夹具改用 `KAR_UPSTREAM_SOURCE`（Kimi）和 `KAR_PI_PREFLIGHT_FIXTURE`（Pi）。分别运行 `cargo test --locked --test kimi_controls -- --ignored --test-threads=1`（4 项协议测试）及 `cargo test --locked --test native_live admission_holds -- --ignored`（1 项原生程序测试）。文中的复验命令使用当前变量名。
 
 ## Pi 扩展自己发起的模型回合
 
@@ -205,6 +207,12 @@ Pi 还验证了 A、HANDLE、C 三条连续输入。模型处理 A 和 C，扩�
 Pi Durable 1.6.0 在两平台均运行了真实 Chromium、IndexedDB 和官方 Harness。模型响应保持挂起期间，旧观察者可以释放，新观察者接入相同会话后看见原生运行，并能中止它。重试已完成输入时只返回之前的提交结果，另一个活动输入继续运行到放行。五个专有测试位置覆盖慢回合中的排队与撤回、已完成输入的重试、接管未输出的运行、新回合中的旧输入重试、以及接管时拒绝改动设置。两个平台各运行 `node tests/browser/live.mjs` 一次用于最终复验，每次观察到 12 个模型请求，重试文字的调用次数为零。
 
 Morph 与 Cybion 另以 Rust 测试对端核对控制回执。Pi RPC 的协议测试注入编号类型错误、非规范编号及命令不符的回执，随后原生拒绝仍只归入原请求。Codex 和 Claude 在原生进程完全不回应中止时的限时退出，以及专有用例要求的退出记录与结果回放，仍待逐项验收。
+
+## Factory 在投递回执写盘前强杀后的恢复
+
+提交 `661854c` 在原生程序接收 UUID、Kar 仅持久化 Begin 时分别测试两次强杀。第一次模型仍在等待。第二次原生程序已经写出该回合的完成记录。修复前第一次重开后漏记了投递回执。修复后，同一工作区和会话中均按原 UUID 确认已发送，第一种回合显示 interrupted，第二种显示 completed。之后两个排队输入依次完成。模型一共收到四次请求，依次是种子消息和三个排队输入；重试全部 UUID 后没有新的模型请求。两个从不同游标断线的 HTTP 客户端分别在两种情况下逐条匹配了全部 32 条及 31 条持久事件。
+
+在 macOS arm64（Factory 1.12.1、1.17.2）和 Ubuntu arm64（Factory 1.12.1），指定 `KAR_FACTORY_BIN` 后运行 `cargo test --locked --test factory_live -- --ignored --test-threads=1 --nocapture`，三组各 10 项通过。早先 macOS 1.12.1 的一次并行运行有一项进程资源读数未返回，该项单独重跑及整套串行重跑通过。另以 `cargo test --locked --test chat_restart` 验证持有共享日志读锁期间第二个 HTTP 客户端仍可读取活动回合快照。此处验证有可匹配原生 UUID 的两个切点。供应商未保存收件凭据的情形仍需按运行时核验。
 
 ## 尚未核销的范围
 
