@@ -239,7 +239,7 @@ async fn scenario() {
     let (milestone_cursor,live_milestones)=milestones::begin(&c,&url,owner,provider).await;
     workflow::exercise(&url, &a, p, chat, call).await;
     operations::exercise(&url, &a, p, chat, &observer, call).await;
-    orchestrator::exercise(&url,&a,p,chat,&observer,call).await;
+    orchestrator::exercise(&url,&a,p,chat,&observer,&db,call).await;
     let first_milestone=milestones::recover(&c,&url,owner,&milestone_cursor,None).await;
     milestones::observe_live(live_milestones,&first_milestone).await;
     let stateless = |r: RequestBuilder| {

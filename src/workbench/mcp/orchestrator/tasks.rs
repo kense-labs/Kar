@@ -1,5 +1,9 @@
 use super::*;
 mod peer;
+mod delivery;
+use crate::chat::{Completion, WakePolicy};
+pub(in crate::workbench) use delivery::routes as delivery_routes;
+pub(in crate::workbench::mcp) use delivery::observe_read;
 pub(in crate::workbench) use peer::routes as peer_routes;
 #[derive(Clone,Serialize,Deserialize,PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -11,6 +15,7 @@ use std::path::PathBuf;
 #[serde(deny_unknown_fields)]
 struct Spec {
     task: String,
+    #[serde(default,skip_serializing_if="Option::is_none")] completion_wake:Option<WakePolicy>,
     remote:Option<Remote>,
     title: Option<String>,
     runtime: Option<String>,
@@ -48,6 +53,8 @@ pub(in crate::workbench) struct Task {
     summary: Option<String>,
     output: Option<Value>,
     delivered: bool,
+    #[serde(default)] parent_turn:Option<Uuid>,
+    #[serde(default)] completion: Option<Completion>,
     #[serde(default)] inbound_device:Option<Uuid>,
     #[serde(default)] remote_chat:Option<Uuid>,
     #[serde(default)] remote_link:Option<Uuid>,
@@ -70,7 +77,7 @@ impl Task {
         )
     }
     fn view(&self) -> Value {
-        json!({"task_id":self.id,"thread_id":if self.spec.remote.is_some(){self.remote_chat}else{Some(self.id)},"remote":self.spec.remote,"parent_thread_id":self.parent,"project_id":self.project,"input_id":self.input(),"work_state":self.phase,"summary":self.summary,"structured_output":self.output,"delivered":self.delivered})
+        json!({"task_id":self.id,"thread_id":if self.spec.remote.is_some(){self.remote_chat}else{Some(self.id)},"remote":self.spec.remote,"parent_thread_id":self.parent,"project_id":self.project,"input_id":self.input(),"work_state":self.phase,"summary":self.summary,"structured_output":self.output,"delivered":self.completion.as_ref().is_some_and(|c|c.native_received),"completion_delivery":self.completion,"parent_run_id":self.parent_turn,"completion_wake":self.completion.as_ref().map(|c|c.wake_policy).or(self.spec.completion_wake).unwrap_or_default()})
     }
 }
 pub(in crate::workbench::mcp) fn owned(db: &Catalog, parent: Uuid, child: Uuid) -> Option<Uuid> {
@@ -136,7 +143,7 @@ pub(in crate::workbench) fn recover(app: &Workbench) {
         .unwrap()
         .model_tasks
         .iter()
-        .filter(|(_, r)| !r.terminal() || (r.phase != Phase::Cancelled && !r.delivered))
+        .filter(|(_, r)| !r.terminal() || (r.inbound_device.is_none() && r.completion.as_ref().is_none_or(|c|!c.settled() || matches!(c.queue_status,Some(InputStatus::Pending|InputStatus::Sending|InputStatus::Uncertain)))))
         .map(|(id, _)| *id)
         .collect();
     for id in ids {
@@ -170,19 +177,7 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
         return cancel_one(app, &t).await;
     }
     if t.terminal() {
-        if !t.delivered && t.phase != Phase::Cancelled {
-            let msg = format!(
-                "Delegated task {} finished ({})\n{}",
-                t.id,
-                serde_json::to_string(&t.phase)?,
-                t.summary.as_deref().unwrap_or("")
-            );
-            if t.inbound_device.is_none() && !app.archived(t.parent) && still_granted(app, &t).is_ok() {
-                app.0.chats.enqueue(t.parent, t.wake(), msg)?;
-                app.wake_queue();
-            }
-            change(app, t.id, |r| r.delivered = true)?;
-        }
+        if t.inbound_device.is_none() { delivery::sync(app,&t,None,None)?; }
         return Ok(());
     }
     if t.spec.remote.is_some(){return peer::advance(app,&t).await;}
@@ -314,9 +309,9 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
     };
     let waiting = children.iter().any(|r| {
         !r.terminal()
-            || (!r.delivered && r.phase != Phase::Cancelled)
+            || (r.phase!=Phase::Cancelled && r.completion.as_ref().is_none_or(|c|!c.settled()))
             || inbox.iter().any(|q| {
-                q.id == r.wake()
+                Some(q.id)==r.completion.as_ref().and_then(|c|c.message_id)
                     && matches!(
                         q.status,
                         InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
@@ -324,7 +319,7 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
             })
             || h.turns
                 .iter()
-                .any(|t| t.id == r.wake() && t.status == TurnStatus::Running)
+                .any(|t| Some(t.id)==r.completion.as_ref().and_then(|c|c.message_id) && t.status == TurnStatus::Running)
     });
     if waiting {
         if t.phase != Phase::WaitingForChildren {
@@ -336,7 +331,7 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
         .turns
         .iter()
         .rev()
-        .find(|t| children.iter().any(|r| r.wake() == t.id))
+        .find(|t| children.iter().any(|r| r.completion.as_ref().and_then(|c|c.message_id)==Some(t.id)))
         .unwrap_or(turn);
     let summary = turn
         .items
@@ -391,12 +386,12 @@ async fn cancel_one(app: &Workbench, t: &Task) -> Result<()> {
     }
     change(app, t.id, |r| {
         r.phase = Phase::Cancelled;
-        r.delivered = true;
     })?;
     Ok(())
 }
 pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value) -> Result<Value> {
     let grant = c.grant.as_ref().unwrap();
+    if name=="kar_task_delivery" {return delivery::model(app,c,req).await;}
     if matches!(name, "kar_task_status" | "kar_task_cancel") {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -410,6 +405,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
         if prior.parent != grant.chat || prior.project != grant.project {
             return Err(refused("task was not delegated by this chat"));
         }
+        let observing = delivery::active(app,grant.chat)?;
         if name == "kar_task_status"
             && matches!(prior.phase, Phase::Running | Phase::WaitingForChildren)
         {
@@ -423,9 +419,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
                     .get_mut(&q.task_id)
                     .filter(|t| t.parent == grant.chat && t.project == grant.project)
                     .ok_or_else(|| refused("task was not delegated by this chat"))?;
-                if t.terminal() {
-                    t.delivered = true;
-                } else if name == "kar_task_cancel" {
+                if !t.terminal() && name == "kar_task_cancel" {
                     t.phase = Phase::Cancelling;
                 }
                 let t = t.clone();
@@ -443,6 +437,9 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
                 Ok(t)
             })?;
         app.wake_queue();
+        if name=="kar_task_status" && t.terminal() {
+            return Ok(delivery::sync(app,&t,None,observing)?.view());
+        }
         return Ok(t.view());
     }
     let map = req
@@ -488,6 +485,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
         };
         let id = cmd;
         let remote_link=spec.remote.as_ref().map(|r|super::super::collaboration_tools::environment::peer_identity(&app.0.catalog.lock().unwrap(),r.environment_id)).transpose()?;
+        let spec_policy=spec.completion_wake.unwrap_or_default();
         let task = Task {
             id,
             project: p,
@@ -503,6 +501,8 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
             summary: None,
             output: None,
             delivered: false,
+            parent_turn:delivery::active(app,grant.chat)?,
+            completion:Some(Completion{wake_policy:spec_policy,..Default::default()}),
             inbound_device:None,remote_chat:None,remote_link,next_peer_poll_ms:0,
         };
         let saved = app.update(|db| {

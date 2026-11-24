@@ -398,6 +398,14 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 }
+                if text=="delegation wait in parent" {
+                    fs::write(database.join("delegation-parent-ready"),&turn).unwrap();
+                    let limit=Instant::now()+Duration::from_secs(100);
+                    while database.join("hold-delegation-parent").is_file(){
+                        assert!(Instant::now()<limit);
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
                 if text == "shared-next" && database.join("hold-parent-turn").exists() {
                     fs::write(database.join("parent-turn-running"), []).unwrap();
                     let until = Instant::now() + Duration::from_secs(30);

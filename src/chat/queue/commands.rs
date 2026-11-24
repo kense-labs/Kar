@@ -103,6 +103,13 @@ impl ChatStore {
             };
         }
         match &action {
+            QueueAction::Edit{input,..}|QueueAction::Replace{input,..}|QueueAction::Reorder{input,..}
+                if inbox.delegations.protects(*input) => return Err(Error::Refused("automatic completion messages can only be changed by resolving the task".into())),
+            QueueAction::Reorder{before:Some(id),..} if inbox.delegations.protects(*id) => return Err(Error::Refused("cannot reorder ahead of a completion notice".into())),
+            QueueAction::Start{input} if !inbox.delegations.protects(*input) &&
+                inbox.entries.iter().any(|e|inbox.delegations.protects(e.id) && e.status(&state)==InputStatus::Pending) =>
+                return Err(Error::Refused("a pending delegated completion is ahead of this input".into())),
+
             QueueAction::AcknowledgeUncertain { input } => {
                 let head = inbox.uncertain_head(&state);
                 let entry = inbox

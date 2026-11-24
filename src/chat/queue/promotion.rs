@@ -93,6 +93,7 @@ impl ChatStore {
                 "queue command ID belongs to a different request".into(),
             ));
         }
+        if inbox.delegations.protects(input) {return Err(Error::Refused("automatic completion notices cannot be steered".into()));}
         let workspace_pending=inbox.workspace_gate.is_some();
         let uncertain_head = inbox.uncertain_head(&state);
         let steer_only = new_input.is_some();

@@ -261,6 +261,7 @@ fn required(method: &Method, path: &str) -> Option<&'static str> {
             Some("orchestration:read")
         }
         ["search", "chats"] | ["projects", _, "search"] if read => Some("orchestration:read"),
+        ["projects", _, "chats", _, "delegations", _] => Some(if read {"orchestration:read"}else{"orchestration:operate"}),
         ["projects", _, "chats"] if !read => Some("orchestration:operate"),
         [
             "projects",

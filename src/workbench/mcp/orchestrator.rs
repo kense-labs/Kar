@@ -38,6 +38,7 @@ pub(super) fn handles(name: &str) -> bool {
         name,
         "kar_delegate_task"
             | "kar_task_status"
+            | "kar_task_delivery"
             | "kar_task_cancel"
             | "kar_create_threads"
             | "kar_schedule_task"
@@ -86,6 +87,9 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
             if !scope.unwrap().remote_projects.is_empty(){
                 task["remote"]=json!({"type":"object","properties":{"environment_id":id,"project_id":id},"required":["environment_id","project_id"],"additionalProperties":false});
             }
+            task["completion_wake"]=json!({"enum":["always","settled_only"]});
+            add("kar_task_delivery","Change when this child wakes its parent, acknowledge a result in the observing parent turn, or dispose of its completion notice.",
+                json!({"task_id":id,"command_id":id,"action":{"enum":["wake_policy","acknowledge","dispose"]},"completion_wake":{"enum":["always","settled_only"]},"observed_by_run_id":id}), &["task_id","command_id","action"]);
             let mut one = task.clone();
             one["command_id"] = id.clone();
             add(
@@ -147,7 +151,8 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, req: Value) -> R
 }
 pub(super) use tasks::owned;
 pub(in crate::workbench) use tasks::milestone_parent;
-pub(in crate::workbench) use tasks::peer_routes;
+pub(in crate::workbench) use tasks::{peer_routes,delivery_routes};
+pub(in crate::workbench::mcp) use tasks::observe_read;
 pub(in crate::workbench) use tasks::{Task, recover};
 pub(in crate::workbench) fn scheduled_execution(
     app: &Workbench,

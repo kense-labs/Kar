@@ -153,6 +153,7 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
         .merge(links::session_routes())
         .merge(threads::remote_routes())
         .merge(crate::workbench::mcp::orchestrator::peer_routes())
+        .merge(crate::workbench::mcp::orchestrator::delivery_routes())
 }
 pub(in crate::workbench) fn owner_routes() -> Router<Workbench> {
     Router::new()

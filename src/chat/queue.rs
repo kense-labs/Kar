@@ -1,6 +1,7 @@
 //! Producers can add inputs while another process owns the native session. The queue
 //! stores admission order. The chat journal is authoritative about dispatch attempts.
 mod commands;
+pub(crate) mod delegations;
 mod merge;
 mod app_context;
 pub use merge::MergedContext;
@@ -179,6 +180,8 @@ impl Entry {
 }
 #[derive(Serialize, Deserialize)]
 struct Inbox {
+    #[serde(default)]
+    delegations: delegations::Ledger,
     #[serde(default,skip_serializing_if="std::collections::BTreeMap::is_empty")]
     app_context:std::collections::BTreeMap<String,app_context::Entry>,
     #[serde(default,skip_serializing_if="std::collections::BTreeMap::is_empty")]
@@ -213,6 +216,7 @@ impl ChatStore {
             Ok(file) => file,
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 return Ok(Inbox {
+                    delegations: Default::default(),
                     workspace_gate:None,
                     context_transfers:Default::default(),
                     app_context:Default::default(),

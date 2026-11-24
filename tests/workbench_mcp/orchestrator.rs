@@ -5,6 +5,7 @@ pub(super) async fn exercise(
     project: &str,
     caller: Uuid,
     observer: &tokio::net::UdpSocket,
+    db: &std::path::Path,
     rpc: impl Fn(&str, Value) -> RequestBuilder,
 ) {
     let permissions = format!("{url}/projects/{project}/chats/{caller}/model-tools/permissions");
@@ -21,6 +22,21 @@ pub(super) async fn exercise(
     let plan = server::json(invoke("kar_delegate_task", payload.clone())).await;
     assert!(plan["result"]["isError"] == true || plan["error"].is_object());
     server::json(set("execute")).await;
+    let parent_turn = Uuid::new_v4();
+    let base = format!("{url}/projects/{project}/chats/{caller}");
+    let details = |id| format!("{base}/delegations/{id}");
+    fs::write(db.join("hold-delegation-parent"), []).unwrap();
+    let parent = tokio::spawn(server::json(
+        host.post(format!("{base}/messages"))
+            .json(&json!({"id":parent_turn,"text":"delegation wait in parent"})),
+    ));
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while !db.join("delegation-parent-ready").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
     for _ in 0..2 {
         assert_eq!(
             server::json(invoke("kar_delegate_task", payload.clone())).await["result"]["structuredContent"]
@@ -29,18 +45,96 @@ pub(super) async fn exercise(
         );
     }
     observer.recv(&mut [0u8; 192]).await.unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(35), async {
-        loop {
-            let s = server::json(invoke("kar_task_status", json!({"task_id":task}))).await;
-            if s["result"]["structuredContent"]["work_state"] == "result_available" {
-                break s;
+    let ready = |id: Uuid| async move {
+        tokio::time::timeout(Duration::from_secs(35), async {
+            loop {
+                let s = server::json(host.get(format!(
+                    "{url}/projects/{project}/chats/{caller}/delegations/{id}"
+                )))
+                .await;
+                if s["work_state"] == "result_available" {
+                    break s;
+                }
+                tokio::time::sleep(Duration::from_millis(80)).await;
             }
-            tokio::time::sleep(Duration::from_millis(90)).await;
+        })
+        .await
+        .unwrap()
+    };
+    let r = ready(task).await;
+    assert_eq!(r["parent_run_id"], json!(parent_turn));
+    assert_eq!(r["completion_delivery"]["state"], "pending");
+    assert_eq!(r["delivered"], false);
+    let policy =
+        json!({"command_id":Uuid::new_v4(),"action":"wake_policy","completion_wake":"always"});
+    let claimed = server::json(host.post(details(task)).json(&policy)).await;
+    let wake = claimed["completion_delivery"]["message_id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(claimed["delivered"], false);
+    let sibling = Uuid::new_v4();
+    server::json(invoke(
+        "kar_delegate_task",
+        json!({"command_id":sibling,"task":"Second delegate","completion_wake":"always"}),
+    ))
+    .await;
+    observer.recv(&mut [0u8; 192]).await.unwrap();
+    assert_eq!(
+        ready(sibling).await["completion_delivery"]["message_id"],
+        wake
+    );
+    let ack = server::json(invoke("kar_task_status", json!({"task_id":task}))).await;
+    assert_eq!(
+        ack["result"]["structuredContent"]["completion_delivery"]["observed_by_run_id"],
+        json!(parent_turn)
+    );
+    assert_eq!(ack["result"]["structuredContent"]["delivered"], false);
+    let inbox = server::json(host.get(format!("{base}/queue"))).await;
+    let entry = inbox["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == wake)
+        .unwrap();
+    let text = entry["text"].as_str().unwrap();
+    assert!(!text.contains(&task.to_string()) && text.contains(&sibling.to_string()));
+    let dispose = json!({"command_id":Uuid::new_v4(),"task_id":sibling,"action":"dispose"});
+    for _ in 0..2 {
+        let result = server::json(invoke("kar_task_delivery", dispose.clone())).await;
+        assert_eq!(
+            result["result"]["structuredContent"]["completion_delivery"]["state"],
+            "disposed"
+        );
+    }
+    let final_child = Uuid::new_v4();
+    server::json(invoke(
+        "kar_delegate_task",
+        json!({"command_id":final_child,"task":"Notify after parent settles"}),
+    ))
+    .await;
+    observer.recv(&mut [0u8; 192]).await.unwrap();
+    assert_eq!(
+        ready(final_child).await["completion_delivery"]["state"],
+        "pending"
+    );
+    fs::remove_file(db.join("hold-delegation-parent")).unwrap();
+    assert_eq!(parent.await.unwrap()["id"], json!(parent_turn));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let settled = server::json(host.get(details(final_child))).await;
+            if settled["completion_delivery"]["state"] == "delivered" {
+                assert_eq!(settled["delivered"], true);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(80)).await;
         }
     })
     .await
     .unwrap();
-    assert_eq!(result["result"]["structuredContent"]["delivered"], true);
+    assert_eq!(
+        server::json(host.get(details(task))).await["delivered"],
+        false
+    );
     let bad = server::json(invoke("kar_task_status", json!({"task_id":Uuid::new_v4()}))).await;
     assert_eq!(bad["result"]["isError"], true);
     let schedule = Uuid::new_v4();

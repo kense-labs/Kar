@@ -16,6 +16,7 @@ mod workspace_handoff;
 mod http_feed;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
 pub use queue::MergedContext;
+pub(crate) use queue::delegations::{Completion,CompletionSource,CompletionCommand,WakePolicy};
 pub use handoff::{Handoff, HandoffRequest, HandoffStatus, ProviderSession};
 pub use http_feed::HttpChatFeed;
 pub use log::ChatUpdate;

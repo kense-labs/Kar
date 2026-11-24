@@ -447,6 +447,9 @@ fn read(app: &Workbench, c: &Caller, a: Read) -> Result<Value> {
     if max == 0 || limit == 0 {
         return Err(bad("Text and page limits must be positive"));
     }
+    let observing=if let Some(grant)=&c.grant && grant.chat!=t {
+        app.0.chats.history(grant.chat)?.turns.last().filter(|run|run.status==crate::chat::TurnStatus::Running).map(|run|run.id)
+    }else{None};
     let history = app.0.chats.history(t)?;
     let mut out = vec![];
     let mut has_more = false;
@@ -479,6 +482,7 @@ fn read(app: &Workbench, c: &Caller, a: Read) -> Result<Value> {
         let (text, next) = window(&text, a.text_offset, max);
         out.push(json!({"item_id":row.entry_id,"run_id":row.turn,"position":n,"kind":kind,"text":text,"next_text_offset":next}));
     }
+    super::orchestrator::observe_read(app,c,t,observing,&out)?;
     Ok(json!({"project_id":p,"thread_id":t,"items":out,"has_more":has_more}))
 }
 fn window(text: &str, offset: usize, max: usize) -> (String, Option<usize>) {
