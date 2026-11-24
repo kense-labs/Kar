@@ -237,7 +237,7 @@ async fn sign_read(
 ) -> Reply<Value> {
     blocking(move || {
         app.binding(p, c)?;
-        app.0.chats.read_attachment(c, id)?;
+        app.0.chats.visible_attachment(c, id)?;
         let key = credential()?;
         let ticket = Uuid::new_v4();
         let at = now();
@@ -276,7 +276,7 @@ async fn download(
         .ok_or_else(missing)?;
     let (a, data) = tokio::task::spawn_blocking(move || -> Result<_> {
         app.binding(read.project, read.chat)?;
-        let a = app.0.chats.read_attachment(read.chat, read.attachment)?;
+        let a = app.0.chats.visible_attachment(read.chat, read.attachment)?;
         let data = fs::read(app.0.chats.attachment_path(&a))?;
         Ok((a, data))
     })

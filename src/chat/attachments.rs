@@ -75,17 +75,49 @@ impl ChatStore {
     fn attachment_dir(&self, id: Uuid) -> PathBuf {
         self.dir.join("attachments").join(id.to_string())
     }
-    pub(crate) fn read_attachment(&self, chat: Uuid, id: Uuid) -> Result<Attachment> {
+    fn saved_attachment(&self, id: Uuid) -> Result<Saved> {
         let saved: Saved =
             serde_json::from_reader(File::open(self.attachment_dir(id).join("metadata"))?)?;
-        if saved.chat != chat || saved.attachment.id != id {
-            return Err(Error::Refused(
-                "attachment belongs to a different chat".into(),
-            ));
+        if saved.attachment.id != id {
+            return Err(Error::Protocol("unexpected attachment ID".into()));
         }
         let a = &saved.attachment;
         Attachment::validate(&a.name, &a.mime, a.kind, a.bytes)?;
-        Ok(saved.attachment)
+        Ok(saved)
+    }
+    pub(crate) fn read_attachment(&self, chat: Uuid, id: Uuid) -> Result<Attachment> {
+        let saved = self.saved_attachment(id)?;
+        if saved.chat == chat {
+            return Ok(saved.attachment);
+        }
+        Err(Error::Refused(
+            "attachment belongs to a different chat".into(),
+        ))
+    }
+    pub(crate) fn visible_attachment(&self, chat: Uuid, id: Uuid) -> Result<Attachment> {
+        let saved = self.saved_attachment(id)?;
+        if saved.chat == chat {
+            return Ok(saved.attachment);
+        }
+        let state = self.read_state(File::open(self.path(chat))?, chat)?;
+        let inherited_end = state
+            .info
+            .forked_from
+            .as_ref()
+            .and_then(|origin| state.turns.iter().position(|t| t.id == origin.turn));
+        if inherited_end.is_some_and(|end| {
+            state.turns[..=end].iter().any(|t| {
+                t.attachments
+                    .iter()
+                    .chain(t.steered_attachments.values().flatten())
+                    .any(|a| *a == saved.attachment)
+            })
+        }) {
+            return Ok(saved.attachment);
+        }
+        Err(Error::Refused(
+            "attachment is outside this chat's history".into(),
+        ))
     }
     pub fn persist_attachment(
         &self,

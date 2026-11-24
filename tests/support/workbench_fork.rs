@@ -100,7 +100,38 @@ async fn scenario() {
     let parent_path = format!("/projects/{p}/chats/{chat}");
     let child_path = format!("/projects/{target_project}/chats/{child}");
     let parent = format!("{url}{parent_path}");
-    let first = say(&a, &parent, "parent context").await;
+    let store = kar::chat::ChatStore::open(&state).unwrap();
+    let notes = Uuid::new_v4();
+    let private = Uuid::new_v4();
+    for id in [notes, private] {
+        store
+            .persist_attachment(
+                chat,
+                id,
+                "notes.txt",
+                "text/plain",
+                kar::chat::AttachmentKind::File,
+                b"review notes",
+            )
+            .unwrap();
+    }
+    let first = ok(a.post(format!("{parent}/messages")).json(&json!({
+        "id":Uuid::new_v4(),"text":"parent context","attachments":[notes]
+    })))
+    .await;
+    let native_calls = fs::read_to_string(native.join("calls")).unwrap();
+    let call: Value = serde_json::from_str(native_calls.lines().last().unwrap()).unwrap();
+    let (_, files) = call["text"]
+        .as_str()
+        .unwrap()
+        .split_once("\n\nAttached files (JSON):\n")
+        .unwrap();
+    let files: Vec<Value> = serde_json::from_str(files).unwrap();
+    assert_eq!(files[0]["name"], "notes.txt");
+    assert_eq!(
+        fs::read(files[0]["path"].as_str().unwrap()).unwrap(),
+        b"review notes"
+    );
     let cut = say(&a, &parent, "shared-child").await;
     let latest = say(&b, &parent, "shared-next").await;
     let request = json!({"id":child,"turn":cut["id"],"destination_project":target_project});
@@ -116,6 +147,31 @@ async fn scenario() {
     assert_eq!(h["chat"]["worktree_id"], worktree_id.to_string());
     assert_eq!(h["turns"].as_array().unwrap().len(), 2);
     assert_eq!(h["turns"][0]["id"], first["id"]);
+    assert_eq!(h["turns"][0]["attachments"][0]["id"], notes.to_string());
+    let inherited_url = ok(b.post(format!("{url}{child_path}/attachments/{notes}/url"))).await;
+    let read = reqwest::get(format!(
+        "{url}{}",
+        inherited_url["read_path"].as_str().unwrap()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        read.error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        b"review notes"
+    );
+    assert!(
+        !b.post(format!("{url}{child_path}/attachments/{private}/url"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
     assert_eq!(h["turns"][1]["id"], cut["id"]);
     assert_eq!(fs::read(target.join("shared")).unwrap(), b"shared-child");
     assert_eq!(fs::read(main.join("shared")).unwrap(), b"shared-next");
