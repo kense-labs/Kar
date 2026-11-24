@@ -306,10 +306,15 @@ impl Session {
                 let queued = turn.admission().cloned();
                 drop(gate);
                 let mut result = completed(&active).await?;
-                if result.landed == DeliverLanded::Prompted
-                    && !result.merged_input_ids.contains(&id)
-                {
-                    return Ok(DeliverReceipt::new(id, DeliverLanded::Queued, queued));
+                let still_owned_by_queue = match result.landed {
+                    DeliverLanded::Prompted => !result.merged_input_ids.contains(&id),
+                    DeliverLanded::Rejected => !result.undelivered_input_ids.contains(&id),
+                    _ => false,
+                };
+                if still_owned_by_queue {
+                    let mut own = DeliverReceipt::new(id, DeliverLanded::Queued, queued);
+                    own.undelivered_input_ids = result.undelivered_input_ids;
+                    return Ok(own);
                 }
                 result.input_id = id;
                 return Ok(result);
@@ -561,7 +566,10 @@ impl Session {
                 r
             }
             Err(e) => {
-                let attempted = self.records().iter().any(|r| {
+                let attempted = matches!(
+                    e,
+                    Error::Io(_) | Error::Closed(_) | Error::Timeout(_) | Error::Http(_)
+                ) || self.records().iter().any(|r| {
                     r.prompt
                         .as_ref()
                         .is_some_and(|p| p.input_id == merged_id.to_string())
