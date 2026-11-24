@@ -172,7 +172,7 @@ impl Probe {
             .map_err(|_| Error::Timeout("installation probe".into()))?
             .map_err(Into::into)
     }
-    fn entry<'a>(&'a self, rt: &'a Runtime) -> (&'a Path, bool) {
+    pub(crate) fn entry<'a>(&'a self, rt: &'a Runtime) -> (&'a Path, bool) {
         let Some(default) = crate::runtime::registered_command(&rt.id) else {
             return (&rt.program, true);
         };

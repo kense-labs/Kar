@@ -77,6 +77,12 @@ enum Action {
         runtime: String,
         #[arg(long)]
         plan: bool,
+        /// Select a release line for an OpenCode installation (v1 or v2).
+        #[arg(long)]
+        line: Option<String>,
+        /// Bound installer execution in milliseconds.
+        #[arg(long, default_value = "600000")]
+        timeout_ms: std::num::NonZeroU64,
     },
     /// Invoke the installed CLI's native updater.
     Update { runtime: String },
@@ -425,12 +431,21 @@ async fn execute(command: Action) -> Result<()> {
                 .collect::<Result<Vec<_>>>()?;
             mcp::serve(cwd, selected, max_sessions).await?;
         }
-        Action::Install { runtime: id, plan } => {
+        Action::Install {
+            runtime: id,
+            plan,
+            line,
+            timeout_ms,
+        } => {
             let r = runtime(&id)?;
             if plan {
-                json_line(&r.install_plan()?, std::io::stdout())?;
+                json_line(&r.install_plan_for(line.as_deref())?, std::io::stdout())?;
             } else {
-                json_line(&r.install().await?, std::io::stdout())?;
+                json_line(
+                    &r.install_with(line.as_deref(), Duration::from_millis(timeout_ms.get()))
+                        .await?,
+                    std::io::stdout(),
+                )?;
             }
         }
         Action::Update { runtime: id } => {
@@ -462,6 +477,9 @@ async fn execute(command: Action) -> Result<()> {
                 probes.push(tokio::spawn(async move {
                     let installation = rt.probe_installation(&options).await?;
                     let mut row = json!({"id":rt.id,"protocol":rt.protocol,"program":installation.command().unwrap_or(&rt.program),"installation":installation});
+                    if !rt.install_lines().is_empty() {
+                        row["install_lines"] = json!(rt.install_lines());
+                    }
                     if let Some(caps) = rt.session_capabilities(&installation) {
                         row["session_capabilities"] = serde_json::to_value(caps)?;
                     }

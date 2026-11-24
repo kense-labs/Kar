@@ -18,6 +18,7 @@ cargo build --release --locked
 | 入口 | 用途 |
 | --- | --- |
 | `kar install claude --plan` | 查看供应商安装方式。省略 `--plan` 会运行安装器 |
+| `kar install opencode --line v2 --plan` | 选择 OpenCode 的 `v1` 或 `v2` 发行线。已有可用副本时会返回其版本。安装时间可用 `--timeout-ms` 指定 |
 | `kar account claude login` | 在终端使用供应商自己的登录流程 |
 | `kar account codex login --json` | 逐行输出设备验证码、提示和最终登录结果，供当前登录界面消费 |
 | `kar account codex logout --json` | 退出所选原生账号并核对结果 |

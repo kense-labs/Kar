@@ -1,7 +1,7 @@
 //! Vendor-owned installation methods. Planning does not change the host.
 use crate::{Error, Installation, Result, Runtime};
 use serde::Serialize;
-use std::process::Stdio;
+use std::{process::Stdio, time::Duration};
 use tokio::process::Command;
 
 #[derive(Clone, Debug, Serialize)]
@@ -17,12 +17,42 @@ pub enum InstallPlan {
     },
 }
 impl Runtime {
+    pub fn install_lines(&self) -> &'static [&'static str] {
+        if self.id == "opencode" {
+            &["v1", "v2"]
+        } else {
+            &[]
+        }
+    }
+
     pub fn install_plan(&self) -> Result<InstallPlan> {
+        self.install_plan_for(None)
+    }
+
+    pub fn install_plan_for(&self, line: Option<&str>) -> Result<InstallPlan> {
+        let lines = self.install_lines();
+        match line {
+            None if !lines.is_empty() => {
+                return Err(Error::Unsupported(format!(
+                    "{} needs a release line; choose --line {}",
+                    self.id,
+                    lines.join(" or ")
+                )));
+            }
+            Some(line) if !lines.contains(&line) => {
+                return Err(Error::Unsupported(format!(
+                    "{} has no release line {line:?}",
+                    self.id
+                )));
+            }
+            _ => {}
+        }
         let package = match self.id.as_str() {
             "codebuddy" => Some("@tencent-ai/codebuddy-code"),
             "dsh" => Some("@deepseek-ai/dsh"),
             "pi" => Some("@earendil-works/pi-coding-agent"),
             "codex" if cfg!(windows) => Some("@openai/codex"),
+            "opencode" if cfg!(windows) && line == Some("v1") => Some("opencode-ai"),
             "opencode" if cfg!(windows) => Some("@opencode/cli"),
             "claude" if cfg!(windows) => Some("@anthropic-ai/claude-code"),
             "qwen" if cfg!(windows) => Some("@qwen-code/qwen-code"),
@@ -40,6 +70,7 @@ impl Runtime {
         let (url, interpreter, args): (&str, &str, &[&str]) = match self.id.as_str() {
             "codex" => ("https://chatgpt.com/codex/install.sh", "sh", &[]),
             "claude" => ("https://claude.ai/install.sh", "bash", &[]),
+            "opencode" if line == Some("v1") => ("https://opencode.ai/install", "bash", &[]),
             "opencode" => ("https://opencode.ai/v2/install", "bash", &[]),
             "grok" => ("https://x.ai/cli/install.sh", "bash", &[]),
             "kimi" => ("https://code.kimi.com/kimi-code/install.sh", "bash", &[]),
@@ -62,15 +93,52 @@ impl Runtime {
         })
     }
     pub async fn install(&self) -> Result<Installation> {
-        match self.installation().await {
+        self.install_with(None, Duration::from_secs(600)).await
+    }
+
+    pub async fn install_with(
+        &self,
+        line: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Installation> {
+        if timeout.is_zero() {
+            return Err(Error::Protocol("installer timeout must be positive".into()));
+        }
+        let probe = crate::installation::Probe::new(&Default::default())?;
+        let installation = probe.discover(self).await.summary();
+        match installation {
+            Installation::Missing if probe.entry(self).1 => {
+                return Err(Error::Refused(format!(
+                    "the selected {} executable is missing; its installer writes to a vendor-selected location",
+                    self.id
+                )));
+            }
             Installation::Missing => {}
             available @ Installation::Available { .. } => return Ok(available),
             Installation::Failed { reason } => return Err(Error::Refused(reason)),
         }
-        match self.install_plan()? {
+        let plan = self.install_plan_for(line)?;
+        let run = tokio::time::timeout(timeout, self.run_installer(plan)).await;
+        crate::clear_installation_cache();
+        let run = run.map_err(|_| Error::Timeout(format!("{} installer", self.id)))?;
+        match (probe.discover(self).await.summary(), run) {
+            (installed @ Installation::Available { .. }, _) => Ok(installed),
+            (_, Err(error)) => Err(error),
+            (Installation::Failed { reason }, _) => Err(Error::Refused(reason)),
+            (Installation::Missing, _) => Err(Error::Refused(format!(
+                "{} installer finished without a discoverable executable",
+                self.id
+            ))),
+        }
+    }
+
+    async fn run_installer(&self, plan: InstallPlan) -> Result<()> {
+        match plan {
             InstallPlan::Npm { package } => {
                 let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-                checked(Command::new(npm).args(["install", "--global", package])).await?;
+                let mut command = Command::new(npm);
+                command.args(["install", "--global", package]);
+                checked(command).await?;
             }
             InstallPlan::VendorScript {
                 url,
@@ -78,35 +146,31 @@ impl Runtime {
                 args,
             } => {
                 let temp = tempfile::NamedTempFile::new()?;
-                checked(
-                    Command::new("curl")
-                        .args([
-                            "--fail",
-                            "--silent",
-                            "--show-error",
-                            "--location",
-                            "--proto",
-                            "=https",
-                            "--proto-redir",
-                            "=https",
-                            "--max-time",
-                            "120",
-                            "--output",
-                        ])
-                        .arg(temp.path())
-                        .arg(url),
-                )
-                .await?;
+                let mut download = Command::new("curl");
+                download
+                    .args([
+                        "--fail",
+                        "--silent",
+                        "--show-error",
+                        "--location",
+                        "--proto",
+                        "=https",
+                        "--proto-redir",
+                        "=https",
+                        "--output",
+                    ])
+                    .arg(temp.path())
+                    .arg(url);
+                checked(download).await?;
                 let mut command = Command::new(interpreter);
                 command.arg(temp.path()).args(args);
                 if self.id == "codex" {
                     command.env("CODEX_NON_INTERACTIVE", "1");
                 }
-                checked(&mut command).await?;
+                checked(command).await?;
             }
         }
-        crate::clear_installation_cache();
-        Ok(self.installation().await)
+        Ok(())
     }
     /// Invoke the existing executable's own updater.
     pub async fn update(&self) -> Result<Installation> {
@@ -123,19 +187,19 @@ impl Runtime {
         };
         let mut selected = self.clone();
         selected.program = self.management_command(true).await?;
-        checked(Command::new(&selected.program).args(args)).await?;
+        let mut command = Command::new(&selected.program);
+        command.args(args);
+        checked(command).await?;
         crate::clear_installation_cache();
         Ok(selected.installation().await)
     }
 }
-async fn checked(cmd: &mut Command) -> Result<()> {
-    let status = cmd
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
+async fn checked(mut cmd: Command) -> Result<()> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::from(std::io::stderr()))
         .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .status()
-        .await?;
+        .env_remove("KAR_WORKBENCH_TOKEN");
+    let status = crate::process::OwnedProcess::spawn(cmd)?.wait().await?;
     if status.success() {
         Ok(())
     } else {
