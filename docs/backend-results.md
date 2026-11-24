@@ -39,10 +39,23 @@
 
 `cargo fmt --all -- --check`、`cargo clippy --locked --all-targets -- -D warnings` 和 `cargo test --locked` 均通过。Cargo 汇总行共报告 116 项通过（含 3 项文档测试）、137 项默认忽略。多进程聊天与协议测试另有独立测试入口，命令退出码为 0。显式运行 K1/K4 共 2 项、K2 共 4 项、C1 共 7 项、P1 共 4 项、F1 共 6 项，均通过。K2 的 4 项计入协议及本机进程实验。
 
+## ACP 历史恢复与超时
+
+以下行为对应 Kar 提交 `677d69390c7cf2f208296d90dee11be6791a5cab`。上游依据是固定 v0.130.1 的 `tests/acp/acp-open-timeouts.test.ts` 和 `packages/oar/src/shared/acp/profile.ts`。平台为 macOS arm64。
+
+| 验收项 / 上游位置 | 供应商、版本、传输 | 操作与期望 | 命令及实际证据 | 状态 |
+| --- | --- | --- | --- | --- |
+| restart、lifecycle / release_delta.resume | Kimi、Grok、通用 ACP，按 v0.130.1 实现的 Rust 协议对端及实际 stdio 子进程 | 用可控时钟延迟原生回复。Kimi 新建、轻量恢复、分叉在 60 秒可成功，630 秒超时；Kimi、Grok 的历史载入分别在 45、40 秒可成功，静默至 60 秒失败。认证、工作区查询、模式、模型和推理设置采用各自普通请求时限。 | `cargo test --locked --test acp_deadlines`。31 个场景连续运行 12 次通过。超时返回原生方法及毫秒数，检查 PID 已回收、控制连接 EOF。对历史加载超时在同目录以同一原生 ID 重试，后续输入完成一次且返回预期文本。 | 已验收，协议和本机进程实验 |
+| restart、tools / Grok MCP readiness | Grok ACP，按 v0.130.1 实现的 Rust 协议对端 | 第 25 秒答复载入请求，第 30 秒发出本会话 discovery 和宿主 MCP endpoint 已就绪，另一次让 endpoint 保持静默。 | 同上。第一种返回原会话；第二种自开始载入计 60 秒返回 `_x.ai/mcp_initialized (60000 ms)` 并回收进程。自定义载入 45 秒、普通请求 90 秒、会话启动 7 秒分别验证。 | 已验收，协议实验 |
+| restart、interaction_settings / Kimi ACP configureSession | 官方 Kimi 2.7.2 ACP，另有 2.7.2-botiverse.1 KAP 对照 | 在隔离目录创建聊天并明确选择原生 default 模式，关闭后以原聊天 ID 重开，再发一轮。 | K4 同时核对两次 `session/set_mode` 的目标会话、模式及成功回执，验证模型看见两轮输入；K1 复验两个独立 SSE 客户端分别补齐到 32 条事件。K1、K4 共 2 项通过。Kar 只在调用方显式选定模式时发该请求，上游 Kimi 会自动选 yolo。 | 已验收上述实机行为，默认模式选择有此差异 |
+| realtime、restart、tools / Grok 与 Antigravity ACP 回归 | Grok 1.0.92 (b06756fd6256)、Antigravity 1.5.15，真实程序，模型流量走回环服务 | 检查 Grok 的目录、图像、双客户端插话、中止、宿主工具首轮可用，以及 Antigravity 的工具回合、双客户端恢复。 | 分别设置 `KAR_GROK_BIN`、`KAR_ANTIGRAVITY_BIN` 为上述二进制，运行 `cargo test --locked --test grok_live -- --ignored --test-threads=2`（6 项），`cargo test --locked --test antigravity_live -- --ignored`（1 项）。均通过。 | 已验收上述实机行为 |
+
+该提交通过格式、Clippy 和完整 Cargo 测试门禁。标准汇总 116 项通过、137 项默认忽略；包含 31 个子场景的 `acp_deadlines` 使用独立测试入口。上述模拟时限与供应商程序运行结果分别记账。
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。
-- **未完成或失败。** 实时推送、重启和队列已有上述平台证据。其余供应商、完整强制终止切点、三轮检查点及分叉、并行工作树、原生目标、子任务模型归属、用量、凭据传递、慢速恢复以及运行时专有目录仍须按清单各自核销。
+- **未完成或失败。** 实时推送、重启和队列已有上述平台证据。其余供应商、完整强制终止切点、三轮检查点及分叉、并行工作树、原生目标、子任务模型归属、用量、凭据传递以及运行时专有目录仍须按清单各自核销。
 - **供应商不支持。** 本批次没有把未实测的功能登记为供应商不支持。
 - **缺环境待验证。** 表中实机结果来自 macOS arm64。Linux 原生运行仍须提供可执行这些供应商程序的 Linux 环境及对应架构安装包，设置同表环境变量后逐项复跑。交叉编译只验证编译。
 - **本轮排除：Windows 实机验证。** 此排除项沿用固定清单。
