@@ -326,50 +326,9 @@ impl ChatStore {
         if state.pending_rewind.is_some() {
             return Err(Error::Busy);
         }
-        let turn = state.find(id);
         let mut inbox = self.read_inbox(&state.info)?;
         let receipt = if let Some((text, attachments)) = text {
-            if let Some(entry) = inbox.entries.iter().find(|e| e.id == id) {
-                let same = entry.text == text && entry.attachments == attachments;
-                let original = entry.initial_text.as_ref().unwrap_or(&entry.text) == &text
-                    && entry
-                        .initial_attachments
-                        .as_ref()
-                        .unwrap_or(&entry.attachments)
-                        == &attachments;
-                if !same && !original {
-                    return Err(different_prompt());
-                }
-                return Ok(entry.receipt(&state));
-            }
-            if turn.is_none() {
-                state.check_new_prompt_id(id)?;
-            }
-            if turn
-                .is_some_and(|t| t.prompt() != Some(text.as_str()) || t.attachments != attachments)
-            {
-                return Err(different_prompt());
-            }
-            if turn.is_none() {
-                if state.pending_handoff().is_some() {
-                    return Err(Error::Busy);
-                }
-                crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
-            }
-            let entry = Entry {
-                uncertainty_acknowledged: false,
-                refusal: None,
-                attachments,
-                initial_attachments: None,
-                initial_text: None,
-                promotion: None,
-                id,
-                text,
-                withdrawn: false,
-            };
-            let receipt = entry.receipt(&state);
-            inbox.entries.push(entry);
-            receipt
+            inbox.admit(&state, id, text, attachments)?
         } else {
             let entry = inbox
                 .entries
@@ -432,6 +391,52 @@ impl ChatStore {
             .iter()
             .map(|e| e.receipt(&state))
             .collect())
+    }
+}
+impl Inbox {
+    fn admit(&mut self, state: &super::log::State, id: Uuid, text: String, attachments: Vec<super::Attachment>) -> Result<QueuedInput> {
+        let turn = state.find(id);
+            if let Some(entry) = self.entries.iter().find(|e| e.id == id) {
+                let same = entry.text == text && entry.attachments == attachments;
+                let original = entry.initial_text.as_ref().unwrap_or(&entry.text) == &text
+                    && entry
+                        .initial_attachments
+                        .as_ref()
+                        .unwrap_or(&entry.attachments)
+                        == &attachments;
+                if !same && !original {
+                    return Err(different_prompt());
+                }
+                return Ok(entry.receipt(state));
+            }
+            if turn.is_none() {
+                state.check_new_prompt_id(id)?;
+            }
+            if turn
+                .is_some_and(|t| t.prompt() != Some(text.as_str()) || t.attachments != attachments)
+            {
+                return Err(different_prompt());
+            }
+            if turn.is_none() {
+                if state.pending_handoff().is_some() {
+                    return Err(Error::Busy);
+                }
+                crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
+            }
+            let entry = Entry {
+                uncertainty_acknowledged: false,
+                refusal: None,
+                attachments,
+                initial_attachments: None,
+                initial_text: None,
+                promotion: None,
+                id,
+                text,
+                withdrawn: false,
+            };
+            let receipt = entry.receipt(state);
+            self.entries.push(entry);
+            Ok(receipt)
     }
 }
 fn different_prompt() -> Error {

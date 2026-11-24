@@ -68,6 +68,8 @@ struct Catalog {
     model_tool_permissions: BTreeMap<Uuid, BTreeMap<Uuid, mcp::Policy>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     model_worktree_moves: BTreeMap<Uuid, mcp::worktree::Move>,
+    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
+    model_thread_commands:BTreeMap<Uuid,mcp::operations::Record>,
     #[serde(default)]
     model_project_commands: BTreeMap<Uuid, mcp::project_tools::Receipt>,
     #[serde(default)]

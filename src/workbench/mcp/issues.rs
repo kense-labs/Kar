@@ -26,6 +26,8 @@ pub(in crate::workbench) struct Policy {
     #[serde(default)]
     workflow_reads: bool,
     #[serde(default)]
+    pub(super) thread_tools:Option<super::operations::Scope>,
+    #[serde(default)]
     pull_reads:bool,
     #[serde(default)]
     pull_writes:bool,
@@ -54,6 +56,8 @@ struct Configure {
     #[serde(default)]
     workflow_reads: bool,
     #[serde(default)]
+    pub(super) thread_tools:Option<super::operations::Scope>,
+    #[serde(default)]
     pull_reads:bool,
     #[serde(default)]
     pull_writes:bool,
@@ -69,6 +73,7 @@ impl Policy {
     fn get(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         db.model_tool_permissions.get(&project)?.get(&chat)
     }
+    pub(super) fn executes(&self)->bool{self.mode==Mode::Execute}
     pub(super) fn current(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         if db.archived.contains(&chat) || db.projects.get(&project)?.metadata.deleted {
             return None;
@@ -126,7 +131,9 @@ async fn configure(
         Some(dir.root)
     } else {None};
     let pull_repository=if cfg.pull_reads || cfg.pull_writes && cfg.mode==Mode::Execute {Some(forge::model::pull_repository(app.clone(),p).await?)}else{None};
+    if let Some(s)=&cfg.thread_tools {s.validate(&app,p)?;}
     let policy = Policy {
+        thread_tools:cfg.thread_tools,
         pull_repository,pull_reads:cfg.pull_reads,pull_writes:cfg.pull_writes,
         worktree_directory,
         mode: cfg.mode,
@@ -140,7 +147,7 @@ async fn configure(
         repository,
     };
     app.update(|db| {
-        if (policy.reads_pulls() || policy.reads_issues() || policy.reads_workflows() || policy.worktree_directory().is_some())
+        if (policy.thread_tools.is_some() || policy.reads_pulls() || policy.reads_issues() || policy.reads_workflows() || policy.worktree_directory().is_some())
             && (db.archived.contains(&c)
                 || db
                     .projects

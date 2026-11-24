@@ -22,6 +22,9 @@ fn tools(caller: &Caller) -> Vec<Tool> {
     let id = json!({"type":"string","format":"uuid"});
     let cursor = json!({"type":"integer","minimum":0});
     let limit = json!({"type":"integer","minimum":1,"maximum":100});
+    let queue_write = !caller.plan && (caller.grant.is_none() || caller.policy.as_ref()
+        .is_some_and(|p| p.executes() && p.thread_tools.as_ref().is_some_and(|s| s.write)));
+    let queue_actions = if queue_write {vec!["list","read","edit","cancel","reorder","promote_to_steer"]} else {vec!["list","read"]};
     let mut tools = vec![
         Tool {
             name: "orchestrator_capabilities",
@@ -56,7 +59,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
         Tool {
             name: "kar_queue",
             description: "Read queued inputs in send order. Edit, cancel or reorder a pending input with a command ID.",
-            properties: json!({"project_id":id,"thread_id":id,"action":{"enum":["list","read","edit","cancel","reorder"]},"input_id":id,"command_id":id,"before":{"type":["string","null"],"format":"uuid"},"text":{"type":"string"},"cursor":cursor,"limit":limit}),
+            properties: json!({"project_id":id,"thread_id":id,"action":{"enum":queue_actions},"turn_id":id,"request_id":id,"input_id":id,"command_id":id,"before":{"type":["string","null"],"format":"uuid"},"text":{"type":"string"},"cursor":cursor,"limit":limit}),
             required: &["action"],
         },
         Tool {
@@ -127,6 +130,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
         });
     }
     tools.extend(super::collaboration_tools::tools(caller));
+    tools.extend(super::operations::tools(caller));
     tools.extend(super::forge_tools::tools(caller));
     tools.extend(preview_tools::tools(caller));
     tools.extend(super::project_tools::tools(caller));
@@ -267,6 +271,18 @@ pub(super) async fn call(
     if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
         return issues::call(app, caller, name, input).await;
     }
+    if name=="kar_queue" && input["action"]=="promote_to_steer" {
+        if caller.plan {return Err(bad("Queue promotion requires an execute grant"));}
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Promotion { project_id:Option<Uuid>, thread_id:Option<Uuid>, action:String, turn_id:Uuid, request_id:Option<Uuid>, input_id:Uuid, command_id:Uuid }
+        let q:Promotion=args(input)?;
+        debug_assert_eq!(q.action,"promote_to_steer");
+        let (p,t)=super::operations::target(&app,&caller,q.project_id,q.thread_id,true)?;
+        if let Some(g)=&caller.grant {super::operations::may_run(&app,p,g.chat,t)?;}
+        return Ok(json!(super::super::interactions::steer_queued(app,p,t,q.input_id,q.command_id,crate::chat::SteerTarget{turn:q.turn_id,request_id:q.request_id}).await?));
+    }
+    if super::operations::handles(name) {return super::operations::call(app,caller,name,input).await;}
     if super::forge_tools::handles(name) {return super::forge_tools::call(app,caller,name,input).await;}
     if name.starts_with("kar_worktree_") {return super::worktree::call(app,caller,name,input).await;}
     if name == "kar_background_wait" {
@@ -357,7 +373,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
             Ok(
                 json!({"server":"Kar","tools":tools(c).iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
                 "provider_session":c.grant.as_ref().map(|g|json!({"id":g.id,"project_id":g.project,"thread_id":g.chat,"runtime":g.runtime})),
-                "write_access":!c.plan && (c.grant.is_none() || c.policy.as_ref().is_some_and(|p| p.writes_issues() || p.writes_workflows() || p.worktree_directory().is_some())),"issue_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.policy.as_ref().is_some_and(Policy::reads_issues), "workflow_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_workflows)}),
+                "write_access":!c.plan && (c.grant.is_none() || c.policy.as_ref().is_some_and(|p| p.writes_issues() || p.writes_pulls() || p.thread_tools.as_ref().is_some_and(|s|s.write) && p.executes() || p.writes_workflows() || p.worktree_directory().is_some())),"issue_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.policy.as_ref().is_some_and(Policy::reads_issues), "workflow_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_workflows)}),
             )
         }
         "kar_project_list" => {
@@ -395,7 +411,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
                     item["kind"] == "chat"
                         && row["unavailable"] != true
                         && project.is_none_or(|p| row["project"] == json!(p))
-                        && c.grant.as_ref().is_none_or(|g| item["id"] == json!(g.chat))
+                        && c.grant.as_ref().is_none_or(|_| serde_json::from_value::<Uuid>(item["id"].clone()).is_ok_and(|t|super::operations::visible(&app.0.catalog.lock().unwrap(),c,t)))
                         && (a.include_archived || row["archived"] == false)
                         && a.snoozed.is_none_or(|s| row["snoozed"] == s)
                         && a.settled
@@ -419,7 +435,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
     }
 }
 fn read(app: &Workbench, c: &Caller, a: Read) -> Result<Value> {
-    let (p, t) = target(app, c, a.project_id, a.thread_id)?;
+    let (p, t) = super::operations::target(app,c,a.project_id,a.thread_id,false)?;
     let view = a.view.as_deref().unwrap_or("messages");
     if !matches!(view, "messages" | "activity") || a.after_position.is_some_and(|n| n < -1) {
         return Err(bad("Invalid view or position"));
@@ -479,7 +495,8 @@ fn window(text: &str, offset: usize, max: usize) -> (String, Option<usize>) {
     (projected, None)
 }
 fn queue(app: &Workbench, c: &Caller, q: Queue) -> Result<Value> {
-    let (_, t) = target(app, c, q.project_id, q.thread_id)?;
+    let write=!matches!(q.action.as_str(),"list"|"read");
+    let (_,t)=super::operations::target(app,c,q.project_id,q.thread_id,write)?;
     if matches!(q.action.as_str(), "list" | "read") {
         let (held, entries) = app.0.chats.queue_view(t)?;
         let waiting = entries.into_iter().filter(|e| e.outstanding());
@@ -500,8 +517,8 @@ fn queue(app: &Workbench, c: &Caller, q: Queue) -> Result<Value> {
         result["held"] = held.into();
         return Ok(result);
     }
-    if c.plan || c.grant.is_some() {
-        return Err(bad("Queue writes require a writable workbench client"));
+    if c.plan {
+        return Err(bad("Queue writes require an execute grant"));
     }
     if app.archived(t) {
         return Err(bad("Chat is archived"));

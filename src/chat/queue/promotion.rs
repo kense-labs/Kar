@@ -20,6 +20,8 @@ pub struct QueuePromotion {
     pub command_id: Uuid,
     pub target: SteerTarget,
     pub submitted: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub steer_only: bool,
     #[serde(default)]
     pub native_acknowledged: bool,
     pub returned_to_queue: bool,
@@ -81,6 +83,7 @@ impl ChatStore {
         cmd: Uuid,
         target: SteerTarget,
         online: bool,
+        new_input: Option<(String, Vec<Uuid>)>,
     ) -> Result<Claim> {
         let _lock = self.inbox_lock(chat)?;
         let state = self.read_state(File::open(self.path(chat))?, chat)?;
@@ -92,6 +95,11 @@ impl ChatStore {
         }
         let workspace_pending=inbox.workspace_gate.is_some();
         let uncertain_head = inbox.uncertain_head(&state);
+        let steer_only = new_input.is_some();
+        if let Some((text, ids)) = new_input {
+            let attachments = self.attachments(chat, &ids)?;
+            inbox.admit(&state, input, text, attachments)?;
+        }
         let entry = inbox
             .entries
             .iter_mut()
@@ -143,6 +151,7 @@ impl ChatStore {
         }
         entry.promotion = Some(QueuePromotion {
             command_id: cmd,
+            steer_only,
             target,
             submitted: false,
             native_acknowledged: false,
@@ -187,6 +196,9 @@ impl ChatStore {
                     &error,
                     Error::Unsupported(_) | Error::Busy | Error::InputTooLarge { .. }
                 ) || matches!(&error,Error::Refused(reason) if reason == crate::transport::AbortRequest::STALE);
+                if promotion.returned_to_queue && promotion.steer_only {
+                    entry.withdrawn = true;
+                }
                 promotion.error = Some(error.to_string());
             }
         }

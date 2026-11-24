@@ -1,5 +1,6 @@
 //! Workbench tools use a caller-scoped transport independent of the runtime's stdio MCP server.
 mod forge_tools;
+pub(in crate::workbench) mod operations;
 mod issues;
 pub(super) use issues::{Policy, permission_routes};
 mod registry;

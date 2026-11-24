@@ -360,9 +360,15 @@ async fn change(
     Path((p, c)): Path<(Uuid, Uuid)>,
     Json(req): Json<Command>,
 ) -> std::result::Result<Json<Change>, ApiError> {
-    blocking(move || {
+    blocking(move||apply(&app,p,c,req,|_|Ok(()))).await
+}
+pub(in crate::workbench) fn model_change(app:&Workbench,p:Uuid,c:Uuid,value:serde_json::Value,authorize:impl FnOnce(&super::Catalog)->Result<()>)->Result<serde_json::Value>{
+    Ok(serde_json::to_value(apply(app,p,c,serde_json::from_value(value)?,authorize)?)?)
+}
+fn apply(app:&Workbench,p:Uuid,c:Uuid,req:Command,authorize:impl FnOnce(&super::Catalog)->Result<()>)->Result<Change>{
         let info = app.binding(p, c)?;
         let out = app.update(|db| {
+            authorize(db)?;
             if let Some((action, index)) = db.thread_state.commands.get(&req.command_id) {
                 let prior = db
                     .thread_state
@@ -405,8 +411,6 @@ async fn change(
             .thread_updates
             .send_modify(|seen| *seen = (*seen).max(out.sequence));
         Ok(out)
-    })
-    .await
 }
 async fn metadata(
     State(app): State<Workbench>,

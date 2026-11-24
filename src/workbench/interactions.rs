@@ -82,6 +82,12 @@ async fn promote(
     Path((project, chat, input)): Path<(Uuid, Uuid, Uuid)>,
     Json(req): Json<Promote>,
 ) -> std::result::Result<Json<crate::chat::QueuedInput>, ApiError> {
+    Ok(Json(steer_queued(app,project,chat,input,req.command_id,req.target).await?))
+}
+pub(in crate::workbench) async fn steer_queued(app:Workbench,project:Uuid,chat:Uuid,input:Uuid,command_id:Uuid,target:crate::chat::SteerTarget)->Result<crate::chat::QueuedInput> {
+    steer_input(app, project, chat, input, command_id, target, None).await
+}
+pub(in crate::workbench) async fn steer_input(app:Workbench, project:Uuid, chat:Uuid, input:Uuid, command_id:Uuid, target:crate::chat::SteerTarget, new_input:Option<(String, Vec<Uuid>)>)->Result<crate::chat::QueuedInput> {
     let session = app.active_control(project, chat)?;
     // Once reserved, the command must finish recording its result even if the HTTP client disconnects.
     let receipt = tokio::spawn(async move {
@@ -90,7 +96,7 @@ async fn promote(
             let store = store.clone();
             let online = session.is_some();
             tokio::task::spawn_blocking(move || {
-                store.claim_queue_steer(chat, input, req.command_id, req.target, online)
+                store.claim_queue_steer(chat, input, command_id, target, online, new_input)
             })
             .await
             .map_err(|e| Error::Closed(e.to_string()))??
@@ -106,8 +112,8 @@ async fn promote(
         let result = if session.capabilities().steering {
             session
                 .steer_turn(
-                    req.target.turn,
-                    req.target.request_id,
+                    target.turn,
+                    target.request_id,
                     input,
                     payload.text,
                     payload.images,
@@ -119,7 +125,7 @@ async fn promote(
             ))
         };
         let receipt = tokio::task::spawn_blocking(move || {
-            store.finish_queue_steer(chat, input, req.command_id, native_acknowledged, result)
+            store.finish_queue_steer(chat, input, command_id, native_acknowledged, result)
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;
@@ -128,7 +134,7 @@ async fn promote(
     })
     .await
     .map_err(|e| Error::Closed(e.to_string()))??;
-    Ok(Json(receipt))
+    Ok(receipt)
 }
 
 async fn attach(

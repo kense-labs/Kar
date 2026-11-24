@@ -99,11 +99,23 @@ impl Drop for HttpSession {
 #[derive(Default)]
 pub(in crate::workbench) struct Registry {
     endpoint: OnceLock<SocketAddr>,
+    commands: Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>,
     grants: Mutex<HashMap<String, Weak<Grant>>>,
     sessions: Mutex<HashMap<Uuid, Arc<HttpSession>>>,
 }
 impl Registry {
     pub(super) fn origin(&self)->Option<String>{self.endpoint.get().map(|a|format!("http://{a}"))}
+    pub(super) fn command_gate(&self, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+        let mut gates = self.commands.lock().unwrap();
+        gates.retain(|_, gate| gate.strong_count() > 0);
+        if let Some(gate) = gates.get(&id).and_then(Weak::upgrade) {
+            return gate;
+        }
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        gates.insert(id, Arc::downgrade(&gate));
+        gate
+    }
+
     pub(in crate::workbench) fn set_endpoint(&self, addr: SocketAddr) -> crate::Result<()> {
         if !addr.ip().is_loopback()
             || addr.port() == 0

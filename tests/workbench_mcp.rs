@@ -11,6 +11,8 @@ mod preview_tools;
 mod collaboration;
 #[path = "workbench_mcp/workflow.rs"]
 mod workflow;
+#[path = "workbench_mcp/operations.rs"]
+mod operations;
 #[allow(dead_code)]
 #[path = "support/codex_chat_peer.rs"]
 mod peer;
@@ -216,6 +218,7 @@ async fn scenario() {
     preview_tools::html(&url,&a,p,chat,&root,call).await;
     if std::env::var_os("KAR_MCP_BROWSER_LIVE").is_some(){preview_tools::browser(&url,&a,p,chat,&root,call).await;}
     workflow::exercise(&url, &a, p, chat, call).await;
+    operations::exercise(&url, &a, p, chat, &observer, call).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")
             .header("mcp-protocol-version", "2026-07-28")
