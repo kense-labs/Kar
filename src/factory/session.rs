@@ -90,6 +90,40 @@ pub(crate) fn context(result: &Value) -> Option<ContextUsage> {
     ))
 }
 
+fn effort_refusal(error: Error, options: &SessionOptions, effort_only: bool) -> Error {
+    if let Some(wanted) = &options.settings.effort
+        && let Error::Refused(raw) = &error
+        && let Ok(native) = serde_json::from_str::<Value>(raw)
+        && native["code"].as_i64() == Some(-32602)
+        && (effort_only
+            || native["message"]
+                .as_str()
+                .is_some_and(|msg| msg.contains("reasoningEffort")))
+    {
+        // Some releases omit the parameter name on an effort-only update.
+        let mut message = format!("Factory refused effort {wanted:?}: {raw}");
+        crate::transport::redact_text(&mut message, &crate::options::session_secrets(options));
+        return Error::Refused(message);
+    }
+    error
+}
+
+fn confirm_settings(options: &SessionOptions, settings: &Value) -> Result<()> {
+    options.confirm_model("Factory", settings["modelId"].as_str())?;
+    let reported = settings["reasoningEffort"].as_str();
+    if let Some(wanted) = &options.settings.effort
+        && reported != Some(wanted)
+    {
+        let mut message = format!(
+            "Factory did not apply effort {wanted:?}, reported {}",
+            reported.unwrap_or("no level")
+        );
+        crate::transport::redact_text(&mut message, &crate::options::session_secrets(options));
+        return Err(Error::Refused(message));
+    }
+    Ok(())
+}
+
 pub(crate) async fn open(
     session: &Session,
     options: &SessionOptions,
@@ -150,7 +184,10 @@ pub(crate) async fn open(
         .as_ref()
         .map(|id| crate::opening::OpenStep::Target(id.clone()))
         .unwrap_or(crate::opening::OpenStep::Open);
-    let mut info = session.open_rpc(method, params, step).await?;
+    let mut info = session
+        .open_rpc(method, params, step)
+        .await
+        .map_err(|e| effort_refusal(e, options, false))?;
     let id = if let Some(expected) = &options.resume {
         let actual = info["cwd"]
             .as_str()
@@ -190,18 +227,15 @@ pub(crate) async fn open(
             changes[key] = wanted.clone().into();
         }
     }
-    if changes != json!({}) {
-        if options.resume.is_none() {
-            options.confirm_model("Factory", info["settings"]["modelId"].as_str())?;
-            return Err(Error::Refused(
-                "Factory did not apply the requested model or effort".into(),
-            ));
-        }
+    if changes != json!({}) && options.resume.is_some() {
         let cursor = session.records().last().map(|r| r.cursor());
         let mut events = session.subscribe(cursor.as_ref())?;
+        let effort_only =
+            changes.get("modelId").is_none() && changes.get("reasoningEffort").is_some();
         session
             .rpc("droid.update_session_settings", changes)
-            .await?;
+            .await
+            .map_err(|e| effort_refusal(e, options, effort_only))?;
         info["settings"] = tokio::time::timeout(options.handshake_timeout, async {
             let mut requested = None;
             while let Some(record) = events.next().await {
@@ -219,23 +253,10 @@ pub(crate) async fn open(
                     && n["requestId"].as_str().is_none_or(|r| r == rpc_id)
                 {
                     let settings = &n["settings"];
-                    if options
-                        .model
-                        .as_deref()
-                        .is_none_or(|s| settings["modelId"] == s)
-                        && options
-                            .settings
-                            .effort
-                            .as_deref()
-                            .is_none_or(|s| settings["reasoningEffort"] == s)
-                    {
+                    let confirmed = confirm_settings(options, settings);
+                    if confirmed.is_ok() || n["requestId"] == rpc_id {
+                        confirmed?;
                         return Ok(settings.clone());
-                    }
-                    if n["requestId"] == rpc_id {
-                        options.confirm_model("Factory", settings["modelId"].as_str())?;
-                        return Err(Error::Refused(
-                            "Factory did not apply requested settings on resume".into(),
-                        ));
                     }
                 }
             }
@@ -246,6 +267,7 @@ pub(crate) async fn open(
         .await
         .map_err(|_| Error::Timeout("confirming Factory settings".into()))??;
     }
+    confirm_settings(options, &info["settings"])?;
     Ok((id, info))
 }
 

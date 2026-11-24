@@ -286,6 +286,95 @@ async fn fixture() -> Fixture {
     }
 }
 #[tokio::test]
+#[ignore = "requires Factory Droid; verifies public effort refusals without model traffic"]
+async fn unknown_effort_is_named_on_open_and_resume() {
+    let f = fixture().await;
+    let established = f.runtime.open(f.opts.clone()).await.unwrap();
+    let id = established.id().to_owned();
+    established.close().await.unwrap();
+    for target in [None, Some(id)] {
+        // An invalid enum value and a real level unsupported by this custom model.
+        for wanted in ["kar-no-such-effort", "high"] {
+            let mut opts = f.opts.clone();
+            opts.resume = target.clone();
+            opts.settings.effort = Some(wanted.into());
+            let error = f
+                .runtime
+                .open(opts)
+                .await
+                .err()
+                .expect("Droid unexpectedly applied the level");
+            assert!(
+                matches!(&error, kar::Error::Unsupported(_) | kar::Error::Refused(_))
+                    && error.to_string().contains(wanted),
+                "requested {wanted:?} with resume={}: {error}",
+                target.is_some()
+            );
+        }
+    }
+    assert!(f.model.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires Factory Droid; uses a loopback model"]
+async fn listed_effort_levels_apply_across_native_resume() {
+    let f = fixture().await;
+    let home = f._isolated.path().join("home");
+    let settings = home.join(".factory/settings.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+    let mut model = config["customModels"][0].clone();
+    model["model"] = json!("gpt-5.2");
+    model["displayName"] = json!("ReasoningFixture");
+    config["customModels"].as_array_mut().unwrap().push(model);
+    fs::write(settings, serde_json::to_vec(&config).unwrap()).unwrap();
+    let catalog = query(
+        &home,
+        &f.opts.cwd,
+        &f.runtime.program,
+        &["models", "factory"],
+    );
+    let entry = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["displayName"] == "ReasoningFixture")
+        .unwrap();
+    let levels = entry["supportedReasoningEfforts"].as_array().unwrap();
+    assert!(levels.len() >= 2);
+    let mut opts = f.opts.clone();
+    opts.model = Some(entry["id"].as_str().unwrap().into());
+    for (level, text) in [
+        (&levels[0], "KAR_RECEIPT_EFFORT_ONE"),
+        (&levels[1], "KAR_RECEIPT_EFFORT_TWO"),
+    ] {
+        let level = level.as_str().unwrap();
+        opts.settings.effort = Some(level.into());
+        let session = f.runtime.open(opts.clone()).await.unwrap();
+        assert_eq!(session.effort().as_deref(), Some(level));
+        if let Some(native) = &opts.resume {
+            assert_eq!(session.id(), native);
+        }
+        assert_eq!(
+            session.prompt(text).await.unwrap().wait().await.unwrap(),
+            kar::Outcome::Completed
+        );
+        opts.resume = Some(session.id().into());
+        session.close().await.unwrap();
+    }
+    let requests = f.model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]["messages"]
+            .to_string()
+            .contains("KAR_RECEIPT_EFFORT_ONE")
+    );
+    eprintln!(
+        "Factory {} applied {}, then {} on native resume; two completed prompts",
+        entry["id"], levels[0], levels[1]
+    );
+}
+
+#[tokio::test]
 #[ignore = "requires the official Factory Droid CLI; uses a loopback model"]
 async fn native_tool_feed_and_queued_resume() {
     let Fixture {
