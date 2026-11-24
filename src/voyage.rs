@@ -28,9 +28,16 @@ pub fn import(
             "expected a kar-voyage/3 recording header".into(),
         ));
     }
+    let native_stream = match header.get("recordEncoding") {
+        None => None,
+        Some(encoding) if encoding == "kar-record/1" => {
+            Some(serde_json::from_value::<Uuid>(header["streamId"].clone())?)
+        }
+        Some(_) => return Err(Error::Protocol("unrecognized Kar record encoding".into())),
+    };
     let mut summary = VoyageSummary {
         header,
-        stream_id: Uuid::new_v4(),
+        stream_id: native_stream.unwrap_or_else(Uuid::new_v4),
         end: None,
         records: 0,
     };
@@ -48,10 +55,28 @@ pub fn import(
                         summary.records
                     )));
                 }
-                accept(convert(rec, summary.stream_id, summary.records)?)?;
+                let record = if let Some(stream_id) = native_stream {
+                    let record: Record = serde_json::from_value(rec.clone())?;
+                    if record.stream_id != stream_id {
+                        return Err(Error::Protocol(
+                            "Kar recording changed stream identity".into(),
+                        ));
+                    }
+                    record
+                } else {
+                    convert(rec, summary.stream_id, summary.records)?
+                };
+                accept(record)?;
                 summary.records += 1;
             }
-            Some("end") => summary.end = Some(value),
+            Some("end") => {
+                if native_stream.is_some() && value["records"].as_u64() != Some(summary.records) {
+                    return Err(Error::Protocol(
+                        "Kar recording end count does not match".into(),
+                    ));
+                }
+                summary.end = Some(value);
+            }
             _ => return Err(Error::Protocol("unknown voyage line".into())),
         }
     }

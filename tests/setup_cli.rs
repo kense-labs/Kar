@@ -153,3 +153,41 @@ fn account_batch_keeps_each_provider_identity_and_requires_a_target_for_changes(
         );
     }
 }
+
+#[test]
+fn inherited_mcp_depth_refuses_a_child_before_opening_its_runtime() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Stdio;
+    for (depth, inherited, requested, limit) in [(0, 3, 0, 0), (1, 1, 4, 1), (2, 4, 2, 2)] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_kar"))
+            .args([
+                "mcp",
+                "--runtimes",
+                "codex",
+                "--max-depth",
+                &requested.to_string(),
+            ])
+            .env("KAR_AGENT_DEPTH", depth.to_string())
+            .env("KAR_AGENT_MAX_DEPTH", inherited.to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
+        for (id,(method,params)) in [
+            ("initialize",serde_json::json!({"protocolVersion":"2025-11-25"})),
+            ("tools/call",serde_json::json!({"name":"run","arguments":{"runtime":"codex","task":"must not run"}})),
+        ].into_iter().enumerate() {
+            writeln!(input,"{}",serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})).unwrap();
+            input.flush().unwrap();
+            let reply:serde_json::Value=serde_json::from_str(&output.next().unwrap().unwrap()).unwrap();
+            if id==1 {
+                assert_eq!(reply["result"]["isError"],true);
+                assert_eq!(reply["result"]["content"][0]["text"],format!("subagents may nest at most {limit} deep"));
+            }
+        }
+        drop(input);
+        assert!(child.wait().unwrap().success());
+    }
+}

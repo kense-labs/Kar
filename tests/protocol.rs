@@ -1702,16 +1702,25 @@ async fn cli_contract() -> kar::Result<()> {
         String::from_utf8_lossy(&replay.stdout).lines().count(),
         records.len() - 4
     );
+    let log_dir = dir.path().join("children");
     let child = Command::new(bin)
         .args([
             "mcp",
             "--runtimes",
             "codex,claude",
+            "--max-running",
+            "1",
+            "--max-depth",
+            "2",
             "--max-sessions",
             "2",
             "--cwd",
         ])
         .arg(dir.path())
+        .arg("--log-dir")
+        .arg(&log_dir)
+        .env_remove("KAR_AGENT_DEPTH")
+        .env_remove("KAR_AGENT_MAX_DEPTH")
         .env("KAR_CODEX_BIN", &exe)
         .env("KAR_CLAUDE_BIN", &exe)
         .env("KAR_TEST_MCP_ROUTING", dir.path())
@@ -1779,5 +1788,50 @@ async fn cli_contract() -> kar::Result<()> {
     }
     drop(input);
     assert!(child.wait().await?.success());
+    let logs = std::fs::read_dir(log_dir)?.collect::<std::io::Result<Vec<_>>>()?;
+    assert_eq!(logs.len(), 2);
+    for entry in logs {
+        let archive = entry.path();
+        let export = dir
+            .path()
+            .join(archive.file_name().unwrap())
+            .with_extension("replay");
+        let result = Command::new(bin)
+            .arg("import")
+            .arg(&archive)
+            .arg(&export)
+            .output()
+            .await?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let replay = Command::new(bin)
+            .arg("replay")
+            .arg(&export)
+            .output()
+            .await?;
+        assert!(replay.status.success());
+        let original = std::fs::read_to_string(&archive)?;
+        let frames = original
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(frames[0]["format"], "kar-voyage/3");
+        assert_eq!(frames.last().unwrap()["kind"], "end");
+        let output = String::from_utf8(replay.stdout).unwrap();
+        let restored = output
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let expected: Vec<_> = frames
+            .iter()
+            .filter(|f| f["kind"] == "record")
+            .map(|f| f["record"].clone())
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(restored, expected);
+    }
     Ok(())
 }

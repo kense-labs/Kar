@@ -100,10 +100,20 @@ enum Action {
     Mcp {
         #[arg(long, default_value = ".")]
         cwd: PathBuf,
-        #[arg(long, value_delimiter = ',', default_value = "codex,claude")]
+        #[arg(long, value_delimiter = ',')]
         runtimes: Vec<String>,
+        /// Maximum concurrent active agents. Idle sessions may remain open.
         #[arg(long, default_value_t = 4)]
-        max_sessions: usize,
+        max_running: usize,
+        /// Optional separate cap on the number of open sessions.
+        #[arg(long)]
+        max_sessions: Option<usize>,
+        /// Maximum delegation depth. A child inherits its parent's limit.
+        #[arg(long)]
+        max_depth: Option<usize>,
+        /// Write each child's Kar recording to a new file in this directory.
+        #[arg(long)]
+        log_dir: Option<PathBuf>,
     },
     /// Use the provider's own interactive login, logout or status command.
     #[command(subcommand_precedence_over_arg = true)]
@@ -452,12 +462,19 @@ async fn execute(command: Action) -> Result<()> {
             cwd,
             runtimes: ids,
             max_sessions,
+            max_depth,
+            log_dir,
+            max_running,
         } => {
-            let selected = ids
-                .iter()
-                .map(|id| runtime(id))
-                .collect::<Result<Vec<_>>>()?;
-            mcp::serve(cwd, selected, max_sessions).await?;
+            let selected = if ids.is_empty() {
+                runtimes()
+            } else {
+                ids.iter()
+                    .map(|id| runtime(id.trim()))
+                    .collect::<Result<Vec<_>>>()?
+            };
+            let capacity = mcp::Limits::from_env(max_sessions, max_running, max_depth)?;
+            mcp::serve(cwd, selected, capacity, log_dir).await?;
         }
         Action::Install {
             runtime: id,

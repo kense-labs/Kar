@@ -13,6 +13,45 @@ struct Server {
     crew: Crew,
     cwd: PathBuf,
     runtimes: BTreeMap<String, Runtime>,
+    limits: Limits,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Limits {
+    sessions: usize,
+    running: usize,
+    depth: usize,
+    max_depth: usize,
+}
+impl Limits {
+    pub fn from_env(
+        sessions: Option<usize>,
+        running: usize,
+        requested: Option<usize>,
+    ) -> kar::Result<Self> {
+        fn inherited(name: &str) -> kar::Result<Option<usize>> {
+            std::env::var_os(name)
+                .map(|s| {
+                    s.to_str()
+                        .and_then(|s| s.parse().ok())
+                        .ok_or_else(|| kar::Error::Protocol(format!("invalid {name}")))
+                })
+                .transpose()
+        }
+        let inherited_limit = inherited("KAR_AGENT_MAX_DEPTH")?;
+        let max_depth = match (requested, inherited_limit) {
+            (Some(local), Some(parent)) => local.min(parent),
+            (Some(local), None) => local,
+            (None, Some(parent)) => parent,
+            (None, None) => 1,
+        };
+        Ok(Self {
+            sessions: sessions.unwrap_or(tokio::sync::Semaphore::MAX_PERMITS),
+            running,
+            depth: inherited("KAR_AGENT_DEPTH")?.unwrap_or(0),
+            max_depth,
+        })
+    }
 }
 fn tools() -> Value {
     let string = json!({"type":"string"});
@@ -113,15 +152,23 @@ impl Server {
                 let mut opts = SessionOptions::new(&self.cwd);
                 opts.model = a["model"].as_str().map(str::to_owned);
                 opts.resume = a["resume"].as_str().map(str::to_owned);
-                let depth = std::env::var("KAR_AGENT_DEPTH")
-                    .unwrap_or("0".into())
-                    .parse::<usize>()
-                    .map_err(|_| "invalid KAR_AGENT_DEPTH")?;
-                if depth >= 1 {
-                    return Err("nested MCP delegation is disabled".into());
+                let limits = self.limits;
+                if limits.depth >= limits.max_depth {
+                    return Err(format!(
+                        "subagents may nest at most {} deep",
+                        limits.max_depth
+                    ));
                 }
-                opts.env
-                    .insert("KAR_AGENT_DEPTH".into(), (depth + 1).to_string().into());
+                opts.env.insert(
+                    "KAR_AGENT_DEPTH".into(),
+                    (limits.depth + 1).to_string().into(),
+                );
+                opts.env.insert(
+                    "KAR_AGENT_MAX_DEPTH".into(),
+                    limits.max_depth.to_string().into(),
+                );
+                opts.remove_env("KAR_WORKBENCH_TOKEN")
+                    .map_err(|e| e.to_string())?;
                 let label = a["name"].as_str().map(str::to_owned);
                 let prompt = argument(a, "task")?.to_owned();
                 if name == "spawn" {
@@ -190,9 +237,19 @@ async fn output(out: &mut tokio::io::Stdout, v: Value) -> kar::Result<()> {
     out.flush().await?;
     Ok(())
 }
-pub async fn serve(cwd: PathBuf, runtimes: Vec<Runtime>, max_sessions: usize) -> kar::Result<()> {
+pub(super) async fn serve(
+    cwd: PathBuf,
+    runtimes: Vec<Runtime>,
+    limits: Limits,
+    log_dir: Option<PathBuf>,
+) -> kar::Result<()> {
+    let mut crew = Crew::new(limits.sessions).with_running_limit(limits.running);
+    if let Some(dir) = log_dir {
+        crew = crew.with_log_directory(&dir)?;
+    }
     let server = Server {
-        crew: Crew::new(max_sessions),
+        limits,
+        crew,
         cwd: std::fs::canonicalize(cwd)?,
         runtimes: runtimes.into_iter().map(|r| (r.id.clone(), r)).collect(),
     };
@@ -260,8 +317,13 @@ pub async fn serve(cwd: PathBuf, runtimes: Vec<Runtime>, max_sessions: usize) ->
     }.await;
     calls.abort_all();
     while calls.join_next().await.is_some() {}
+    let mut result = result;
     for agent in server.crew.list() {
-        let _ = server.crew.close(agent.id).await;
+        if let Err(error) = server.crew.close(agent.id).await
+            && result.is_ok()
+        {
+            result = Err(error);
+        }
     }
     result
 }
