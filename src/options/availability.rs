@@ -119,7 +119,7 @@ fn rules(protocol: Protocol, id: &str) -> [Setting; 16] {
         ),
         rule(
             "additional_directories",
-            matches!(protocol, Codex | Claude | Qwen | Qoder | KimiKap)
+            matches!(protocol, Codex | Claude | Qwen | Qoder | KimiKap | Muse)
                 || opencode
                 || (acp && id == "kimi")
                 || (id == "dsh"

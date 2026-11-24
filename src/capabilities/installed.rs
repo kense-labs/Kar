@@ -228,6 +228,9 @@ fn declaration(
                 d.task_event_types = Some(&[Agent]);
             }
         }
+        Muse => {
+            d.steering = Some(false);
+        }
         Factory | Pi => {
             d.context_usage = Some(COUNTS);
             d.task_event_types = Some(&[]);

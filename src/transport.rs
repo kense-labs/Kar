@@ -4,6 +4,7 @@ mod codex_processes;
 mod codex_queue;
 mod codex_steering;
 mod interrupt_timeout;
+mod muse;
 mod suggestions;
 use suggestions::private_suggestion;
 use crate::grok::turns::{INTERJECT, Turns as GrokTurns};
@@ -295,6 +296,7 @@ struct Pending {
     method: String,
     reply: Option<Reply<Value>>,
     prompt_ack: Option<Reply<()>>,
+    muse_turn: Option<String>,
     prompt_request: Option<uuid::Uuid>,
     codex_prompt_input: Option<uuid::Uuid>,
     control_request: Option<uuid::Uuid>,
@@ -327,6 +329,7 @@ pub(crate) struct Actor {
     codex_steering: codex_steering::Inputs,
     codex_processes: Option<codex_processes::Guard>,
     interrupt_timeout: interrupt_timeout::InterruptTimeout,
+    muse: Option<muse::Projection>,
     factory: Option<crate::factory::Projection>,
     usage: wire::usage::Projection,
     opencode: Option<wire::opencode::Children>,
@@ -400,6 +403,7 @@ impl Actor {
             startup_stderr.spawn(crate::process::diagnostic::startup_tail(stderr, sensitive));
         }
         let actor = Self {
+            muse: (runtime.protocol == Protocol::Muse).then(|| muse::Projection::new(options)),
             background: Default::default(),
             close_ack: None,
             protocol: runtime.protocol,
@@ -781,13 +785,15 @@ impl Actor {
                 },
                 reply,
                 prompt_ack: None,
+                muse_turn: (starts_turn && self.protocol == Protocol::Muse)
+                    .then(|| params["commandId"].as_str().map(str::to_owned)).flatten(),
                 codex_prompt_input: (starts_turn && self.protocol == Protocol::Codex)
                     .then(|| self.turn.as_ref()?.chat_input)
                     .flatten(),
                 prompt_request: if starts_turn
                     && matches!(
                         self.protocol,
-                        Protocol::Pi | Protocol::Factory | Protocol::Codex
+                        Protocol::Muse | Protocol::Pi | Protocol::Factory | Protocol::Codex
                     ) {
                     self.turn.as_ref().map(|t| t.prompt_request)
                 } else {
@@ -926,6 +932,12 @@ impl Actor {
             Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
                 return Err(Error::Protocol("expected a stdio runtime".into()));
             }
+            Protocol::Muse => {
+                let state = self.muse.as_mut().expect("MSP state");
+                let (native, args) = state.prompt(id.as_deref(), &prompt);
+                self.turn.as_mut().expect("dispatched turn").native = Some(native);
+                self.rpc("turn/start", args, None, RpcIntent::Prompt).await?;
+            }
             Protocol::Factory => {
                 self.turn.as_mut().expect("dispatch started a turn").native =
                     Some(input_id.to_string());
@@ -975,7 +987,7 @@ impl Actor {
         }
         if !matches!(
             self.protocol,
-            Protocol::Pi | Protocol::Factory | Protocol::Codex
+            Protocol::Muse | Protocol::Pi | Protocol::Factory | Protocol::Codex
         ) {
             self.journal.control_decision(request, None);
         }
@@ -1178,6 +1190,15 @@ impl Actor {
                         return Ok(true);
                     }
                 };
+                if self.protocol == Protocol::Muse {
+                    let (command, params) = match muse::answer_command(method, body, &answer) {
+                        Ok(cmd) => cmd,
+                        Err(err) => { let _ = tx.send(Err(err)); return Ok(true); }
+                    };
+                    self.rpc(command, params, None, RpcIntent::Control).await?;
+                    self.pending.get_mut(&self.next).expect("pending Muse decision").prompt_ack = Some(tx);
+                    return Ok(true);
+                }
                 let packet = wire::answer(self.protocol, &id, method, Some(answer));
                 self.write(packet, RecordKind::Response).await?;
                 self.requests.remove(&key);
@@ -1216,7 +1237,7 @@ impl Actor {
                 }
                 if matches!(
                     self.protocol,
-                    Protocol::Pi | Protocol::Factory | Protocol::Codex
+                    Protocol::Muse | Protocol::Pi | Protocol::Factory | Protocol::Codex
                 ) {
                     self.pending
                         .get_mut(&self.next)
@@ -1344,6 +1365,12 @@ impl Actor {
         match self.protocol {
             Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
                 return Err(Error::Protocol("expected a stdio runtime".into()));
+            }
+            Protocol::Muse => {
+                let Some(native) = self.turn.as_ref().and_then(|t| t.native.clone()) else {
+                    abort.finish(&self.journal,Err(Error::Refused("no active turn".into()))); return Ok(());
+                };
+                self.rpc("turn/interrupt", json!({"sessionId":self.session(),"turnId":native,"commandId":uuid::Uuid::now_v7()}), Some(abort.client),RpcIntent::Abort(abort.request)).await?;
             }
             Protocol::Codex => {
                 let turn_id = match self.manual_compaction.as_ref() {
@@ -1790,7 +1817,7 @@ impl Actor {
             && (pending.prompt_request.is_some() || pending.control_request.is_some())
         {
             let exact_id = match self.protocol {
-                Protocol::Codex | Protocol::Acp => v["id"].as_u64() == Some(id),
+                Protocol::Muse | Protocol::Codex | Protocol::Acp => v["id"].as_u64() == Some(id),
                 _ => wire_id.as_ref().and_then(Value::as_str) == Some(id.to_string().as_str()),
             };
             // Pi also echoes the command. Preserve unrelated public input frames
@@ -1988,7 +2015,12 @@ impl Actor {
             return Ok(());
         }
         // Permission replies must round-trip the vendor's original arguments, including values hidden in the UI.
-        let original_request = if self.mode == ApprovalMode::Host {
+        let muse_control = (self.protocol == Protocol::Muse).then(|| {
+            muse::control(&v, self.session().as_deref(), self.turn.as_ref().and_then(|t| t.native.as_deref()))
+        }).flatten();
+        let original_request = if muse_control.is_some() {
+            Some(v["params"].clone())
+        } else if self.mode == ApprovalMode::Host {
             wire::host_request(self.protocol, &v)
                 .map(|(_, m)| crate::interaction::request_body(&m, &v).clone())
         } else {
@@ -2087,7 +2119,8 @@ impl Actor {
         let mut request = wire::host_request(self.protocol, &v);
         // Cursor uses JSON-RPC requests for these post-tool notifications and ignores the result.
         let cursor_notice = request.take_if(|(_, method)| {
-            self.cursor_children.is_some()
+            (self.protocol == Protocol::Muse && matches!(method.as_str(), "approval/request" | "userInput/request"))
+            || self.cursor_children.is_some()
                 && matches!(
                     method.as_str(),
                     "cursor/task" | "cursor/update_todos" | "cursor/generate_image"
@@ -2114,6 +2147,11 @@ impl Actor {
             }
         }
         let root = self.session();
+        if self.protocol == Protocol::Muse && v["method"] == "view/gap"
+            && root.as_deref().is_some_and(|id| v["params"]["sessionId"] == id)
+        {
+            return Err(Error::Closed("Muse reported an event delivery gap; reopen the saved session".into()));
+        }
         let mut events = self
             .opencode
             .as_mut()
@@ -2127,6 +2165,9 @@ impl Actor {
             })
             .unwrap_or_else(|| {
                 let mut events = wire::project(self.protocol, &v, self.cursor_children.is_some());
+                if let Some(muse) = &mut self.muse {
+                    events.extend(muse.events(&v, root.as_deref()));
+                }
                 if self.protocol == Protocol::Qwen {
                     self.qwen_content.observe(&v, &mut events);
                 }
@@ -2319,6 +2360,15 @@ impl Actor {
                 .unwrap_or(events.len());
             events.insert(at, report);
         }
+        if let Some((id, method)) = &muse_control {
+            if matches!(method.as_str(), "approval/resolved" | "userInput/settled") {
+                if self.requests.remove(&id.to_string()).is_some() {
+                    events.push(Event::RequestResolved { id:id.clone() });
+                }
+            } else if method != "approval/updated" || self.requests.contains_key(&id.to_string()) {
+                request = Some((id.clone(), method.clone()));
+            }
+        }
         if let Some(ref req) = request {
             events.push(Event::ApprovalRequested {
                 id: req.0.clone(),
@@ -2500,6 +2550,11 @@ impl Actor {
                     invalid_codex_admission = true;
                 }
             } else if let Some(request) = p.prompt_request {
+                if let Some(expected) = &p.muse_turn && result.is_ok()
+                    && !muse::accepts(expected, &v["result"])
+                {
+                    return Err(Error::Closed("Muse did not confirm the submitted native turn identity".into()));
+                }
                 let refusal = result.as_ref().err().map(|error| {
                     let mut reason = v["error"]
                         .as_str()
@@ -3121,7 +3176,16 @@ impl Actor {
             .await?;
         }
         if let Some((id, method)) = request {
-            if self.mode == ApprovalMode::Host {
+            if self.protocol == Protocol::Muse && muse_control.is_some() {
+                let body = original_request.unwrap_or(Value::Null);
+                self.requests.insert(id.to_string(), (method.clone(), body.clone()));
+                if self.mode != ApprovalMode::Host {
+                    let deny = crate::interaction::decision_payload(&method, &body, crate::PermissionDecision::Deny)
+                        .unwrap_or_else(|| json!({"cancelled":true}));
+                    let (command, params) = muse::answer_command(&method, &body, &deny)?;
+                    self.rpc(command, params, None, RpcIntent::Control).await?;
+                }
+            } else if self.mode == ApprovalMode::Host {
                 if self.protocol == Protocol::Pi {
                     let key = id.to_string();
                     self.pi_deadlines.remove(&key);

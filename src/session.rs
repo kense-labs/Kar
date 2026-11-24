@@ -1,6 +1,7 @@
 pub(crate) mod delivery;
 pub use delivery::{DeliverWhen, DeliverOptions, DeliverReceipt, DeliverLanded, MergeInput, MergedInput};
 mod image_input;
+mod muse;
 mod prompt_run;
 mod qwen;
 mod workbench_acp;
@@ -195,6 +196,9 @@ impl Session {
         replay: bool,
         version: Option<&str>,
     ) -> Result<Self> {
+        if runtime.protocol == Protocol::Muse && fork.is_some() {
+            return Err(Error::Unsupported("native Muse fork is unavailable on this adapter".into()));
+        }
         let journal = runtime.session_journal(options.retained_bytes)?;
         crate::options::launch_args::validate(runtime, &options, fork.is_some())?;
         options.settings.validate(runtime.protocol, &runtime.id)?;
@@ -248,6 +252,12 @@ impl Session {
             || options.command(&runtime.program),
             |s| s.command(&options),
         )?;
+        if runtime.protocol == Protocol::Muse {
+            for (key, _) in std::env::vars_os().chain(options.env.clone()) {
+                if key.to_string_lossy().eq_ignore_ascii_case("META_API_KEY") { process.env_remove(key); }
+            }
+            process.env("MUSE_NO_AUTO_UPDATE", "1");
+        }
         let mut pi_mcp = None;
         let grok_stdio = runtime.protocol == Protocol::Acp
             && runtime.id == "grok"
@@ -681,6 +691,9 @@ impl Session {
         let expected_resume = options.resume.clone();
         use crate::opening::OpenStep;
         match runtime.protocol {
+            Protocol::Muse => {
+                (id, session.info) = session.open_muse(&options, cwd_str).await?;
+            }
             Protocol::Factory => {
                 (id, session.info) = crate::factory::open(&session, &options, &cwd).await?;
             }
@@ -1425,7 +1438,8 @@ impl Session {
                         | Protocol::Dsh
                         | Protocol::Qoder
                 ),
-            session_mcp: !matches!(self.protocol, Protocol::Morph | Protocol::Cybion),
+            session_mcp: !matches!(self.protocol, Protocol::Morph | Protocol::Cybion)
+                && (self.protocol != Protocol::Muse || self.mcp.transports.is_some_and(|s| !s.is_empty())),
             mcp_transports: self.mcp.transports,
             mcp_startup: self.mcp.startup.or_else(|| {
                 (self.protocol == Protocol::Codex && self.journal.has_mcp_startup())
@@ -2249,6 +2263,7 @@ impl Session {
                 &self.rpc("droid.list_models", json!({})).await?,
             ),
             Protocol::Morph => self.rpc("profiles", json!({})).await,
+            Protocol::Muse => self.rpc("model/list", json!({})).await,
             Protocol::Cybion => Err(Error::Unsupported(
                 "Cybion's Agent API has no model catalog".into(),
             )),

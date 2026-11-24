@@ -269,6 +269,17 @@ fn mcp_form(body: &Value) -> Option<QuestionForm> {
 }
 fn form(method: &str, b: &Value) -> Option<QuestionForm> {
     match method {
+        "userInput/requested" => {
+            let mut form = model_form(&b["questions"], false)?;
+            for (field, q) in form.fields.iter_mut().zip(b["questions"].as_array()?) {
+                field.allow_other = true;
+                if q["selection"]["mode"] == "multiple" {
+                    field.kind = FieldKind::MultiSelect;
+                    field.schema = Some(serde_json::json!({"uniqueItems":true}));
+                }
+            }
+            Some(form)
+        }
         "cursor/ask_question" => cursor::questionnaire(b),
         "droid.ask_user" => factory::questionnaire(b),
         "droid.pick_options" => factory::picker(b),
@@ -430,6 +441,30 @@ pub(crate) fn answer(method: &str, body: &Value, reply: QuestionReply) -> Result
         }
     }
     Ok(match method {
+        "userInput/requested" => {
+            let mut answers = Vec::new();
+            for (field, q) in form.fields.iter().zip(body["questions"].as_array().expect("parsed Muse questions")) {
+                let inputs = &values[&field.id];
+                let inputs = inputs.as_array().map_or_else(|| std::slice::from_ref(inputs), Vec::as_slice);
+                let (selected, other): (Vec<_>,Vec<_>) = inputs.iter().filter_map(Value::as_str)
+                    .partition(|s|field.options.iter().any(|o|o.value == *s));
+                let custom = other.join("\n");
+                let n = selected.len() as u64;
+                if custom.encode_utf16().count()>500 || (n==0 && custom.is_empty())
+                    || (n!=0 && (q["selection"]["minSelections"].as_u64().is_some_and(|min|n<min)
+                        || q["selection"]["maxSelections"].as_u64().is_some_and(|max|n>max))) {
+                    return Err(Error::Refused("invalid Muse question selection or custom answer length".into()));
+                }
+                let mut value = json!({"questionId":field.id});
+                if n>0 {
+                    if q["selection"]["mode"]=="single" { value["selectedLabel"]=selected[0].into(); }
+                    else { value["selectedLabels"]=json!(selected); }
+                }
+                if !custom.is_empty() { value[if n>0 {"note"} else {"freeText"}] = custom.into(); }
+                answers.push(value);
+            }
+            json!({"answers":answers})
+        }
         "cursor/ask_question" => cursor::answers(&form, &values),
         "droid.ask_user" => factory::answers(body, &values)?,
         "droid.request_permission" => {

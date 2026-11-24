@@ -1225,6 +1225,9 @@ impl MessageIds {
         }
         let block_key = |id: &str, index: u64| format!("{id}#{index}");
         let key = match p {
+            Protocol::Muse => n.pointer("/params/itemId")
+                .or_else(|| n.pointer("/params/item/itemId"))
+                .and_then(Value::as_str).map(str::to_owned),
             Protocol::Codex => n
                 .pointer("/params/itemId")
                 .or_else(|| n.pointer("/params/item/id"))

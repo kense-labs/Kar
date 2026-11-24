@@ -157,7 +157,7 @@ pub(crate) fn sensitive_field(key: &str) -> bool {
 fn classify(method: &str, body: &Value) -> RequestKind {
     match method {
         "can_use_tool" if body["tool_name"] == "AskUserQuestion" => RequestKind::Question,
-        "droid.request_permission"
+        "approval/requested" | "approval/updated" | "droid.request_permission"
         | "cursor/create_plan"
         | "session/request_permission"
         | "item/commandExecution/requestApproval"
@@ -170,7 +170,7 @@ fn classify(method: &str, body: &Value) -> RequestKind {
         | "morph/approval"
         | "dsh/approval"
         | "kimi/approval" => RequestKind::Permission,
-        "cursor/ask_question"
+        "userInput/requested" | "cursor/ask_question"
         | "droid.ask_user"
         | "droid.pick_options"
         | "dsh/question"
@@ -202,6 +202,21 @@ pub(crate) fn decision_payload(
     use PermissionDecision::*;
     use serde_json::json;
     match method {
+        "approval/requested" | "approval/updated" => {
+            let choices = body["availableChoices"].as_array()?;
+            let matches = |c:&Value| match decision {
+                AllowOnce => c["decision"]=="approved",
+                AllowForSession => c["decision"]=="approvedForSession" || (c["decision"]=="approvedPolicyAmendment" && c["scope"]=="session"),
+                AllowAlways => c["decision"]=="approvedPolicyAmendment" && c["scope"]=="localPersistent",
+                Deny => c["decision"]=="denied" || c["decision"]=="deniedPolicyAmendment",
+                Cancel => c["decision"]=="abort",
+                _ => false,
+            };
+            let choice=choices.iter().find(|c| matches(c)).or_else(|| {
+                (decision==Deny).then(||choices.iter().find(|c| c["decision"]=="abort")).flatten()
+            })?;
+            Some(json!({"choiceId":choice["choiceId"].as_str()?}))
+        }
         "cursor/create_plan" => Some(json!({"outcome":{"outcome":match decision {
             AllowOnce => "accepted",
             Deny => "rejected",

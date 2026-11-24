@@ -37,7 +37,7 @@ fn done(events: &mut Vec<Event>, outcome: Outcome) {
 
 pub(crate) fn response_id(p: Protocol, v: &Value) -> Option<Value> {
     match p {
-        Protocol::Codex | Protocol::Acp
+        Protocol::Muse | Protocol::Codex | Protocol::Acp
             if v.get("result").is_some() || v.get("error").is_some() =>
         {
             v.get("id").cloned()
@@ -53,7 +53,7 @@ pub(crate) fn response_id(p: Protocol, v: &Value) -> Option<Value> {
 }
 pub(crate) fn result(p: Protocol, v: &Value) -> crate::Result<Value> {
     let error = match p {
-        Protocol::Codex | Protocol::Acp | Protocol::Factory => v.get("error"),
+        Protocol::Muse | Protocol::Codex | Protocol::Acp | Protocol::Factory => v.get("error"),
         Protocol::Claude | Protocol::Qoder | Protocol::Qwen
             if v.pointer("/response/subtype").and_then(Value::as_str) == Some("error") =>
         {
@@ -66,7 +66,7 @@ pub(crate) fn result(p: Protocol, v: &Value) -> crate::Result<Value> {
         return Err(crate::Error::Refused(e.to_string()));
     }
     Ok(match p {
-        Protocol::Codex | Protocol::Acp | Protocol::Factory => v["result"].clone(),
+        Protocol::Muse | Protocol::Codex | Protocol::Acp | Protocol::Factory => v["result"].clone(),
         Protocol::Claude | Protocol::Qoder | Protocol::Qwen => v["response"]["response"].clone(),
         Protocol::Pi => v["data"].clone(),
         Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
@@ -80,7 +80,7 @@ pub(crate) fn request(p: Protocol, id: u64, method: &str, params: Value) -> Valu
             unreachable!("HTTP runtimes own a separate transport")
         }
         Protocol::Factory => crate::factory::request(&id.to_string(), method, params),
-        Protocol::Codex | Protocol::Acp => {
+        Protocol::Muse | Protocol::Codex | Protocol::Acp => {
             json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
         }
         Protocol::Claude | Protocol::Qoder | Protocol::Qwen => {
@@ -101,7 +101,7 @@ pub(crate) fn host_request(p: Protocol, v: &Value) -> Option<(Value, String)> {
         Protocol::Factory if v["type"] == "request" => {
             Some((v.get("id")?.clone(), v["method"].as_str()?.into()))
         }
-        Protocol::Codex | Protocol::Acp if v.get("method").is_some() => {
+        Protocol::Muse | Protocol::Codex | Protocol::Acp if v.get("method").is_some() => {
             Some((v.get("id")?.clone(), s(v, "method").into()))
         }
         Protocol::Claude | Protocol::Qoder | Protocol::Qwen
@@ -225,6 +225,7 @@ fn acp_settings(body: &Value, cursor: bool) -> Vec<Event> {
 }
 pub(crate) fn reply_settings(p: Protocol, method: &str, body: &Value, cursor: bool) -> Vec<Event> {
     match (p, method) {
+        (Protocol::Muse, "session/start" | "session/resume") => settings(body.pointer("/session/modelId").and_then(Value::as_str), None, None),
         (Protocol::Codex, "thread/start" | "thread/resume" | "thread/fork") => settings(
             body["model"].as_str(),
             body["reasoningEffort"].as_str(),
@@ -262,7 +263,7 @@ pub(crate) fn reply_settings(p: Protocol, method: &str, body: &Value, cursor: bo
 pub(crate) fn project(p: Protocol, v: &Value, cursor: bool) -> Vec<Event> {
     let mut events = Vec::new();
     match p {
-        Protocol::Factory => {} // Stateful notifications are projected by the stdio actor.
+        Protocol::Factory | Protocol::Muse => {} // Stateful notifications are projected by the stdio actor.
         Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
             unreachable!("HTTP runtimes project their own frames")
         }
@@ -572,7 +573,7 @@ pub(crate) fn session_id(p: Protocol, v: &Value) -> Option<String> {
             .filter(|id| !id.is_empty())
             .or_else(|| string(v, "/params/threadId")),
         Protocol::Codex => string(v, "/params/threadId").or_else(|| string(v, "/params/thread/id")),
-        Protocol::Acp | Protocol::Factory => string(v, "/params/sessionId"),
+        Protocol::Muse | Protocol::Acp | Protocol::Factory => string(v, "/params/sessionId"),
         Protocol::Claude | Protocol::Qoder | Protocol::Qwen => string(v, "/session_id"),
         Protocol::Pi | Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
             None
