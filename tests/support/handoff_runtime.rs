@@ -130,7 +130,13 @@ fn fixture(runtime: &str) {
                             cwd.as_os_str().as_encoded_bytes()
                         );
                     }
-                    reply(json!({"thread":{"id":sid,"cwd":cwd,"turns":[]}}));
+                    let mut info = json!({"thread":{"id":sid,"cwd":cwd,"turns":[]}});
+                    if args.iter().any(|a| a == "sandbox_mode=\"workspace-write\"") {
+                        info["cwd"] = json!(cwd);
+                        info["approvalPolicy"] = json!("never");
+                        info["sandbox"] = json!({"type":"workspaceWrite","writableRoots":[],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true,"networkAccess":false});
+                    }
+                    reply(info);
                 }
                 Some("turn/start") => {
                     let text = input(runtime, &v).unwrap();
@@ -141,6 +147,16 @@ fn fixture(runtime: &str) {
                         json!({"method":"turn/started","params":{"threadId":sid,"turn":{"id":turn}}}),
                     );
                     gate(&dir, "turn");
+                    if text.contains("kar-acceptance-edit-notes") {
+                        let original = fs::read_to_string("notes.md").unwrap();
+                        assert!(original.contains("author=original"));
+                        gate(&dir, "document");
+                        fs::write(
+                            "notes.md",
+                            original.replace("author=original", "author=assistant"),
+                        )
+                        .unwrap();
+                    }
                     if text == "collect evidence" {
                         let marker = Uuid::new_v4();
                         fs::write(dir.join("side-effect"), marker.to_string()).unwrap();

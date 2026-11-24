@@ -79,6 +79,11 @@ path = "tests/chat_restart.rs"
 harness = false
 
 [[test]]
+name = "workbench_acceptance"
+path = "tests/workbench_acceptance.rs"
+harness = false
+
+[[test]]
 name = "workbench_forge"
 path = "tests/workbench_forge.rs"
 harness = false
@@ -116,6 +121,9 @@ libproc = "0.15"
 process-wrap = { version = "8.2.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop", "creation-flags"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+docs_engine = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
+sheets_engine = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
+slides_engine = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
 axum = { version = "0.8", default-features = false, features = ["json", "http1", "http2", "tokio", "ws", "query"] }
 tokio = { version = "1", features = ["test-util"] }
 prost = "0.14"
