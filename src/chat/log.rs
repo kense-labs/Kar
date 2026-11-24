@@ -181,6 +181,12 @@ pub(super) struct State {
     pub(super) stream: Option<Uuid>,
 }
 impl State {
+    pub(super) fn positioned_repositories(&self) -> &[super::checkpoint::RepositoryCheckpoint] {
+        self.position
+            .and_then(|p| self.find(p.turn))
+            .and_then(|t| t.checkpoint.as_ref())
+            .map_or(&[], |c| c.repositories.as_slice())
+    }
     pub(super) fn unfinished_turn(&self) -> Option<&ChatTurn> {
         self.turns
             .last()
@@ -1529,7 +1535,8 @@ impl Log {
             boundary.id = id;
             checkpoint = Some(boundary);
         } else if !historical && !(steering.is_some() && r.native["type"] == "result") {
-            let scopes = store.scope_baselines(&self.state.info)?;
+            let scopes =
+                store.resumed_scopes(&self.state.info, self.state.positioned_repositories())?;
             let lease = store.turn_lease(&self.state.info, &scopes);
             match lease {
                 Ok(lease) => {

@@ -65,9 +65,11 @@ impl ChatInfo {
         crate::workbench_git::pin_saved_checkout(&self.workspace, self.worktree_id)
     }
     fn tracks_steering_receipts(&self) -> bool {
-        matches!(self.protocol, Protocol::Claude | Protocol::Pi)
-            || (self.protocol == Protocol::Acp
-                && matches!(self.runtime.as_str(), "antigravity" | "opencode" | "grok"))
+        matches!(
+            self.protocol,
+            Protocol::Claude | Protocol::Pi | Protocol::Codex
+        ) || (self.protocol == Protocol::Acp
+            && matches!(self.runtime.as_str(), "antigravity" | "opencode" | "grok"))
     }
     fn awaits_steering_receipt(&self, status: crate::SteerStatus) -> bool {
         // Pi's queued disposition is already a native receipt. Only a submitted
@@ -757,8 +759,16 @@ impl Sender {
         crate::input::check_text(&text, crate::input::text_limit(&self.info.runtime))?;
         let store = self.store.clone();
         let info = self.info.clone();
+        let previous = self
+            .sink
+            .0
+            .lock()
+            .unwrap()
+            .state
+            .positioned_repositories()
+            .to_vec();
         let (store, info, lease, scopes) = tokio::task::spawn_blocking(move || -> Result<_> {
-            let scopes = store.scope_baselines(&info)?;
+            let scopes = store.resumed_scopes(&info, &previous)?;
             let lease = store.turn_lease(&info, &scopes)?;
             store.require_no_pending_fork(info.id)?;
             Ok((store, info, lease, scopes))

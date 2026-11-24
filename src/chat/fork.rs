@@ -653,33 +653,29 @@ impl ChatStore {
         }
         // Launch in the restored checkout so workspace-derived instructions are loaded there.
         let session = Self::open_saved(&log.state, opts.before_chat_attach()?).await?;
-        if let Some(dest) = &destination {
-            // A provider can take time to reopen. Check directory contents and branch again
-            // before making the child visible to another client.
-            let dest = dest.clone();
-            let info = saved.clone();
-            let store = self.clone();
-            let expected = log
-                .state
-                .find(target.turn)
-                .and_then(|t| t.checkpoint.as_ref())
-                .and_then(|cp| cp.after_tree.clone())
-                .ok_or_else(|| Error::Protocol("missing staged fork checkpoint".into()))?;
-            let verified = tokio::task::spawn_blocking(move || {
-                let base = info
-                    .forked_from
-                    .as_ref()
-                    .and_then(|f| f.worktree_base.as_ref())
-                    .ok_or_else(|| Error::Protocol("missing staged fork baseline".into()))?;
-                dest.verify(base)?;
-                store.capture(&info, target, Some(&expected)).map(|_| ())
-            })
-            .await
-            .map_err(|e| Error::Closed(e.to_string()))?;
-            if let Err(e) = verified {
-                session.close().await?;
-                return Err(e);
-            }
+        let dest = destination.clone();
+        let store = self.clone();
+        let (log, verified) = tokio::task::spawn_blocking(move || {
+            let result = (|| {
+                if let Some(dest) = &dest {
+                    let base = log
+                        .state
+                        .info
+                        .forked_from
+                        .as_ref()
+                        .and_then(|f| f.worktree_base.as_ref())
+                        .ok_or_else(|| Error::Protocol("missing staged fork baseline".into()))?;
+                    dest.verify(base)?;
+                }
+                store.verify_restored(&log.state, target, dest.is_some())
+            })();
+            (log, result)
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?;
+        if let Err(e) = verified {
+            session.close().await?;
+            return Err(e);
         }
         let child = ChatSession::bind(session, log, self.clone(), opts)?;
         fs::rename(stage, self.path(saved.id))?;

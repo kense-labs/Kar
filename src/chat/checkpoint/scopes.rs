@@ -33,10 +33,58 @@ impl ChatStore {
         &self,
         info: &ChatInfo,
     ) -> Result<Vec<RepositoryCheckpoint>> {
-        let Some(lookup) = &self.repository_scopes else {
-            return Ok(Vec::new());
+        self.resumed_scopes(info, &[])
+    }
+
+    pub(in crate::chat) fn resumed_scopes(
+        &self,
+        info: &ChatInfo,
+        previous: &[RepositoryCheckpoint],
+    ) -> Result<Vec<RepositoryCheckpoint>> {
+        let scopes = if let Some(lookup) = &self.repository_scopes {
+            lookup(info)?
+        } else {
+            let mut scopes = Vec::new();
+            let additional = info.settings.directories(&info.workspace)?;
+            for saved in previous {
+                let mut scope = saved.scope.clone();
+                // Inherited turns retain the parent's journal paths. Use the destination
+                // established by the fork before resolving any paths against the filesystem.
+                if let Some(mapped) = info
+                    .forked_from
+                    .as_ref()
+                    .and_then(|f| f.worktree_base.as_ref())
+                    .and_then(|b| {
+                        b.repositories
+                            .iter()
+                            .find(|r| r.scope.repository_path == scope.repository_path)
+                    })
+                {
+                    scope = mapped.scope.clone();
+                }
+                self.check_cli_scope(info, &additional, &scope.worktree_path)?;
+                scopes.push(scope);
+            }
+            for dir in &additional {
+                if !info.workspace.starts_with(dir)
+                    && dir.join(".git").exists()
+                    && !scopes.iter().any(|s| s.worktree_path == *dir)
+                {
+                    self.check_cli_scope(info, &additional, dir)?;
+                    scopes.push(RepositoryScope {
+                        name: dir
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                        repository_path: dir.clone(),
+                        worktree_path: dir.clone(),
+                    });
+                }
+            }
+            scopes
         };
-        Ok(lookup(info)?
+        Ok(scopes
             .into_iter()
             .map(|scope| RepositoryCheckpoint {
                 scope,
@@ -45,6 +93,33 @@ impl ChatStore {
                 error: None,
             })
             .collect())
+    }
+
+    pub(super) fn check_cli_scope(
+        &self,
+        info: &ChatInfo,
+        additional: &[PathBuf],
+        path: &std::path::Path,
+    ) -> Result<()> {
+        if info.workspace.starts_with(path)
+            || path.starts_with(&self.dir)
+            || !std::iter::once(&info.workspace)
+                .chain(additional.iter())
+                .any(|root| path.starts_with(root))
+        {
+            return Err(err(format!(
+                "tracked checkout is outside the chat directories: {}",
+                path.display()
+            )));
+        }
+        super::checked_root(path)?;
+        if !path.join(".git").exists() {
+            return Err(err(format!(
+                "tracked checkout is unavailable: {}",
+                path.display()
+            )));
+        }
+        Ok(())
     }
 
     pub(super) fn capture_scopes(

@@ -240,19 +240,6 @@ impl ChatStore {
         Ok(lease)
     }
 
-    pub(super) fn capture(
-        &self,
-        chat: &ChatInfo,
-        point: CheckpointPoint,
-        required_tree: Option<&str>,
-    ) -> Result<Capture> {
-        let scopes = if point.before && required_tree.is_none() {
-            self.scope_baselines(chat)?
-        } else {
-            Vec::new()
-        };
-        self.capture_with_scopes(chat, point, required_tree, scopes)
-    }
     pub(super) fn capture_with_scopes(
         &self,
         chat: &ChatInfo,

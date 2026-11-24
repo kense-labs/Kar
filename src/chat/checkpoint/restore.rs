@@ -640,6 +640,46 @@ impl ChatStore {
         Ok(())
     }
 
+    /// Provider attach can read project files or take long enough for other editors to write.
+    /// Recheck all live checkout trees against the selected point before publishing the child.
+    pub(in crate::chat) fn verify_restored(
+        &self,
+        state: &State,
+        point: CheckpointPoint,
+        relocated: bool,
+    ) -> Result<()> {
+        let repo = gix::open(self.odb_path(state.info.checkpoint_store())).map_err(err)?;
+        let check = |work: &Path, key: Option<&Path>| -> Result<()> {
+            checked_root(work)?;
+            let tree = tree_at(state, &repo, point, key)?;
+            if self.live_files(&repo, work)? != tree_files(&tree)? {
+                return Err(err(format!(
+                    "workspace changed after restoring the selected turn: {}",
+                    work.display()
+                )));
+            }
+            Ok(())
+        };
+        check(&state.info.workspace, None)?;
+        for (key, scope) in self.restore_scopes(state, point, relocated)? {
+            if relocated {
+                let base = state
+                    .info
+                    .forked_from
+                    .as_ref()
+                    .and_then(|f| f.worktree_base.as_ref())
+                    .and_then(|b| {
+                        b.repositories
+                            .iter()
+                            .find(|r| r.scope.repository_path == key)
+                    })
+                    .ok_or_else(|| err("missing fork repository baseline"))?;
+                base.verify()?;
+            }
+            check(&scope.worktree_path, Some(&key))?;
+        }
+        Ok(())
+    }
     fn restore_scopes(
         &self,
         state: &State,
@@ -689,13 +729,18 @@ impl ChatStore {
                 &r.scope.repository_path == key || r.scope.worktree_path == scope.worktree_path
             }) {
                 *scope = row.scope.clone();
-            } else if self.repository_scopes.is_some()
-                || !scope.worktree_path.starts_with(&state.info.workspace)
-            {
+            } else if self.repository_scopes.is_some() {
                 return Err(err(format!(
                     "cannot locate tracked checkout {}",
                     key.display()
                 )));
+            }
+            if self.repository_scopes.is_none() {
+                self.check_cli_scope(
+                    &state.info,
+                    &state.info.settings.directories(&state.info.workspace)?,
+                    &scope.worktree_path,
+                )?;
             }
             checked_root(&scope.worktree_path)?;
             if !scope.worktree_path.join(".git").exists() {

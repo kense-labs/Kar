@@ -282,6 +282,39 @@ async fn scenario() {
     assert_eq!(std::fs::read(&web_file).unwrap(), b"web change\n");
     restored.kill().await.unwrap();
     restored.wait().await.unwrap();
+    // Standalone CLI resumes the saved scope without the workbench's in-process lookup.
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+        .args(["chat", "--store"])
+        .arg(&state)
+        .args(["resume", "--chat", &fork.to_string(), "edit selected again"])
+        .env("KAR_CODEX_BIN", std::env::current_exe().unwrap())
+        .env("FIXTURE_NATIVE_DB", &native)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(&api_file).unwrap(), b"api second\n");
+    assert_eq!(std::fs::read(&web_file).unwrap(), b"web second\n");
+    let history = kar::chat::ChatStore::open(&state)
+        .unwrap()
+        .history(fork)
+        .unwrap();
+    assert_eq!(
+        history
+            .turns
+            .last()
+            .unwrap()
+            .checkpoint
+            .as_ref()
+            .unwrap()
+            .repositories
+            .len(),
+        2
+    );
 }
 
 #[cfg(unix)]
