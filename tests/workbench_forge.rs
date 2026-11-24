@@ -7,6 +7,8 @@ mod diff_contents;
 mod server;
 #[path = "workbench_forge/signals.rs"]
 mod signals;
+#[path = "workbench_forge/viewed.rs"]
+mod viewed;
 use axum::{
     Json, Router,
     extract::{Path as Param, State},
@@ -37,6 +39,7 @@ struct Forge {
     review_comments: Vec<Value>,
     resolved: bool,
     issue_reacted: bool,
+    viewed: bool,
     starred: bool,
     created_issue: Option<Value>,
 }
@@ -203,6 +206,7 @@ async fn scenario() {
         review_comments: vec![],
         resolved: false,
         issue_reacted: false,
+        viewed: false,
         starred: false,
         created_issue: None,
         issue: json!({"number":7,"title":"Fix notes","state":"open","html_url":"https://review.example/team/repo/issues/7"}),
@@ -335,6 +339,7 @@ async fn scenario() {
             .is_null()
     );
     diff_contents::verify(&a, &forge, "github").await;
+    viewed::host(&a, &forge).await;
     let diff = ok(a.get(format!("{forge}/pulls/1/diff"))).await;
     assert_eq!(diff["files"], json!(["notes.txt"]));
     let patch = ok(a.get(format!("{forge}/pulls/1/diff?path=notes.txt"))).await;

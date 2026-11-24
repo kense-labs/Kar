@@ -616,6 +616,10 @@ pub(super) fn routes() -> Router<Workbench> {
             post(providers::diff_contents::read),
         )
         .route("/projects/{project}/forge/pulls/{n}/diff", get(diff))
+        .route(
+            "/projects/{project}/forge/pulls/{n}/files-viewed",
+            get(providers::viewed::read).put(providers::viewed::set),
+        )
         .route("/projects/{project}/forge/pulls/{n}/reviewed", put(mark))
         .route(
             "/projects/{project}/forge/pulls/{n}/worktree",

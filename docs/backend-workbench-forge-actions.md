@@ -117,3 +117,7 @@ PR 文件全文可由 `POST /projects/{project}/forge/pulls/{n}/diff/contents` �
 同一组协议场景覆盖六种托管服务的重命名、带空格及特殊字符的文件名、GitHub 初始提交与二进制拒绝、fork 源仓库、两种未实现驱动的原生能力边界。统一执行 `cargo test --locked --test workbench_forge`，本轮仅做 macOS 全目标编译。
 
 托管和关联聊天的刷新修订号随工作台目录持久化。两个客户端分别订阅 `/forge/refreshes/pulls`、`/forge/refreshes/linked-chats`，通过 Last-Event-ID 读取更新后的最新修订，多个刷新允许合并。仅已阅标记失效不会广播全局 PR 刷新。`POST /forge/pulls/report-state` 保存客户端观察，按项目、主机、仓库与 PR 在五分钟内去重，最多保存 2048 个对象；已绑定 PR 另外向托管方回读。客户端报告不会覆盖已验证的 PR 数据。协议测试在 `tests/workbench_forge/signals.rs`，命令为 `cargo test --locked --test workbench_forge`，双客户端、断线、服务重启及重复报告等待集中执行。
+
+文件已阅入口为 `GET/PUT /projects/{project}/forge/pulls/{n}/files-viewed`，单批最多 500 个文件。GitHub 按当前账号读原生 viewed、unviewed、dismissed，每 100 个 toggle 一组有序提交。GitLab 从 MR 头修订查询文件 blob，Azure 读取最新迭代的变更对象，Forgejo 和 Bitbucket 从 Git patch 的 index 头解析修改后 blob。后四者按托管账号、主机、仓库及 PR 保存标记，优先记住用户实际读到的版本；取不到当前修订时保留已阅。缺少原生 viewedFiles 能力的三个驱动返回 unsupported。旧的 reviewed 接口保留原有按 PR 头确认的行为，旧数据没有托管账号可核实。
+
+正常 HTTP 场景 `tests/workbench_forge/viewed.rs` 包括 GitHub 分页和同路径开关顺序、四种文件版本来源、跨账号隔离、文件删除，以及 Bitbucket 跟随仓库内 diff 重定向。统一运行 `cargo test --locked --test workbench_forge`；开发期仅在 macOS 编译。

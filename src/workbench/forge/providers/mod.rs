@@ -13,6 +13,7 @@ pub(in crate::workbench::forge) mod reactions;
 pub(super) mod rest;
 pub(super) mod reviews;
 pub(in crate::workbench::forge) mod stack;
+pub(in crate::workbench::forge) mod viewed;
 use super::{Context, ForgeError, Operation};
 use reqwest::Method;
 use serde_json::{Value, json};
@@ -109,10 +110,46 @@ async fn response(
     if let Some(accept) = accept {
         req = req.header("Accept", accept);
     }
-    let res = req
-        .send()
-        .await
-        .map_err(|_| response_error(mutation, "forge did not return a response"))?;
+    let res = if c.kind == "bitbucket" && accept == Some("text/x-diff") {
+        // Bitbucket Cloud redirects its PR diff to the repository diff for the same revisions.
+        let diff_prefix = format!("{}/diff/", rest::project(c)?.path().trim_end_matches('/'));
+        let mut request = req.build().map_err(|_| invalid("Bitbucket diff request"))?;
+        let mut count = 0;
+        loop {
+            let outgoing = request
+                .try_clone()
+                .ok_or_else(|| invalid("Bitbucket diff request"))?;
+            let result = c
+                .client
+                .execute(outgoing)
+                .await
+                .map_err(|_| response_error(false, "forge did not return a response"))?;
+            if !result.status().is_redirection() {
+                break result;
+            }
+            let next = result
+                .headers()
+                .get("location")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| request.url().join(s).ok())
+                .filter(|u| {
+                    u.origin() == c.api_base.origin()
+                        && u.path().starts_with(&diff_prefix)
+                        && u.username().is_empty()
+                        && u.password().is_none()
+                })
+                .ok_or_else(|| invalid("Bitbucket diff redirect"))?;
+            if count == 3 {
+                return Err(invalid("repeated Bitbucket diff redirect"));
+            }
+            count += 1;
+            *request.url_mut() = next;
+        }
+    } else {
+        req.send()
+            .await
+            .map_err(|_| response_error(mutation, "forge did not return a response"))?
+    };
     let status = res.status();
     if status.as_u16() == 401 {
         super::signin::reject(c);

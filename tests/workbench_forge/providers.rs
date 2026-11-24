@@ -181,6 +181,9 @@ async fn peer(
     if kind == "linear" {
         return linear(&mut db, &b);
     }
+    if let Some(result) = super::viewed::peer(kind, path, &uri, &b) {
+        return result;
+    }
     if let Some(result) = super::diff_contents::peer(kind, path, &uri) {
         return result;
     }
@@ -192,6 +195,12 @@ async fn peer(
     }
     if path.ends_with("/429") {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    if kind == "forgejo"
+        && path == "user"
+        && let Some(name) = db.states.get("forgejo-viewer")
+    {
+        return Json(json!({"login":name})).into_response();
     }
     let repo = match kind {
         "gitlab" => "projects/team%2Frepo",
@@ -445,6 +454,19 @@ pub(super) async fn run() {
         }
         if kind != "linear" {
             super::diff_contents::verify(&client, &url, kind).await;
+            super::viewed::environment(&client, &url, kind).await;
+            if kind == "forgejo" {
+                store
+                    .lock()
+                    .unwrap()
+                    .states
+                    .insert("forgejo-viewer".into(), "another".into());
+                assert_eq!(
+                    ok(client.get(format!("{url}/pulls/42/files-viewed"))).await["files"],
+                    json!([])
+                );
+                store.lock().unwrap().states.remove("forgejo-viewer");
+            }
         }
         let chat = Uuid::new_v4();
         ok(client

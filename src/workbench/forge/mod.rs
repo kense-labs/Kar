@@ -24,6 +24,7 @@ mod routing;
 pub(in crate::workbench) mod signals;
 pub(in crate::workbench) mod signin;
 pub(super) mod trackers;
+pub(in crate::workbench) use providers::viewed::Gates as ViewedGates;
 pub(super) fn routes() -> axum::Router<Workbench> {
     routes::routes()
 }
@@ -213,6 +214,8 @@ type Reply<T> = Result<Json<T>, ForgeError>;
 pub(super) struct ForgeState {
     #[serde(default)]
     activity: signals::Activity,
+    #[serde(default)]
+    viewed: providers::viewed::Stores,
     #[serde(default)]
     publications: BTreeMap<Uuid, repository::publication::Record>,
     #[serde(default)]

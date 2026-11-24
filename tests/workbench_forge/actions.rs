@@ -143,6 +143,9 @@ pub(super) async fn review_control(
     let q = input["query"].as_str().unwrap();
     let v = &input["variables"];
     let mut db = mock.lock().unwrap();
+    if let Some(data) = super::viewed::github(&mut db, q, v) {
+        return Json(json!({"data":data}));
+    }
     let comments = json!({"nodes":db.review_comments,"pageInfo":{"hasNextPage":false}});
     let tid = "thread-1";
     let t = json!({"id":tid,"path":"notes.txt","isResolved":db.resolved,"viewerCanResolve":true,"viewerCanUnresolve":true,"viewerCanReply":true,"pullRequest":{"number":1,"repository":{"nameWithOwner":"team/repo"}},"comments":comments});
