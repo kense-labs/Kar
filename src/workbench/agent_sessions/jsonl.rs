@@ -63,6 +63,10 @@ enum Field {
     Metadata,
     Base,
     Source,
+    Usage,
+    UsageValue,
+    UsageArray,
+    UsageMap,
     Scalar,
     Present,
 }
@@ -70,6 +74,83 @@ impl Field {
     fn child(self, name: &str) -> Option<Self> {
         use Field::*;
         Some(match (self, name) {
+            (UsageMap, _) => Usage,
+            (Usage | UsageValue, "model" | "cost" | "total") => UsageValue,
+            (Usage, "children" | "modelUsage") => UsageMap,
+            (Usage, "iterations") => UsageArray,
+            (
+                Usage,
+                "payload" | "message" | "usage" | "source" | "stream" | "event" | "cache_creation"
+                | "params" | "update" | "_meta" | "thread_settings" | "info" | "last_token_usage"
+                | "total_token_usage" | "subagent" | "thread_spawn" | "chat" | "reading" | "cursor"
+                | "target" | "frame" | "settings",
+            ) => Usage,
+            (
+                Usage | UsageValue,
+                "type"
+                | "id"
+                | "role"
+                | "requestId"
+                | "sessionId"
+                | "timestamp"
+                | "provider"
+                | "responseModel"
+                | "session_id"
+                | "forked_from_id"
+                | "parent_thread_id"
+                | "turn_id"
+                | "response_id"
+                | "model_provider"
+                | "service_tier"
+                | "speed"
+                | "model_id"
+                | "kind"
+                | "schema_version"
+                | "record_type"
+                | "payload_type"
+                | "payload_schema_version"
+                | "recorded_at"
+                | "source_run_record_id"
+                | "sessionUpdate"
+                | "prompt_id"
+                | "agentTimestampMs"
+                | "costUSD"
+                | "costUsdTicks"
+                | "format"
+                | "runtime"
+                | "native_id"
+                | "created_ms"
+                | "at"
+                | "stream_id"
+                | "after_seq"
+                | "native_turn"
+                | "input"
+                | "cache_read"
+                | "cache_write"
+                | "output"
+                | "reasoning"
+                | "cacheRead"
+                | "cacheWrite"
+                | "input_tokens"
+                | "output_tokens"
+                | "total_tokens"
+                | "cache_read_input_tokens"
+                | "cache_creation_input_tokens"
+                | "ephemeral_1h_input_tokens"
+                | "cached_input_tokens"
+                | "cache_write_input_tokens"
+                | "reasoning_output_tokens"
+                | "cache_read_tokens"
+                | "cache_write_tokens"
+                | "cached_tokens"
+                | "reasoning_tokens"
+                | "inputTokens"
+                | "outputTokens"
+                | "cachedReadTokens"
+                | "cacheCreationTokens"
+                | "reasoningTokens",
+            ) => Scalar,
+
             (Root, "payload") => Payload,
             (Root, "message") => Message,
             (
@@ -123,7 +204,10 @@ impl Budget<'_> {
                 | Field::Block
                 | Field::Metadata
                 | Field::Base
-                | Field::Source,
+                | Field::Source
+                | Field::Usage
+                | Field::UsageValue
+                | Field::UsageMap,
             ) => {
                 let mut result = Map::new();
                 r.begin_object().ok()?;
@@ -143,16 +227,26 @@ impl Budget<'_> {
                 r.end_object().ok()?;
                 Value::Object(result)
             }
-            (ValueType::Array, Field::Content) => {
+            (ValueType::Array, Field::Content | Field::UsageArray) => {
                 let mut items = Vec::new();
                 r.begin_array().ok()?;
                 while r.has_next().ok()? {
-                    items.push(self.value(r, Field::Block)?);
+                    items.push(self.value(
+                        r,
+                        if matches!(field, Field::UsageArray) {
+                            Field::Usage
+                        } else {
+                            Field::Block
+                        },
+                    )?);
                 }
                 r.end_array().ok()?;
                 Value::Array(items)
             }
-            (ValueType::String, Field::Content | Field::Metadata | Field::Scalar) => {
+            (
+                ValueType::String,
+                Field::Content | Field::Metadata | Field::Scalar | Field::UsageValue,
+            ) => {
                 let left = self.cap - self.retained;
                 let mut bytes = Vec::new();
                 r.next_string_reader()
@@ -164,7 +258,7 @@ impl Budget<'_> {
                 Value::String(String::from_utf8(bytes).ok()?)
             }
             (ValueType::Boolean, Field::Scalar) => Value::Bool(r.next_bool().ok()?),
-            (ValueType::Number, Field::Scalar) => {
+            (ValueType::Number, Field::Scalar | Field::UsageValue) => {
                 let n = r.next_number_as_str().ok()?.parse::<Number>().ok()?;
                 Value::Number(n)
             }
@@ -182,6 +276,22 @@ pub(super) fn record(
     remaining: &mut u64,
     history_bytes: usize,
 ) -> io::Result<(u64, Option<Value>)> {
+    let (n, v, _) = project(reader, remaining, history_bytes, Field::Root)?;
+    Ok((n, v))
+}
+
+pub(in crate::workbench) fn usage_record(
+    reader: &mut impl BufRead,
+) -> io::Result<(u64, Option<Value>, bool)> {
+    let mut remaining = u64::MAX;
+    project(reader, &mut remaining, 0, Field::Usage)
+}
+fn project(
+    reader: &mut impl BufRead,
+    remaining: &mut u64,
+    history_bytes: usize,
+    root: Field,
+) -> io::Result<(u64, Option<Value>, bool)> {
     let key = Cell::new(None);
     let limit_hit = Cell::new(false);
     let mut line = Line {
@@ -204,7 +314,7 @@ pub(super) fn record(
         key: &key,
         limit_hit: &limit_hit,
     }
-    .value(&mut stream, Field::Root);
+    .value(&mut stream, root);
     let value = if value.is_some() && stream.consume_trailing_whitespace().is_ok() {
         value
     } else {
@@ -217,7 +327,7 @@ pub(super) fn record(
     }
     io::copy(&mut line, &mut io::sink())?;
     *remaining -= line.bytes;
-    Ok((line.bytes, value))
+    Ok((line.bytes, value, line.ended))
 }
 
 #[cfg(test)]
@@ -260,5 +370,19 @@ mod tests {
             record(&mut input, &mut remaining, 0).unwrap().1.unwrap()["type"],
             "ok"
         );
+    }
+    #[test]
+    fn usage_skips_large_prompt_and_keeps_an_unterminated_complete_row() {
+        let prefix = br#"{"type":"assistant","message":{"content":""#;
+        let suffix = br#"","id":"m","model":"paid","usage":{"input_tokens":8}}}"#;
+        let bytes = (&prefix[..])
+            .chain(io::repeat(b'a').take(34 << 20))
+            .chain(&suffix[..]);
+        let (read, row, lf) = usage_record(&mut BufReader::new(bytes)).unwrap();
+        let row = row.unwrap();
+        assert!(read > 32 << 20);
+        assert!(!lf);
+        assert!(row["message"].get("content").is_none());
+        assert_eq!(row["message"]["usage"]["input_tokens"], 8);
     }
 }

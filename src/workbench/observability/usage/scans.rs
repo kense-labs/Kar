@@ -2,10 +2,12 @@ use super::*;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, Metadata},
-    io::{self, BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{self, BufReader, Read, Seek, SeekFrom},
 };
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct FileUsage {
+    #[serde(default)]
+    schema: u32,
     pub root: PathBuf,
     pub format: String,
     pub entries: Vec<Entry>,
@@ -16,6 +18,8 @@ pub(super) struct FileUsage {
     identity: String,
     offset: u64,
     guard: Vec<u8>,
+    #[serde(default)]
+    tail_count: usize,
     malformed: u64,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -39,6 +43,22 @@ pub(super) struct Snapshot {
     pub duration: u64,
 }
 impl Snapshot {
+    pub(super) fn codex_tiers(&self) -> BTreeMap<&str, Option<&str>> {
+        let mut tiers = BTreeMap::new();
+        for f in self.files.values().filter(|f| f.format == "kar") {
+            for (k, v) in &f.parser.tiers {
+                tiers
+                    .entry(k.as_str())
+                    .and_modify(|held| {
+                        if *held != v.as_deref() {
+                            *held = None;
+                        }
+                    })
+                    .or_insert(v.as_deref());
+            }
+        }
+        tiers
+    }
     pub fn with_account(&self, read: cursor::Read) -> Self {
         let mut snapshot = self.clone();
         let id = read.account.as_ref().map(|a| a.id.as_str()).unwrap_or("");
@@ -64,6 +84,7 @@ impl Snapshot {
             snapshot.files.insert(
                 root.clone(),
                 Arc::new(FileUsage {
+                    schema: 2,
                     root: root.clone(),
                     format: "cursor".into(),
                     entries: a.rows.clone(),
@@ -73,6 +94,7 @@ impl Snapshot {
                     identity: String::new(),
                     offset: 0,
                     guard: vec![],
+                    tail_count: 0,
                     malformed: 0,
                 }),
             );
@@ -244,7 +266,6 @@ fn guard(file: &mut File, offset: u64) -> io::Result<Vec<u8>> {
     }
     Ok(digest.finalize().to_vec())
 }
-const MAX_LINE: usize = 32 << 20;
 fn read_file(
     path: &Path,
     root: &Path,
@@ -258,7 +279,8 @@ fn read_file(
     let meta = file.metadata()?;
     let id = identity(&meta);
     let sig = signature(&meta);
-    let old = old.filter(|o| o.identity == id && o.format == format && o.root == root);
+    let old =
+        old.filter(|o| o.schema == 2 && o.identity == id && o.format == format && o.root == root);
     if let Some(o) = old.filter(|x| x.signature == sig) {
         return Ok((o.clone(), true));
     }
@@ -275,6 +297,7 @@ fn read_file(
         _ => None,
     };
     let mut result = previous.unwrap_or_else(|| FileUsage {
+        schema: 2,
         root: root.into(),
         format: format.into(),
         entries: vec![],
@@ -284,45 +307,41 @@ fn read_file(
         identity: id,
         offset: 0,
         guard: vec![],
+        tail_count: 0,
         malformed: 0,
     });
     file.seek(SeekFrom::Start(result.offset))?;
     let mut reader = BufReader::new(crate::workbench::agent_sessions::transcript_input(
         &file, path,
     )?);
-    let mut line = Vec::new();
-    let mut bytes = 0u64;
-    let mut oversize = false;
+    result
+        .entries
+        .truncate(result.entries.len().saturating_sub(result.tail_count));
+    result.tail_count = 0;
     loop {
-        let block = reader.fill_buf()?;
-        if block.is_empty() {
+        let (bytes, record, terminated) =
+            crate::workbench::agent_sessions::usage_record(&mut reader)?;
+        if bytes == 0 {
             break;
         }
-        let newline = block.iter().position(|b| *b == b'\n');
-        let count = newline.map_or(block.len(), |i| i + 1);
-        if line.len().saturating_add(count) > MAX_LINE {
-            oversize = true;
-        }
-        if !oversize {
-            line.extend_from_slice(&block[..count]);
-        }
-        reader.consume(count);
-        bytes += count as u64;
-        if newline.is_none() {
-            continue;
-        }
-        if oversize {
-            result.malformed += 1;
-        } else if !line.iter().all(u8::is_ascii_whitespace) {
-            match serde_json::from_slice::<Value>(&line) {
-                Ok(v) => result.entries.extend(result.parser.parse(format, &v)),
-                Err(_) => result.malformed += 1,
+        if !terminated {
+            // A native writer may close a complete JSON object without a newline. It is
+            // visible immediately but does not advance the resume cursor or persistent parser.
+            if format != "kar"
+                && let Some(v) = record
+            {
+                let tail = result.parser.clone().parse(format, &v);
+                result.tail_count = tail.len();
+                result.entries.extend(tail);
             }
+            break;
         }
         result.offset += bytes;
-        bytes = 0;
-        oversize = false;
-        line.clear();
+        if let Some(v) = record {
+            result.entries.extend(result.parser.parse(format, &v));
+        } else {
+            result.malformed += 1;
+        }
     }
     drop(reader);
     if compressed {
@@ -350,7 +369,9 @@ fn read_native_file(
         }
     };
     let sig = fingerprint()?;
-    if let Some(old) = old.filter(|f| f.root == root && f.format == format && f.signature == sig) {
+    if let Some(old) =
+        old.filter(|f| f.schema == 2 && f.root == root && f.format == format && f.signature == sig)
+    {
         return Ok((old.clone(), true));
     }
     let entries = if db {
@@ -363,6 +384,7 @@ fn read_native_file(
     }
     Ok((
         Arc::new(FileUsage {
+            schema: 2,
             root: root.into(),
             format: format.into(),
             entries,
@@ -372,6 +394,7 @@ fn read_native_file(
             identity: String::new(),
             offset: 0,
             guard: vec![],
+            tail_count: 0,
             malformed: 0,
         }),
         false,

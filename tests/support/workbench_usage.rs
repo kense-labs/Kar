@@ -35,7 +35,8 @@ pub(super) async fn run() {
     append(&claude, &[partial.clone()]);
     let unknown = json!({"type":"assistant","timestamp":"2025-11-02T06:23:00Z","sessionId":"native-c","message":{"model":"unknown","usage":{"input_tokens":30,"output_tokens":2}}});
     let mut f = fs::OpenOptions::new().append(true).open(&claude).unwrap();
-    write!(f, "{unknown}").unwrap();
+    let unknown = unknown.to_string();
+    write!(f, "{}", &unknown[..unknown.len() - 1]).unwrap();
     let codex = sessions.join("rollout.jsonl");
     let mut ledger = json!({"timestamp":"2025-11-02T06:23:00Z","type":"token_usage_record","payload":{"response_id":"r1","usage":{"input_tokens":15,"cached_input_tokens":5,"output_tokens":4,"reasoning_output_tokens":1}}});
     let context = json!({"type":"turn_context","payload":{"model":"metered","turn_id":"t"}});
@@ -91,7 +92,7 @@ pub(super) async fn run() {
     assert_eq!(rows[1]["records"], 1);
     assert_eq!(rows[1]["totals"]["uncached_input"], 10);
     assert_eq!(rows[1]["hour_start"], "2025-11-02T06:00:00Z");
-    writeln!(f).unwrap();
+    write!(f, "}}").unwrap();
     drop(f);
     let next = json(http.post(&endpoint).json(&request)).await;
     let rows = next["buckets"].as_array().unwrap();
@@ -346,4 +347,85 @@ fn native_databases(opencode: &Path, antigravity: &Path) {
         build_recovered_db_tables(&[generation, steps]),
     )
     .unwrap();
+}
+
+/// Read-only opt-in for a documented local billing period; prints aggregate evidence only.
+#[tokio::main]
+pub(super) async fn live() {
+    let provider = std::env::var("KAR_USAGE_LIVE_PROVIDER")
+        .expect("set KAR_USAGE_LIVE_PROVIDER to a provider with existing billing history");
+    assert!(matches!(
+        provider.as_str(),
+        "claude" | "codex" | "pi" | "opencode" | "antigravity" | "cursor" | "grok" | "muse"
+    ));
+    let since = std::env::var("KAR_USAGE_LIVE_SINCE_DAY")
+        .expect("supply the start of an observed billing period");
+    let until = std::env::var("KAR_USAGE_LIVE_UNTIL_DAY").unwrap_or_else(|_| since.clone());
+    if provider == "cursor" {
+        assert!(
+            std::env::var("CURSOR_API_KEY").is_ok_and(|s| !s.is_empty()),
+            "the Cursor account key is required"
+        );
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("state");
+    let root = tmp.path().join("root");
+    fs::create_dir_all(&root).unwrap();
+    let vars = if provider == "cursor" {
+        vec![]
+    } else {
+        vec![("CURSOR_API_KEY", "".as_ref())]
+    };
+    let (mut server, url) = serve_with_env(&state, &root, tmp.path(), &vars).await;
+    let result = json(client().post(format!("{url}/usage/summary")).json(
+        &json!({"since_day":since,"until_day":until,"time_zone":"UTC","await_refresh":true}),
+    ))
+    .await;
+    let rows = result["buckets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["provider"] == provider)
+        .collect::<Vec<_>>();
+    let records = rows
+        .iter()
+        .map(|r| r["records"].as_u64().unwrap())
+        .sum::<u64>();
+    let tokens = rows
+        .iter()
+        .map(|r| {
+            ["uncached_input", "cached_input", "cache_creation", "output"]
+                .into_iter()
+                .map(|k| r["totals"][k].as_u64().unwrap())
+                .sum::<u64>()
+        })
+        .sum::<u64>();
+    let cost = rows
+        .iter()
+        .map(|r| r["cost_usd"].as_f64().unwrap())
+        .sum::<f64>();
+    assert!(
+        records > 0 && tokens > 0,
+        "the selected provider has no billing evidence in the requested UTC interval"
+    );
+    let statuses = result["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["provider"] == provider)
+        .map(|s| s["status"].clone())
+        .collect::<Vec<_>>();
+    assert!(
+        statuses.iter().any(|s| s == "ok"),
+        "no healthy source for the provider: {statuses:?}"
+    );
+    if let Ok(expected) = std::env::var("KAR_USAGE_LIVE_EXPECT_TOKENS") {
+        assert_eq!(tokens, expected.parse::<u64>().unwrap());
+    }
+    println!(
+        "{}",
+        json!({"provider":provider,"platform":std::env::consts::OS,"since_day":since,"until_day":until,"sources":statuses,"records":records,"tokens":tokens,"cost_usd":cost,"pricing":result["pricing"]["status"],"contract_version":result["contract_version"]})
+    );
+    server.kill().await.unwrap();
+    server.wait().await.unwrap();
 }

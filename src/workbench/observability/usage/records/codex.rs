@@ -35,7 +35,11 @@ fn totals(c: Counter) -> Totals {
     inclusive(c[0], c[1], c[2], c[3], c[4])
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub(super) struct State {
+    model_provider: String,
+    turn: String,
+    saw_settings: bool,
     session: String,
     model: String,
     speed: String,
@@ -63,6 +67,13 @@ impl State {
     fn record(&self, t: i64, c: Counter) -> Entry {
         let mut r = entry("codex", &self.session, &self.model, t, totals(c));
         r.speed.clone_from(&self.speed);
+        if !self.saw_settings
+            && self.model_provider == "openai"
+            && !self.session.is_empty()
+            && !self.turn.is_empty()
+        {
+            r.tier_turn = Some(self.turn.clone());
+        }
         r
     }
     pub fn parse(&mut self, v: &Value) -> Vec<Entry> {
@@ -72,6 +83,7 @@ impl State {
         match kind {
             "session_meta" if !self.meta => {
                 self.meta = true;
+                self.model_provider = string(&p["model_provider"]).into();
                 self.session = p["id"]
                     .as_str()
                     .or(p["session_id"].as_str())
@@ -87,6 +99,11 @@ impl State {
             }
             "turn_context" => {
                 self.ledger = false;
+                self.turn = if p["model"].as_str().is_some_and(|s| !s.is_empty()) {
+                    string(&p["turn_id"]).into()
+                } else {
+                    String::new()
+                };
                 if let Some(model) = p["model"].as_str() {
                     self.model = model.into();
                 }
@@ -95,6 +112,7 @@ impl State {
             _ => {}
         }
         if p["type"] == "thread_settings_applied" {
+            self.saw_settings = true;
             self.speed = match p["thread_settings"]["service_tier"].as_str() {
                 Some("priority" | "fast") => "fast",
                 Some("ultrafast") => "ultrafast",
@@ -241,10 +259,7 @@ impl State {
             self.baseline_time = Some(old_time.unwrap_or(t).max(t));
         }
         self.last = Some(last);
-        let mut r = self.record(t, last);
-        // Archived/moved rollouts can repeat the full native envelope.
-        r.key = Some(json!([self.session, t, self.model, last, total]).to_string());
-        result.push(r);
+        result.push(self.record(t, last));
         result
     }
 }

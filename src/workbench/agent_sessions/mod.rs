@@ -3,6 +3,7 @@ mod codex;
 mod discover;
 pub(super) use discover::input as transcript_input;
 mod jsonl;
+pub(super) use jsonl::usage_record;
 mod transcript;
 use super::{
     Workbench,

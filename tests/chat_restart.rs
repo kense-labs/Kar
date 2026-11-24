@@ -2042,6 +2042,10 @@ fn main() {
         workbench_cloud_live::run(mode.as_deref() == Some("workbench-expo-live"));
         return;
     }
+    if mode.as_deref()==Some("workbench-usage-live"){
+        workbench_usage::live();
+        return;
+    }
     if mode.as_deref() == Some("workbench-usage") {
         workbench_usage::run();
         return;

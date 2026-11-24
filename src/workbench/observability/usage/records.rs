@@ -37,7 +37,10 @@ fn inclusive(input: u64, read: u64, write: u64, output: u64, reason: u64) -> Tot
     ])
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub(super) struct Parser {
+    tier: Option<String>,
+    pub tiers: BTreeMap<String, Option<String>>,
     session: String,
     model: String,
     provider: String,
@@ -69,6 +72,12 @@ impl Parser {
                 &v["chat"]
             };
             self.provider = string(&chat["runtime"]).into();
+            self.tier = match chat["settings"]["service_tier"].as_str() {
+                None | Some("standard" | "default") => Some("standard".into()),
+                Some("fast" | "priority") => Some("fast".into()),
+                Some("ultrafast") => Some("ultrafast".into()),
+                _ => None,
+            };
             self.session = string(&chat["native_id"]).into();
             self.model = chat["model"].as_str().unwrap_or("unknown").into();
             if let Some(t) = millis(&chat["created_ms"]) {
@@ -80,6 +89,32 @@ impl Parser {
         }
         if kind == "handoff_target_reopened" {
             self.session = string(&v["native_id"]).into();
+        }
+        let turn = match kind {
+            "native_begin" => v["native_turn"].as_str(),
+            "frame" | "reconciled"
+                if v["frame"]["source"]["session_id"]
+                    .as_str()
+                    .is_none_or(|s| s == self.session) =>
+            {
+                v["frame"]["native_turn"].as_str()
+            }
+            _ => None,
+        };
+        if self.provider == "codex"
+            && self.model != "unknown"
+            && !self.session.is_empty()
+            && let (Some(turn), Some(tier)) = (turn, &self.tier)
+        {
+            let key = json!([self.session, turn, self.model]).to_string();
+            self.tiers
+                .entry(key)
+                .and_modify(|v| {
+                    if v.as_deref() != Some(tier) {
+                        *v = None;
+                    }
+                })
+                .or_insert_with(|| Some(tier.clone()));
         }
         if kind != "usage_changed" || self.provider.is_empty() {
             return Vec::new();
@@ -120,6 +155,9 @@ impl Parser {
             *state = (seq, current);
             if delta.sum() > 0 {
                 let mut r = entry(&self.provider, session, &self.model, self.clock, delta);
+                if session == self.session {
+                    r.speed = self.tier.clone().unwrap_or_default();
+                }
                 r.key = Some(format!("stream:{stream}/{session}/{seq}"));
                 rows.push(r);
             }
@@ -340,5 +378,33 @@ mod tests {
         assert_eq!(a[0].provider, "pi");
         assert_eq!(a[0].model, "model2");
         assert_eq!(a[0].session, "new");
+    }
+    #[test]
+    fn codex_tiers_require_the_same_model_session_and_native_turn() {
+        let mut kar = Parser::default();
+        kar.parse("kar",&json!({"format":"kar-chat/1","chat":{"native_id":"n","runtime":"codex","model":"m","settings":{"service_tier":"priority"}}}));
+        kar.parse("kar",&json!({"kind":"frame","frame":{"source":{"session_id":"child"},"native_turn":"wrong"}}));
+        kar.parse(
+            "kar",
+            &json!({"kind":"frame","frame":{"source":{"session_id":"n"},"native_turn":"t"}}),
+        );
+        let mut native = Parser::default();
+        native.parse(
+            "codex",
+            &json!({"type":"session_meta","payload":{"id":"n","model_provider":"openai"}}),
+        );
+        native.parse(
+            "codex",
+            &json!({"type":"turn_context","payload":{"model":"m","turn_id":"t"}}),
+        );
+        let raw = json!({"timestamp":"2025-05-01T01:00:00Z","type":"token_usage_record","payload":{"response_id":"r","usage":{"input_tokens":4,"output_tokens":1}}});
+        let r = native.parse("codex", &raw).remove(0);
+        let key = json!([r.session, r.tier_turn, r.model]).to_string();
+        assert_eq!(kar.tiers.get(&key).and_then(|v| v.as_deref()), Some("fast"));
+        assert_eq!(kar.tiers.len(), 1);
+        native.parse("codex",&json!({"payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"ultrafast"}}}));
+        let resolved = native.parse("codex", &raw).remove(0);
+        assert_eq!(resolved.speed, "ultrafast");
+        assert!(resolved.tier_turn.is_none());
     }
 }

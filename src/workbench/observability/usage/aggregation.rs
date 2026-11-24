@@ -152,6 +152,7 @@ pub(super) fn build(
     version: &settings::Version,
 ) -> Value {
     let aliases = version.settings.aliases();
+    let tiers = s.codex_tiers();
     let mut native = BTreeSet::new();
     for f in s.files.values().filter(|f| f.format != "kar") {
         for e in &f.entries {
@@ -164,6 +165,7 @@ pub(super) fn build(
         BTreeMap::new();
     let ag = databases::antigravity::merged(&s.files);
     for (path, f) in &s.files {
+        let mut occurrences = BTreeMap::new();
         let entries = if f.format == "antigravity" {
             ag.get(path).map(Vec::as_slice).unwrap_or_default()
         } else {
@@ -182,10 +184,16 @@ pub(super) fn build(
             {
                 continue;
             }
-            let key = e
-                .key
-                .clone()
-                .unwrap_or_else(|| format!("file:{}:{i}", path.display()));
+            let key = e.key.clone().unwrap_or_else(|| {
+                if e.provider == "codex" && f.format == "codex" && !e.session.is_empty() {
+                    let id = json!([e.session, e.timestamp, e.model, e.tokens]).to_string();
+                    let sequence = occurrences.entry(id.clone()).or_insert(0usize);
+                    *sequence += 1;
+                    format!("snapshot:{id}:{sequence}")
+                } else {
+                    format!("file:{}:{i}", path.display())
+                }
+            });
             let Some(source) = s.source_id(&f.root, &e.provider) else {
                 continue;
             };
@@ -228,6 +236,15 @@ pub(super) fn build(
             one_hour,
             ..e.clone()
         };
+        if let Some(turn) = &entry.tier_turn
+            && let Some(Some(speed)) = tiers.get(
+                json!([entry.session, turn, entry.model])
+                    .to_string()
+                    .as_str(),
+            )
+        {
+            entry.speed = (*speed).into();
+        }
         let model = aliases.get(e.model.as_str()).copied().unwrap_or(&e.model);
         if model != e.model {
             entry.model = model.into();

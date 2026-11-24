@@ -9,7 +9,7 @@
 
 本地来源包括 Kar 聊天逐流增量（含子会话、供应商交接）、Claude projects、Codex sessions 与 archived_sessions、Pi sessions、Grok updates.jsonl 和显式 MUSE_HOME 下的 session.jsonl。相同原生会话有 transcript 计量时，采用原生记录。Claude 重复内容块按请求和消息 ID 取各计数最大值，Codex 以 response_id 或可对账的上下文快照计量，忽略分叉复制段。Grok 按模型分配剩余申报费用。新增 Kar 用量更新包含原始事件毫秒；老日志使用最近带时间的更新，未包含模型的旧会话展示 unknown。
 
-工作台将规范化计量结果和解析进度写入 `workbench/usage-index-v1.json`。已解析的正文、工具内容和提示词不会进入索引。重复读取可命中缓存；追加时校验已消费前缀的 SHA-256，暂缺换行的尾段留待下次。当前来源下删除的文件仍可从索引恢复已观察的历史。费率源只接收一个 GET 请求。下载表的确定性离线覆盖使用测试自己的本地 HTTP peer。
+工作台将规范化计量结果和解析进度写入 `workbench/usage-index-v1.json`。已解析的正文、工具内容和提示词不会进入索引。重复读取可命中缓存；追加时校验已消费前缀的 SHA-256，原生来源末行可解析时即时计量，下次从已提交偏移重读并替换尾段；Kar 聊天只取写完换行的更新。当前来源下删除的文件仍可从索引恢复已观察的历史。费率源只接收一个 GET 请求。下载表的确定性离线覆盖使用测试自己的本地 HTTP peer。
 
 macOS 编译命令为 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo check --locked --tests`。集中复验命令为 `cargo test --locked --test chat_restart -- workbench-usage` 与 `cargo test --locked --lib kar_usage_is_scoped_by_open_child_and_handoff`。HTTP 用例使用专用 HOME、原生格式样例与本地费率表，覆盖秋季夏令时回拨的两个独立小时、折算和申报、重复内容块与请求回执、尾段补全、筛选、未定价、删除后重启、刷新下限。该组尚未执行；供应商真实账单与公开费率源连通性需另行采证。
 
@@ -26,3 +26,8 @@ Claude、Codex 和 Pi 的压缩记录同样支持 .jsonl.zst，复用现有纯 R
 `GET /usage/settings` 返回最新 revision 与 settings；加 `?revision=1` 可取回历史版本。默认模型别名与费率覆盖为空，历史保留 92 天。`PUT /usage/settings` 接收 request_id（UUID）、expected_revision 和完整 settings。修改已知版本时递增版本号，文件置换前同步内容，置换后同步目录。重用同一请求与内容时返回第一次写入的版本，跨重启有效；用过的 ID 提交其他内容会被拒绝。过期的 expected_revision 返回 409。Kar 的 `Workbench::usage_settings` 供其他后端调用者读取同一版本。
 
 设置的 model_aliases 可串接，循环路径上的模型保留各自名称。model_filter 始终匹配原始供应商及模型。price_overrides 的输入、输出、读缓存及写缓存价格单位均为每百万 token 美元，模型覆盖对申报金额优先。history_retention_days 可为正整数或 unlimited，清理过期删除文件前再核对当前配置。汇总响应包含 settings_revision。集中 workbench-usage 用例包含两次写入、旧版本回放、重启后重试、冲突、筛选与定价覆盖。
+
+
+原生 transcript 按字段投影解析，长提示词、图像或工具输出仅流式跳过。Codex 缺失原生计费档位时，只在 model_provider=openai 且 Kar 的会话 ID、原生 turn ID、模型三者匹配时复原档位；原生设置事件优先。额外复验命令为 `cargo test --locked --lib codex_tiers_require_the_same_model_session_and_native_turn` 与 `cargo test --locked --lib usage_skips_large_prompt_and_keeps_an_unterminated_complete_row`。
+
+可选实机入口为 `KAR_USAGE_LIVE_PROVIDER=codex KAR_USAGE_LIVE_SINCE_DAY=YYYY-MM-DD cargo test --locked --test chat_restart -- workbench-usage-live`。日期取已有供应商计量数据的 UTC 日期，也可设置 KAR_USAGE_LIVE_UNTIL_DAY 与已知对账数 KAR_USAGE_LIVE_EXPECT_TOKENS。Cursor 实机另需当前账号的 CURSOR_API_KEY。该入口只读取本机或选定账号的现有计量，并输出供应商、平台、时间区间、来源状态、记录数、token 数和金额。使用隔离的新工作台状态目录；未运行实机，不能据此确认真实账单金额。

@@ -70,6 +70,8 @@ impl Totals {
 struct Entry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     native_meta: Option<databases::antigravity::Identity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tier_turn: Option<String>,
     timestamp: i64,
     provider: String,
     model: String,
