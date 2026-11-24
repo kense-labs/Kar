@@ -87,14 +87,15 @@ async fn scenario() {
     );
     let store = kar::chat::ChatStore::open(&state).unwrap();
     let attachment = Uuid::new_v4();
+    let notebook = br#"{"cells":[{"cell_type":"markdown","source":"client evidence"}]}"#;
     store
         .persist_attachment(
             id,
             attachment,
-            "reference.txt",
-            "text/plain",
+            "reference.ipynb",
+            "application/json",
             kar::chat::AttachmentKind::File,
-            b"client evidence",
+            notebook,
         )
         .unwrap();
     let other: Uuid = Uuid::new_v4();
@@ -144,10 +145,12 @@ async fn scenario() {
     )
     .unwrap();
     assert_eq!(refs.len(), 1);
-    assert_eq!(refs[0]["name"], "reference.txt");
+    assert_eq!(refs[0]["name"], "reference.ipynb");
+    let extracted = fs::read_to_string(refs[0]["extracted_text_path"].as_str().unwrap()).unwrap();
+    assert_eq!(extracted, "## Cell 1 (markdown)\nclient evidence");
     assert_eq!(
         fs::read(refs[0]["path"].as_str().unwrap()).unwrap(),
-        b"client evidence"
+        notebook
     );
     let turn = Uuid::new_v4();
     let post = a

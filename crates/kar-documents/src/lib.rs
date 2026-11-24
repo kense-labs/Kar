@@ -5,6 +5,7 @@ mod grid_history;
 pub use candidate::{OfficeEdits, prepare, prepare_with_grid_history};
 pub use grid_history::{GridAction, GridChange};
 pub mod excel;
+pub mod extract;
 pub mod http;
 mod merge;
 #[cfg(unix)]

@@ -25,6 +25,8 @@ pub struct Attachment {
     pub mime: String,
     pub bytes: u64,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extracted_sha256: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Saved {
@@ -135,15 +137,33 @@ impl ChatStore {
                 "image contents do not match declared type".into(),
             ));
         }
-        let attachment = Attachment {
+        let mut attachment = Attachment {
             id,
             name: name.into(),
             mime: mime.into(),
             kind,
             bytes: data.len() as u64,
             sha256: format!("{:x}", Sha256::digest(data)),
+            extracted_sha256: None,
         };
         let dir = self.attachment_dir(id);
+        let existing = |expected: &Attachment| -> Result<Attachment> {
+            let prior = self.read_attachment(chat, id)?;
+            if prior.name != expected.name
+                || prior.mime != expected.mime
+                || prior.kind != expected.kind
+                || prior.bytes != expected.bytes
+                || prior.sha256 != expected.sha256
+            {
+                return Err(Error::Refused(
+                    "attachment ID already has different content".into(),
+                ));
+            }
+            Ok(prior)
+        };
+        if dir.is_dir() {
+            return existing(&attachment);
+        }
         let parent = dir.parent().unwrap();
         fs::create_dir_all(parent)?;
         let stage = tempfile::tempdir_in(parent)?;
@@ -151,6 +171,14 @@ impl ChatStore {
         let mut file = File::create(stage.path().join("content").join(name))?;
         file.write_all(data)?;
         file.sync_all()?;
+        if kind == AttachmentKind::File
+            && let Some(text) = kar_documents::extract::document_text(name, data)
+        {
+            let mut sidecar = File::create(stage.path().join("extracted.txt"))?;
+            sidecar.write_all(text.as_bytes())?;
+            sidecar.sync_all()?;
+            attachment.extracted_sha256 = Some(format!("{:x}", Sha256::digest(text.as_bytes())));
+        }
         let record = Saved {
             chat,
             attachment: attachment.clone(),
@@ -168,13 +196,7 @@ impl ChatStore {
                 #[cfg(unix)]
                 File::open(parent)?.sync_all()?;
             }
-            Err(_) if dir.is_dir() => {
-                if self.read_attachment(chat, id)? != attachment {
-                    return Err(Error::Refused(
-                        "attachment ID already has different content".into(),
-                    ));
-                }
-            }
+            Err(_) if dir.is_dir() => return existing(&attachment),
             Err(e) => return Err(e.into()),
         }
         Ok(attachment)
@@ -240,10 +262,22 @@ impl ChatStore {
         {
             return Err(Error::Refused("attachment content changed".into()));
         }
+        if let Some(hash) = &file.extracted_sha256 {
+            let text = fs::read(self.attachment_dir(file.id).join("extracted.txt"))?;
+            if format!("{:x}", Sha256::digest(&text)) != *hash {
+                return Err(Error::Refused("extracted text changed".into()));
+            }
+        }
         Ok(bytes)
     }
     fn file_reference(&self, a: &Attachment) -> serde_json::Value {
-        serde_json::json!({"name":a.name,"path":self.attachment_path(a),"mime":a.mime})
+        let mut reference =
+            serde_json::json!({"name":a.name,"path":self.attachment_path(a),"mime":a.mime});
+        if a.extracted_sha256.is_some() {
+            reference["extracted_text_path"] =
+                serde_json::json!(self.attachment_dir(a.id).join("extracted.txt"));
+        }
+        reference
     }
     pub(super) fn file_context(&self, attachments: &[Attachment]) -> String {
         let files = attachments
