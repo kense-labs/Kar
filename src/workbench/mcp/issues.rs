@@ -40,7 +40,7 @@ pub(in crate::workbench) struct Policy {
     pub(super) issue_scope: Option<String>,
     pub(super) repository: Option<String>,
     #[serde(default)]
-    pub(super) pull_repository:Option<String>,
+    pub(in crate::workbench) pull_repository:Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -78,7 +78,7 @@ impl Policy {
     fn get(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         db.model_tool_permissions.get(&project)?.get(&chat)
     }
-    pub(super) fn current(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
+    pub(in crate::workbench) fn current(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         if db.archived.contains(&chat) || db.projects.get(&project)?.metadata.deleted {
             return None;
         }
@@ -88,7 +88,7 @@ impl Policy {
         self.worktree_directory.as_deref().filter(|_| self.mode == Mode::Execute)
     }
     pub(super) fn reads_pulls(&self)->bool{(self.pull_reads || self.writes_pulls()) && self.pull_repository.is_some()}
-    pub(super) fn writes_pulls(&self)->bool{self.mode==Mode::Execute && self.pull_writes && self.pull_repository.is_some()}
+    pub(in crate::workbench) fn writes_pulls(&self)->bool{self.mode==Mode::Execute && self.pull_writes && self.pull_repository.is_some()}
     pub(super) fn reads_workflows(&self) -> bool {
         self.workflow_reads || self.writes_workflows()
     }

@@ -12,7 +12,7 @@ fn pull(v: &Value) -> Result<Value, ForgeError> {
     };
     Ok(
         json!({"number":number,"title":v["title"],"body":v["body"],"state":state,"url":v["html_url"],"base_sha":v.pointer("/base/sha"),"head_sha":v.pointer("/head/sha"),
-        "head_repository":v.pointer("/head/repo/full_name"),"head_ref":v.pointer("/head/ref"),"base_ref":v.pointer("/base/ref"),"updated_at":v["updated_at"]}),
+        "mergeable":v["mergeable"],"mergeable_state":v["mergeable_state"],"draft":v["draft"],"author":v.pointer("/user/login"),"auto_merge_enabled":v.get("auto_merge").map(|a|!a.is_null()),"head_repository":v.pointer("/head/repo/full_name"),"head_ref":v.pointer("/head/ref"),"base_ref":v.pointer("/base/ref"),"updated_at":v["updated_at"]}),
     )
 }
 fn issue(v: &Value) -> Result<Value, ForgeError> {

@@ -123,7 +123,7 @@ impl Sources {
         self.entries.retain(|k, _| files.contains_key(k));
         // Capture the catalog before reading journal state. No journal or inbox lock is taken
         // while holding the live catalog lock (metadata commands can take them in that order).
-        let (projects, ownership, metadata, archived_chats) = {
+        let (projects, ownership, metadata, archived_chats, watched_pulls) = {
             let catalog = app.0.catalog.lock().unwrap();
             (
                 catalog
@@ -135,6 +135,7 @@ impl Sources {
                 catalog.lifecycle.ownership_snapshot(),
                 catalog.thread_state.rows.clone(),
                 catalog.archived.clone(),
+                super::super::forge::watches::waiting(&catalog),
             )
         };
         for p in &projects {
@@ -214,7 +215,7 @@ impl Sources {
                     .pending_questions
                     .iter()
                     .all(|c| meta.acknowledges_question(c));
-            rows.insert(key,json!({"project":project,"workspace":entry.info.workspace,"runtime":entry.info.runtime,"model":entry.info.model,"native_id":entry.info.native_id,"created_ms":entry.info.created_ms,"forked_from":entry.info.forked_from,"title":meta.title.as_ref().unwrap_or(&entry.first_text),"archived":archived,"metadata":meta,"snoozed":effective,"pending_guest_messages":guest_count,"activity":entry.activity}));
+            rows.insert(key,json!({"project":project,"workspace":entry.info.workspace,"runtime":entry.info.runtime,"model":entry.info.model,"native_id":entry.info.native_id,"created_ms":entry.info.created_ms,"forked_from":entry.info.forked_from,"title":meta.title.as_ref().unwrap_or(&entry.first_text),"archived":archived,"metadata":meta,"snoozed":effective,"pending_guest_messages":guest_count,"waiting_for_pull":watched_pulls.contains(&id),"activity":entry.activity}));
         }
         Ok(rows)
     }

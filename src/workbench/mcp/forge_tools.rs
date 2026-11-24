@@ -42,14 +42,14 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         tools.push(Tool{name,description:"List this thread's linked objects. Link or unlink one number or an atomic batch in the granted repository using a stable command_id.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"number":{"type":"integer","minimum":1},"numbers":{"type":"array","items":{"type":"integer","minimum":1}},"command_id":id}),required:&["action"]});
     }
     if p.reads_pulls() {
-        let mut acts = vec!["list", "read", "threads", "thread_comments"];
+        let mut acts = vec!["list", "read", "threads", "thread_comments","watch_status"];
         if p.writes_pulls() && !c.plan {
             acts.extend([
-                "create", "review", "reply", "resolve", "update", "merge", "comment",
+                "create", "review", "reply", "resolve", "update", "merge", "comment","watch","unwatch",
             ]);
         }
         let string = json!({"type":"string"});
-        tools.push(Tool{name:PULL,description:"Use this chat's granted pull-request repository. Read and review changes, open a pull for an existing branch, reply to a review thread or resolve it. Reuse command_id for mutations.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"command_id":id,"number":{"type":"integer","minimum":1},"cursor":string,"review_thread_id":string,"head":string,"head_repository":string,"base":string,"title":string,"body":string,"verdict":{"enum":["comment","approve","request-changes"]},"comments":{"type":"array","items":{"type":"object"}},"resolved":{"type":"boolean"},"ready":{"type":"boolean"},"auto":{"type":"boolean"},"expected_head_sha":string,"method":{"enum":["merge","squash","rebase"]},"state":{"enum":["open","closed"]},"add_labels":{"type":"array","items":string},"remove_labels":{"type":"array","items":string},"request_reviewers":{"type":"array","items":string}}),required:&["action"]});
+        tools.push(Tool{name:PULL,description:"Use this chat's granted pull-request repository. Read and review changes, open a pull for an existing branch, reply to a review thread or resolve it. Reuse command_id for mutations.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"command_id":id,"number":{"type":"integer","minimum":1},"until":{"enum":["checks","merged"]},"cursor":string,"review_thread_id":string,"head":string,"head_repository":string,"base":string,"title":string,"body":string,"verdict":{"enum":["comment","approve","request-changes"]},"comments":{"type":"array","items":{"type":"object"}},"resolved":{"type":"boolean"},"ready":{"type":"boolean"},"auto":{"type":"boolean"},"expected_head_sha":string,"method":{"enum":["merge","squash","rebase"]},"state":{"enum":["open","closed"]},"add_labels":{"type":"array","items":string},"remove_labels":{"type":"array","items":string},"request_reviewers":{"type":"array","items":string}}),required:&["action"]});
     }
     if p.reads_pulls() {
         let acts = if !c.plan && p.writes_pulls() {
@@ -89,7 +89,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
         .to_owned();
     let write = !matches!(
         action.as_str(),
-        "list" | "read" | "threads" | "thread_comments" | "checks" | "logs"
+        "list" | "read" | "threads" | "thread_comments" | "checks" | "logs" | "watch_status"
     );
     let p = c.policy.ok_or_else(denied)?;
     let grant = c.grant.ok_or_else(denied)?;
@@ -127,6 +127,12 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(|_| forge::ForgeError::bad("invalid command ID"))?;
+            if name==PULL && matches!(action.as_str(),"watch"|"unwatch"|"watch_status"){
+                #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct WatchRequest{number:u64,until:Option<forge::watches::Until>}
+                let q:WatchRequest=serde_json::from_value(input).map_err(|e|forge::ForgeError::bad(e.to_string()))?;
+                if action!="watch"&&q.until.is_some() || action=="watch_status"&&id.is_some(){return Err(forge::ForgeError::bad("invalid watch arguments"));}
+                return forge::watches::command(app,project,chat,q.number,id,&action,q.until,authorize).await;
+            }
             if name == CI || matches!(action.as_str(), "comment" | "merge" | "update") {
                 if name == CI && !matches!(action.as_str(), "checks" | "logs" | "rerun") {
                     return Err(forge::ForgeError::bad("unknown CI action"));

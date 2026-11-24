@@ -143,7 +143,41 @@ pub(super) async fn run(
     if !(1..=2000).contains(&lines) {
         return Err(ForgeError::bad("tail_lines must be 1..2000"));
     }
-    let all = checks(c, repo, head).await?;
+    let mut all = checks(c, repo, head).await?;
+    let legacy = issue::child(repo.clone(), &["commits", head, "status"]);
+    let mut seen = std::collections::BTreeSet::new();
+    for page in 1..=1000 {
+        let mut url = legacy.clone();
+        url.query_pairs_mut()
+            .append_pair("per_page", "100")
+            .append_pair("page", &page.to_string());
+        let combined = match get(c, url).await {
+            Ok(v) => v,
+            Err(e) if e.status == 404 => break,
+            Err(e) => return Err(e),
+        };
+        if combined["sha"] != head {
+            return Err(ForgeError::bad("commit status did not match pull head"));
+        }
+        let statuses = combined["statuses"]
+            .as_array()
+            .ok_or_else(|| ForgeError::bad("invalid GitHub commit statuses"))?;
+        for s in statuses {
+            let name = s["context"]
+                .as_str()
+                .ok_or_else(|| ForgeError::bad("missing status context"))?;
+            if seen.insert(name.to_owned()) {
+                let state = s["state"].as_str().unwrap_or("pending");
+                all.push(json!({"name":name,"source":"commit_status","head_sha":head,"id":s["id"],"status":if state=="pending"{"pending"}else{"completed"},"conclusion":match state{"error"|"failure"=>Some("failure"),"success"=>Some("success"),_=>None},"details_url":s["target_url"]}));
+            }
+        }
+        if statuses.len() < 100 {
+            break;
+        }
+        if page == 1000 {
+            return Err(ForgeError::bad("commit statuses exceed page bound"));
+        }
+    }
     if matches!(action, Request::Checks) {
         return Ok(json!({"head_sha":head,"checks":all}));
     }

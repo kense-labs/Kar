@@ -111,7 +111,7 @@ pub(in crate::workbench) struct Registry {
 }
 impl Registry {
     pub(in crate::workbench) fn origin(&self)->Option<String>{self.endpoint.get().map(|a|format!("http://{a}"))}
-    pub(super) fn command_gate(&self, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+    pub(in crate::workbench) fn command_gate(&self, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
         let mut gates = self.commands.lock().unwrap();
         gates.retain(|_, gate| gate.strong_count() > 0);
         if let Some(gate) = gates.get(&id).and_then(Weak::upgrade) {

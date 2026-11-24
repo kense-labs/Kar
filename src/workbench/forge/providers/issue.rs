@@ -50,7 +50,7 @@ pub(in crate::workbench::forge) fn validate(op: &Operation) -> Result<(), ForgeE
     }
 }
 
-pub(super) fn child(mut url: Url, tail: &[&str]) -> Url {
+pub(in crate::workbench::forge) fn child(mut url: Url, tail: &[&str]) -> Url {
     url.path_segments_mut()
         .expect("validated hierarchical API base")
         .pop_if_empty()

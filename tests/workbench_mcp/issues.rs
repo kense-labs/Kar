@@ -50,6 +50,7 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
         .route("/repos/kar/demo/pulls",get(move||async move{Json(json!([pull]))}))
         .route("/repos/kar/demo/pulls/19",get(move||async move{Json(detail)}).patch(|Json(body):Json<Value>|async move{assert_eq!(body["title"],"Changed");Json(json!({"number":19}))}))
         .route("/repos/kar/demo/pulls/19/merge",axum::routing::put(|Json(body):Json<Value>|async move{assert_eq!(body["sha"],"abc");Json(json!({"merged":true,"sha":"merged"}))}))
+        .route("/repos/kar/demo/commits/abc/status",get(||async{Json(json!({"sha":"abc","statuses":[{"context":"legacy","state":"success","id":8}]}))}))
         .route("/repos/kar/demo/commits/abc/check-runs",get(||async{Json(json!({"check_runs":[{"id":4,"name":"tests","head_sha":"abc","conclusion":"failure","details_url":"https://models.example/kar/demo/actions/runs/8/job/41"}]}))}))
         .route("/repos/kar/demo/actions/jobs/41",get(||async{Json(json!({"id":41,"run_id":8,"head_sha":"abc"}))}))
         .route("/repos/kar/demo/actions/jobs/41/logs",get(||async{"start\none\ntwo\n"}))
@@ -206,6 +207,16 @@ pub(super) async fn exercise(
             true
         );
     }
+    let watch=json!({"action":"watch","command_id":Uuid::new_v4(),"number":19,"until":"merged"});
+    let first=server::json(make("kar_pull_request",watch.clone())).await;
+    assert_eq!(first["result"]["structuredContent"]["watching"],true);
+    assert_eq!(server::json(make("kar_pull_request",watch)).await["result"],first["result"]);
+    let status=server::json(make("kar_pull_request",json!({"action":"watch_status","number":19}))).await;
+    assert_eq!(status["result"]["structuredContent"]["until"],"merged");
+    let checks=server::json(make("kar_ci",json!({"action":"checks","number":19}))).await;
+    assert!(checks["result"]["structuredContent"]["checks"].as_array().unwrap().iter().any(|s|s["name"]=="legacy"));
+    let off=server::json(make("kar_pull_request",json!({"action":"unwatch","number":19,"command_id":Uuid::new_v4()}))).await;
+    assert_eq!(off["result"]["structuredContent"]["watching"],false);
     let update =
         json!({"action":"update","number":19,"title":"Changed","command_id":Uuid::new_v4()});
     assert_eq!(

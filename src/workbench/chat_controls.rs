@@ -165,6 +165,7 @@ impl Workbench {
                     let app=Workbench(inner);
                     super::mcp::worktree::recover(&app);
                     super::mcp::orchestrator::recover(&app);
+                    super::forge::watches::recover(&app);
                     let scan=app.clone();
                     match tokio::task::spawn_blocking(move||{ super::access::reconcile_guest_inputs(&scan); scan.queued_chats() }).await {
                         Ok(Ok(pending))=>for(project,chat)in pending{
