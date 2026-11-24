@@ -105,6 +105,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::git::routes())
         .merge(super::git_actions::routes())
         .merge(super::files::routes())
+        .merge(super::editors::routes())
         .merge(super::terminal_preview::routes())
         .merge(super::task_folders::routes())
         .merge(super::project_lifecycle::routes())

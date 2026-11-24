@@ -2036,7 +2036,16 @@ mod workbench_usage;
 mod workbench_observability;
 #[path = "support/workbench_shell.rs"]
 mod workbench_shell;
+#[cfg(target_os="macos")]
+#[path="support/workbench_editors.rs"]
+mod workbench_editors;
 fn main() {
+    #[cfg(target_os="macos")]
+    match std::env::args().nth(1).as_deref() {
+        Some("workbench-editors") => { workbench_editors::run(); return; }
+        Some("--goto") if std::env::var_os("KAR_TEST_EDITOR_RECORD").is_some() => { workbench_editors::peer(); return; }
+        _ => {}
+    }
     if std::env::args().nth(1).as_deref() == Some("workbench-shell") {
         workbench_shell::run();
         return;

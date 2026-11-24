@@ -13,6 +13,7 @@ mod observability;
 mod mcp;
 mod documents;
 mod files;
+mod editors;
 mod force_stop;
 mod forge;
 mod git;
