@@ -5,6 +5,13 @@ mod busy_prompt;
 #[path = "support/declaration.rs"]
 mod declaration;
 
+#[cfg(unix)]
+#[path = "qwen_live/queue_crash.rs"]
+mod queue_crash;
+#[cfg(unix)]
+#[path = "support/sse.rs"]
+mod sse;
+
 use axum::{Json, Router, body::Body, extract::State, http::Response, routing::post};
 use kar::{NativeMemory, NativeMemoryDefault, Outcome, SessionOptions, chat::ChatStore, runtime};
 use serde_json::{Value, json};
@@ -15,7 +22,11 @@ use std::{
 
 type Requests = Arc<Mutex<Vec<Value>>>;
 
-async fn chat(State(requests): State<Requests>, Json(body): Json<Value>) -> Response<Body> {
+type Model = (Requests, tokio::sync::watch::Receiver<bool>);
+async fn chat(
+    State((requests, mut release)): State<Model>,
+    Json(body): Json<Value>,
+) -> Response<Body> {
     let model = body["model"].clone();
     let messages = body["messages"].clone();
     let slow = messages
@@ -23,6 +34,13 @@ async fn chat(State(requests): State<Requests>, Json(body): Json<Value>) -> Resp
         .and_then(|a| a.last())
         .is_some_and(|m| m.to_string().contains("slow marker"));
     requests.lock().unwrap().push(body.clone());
+    if messages
+        .as_array()
+        .and_then(|m| m.last())
+        .is_some_and(|m| m["role"] == "user" && m["content"].to_string().contains("QWEN_CUT_HELD"))
+    {
+        let _ = release.wait_for(|open| *open).await;
+    }
     if slow {
         tokio::time::sleep(Duration::from_secs(6)).await;
     }
@@ -52,13 +70,18 @@ struct Fixture {
     opts: SessionOptions,
     requests: Requests,
     http: tokio::task::JoinHandle<()>,
+    #[cfg(unix)]
+    release: tokio::sync::watch::Sender<bool>,
 }
 
 async fn fixture() -> Fixture {
     let requests = Requests::default();
+    let (release, held) = tokio::sync::watch::channel(false);
+    #[cfg(not(unix))]
+    drop(release);
     let router = Router::new()
         .route("/v1/chat/completions", post(chat))
-        .with_state(requests.clone());
+        .with_state((requests.clone(), held));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
     let http = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -94,6 +117,8 @@ async fn fixture() -> Fixture {
         opts,
         requests,
         http,
+        #[cfg(unix)]
+        release,
     }
 }
 
@@ -105,6 +130,7 @@ async fn actual_qwen_turn_catalog_history_and_interrupt() {
         mut opts,
         requests,
         http,
+        ..
     } = fixture().await;
     opts.settings.system_prompt = Some("QWEN-BASE-RS".into());
     opts.settings.append_system_prompt = Some("QWEN-APPEND-RS".into());
@@ -269,6 +295,7 @@ async fn native_memory_default_survives_chat_restart_and_user_settings_take_prec
         mut opts,
         requests,
         http,
+        ..
     } = fixture().await;
     let store_path = dir.path().join("chats");
     let defaults = dir.path().join("system-defaults.json");

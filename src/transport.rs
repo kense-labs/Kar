@@ -740,20 +740,19 @@ impl Actor {
     async fn dispatch(
         &mut self,
         prompt: crate::input::Input,
-        input_id: Option<uuid::Uuid>,
+        input_id: uuid::Uuid,
         done: Reply<crate::TurnReport>,
     ) -> Result<()> {
         let id = self.session();
         self.claude_errors.clear();
-        let claude_uuid = (self.protocol == Protocol::Claude)
-            .then(|| input_id.unwrap_or_else(uuid::Uuid::new_v4));
         let request = uuid::Uuid::new_v4();
         self.turn = Some(Turn {
             input_receipt: None,
             prompt_request: request,
             process_baseline: None,
-            chat_input: input_id,
-            claude_input: claude_uuid.map(wire::claude_input::Input::written),
+            chat_input: Some(input_id),
+            claude_input: (self.protocol == Protocol::Claude)
+                .then(|| wire::claude_input::Input::written(input_id)),
             pi_inputs: Vec::new(),
             pi_assistant: None,
             pi_anchor: None,
@@ -770,11 +769,11 @@ impl Actor {
                 return Err(Error::Protocol("expected a stdio runtime".into()));
             }
             Protocol::Factory => {
-                let id = input_id.unwrap_or_else(uuid::Uuid::new_v4);
-                self.turn.as_mut().expect("dispatch started a turn").native = Some(id.to_string());
+                self.turn.as_mut().expect("dispatch started a turn").native =
+                    Some(input_id.to_string());
                 self.rpc(
                     "droid.add_user_message",
-                    prompt.factory(id),
+                    prompt.factory(input_id),
                     None,
                     RpcIntent::Prompt,
                 )
@@ -792,7 +791,7 @@ impl Actor {
                 self.acp_failures.start();
                 let mut args = json!({"sessionId":id,"prompt":prompt.blocks(self.protocol)});
                 if let Some(grok) = &mut self.grok {
-                    args["_meta"]["promptId"] = grok.name(input_id).into();
+                    args["_meta"]["promptId"] = grok.name(Some(input_id)).into();
                 }
                 if let Some(schema) = &self.output_schema {
                     args["_meta"]["outputSchema"] = Value::Object(schema.clone());
@@ -808,11 +807,7 @@ impl Actor {
                 .await?;
             }
             Protocol::Claude | Protocol::Qwen => {
-                let msg = prompt.stream_user(
-                    self.protocol,
-                    id.as_deref(),
-                    claude_uuid.unwrap_or_else(uuid::Uuid::new_v4),
-                );
+                let msg = prompt.stream_user(self.protocol, id.as_deref(), input_id);
                 self.write(msg, RecordKind::Request).await?;
             }
             Protocol::Pi => {
@@ -1023,7 +1018,6 @@ impl Actor {
                     let _ = tx.send(Err(error));
                     return Ok(true);
                 }
-                let input_id = Some(id);
                 if let Err(err) = crate::chat::Admission::commit(admission).await {
                     let _ = tx.send(Err(err));
                     return Ok(true);
@@ -1032,7 +1026,7 @@ impl Actor {
                     .codex_processes
                     .as_ref()
                     .and_then(|_| crate::resources::turn::baseline());
-                self.dispatch(prompt, input_id, done).await?;
+                self.dispatch(prompt, id, done).await?;
                 if let Some(turn) = &mut self.turn {
                     turn.process_baseline = baseline;
                 }
@@ -2932,11 +2926,7 @@ impl Actor {
                     vec![],
                 );
                 if let Err(e) = self
-                    .dispatch(
-                        crate::input::Input::text(input.text),
-                        Some(input.id),
-                        input.done,
-                    )
+                    .dispatch(crate::input::Input::text(input.text), input.id, input.done)
                     .await
                 {
                     break e.to_string();

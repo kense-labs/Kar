@@ -30,6 +30,9 @@ async fn check_turns(session: &Session) -> kar::Result<()> {
             assert_eq!(r.kind, kar::RecordKind::Request);
             assert_eq!(r.session_id.as_deref(), Some(session.id()));
             assert_eq!(prompt.native_admission, session.protocol() == Protocol::Pi);
+            if session.protocol() == Protocol::Qwen {
+                assert_eq!(r.native["uuid"].as_str(), Some(prompt.input_id.as_str()));
+            }
             Some(prompt.input_id.as_str())
         })
         .collect();
