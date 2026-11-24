@@ -125,7 +125,7 @@ fn snapshot(app: &Workbench) -> Result<Value> {
     let db = app.0.catalog.lock().unwrap();
     let providers = crate::runtimes()
         .into_iter()
-        .map(|r| json!({"instanceId":r.id,"driver":r.id,"name":r.brand()}))
+        .map(|r| json!({"instanceId":r.id,"driver":r.id,"name":r.brand().name}))
         .collect::<Vec<_>>();
     let root = app.0.roots.first().map(|r| r.path.clone());
     Ok(

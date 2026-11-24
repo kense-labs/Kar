@@ -233,43 +233,66 @@ fn slot(app: &Workbench, driver: &str) -> Result<Arc<Slot>> {
     map.insert(driver.into(), s.clone());
     Ok(s)
 }
-async fn observe(app: &Workbench, id: &str) -> Result<(String, Arc<Slot>)> {
-    let d = driver(id)?;
-    let root = dir(&app.0.chats, &d);
-    let s = slot(app, &d)?;
-    if !s.view.borrow().active() && (external(&d) || !root.join("active.json").is_file()) {
-        let rt = crate::runtime(&d)?;
+#[derive(Clone)]
+struct Local {
+    forced: bool,
+    path: Option<PathBuf>,
+    version: Option<String>,
+}
+impl Local {
+    fn project(&self, mut v: View) -> View {
+        if self.forced || v.source.as_deref() != Some("managed") {
+            v.executable_path = self.path.clone();
+            v.installed_version = self.version.clone();
+            v.source = self.path.as_ref().map(|_| "local".into());
+            v.can_remove = false;
+        }
+        v
+    }
+}
+async fn observe(app: &Workbench, id: &str) -> Result<(Local, Arc<Slot>)> {
+    let (d, custom) = if matches!(id, "codex" | "antigravity") {
+        (id, None)
+    } else {
+        (
+            "codex",
+            crate::provider_instance::for_launch("codex", id)?.program,
+        )
+    };
+    let root = dir(&app.0.chats, d);
+    let s = slot(app, d)?;
+    let forced = external(d) || custom.is_some() || !managed(&root, d)?;
+    let mut local = Local {
+        forced,
+        path: None,
+        version: None,
+    };
+    if forced || (!s.view.borrow().active() && !root.join("active.json").is_file()) {
+        let mut rt = crate::runtime(d)?;
+        if let Some(p) = custom {
+            rt.program = p
+        }
         let probe = tokio::time::timeout(
             std::time::Duration::from_secs(8),
             rt.probe_installation(&Default::default()),
         )
         .await;
-        if let Ok(Ok(crate::InstallationSnapshot::Available {
-            version,
-            command: Some(command),
-            ..
-        })) = probe
-        {
-            s.view.send_if_modified(|v| {
-                if v.active()
-                    || v.source.as_deref() == Some("managed")
-                    || v.executable_path.as_ref() == Some(&command)
-                {
-                    return false;
-                }
-                v.installed_version = version;
-                v.executable_path = Some(command);
-                v.source = Some("local".into());
-                v.can_remove = false;
-                true
-            });
+        if let Ok(Ok(snapshot)) = probe {
+            local.path = snapshot.command().map(Path::to_path_buf);
+            local.version = match snapshot {
+                crate::InstallationSnapshot::Available { version, .. } => version,
+                crate::InstallationSnapshot::Failed {
+                    installed_version, ..
+                } => installed_version,
+                _ => None,
+            };
         }
     }
-    Ok((d, s))
+    Ok((local, s))
 }
 async fn view(State(app): State<Workbench>, RoutePath(id): RoutePath<String>) -> Reply {
-    let (_, s) = observe(&app, &id).await?;
-    let state = s.view.borrow().clone();
+    let (local, s) = observe(&app, &id).await?;
+    let state = local.project(s.view.borrow().clone());
     Ok(Json(json!(state)))
 }
 async fn events(
@@ -279,16 +302,17 @@ async fn events(
     Sse<impl futures_util::Stream<Item = std::result::Result<Event, Infallible>>>,
     ApiError,
 > {
-    let (_, s) = observe(&app, &id).await?;
+    let (local, s) = observe(&app, &id).await?;
     let rx = s.view.subscribe();
-    let stream = futures_util::stream::unfold((rx, true), |(mut rx, first)| async move {
-        if !first {
-            rx.changed().await.ok()?
-        }
-        let v = rx.borrow_and_update().clone();
-        let e = Event::default().event("installation").json_data(v).ok()?;
-        Some((Ok(e), (rx, false)))
-    });
+    let stream =
+        futures_util::stream::unfold((rx, true, local), |(mut rx, first, local)| async move {
+            if !first {
+                rx.changed().await.ok()?
+            }
+            let v = local.project(rx.borrow_and_update().clone());
+            let e = Event::default().event("installation").json_data(v).ok()?;
+            Some((Ok(e), (rx, false, local)))
+        });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 #[derive(Deserialize)]

@@ -92,6 +92,11 @@ path = "tests/chat_restart.rs"
 harness = false
 
 [[test]]
+name = "workbench_managed_providers"
+path = "tests/workbench_managed_providers.rs"
+harness = false
+
+[[test]]
 name = "workbench_mcp"
 path = "tests/workbench_mcp.rs"
 harness = false
