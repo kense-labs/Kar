@@ -1,0 +1,129 @@
+use super::Case;
+
+fn scenario(target: &str, test: &str, args: &[&str], requires: &str) -> Case {
+    Case {
+        runtime: "workbench".into(),
+        target: target.into(),
+        test: test.into(),
+        environment: Vec::new(),
+        requires: requires.into(),
+        program: "cargo".into(),
+        args: ["test", "--locked"]
+            .into_iter()
+            .chain(args.iter().copied())
+            .map(String::from)
+            .collect(),
+        libtest: false,
+        switches: Default::default(),
+    }
+}
+
+pub(super) fn cases() -> Vec<Case> {
+    let mut cases = Vec::new();
+    let mut local = scenario(
+        "workbench_acceptance",
+        "local-workbench",
+        &[
+            "--test",
+            "workbench_git",
+            "--test",
+            "workbench_terminal_preview",
+            "--test",
+            "workbench_coediting",
+            "--test",
+            "workbench_remote_access",
+            "--test",
+            "workbench_workflows",
+            "--test",
+            "workbench_forge",
+            "--test",
+            "workbench_handoff",
+            "--test",
+            "workbench_acceptance",
+        ],
+        "macOS, actual Kar, local Git repositories, PTY and Kantor files; provider and hosting protocol fixtures",
+    );
+    local.switches.insert("KAR_HANDOFF_LIVE".into(), "0".into());
+    cases.push(local);
+    for (mode, requires) in [
+        (
+            "workbench-projects",
+            "two HTTP clients and scoped projects with a Codex protocol fixture",
+        ),
+        (
+            "workbench-queue",
+            "workbench restart with durable inputs, native protocol fixture",
+        ),
+        (
+            "workbench-fork",
+            "actual local Git and a Codex protocol fixture across HTTP restarts",
+        ),
+        (
+            "fork-with-id",
+            "durable fork crash boundaries using the native protocol fixture",
+        ),
+        (
+            "workbench-requests",
+            "concurrent workbench answers and reused native request IDs after restart, protocol fixture",
+        ),
+    ] {
+        cases.push(scenario(
+            "chat_restart",
+            mode,
+            &["--test", "chat_restart", "--", mode],
+            requires,
+        ));
+    }
+    cases.push(scenario("kar-documents","office-engine-and-store",&["--manifest-path","crates/kar-documents/Cargo.toml"],
+        "actual .docx, .xlsx and .pptx fixtures, pinned Kantor engines, local document store and HTTP clients"));
+    for (target, test, requires, env) in [
+        (
+            "workbench_coediting",
+            "native_document_edit::actual_codex_merges_a_native_file_edit_with_a_concurrent_owner_save",
+            "installed Codex, loopback model, actual file tool in a private checkout",
+            &["KAR_CODEX_BIN"][..],
+        ),
+        (
+            "workbench_terminal_preview",
+            "chrome_loads_project_preview",
+            "installed macOS Google Chrome (default Applications path or KAR_TEST_CHROME), real PTY and local HTTP",
+            &[][..],
+        ),
+    ] {
+        let mut case = scenario(
+            target,
+            test,
+            &[
+                "--test",
+                target,
+                test,
+                "--",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ],
+            requires,
+        );
+        case.libtest = true;
+        case.environment = env.iter().map(|s| s.to_string()).collect();
+        cases.push(case);
+    }
+    let mut live = scenario(
+        "workbench_handoff",
+        "installed-codex-qwen",
+        &["--test", "workbench_handoff"],
+        "both installed CLIs, authenticated models and permission to read the disposable workspace",
+    );
+    live.environment = ["KAR_CODEX_BIN", "KAR_QWEN_BIN"].map(String::from).into();
+    live.switches.insert("KAR_HANDOFF_LIVE".into(), "1".into());
+    cases.push(live);
+    let mut hosted = scenario(
+        "workbench_forge",
+        "hosted-github",
+        &["--test", "workbench_forge", "--", "hosted-github"],
+        "explicitly selected disposable GitHub repository, authorized push and PR credentials; leaves its test branch and closed PR",
+    );
+    hosted.environment = ["KAR_FORGE_TEST_REPO", "GH_TOKEN"].map(String::from).into();
+    cases.push(hosted);
+    cases
+}

@@ -12,6 +12,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
 };
+#[path = "backend-suite/workbench.rs"]
+mod workbench;
 
 #[derive(Parser)]
 struct Args {
@@ -45,6 +47,8 @@ struct Case {
     program: String,
     args: Vec<String>,
     libtest: bool,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    switches: BTreeMap<String, String>,
 }
 fn catalog() -> Result<Vec<Case>> {
     let mut cases = Vec::new();
@@ -75,6 +79,7 @@ fn catalog() -> Result<Vec<Case>> {
             requires: requires.to_string(),
             program: "cargo".into(),
             libtest: true,
+            switches: Default::default(),
             args: [
                 "test",
                 "--locked",
@@ -106,6 +111,7 @@ fn catalog() -> Result<Vec<Case>> {
             program: program.into(),
             args: args.iter().map(|s| s.to_string()).collect(),
             libtest: false,
+            switches: Default::default(),
         });
     };
     for (rt, flag, key) in [
@@ -200,6 +206,14 @@ fn catalog() -> Result<Vec<Case>> {
         &["test", "--locked"],
         "Cargo regression including the custom CLI/protocol test harnesses",
     );
+    // The ordinary cargo regression always selects the protocol handoff fixture.
+    // The independently recorded installed-provider case enables real credentials explicitly.
+    cases
+        .last_mut()
+        .expect("regression test")
+        .switches
+        .insert("KAR_HANDOFF_LIVE".into(), "0".into());
+    cases.extend(workbench::cases());
     Ok(cases)
 }
 fn output_text(cmd: &str, args: &[&str]) -> Result<String> {
@@ -262,7 +276,6 @@ fn audit_names(matrix: &[Case]) -> Result<()> {
             .as_array()
             .is_some_and(|k| k.iter().any(|v| v == "test"))
             || custom.contains(name)
-            || name.starts_with("workbench_")
         {
             continue;
         }
@@ -285,6 +298,10 @@ fn audit_names(matrix: &[Case]) -> Result<()> {
             .lines()
             .filter_map(|line| line.strip_suffix(": test"))
         {
+            // This ignored test is the child HTTP server started by other terminal scenarios.
+            if name == "workbench_terminal_preview" && case == "fixture_http_server" {
+                continue;
+            }
             actual.insert((name.to_string(), case.to_string()));
         }
     }
@@ -303,7 +320,7 @@ fn audit_names(matrix: &[Case]) -> Result<()> {
         actual == expected,
         "compiled named tests differ from the macOS inventory"
     );
-    println!("{} ignored first-stage cases listed", actual.len());
+    println!("{} ignored macOS cases listed", actual.len());
     Ok(())
 }
 async fn run() -> Result<bool> {
@@ -359,7 +376,7 @@ async fn run() -> Result<bool> {
     let mut probes = BTreeMap::new();
     let mut complete = true;
     for (i, c) in cases.iter().enumerate() {
-        let mut row = json!({"type":"case","runtime":c.runtime,"target":c.target,"test":c.test,"requires":c.requires,"executable":c.program,"argv":c.args,"revision":rev,"platform":platform,"arch":arch});
+        let mut row = json!({"type":"case","runtime":c.runtime,"target":c.target,"test":c.test,"requires":c.requires,"executable":c.program,"argv":c.args,"switches":c.switches,"revision":rev,"platform":platform,"arch":arch});
         let absent: Vec<_> = c
             .environment
             .iter()
@@ -436,6 +453,7 @@ async fn run() -> Result<bool> {
             .collect();
         let status = Command::new(&c.program)
             .args(&argv)
+            .envs(&c.switches)
             .stdin(Stdio::null())
             .stdout(File::create_new(dir.join(&out))?)
             .stderr(File::create_new(dir.join(&err))?)

@@ -32,4 +32,6 @@
 
 ## 本批证据
 
+工作台的 macOS 集中入口为 `cargo run --locked --example backend_suite -- --runtime workbench`。默认列出命令和环境要求。两份清单集成后，在仓库根目录以同一候选提交执行 `cargo run --locked --example backend_suite -- --execute --output /tmp/kar-macos-候选提交`，可在同一证据目录记录两个阶段。保留每条实际命令、进程退出状态、输出和供应商安装探测。真实托管场景需要显式指定专用测试库 `KAR_FORGE_TEST_REPO` 与凭据，真实接力场景需要设置两个供应商程序路径并能访问模型。办公室文档引擎通过独立 Cargo manifest 运行。
+
 在 macOS 开发分支运行过 `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo check --locked --all-targets`，退出码 0。三个 Office 引擎是测试依赖，继续使用项目现有固定提交 `9b780379e32d3fa4d293499f33fbc2483655567d`。按当前安排，综合场景、各实机入口和全量回归均待统一执行。本轮未进行 Linux 或 Windows 实机验收。
