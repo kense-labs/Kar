@@ -57,6 +57,23 @@ fn read(path: &str, header: &str) -> Result<Vec<Row>, String> {
         .collect()
 }
 
+// Scope an assertion to one Rust function when other scenarios reuse the same check.
+fn anchor_line(source: &str, anchor: &str) -> Option<usize> {
+    if let Some((scope, needle)) = anchor.split_once(" >> ") {
+        let start = source.lines().position(|line| line.contains(scope))?;
+        return source
+            .lines()
+            .enumerate()
+            .skip(start)
+            .take_while(|(_, line)| *line != "}")
+            .find_map(|(i, line)| line.contains(needle).then_some(i + 1));
+    }
+    source
+        .lines()
+        .position(|line| line.contains(anchor))
+        .map(|i| i + 1)
+}
+
 fn git_file(repo: &Path, commit: &str, file: &str) -> Result<String, String> {
     let out = Command::new("git")
         .current_dir(repo)
@@ -159,7 +176,7 @@ fn run() -> Result<(), String> {
         check_sources(Path::new(&repo), &index)?;
     }
     let unique: BTreeSet<_> = evidence.iter().collect();
-    let mut joins: BTreeMap<(&str, &str), Vec<(&Row, &Row, usize)>> = BTreeMap::new();
+    let mut joins: BTreeMap<(&str, &str, usize), Vec<(&Row, &Row, usize)>> = BTreeMap::new();
     let mut texts = BTreeMap::new();
     for link in &links {
         let [source, lines, commit, runtimes, _, file, needle, _] = link.as_slice() else {
@@ -174,11 +191,8 @@ fn run() -> Result<(), String> {
             .or_insert_with(|| git_file(Path::new("."), commit, file))
             .as_ref()
             .map_err(Clone::clone)?;
-        let at = snapshot
-            .lines()
-            .position(|l| l.contains(needle))
-            .ok_or_else(|| format!("missing anchor in {commit}:{file}: {needle}"))?
-            + 1;
+        let at = anchor_line(snapshot, needle)
+            .ok_or_else(|| format!("missing anchor in {commit}:{file}: {needle}"))?;
         let scopes: Vec<_> = unique
             .iter()
             .copied()
@@ -191,15 +205,27 @@ fn run() -> Result<(), String> {
                 "no matching evidence for {source} at {commit} ({runtimes})"
             ));
         }
-        for line in lines.split(',') {
-            // Two direct assertions can occupy one source line. Mapping either
-            // requires a distinct ordinal once this table is extended to them.
-            if case[3].split(',').filter(|n| *n == line).count() != 1 {
-                return Err(format!("{source} line {line} missing or ambiguous"));
+        for token in lines.split(',') {
+            let (line, ordinal) = match token.split_once('.') {
+                Some((line, n)) => (
+                    line,
+                    Some(
+                        n.parse::<usize>()
+                            .map_err(|_| format!("bad assertion ordinal: {token}"))?,
+                    ),
+                ),
+                None => (token, None),
+            };
+            let count = case[3].split(',').filter(|n| *n == line).count();
+            let ordinal = ordinal
+                .or((count == 1).then_some(1))
+                .ok_or_else(|| format!("specify a unique ordinal for {source}:{token}"))?;
+            if !(1..=count).contains(&ordinal) {
+                return Err(format!("assertion missing at {source}:{token}"));
             }
             for &scope in &scopes {
                 joins
-                    .entry((source, line))
+                    .entry((source, line, ordinal))
                     .or_default()
                     .push((link, scope, at));
             }
@@ -241,7 +267,7 @@ fn run() -> Result<(), String> {
                 format!("{line}.{}", *occurrence)
             };
             let candidates: Vec<_> = unique.iter().copied().filter(|e| e[0] == r[1]).collect();
-            let matches = joins.get(&(r[1].as_str(), line));
+            let matches = joins.get(&(r[1].as_str(), line, *occurrence));
             for &e in &candidates {
                 let verified =
                     matches.and_then(|set| set.iter().find(|(_, scoped, _)| *scoped == e));
