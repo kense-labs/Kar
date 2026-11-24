@@ -36,7 +36,7 @@ pub(super) struct Preview {
     pub terminal: Uuid,
     #[serde(skip_serializing_if="Option::is_none")]
     pub chat: Option<Uuid>,
-    target: Port,
+    pub target: Port,
     pub url: String,
     pub profile_id: String,
     #[serde(flatten)]

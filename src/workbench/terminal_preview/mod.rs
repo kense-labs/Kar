@@ -2,6 +2,8 @@
 mod browser;
 pub(super) use browser::html as html_browser;
 mod events;
+mod automation;
+pub(super) use automation::call as automation;
 mod history;
 mod preview;
 mod process;
@@ -522,19 +524,19 @@ impl Workbench {
 }
 
 impl TerminalPreview {
-    pub(super) fn model_tabs(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>)->Vec<serde_json::Value>{
+    pub(super) fn model_tabs(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>,terminals:&std::collections::BTreeSet<Uuid>)->Vec<serde_json::Value>{
         let mut tabs=self.grants.list(project,None);
-        tabs.retain(|tab|tab.chat==Some(chat) || shared.contains(&tab.id));
+        tabs.retain(|tab|(tab.chat==Some(chat) && terminals.contains(&tab.terminal)) || shared.contains(&tab.id));
         tabs.sort_by_key(|tab|tab.id);
         tabs.into_iter().map(|t|serde_json::json!({"tab_id":t.id,"runtime":"server","preview":t})).collect()
     }
-    fn model_grant(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>,tab:Uuid)->Result<Arc<preview::Grant>>{
+    fn model_grant(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>,terminals:&std::collections::BTreeSet<Uuid>,tab:Uuid)->Result<Arc<preview::Grant>>{
         let grant=self.grants.get(project,tab,None)?;
-        if grant.info.chat!=Some(chat) && !shared.contains(&tab){return Err(missing());}
+        if !(grant.info.chat==Some(chat) && terminals.contains(&grant.info.terminal) || shared.contains(&tab)){return Err(missing());}
         Ok(grant)
     }
-    pub(super) fn model_close(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>,tab:Uuid)->Result<()>{
-        self.model_grant(project,chat,shared,tab)?;
+    pub(super) fn model_close(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>,terminals:&std::collections::BTreeSet<Uuid>,tab:Uuid)->Result<()>{
+        self.model_grant(project,chat,shared,terminals,tab)?;
         self.grants.close(project,tab,None)
     }
 }

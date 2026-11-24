@@ -1,5 +1,7 @@
 //! Server-managed browser tabs. A browser profile belongs to one project and device.
 mod cdp;
+mod automation;
+mod recording;
 pub(in crate::workbench) mod html;
 mod network;
 pub(super) mod profiles;
@@ -31,6 +33,7 @@ struct Key {
     ephemeral_tab: Option<Uuid>,
 }
 struct Tab {
+    uploads:Vec<tempfile::TempDir>,
     target: String,
     session: String,
 }
@@ -50,6 +53,7 @@ pub(super) struct Pool {
     root: PathBuf,
     slots: Mutex<HashMap<Key, Weak<AsyncMutex<Slot>>>>,
     active: Mutex<HashMap<Uuid, Handle>>,
+    recordings:recording::Recordings,
 }
 impl Pool {
     pub fn new(root: PathBuf) -> Self {
@@ -57,6 +61,7 @@ impl Pool {
             root,
             slots: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
+            recordings:Default::default(),
         }
     }
     fn slot(&self, key: Key) -> Handle {
@@ -306,7 +311,7 @@ impl Slot {
             .await;
             match open {
                 Ok(session) => {
-                    entry.insert(Tab { target, session });
+                    entry.insert(Tab { target, session, uploads:vec![] });
                 }
                 Err(e) => {
                     let _ = conn

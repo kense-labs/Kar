@@ -14,6 +14,7 @@ pub(in crate::workbench) struct Resources {
     pub device_hosts: BTreeSet<String>,
     pub html: bool,
     pub html_workspace_files: bool,
+    pub upload_files: bool,
 }
 #[derive(Copy, Clone)]
 enum Access {
@@ -43,6 +44,107 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
     }
     if allowed(c, Access::Control) {
         out.push(Tool{name:"kar_preview_close",description:"Close a preview tab shared with this chat and release its browser and tunnel.",properties:json!({"tab_id":{"type":"string","format":"uuid"}}),required:&["tab_id"]});
+    }
+    let tab = json!({"type":"string","format":"uuid"});
+    let string = json!({"type":"string"});
+    let number = json!({"type":"number"});
+    let yes = json!({"type":"boolean"});
+    for (name, description, properties, required, a) in [
+        (
+            "kar_preview_status",
+            "Read the live title, address, viewport and dialog of a shared tab.",
+            json!({}),
+            &[][..],
+            Access::Read,
+        ),
+        (
+            "kar_preview_open",
+            "Open a real preview of the granted project terminal listener. Supply its terminal_id and port or select an existing tab_id.",
+            json!({"terminal_id":tab,"port":{"type":"integer"},"path":string,"reuse_existing_tab":yes}),
+            &[],
+            Access::Control,
+        ),
+        (
+            "kar_preview_navigate",
+            "Navigate within the granted application's origin. Absolute URLs must belong to the same preview.",
+            json!({"url":string}),
+            &["url"][..],
+            Access::Control,
+        ),
+        (
+            "kar_preview_resize",
+            "Set a fill, freeform or preset viewport. Supply viewport in Kar's workbench format.",
+            json!({"viewport":{"type":"object"}}),
+            &["viewport"],
+            Access::Control,
+        ),
+        (
+            "kar_preview_set_appearance",
+            "Change the browser's preferred color scheme.",
+            json!({"appearance":{"enum":["dark","light","system"]}}),
+            &["appearance"],
+            Access::Control,
+        ),
+        (
+            "kar_preview_snapshot",
+            "Read visible text, element selectors and viewport. Optionally include or save the PNG.",
+            json!({"include_image":yes,"save":yes}),
+            &[],
+            Access::Read,
+        ),
+        (
+            "kar_preview_dialog",
+            "Answer the browser's current JavaScript dialog.",
+            json!({"accept":yes,"prompt_text":string}),
+            &["accept"],
+            Access::Control,
+        ),
+        (
+            "kar_preview_evaluate",
+            "Evaluate JavaScript in the granted app's isolated page and return its JSON result.",
+            json!({"expression":string,"await_promise":yes}),
+            &["expression"],
+            Access::Control,
+        ),
+        (
+            "kar_preview_wait_for",
+            "Wait for text, a CSS locator or a URL fragment in the selected page.",
+            json!({"text":string,"selector":string,"locator":string,"url_includes":string,"timeout_ms":{"type":"integer"}}),
+            &[],
+            Access::Read,
+        ),
+        (
+            "kar_preview_act",
+            "Use a browser action on a CSS selector or coordinates in the granted tab.",
+            json!({"action":{"enum":["click","type","hover","select","drag","upload","press","scroll"]},"selector":string,"locator":string,"x":number,"y":number,"text":string,"key":string,"source":string,"target":string,"delta_x":number,"delta_y":number,"values":{"type":"array","items":string},"paths":{"type":"array","items":string}}),
+            &["action"],
+            Access::Control,
+        ),
+        (
+            "kar_preview_recording_start",
+            "Start capturing real frames of this tab into a WebM recording.",
+            json!({}),
+            &[],
+            Access::Control,
+        ),
+        (
+            "kar_preview_recording_stop",
+            "Stop recording and publish the video as an attachment in this chat.",
+            json!({}),
+            &[],
+            Access::Control,
+        ),
+    ] {
+        if allowed(c, a) {
+            let mut properties = properties;
+            properties["tab_id"] = tab.clone();
+            out.push(Tool {
+                name,
+                description,
+                properties,
+                required,
+            });
+        }
     }
     if allowed(c, Access::Html) {
         let text = json!({"type":"string","minLength":1,"maxLength":512000});
@@ -148,7 +250,13 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
     let g = check(
         app,
         c,
-        if name == "kar_preview_list" {
+        if matches!(
+            name,
+            "kar_preview_list"
+                | "kar_preview_status"
+                | "kar_preview_snapshot"
+                | "kar_preview_wait_for"
+        ) {
             Access::Read
         } else {
             Access::Control
@@ -161,7 +269,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
             let page: Page = serde_json::from_value(input)?;
             let start = page.cursor.unwrap_or(0);
             let limit = page.limit.unwrap_or(20).clamp(1, 50);
-            let all = state.model_tabs(g.project, g.chat, &resources.tabs);
+            let all = state.model_tabs(g.project, g.chat, &resources.tabs, &resources.terminals);
             let next = start.saturating_add(limit);
             let count = all.len();
             let sessions: Vec<_> = all.into_iter().skip(start).take(limit).collect();
@@ -169,10 +277,45 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
         }
         "kar_preview_close" => {
             let tab: Tab = serde_json::from_value(input)?;
-            state.model_close(g.project, g.chat, &resources.tabs, tab.tab_id)?;
+            state.model_close(
+                g.project,
+                g.chat,
+                &resources.tabs,
+                &resources.terminals,
+                tab.tab_id,
+            )?;
             Ok(json!({"closed":tab.tab_id}))
         }
-        _ => Err(Error::Unsupported("unknown preview operation".into())),
+        _ => {
+            let weak = std::sync::Arc::downgrade(&app.0);
+            let caller = c.clone();
+            let access = if matches!(
+                name,
+                "kar_preview_status" | "kar_preview_snapshot" | "kar_preview_wait_for"
+            ) {
+                Access::Read
+            } else {
+                Access::Control
+            };
+            super::super::terminal_preview::automation(
+                app,
+                g.project,
+                g.chat,
+                &resources.tabs,
+                &resources.terminals,
+                resources.upload_files && c.files_allowed,
+                name,
+                input,
+                std::sync::Arc::new(move || {
+                    let app = Workbench(
+                        weak.upgrade()
+                            .ok_or_else(|| Error::Closed("workbench stopped".into()))?,
+                    );
+                    check(&app, &caller, access).map(|_| ())
+                }),
+            )
+            .await
+        }
     }
 }
 

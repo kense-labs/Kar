@@ -36,6 +36,8 @@ fn main() {
         return;
     }
     match std::env::args().nth(1).as_deref() {
+        Some("--mcp-local-preview")=>{preview_tools::local_page();return;}
+
         Some("--version") => {
             println!("codex 0.143.0");
             return;
@@ -212,6 +214,7 @@ async fn scenario() {
     preview_tools::controls(&url, &a, p, chat, call).await;
     preview_tools::devices(&url,&a,p,chat,call).await;
     preview_tools::html(&url,&a,p,chat,&root,call).await;
+    if std::env::var_os("KAR_MCP_BROWSER_LIVE").is_some(){preview_tools::browser(&url,&a,p,chat,&root,call).await;}
     workflow::exercise(&url, &a, p, chat, call).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")
