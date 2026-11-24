@@ -95,7 +95,8 @@ impl Actor {
             body["llm_profile"] = model.clone().into();
         }
         let request = input.request_id;
-        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
+        let mut stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
+        stamp.carried = input.carried;
         self.record(
             None,
             if let Some(id) = input_id {
@@ -411,27 +412,15 @@ impl Actor {
                 };
                 let _ = ack.send(result);
             }
-            Command::Queue(id, text, ack, done) => {
-                self.queue.push_back((id, text, done));
-                self.journal.host_event(Event::InputQueued {
-                    input_id: id.to_string(),
-                });
+            Command::Queue(id, input, ack, done) => {
+                self.journal.queue_request(id, &input, &[]);
+                self.journal
+                    .queue_accepted(input.request_id, id, false, None);
+                self.queue.push_back((id, input.text, done));
                 let _ = ack.send(Ok(()));
             }
             Command::Withdraw(id, ack) => {
-                let result = self
-                    .queue
-                    .iter()
-                    .position(|e| e.0 == id)
-                    .and_then(|i| self.queue.remove(i))
-                    .map(|(_, _, done)| {
-                        self.journal.host_event(Event::InputRemoved {
-                            input_id: id.to_string(),
-                        });
-                        let _ = done.send(Err(Error::Refused("input withdrawn".into())));
-                    })
-                    .ok_or_else(|| Error::Refused("input is not queued".into()));
-                let _ = ack.send(result);
+                let _ = ack.send(self.journal.withdraw_held(&mut self.queue, id));
             }
             Command::Steer(input_id, input, ack) => {
                 let request = self.journal.steer_request(input_id, &input, &[]);
@@ -504,7 +493,7 @@ impl Actor {
             if self.tasks.is_empty()
                 && let Some((id, text, done)) = self.queue.pop_front()
             {
-                let _ = self.start(id, Input::text(text), done).await;
+                let _ = self.start(id, Input::from_queue(text, id), done).await;
                 self.journal.host_event(Event::InputRemoved {
                     input_id: id.to_string(),
                 });
@@ -553,7 +542,7 @@ impl Actor {
                 Err(err) => json!({"type":"rejected", "code":"error", "reason":err.to_string()}),
             };
             self.journal
-                .disposed(*id, outcome, Event::Exited { reason });
+                .control_outcome(*id, outcome, Event::Exited { reason });
         } else {
             self.journal.host_event(Event::Exited { reason });
         }

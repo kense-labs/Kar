@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+mod queue;
 pub(crate) mod retention;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -47,6 +49,7 @@ pub(crate) struct RecordStamp {
     pub(crate) response_to: Option<String>,
     opening: Option<crate::Opening>,
     frame_type: Option<String>,
+    pub(crate) carried: Option<Uuid>,
 }
 
 impl From<Direction> for RecordStamp {
@@ -57,6 +60,7 @@ impl From<Direction> for RecordStamp {
             response_to: None,
             opening: None,
             frame_type: None,
+            carried: None,
             prompt: None,
         }
     }
@@ -445,6 +449,9 @@ pub struct Record {
     /// Opening metadata belongs to the Kar lifecycle, independently of native wire packets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opening: Option<crate::Opening>,
+    /// Inputs previously admitted to an adapter queue and carried by this dispatch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carries: Vec<String>,
     /// The wire discriminator or protocol operation that produced a frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_type: Option<String>,
@@ -667,8 +674,10 @@ impl Journal {
         let request = input.request_id;
         let mut body = serde_json::json!({"control":"prompt", "input":input.text, "imageCount":input.images.len()});
         crate::transport::redact(&mut body, secrets);
+        let mut stamp = RecordStamp::from(Direction::ToRuntime);
+        stamp.carried = input.carried;
         self.push(
-            RecordStamp::from(Direction::ToRuntime).with_prompt_request(
+            stamp.with_prompt_request(
                 input_id,
                 native,
                 request,
@@ -816,7 +825,7 @@ impl Journal {
         );
         id
     }
-    pub(crate) fn disposed(&self, id: Uuid, mut outcome: Value, event: Event) {
+    pub(crate) fn control_outcome(&self, id: Uuid, mut outcome: Value, event: Event) {
         outcome["requestId"] = id.to_string().into();
         self.push(
             Direction::Host,
@@ -835,7 +844,7 @@ impl Journal {
         status: &std::io::Result<std::process::ExitStatus>,
     ) {
         if let Some(id) = id {
-            self.disposed(
+            self.control_outcome(
                 id,
                 crate::process::exit_body(status, &reason),
                 Event::Exited { reason },
@@ -937,6 +946,7 @@ impl Journal {
                 }
             }),
             opening: stamp.opening,
+            carries: stamp.carried.map(|id| id.to_string()).into_iter().collect(),
             frame_type: if kind == RecordKind::Frame {
                 stamp
                     .frame_type

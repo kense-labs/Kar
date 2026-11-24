@@ -140,6 +140,16 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
         } else {
             None
         },
+        carries: if kind == RecordKind::Request && body["kind"] == "prompt" {
+            body["carries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        } else {
+            Vec::new()
+        },
         frame_type: (kind == RecordKind::Frame)
             .then(|| body["type"].as_str().map(str::to_owned))
             .flatten(),

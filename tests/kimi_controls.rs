@@ -91,6 +91,14 @@ async fn aborted_or_absent_followup_releases_held_input() {
         let parent = session.prompt("HOLD_FOR_CONTROLS").await.unwrap();
         wait_for_start(&mut events).await;
         let (queued_id, queued) = session.queue("DRAIN_AFTER_GAP_ABORT").await.unwrap();
+        let admission = queued.admission().unwrap();
+        assert_eq!(admission.request.native["type"], "queue");
+        assert_eq!(
+            admission.request.control_request_id(),
+            admission.response.control_response_to()
+        );
+        assert_eq!(admission.response.native["type"], "accepted");
+        assert_eq!(admission.response.native["queued"], "adapter");
         session.steer(steer).await.unwrap();
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(5), parent.wait())

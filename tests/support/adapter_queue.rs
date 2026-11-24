@@ -47,6 +47,10 @@ pub(crate) async fn check(s: &Session, slow: &str, hold: impl Fn(), release: imp
     let (_, accepted) = control(&rows, "queue", id);
     assert_eq!(accepted.native["type"], "accepted");
     assert_eq!(accepted.native["queued"], "adapter");
+    assert_eq!(
+        queued.admission().unwrap().response.cursor(),
+        accepted.cursor()
+    );
     assert!(ends(&rows[from..]).is_empty());
     release();
     assert_eq!(first.wait().await.unwrap(), Outcome::Completed);
@@ -62,6 +66,7 @@ pub(crate) async fn check(s: &Session, slow: &str, hold: impl Fn(), release: imp
         })
         .unwrap();
     assert_eq!(completed.len(), 2);
+    assert_eq!(dispatch.carries, [id.to_string()]);
     assert!(
         accepted.seq < completed[0] && completed[0] < dispatch.seq && dispatch.seq < completed[1]
     );

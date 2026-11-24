@@ -46,8 +46,7 @@ impl Turn {
         self.input_id
     }
 
-    /// The public request and decision for an ordinary prompt. A queued turn
-    /// can be returned before the runtime receives its prompt.
+    /// The public request and decision for this prompt or queue admission.
     pub fn admission(&self) -> Option<&crate::ControlReceipt> {
         self.admission.as_ref()
     }
@@ -1565,15 +1564,16 @@ impl Session {
     pub async fn queue(&self, text: impl Into<String>) -> Result<(Uuid, Turn)> {
         let id = Uuid::new_v4();
         let (done, receiver) = oneshot::channel();
-        let text = text.into();
-        self.check_input("queue", id, Uuid::new_v4(), &text, &[])?;
-        crate::input::check_text(&text, self.text_limit)?;
-        self.call(|tx| Command::Queue(id, text, tx, done)).await?;
+        let input = crate::input::Input::text(text.into());
+        let request = input.request_id;
+        self.check_input("queue", id, request, &input.text, &[])?;
+        crate::input::check_text(&input.text, self.text_limit)?;
+        self.call(|tx| Command::Queue(id, input, tx, done)).await?;
         Ok((
             id,
             Turn {
                 input_id: id,
-                admission: None,
+                admission: self.control_receipt(&request.to_string()),
                 receiver,
             },
         ))

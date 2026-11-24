@@ -119,7 +119,12 @@ pub(crate) enum Command {
         Reply<()>,
         Reply<crate::TurnReport>,
     ),
-    Queue(uuid::Uuid, String, Reply<()>, Reply<crate::TurnReport>),
+    Queue(
+        uuid::Uuid,
+        crate::input::Input,
+        Reply<()>,
+        Reply<crate::TurnReport>,
+    ),
     Withdraw(uuid::Uuid, Reply<()>),
     Abort(Reply<Value>),
     StopTask(String, Reply<Value>),
@@ -142,6 +147,7 @@ struct Queued {
 struct Turn {
     input_receipt: Option<crate::InputReceipt>,
     prompt_request: uuid::Uuid,
+    carried: Option<uuid::Uuid>,
     image_submission: Option<crate::ImageSubmission>,
     process_baseline: Option<crate::resources::turn::Baseline>,
     chat_input: Option<uuid::Uuid>,
@@ -448,6 +454,7 @@ impl Actor {
             && let Some(turn) = &self.turn
             && let Some(id) = turn.chat_input
         {
+            stamp.carried = turn.carried;
             stamp = stamp.with_prompt_request(
                 id,
                 self.protocol == Protocol::Pi,
@@ -770,6 +777,7 @@ impl Actor {
         self.turn = Some(Turn {
             input_receipt: None,
             prompt_request: request,
+            carried: prompt.carried,
             image_submission: crate::ImageSubmission::loaded(
                 &prompt.text,
                 &prompt.images,
@@ -1065,34 +1073,23 @@ impl Actor {
                     let _ = tx.send(Ok(()));
                 }
             }
-            Command::Queue(_, _, tx, _)
-                if self.protocol == Protocol::Codex && self.manual_compaction.is_some() =>
-            {
-                let _ = tx.send(Err(Error::Busy));
-            }
-            Command::Queue(input, text, tx, done) => {
-                let request = uuid::Uuid::new_v4();
-                self.record(
-                    Direction::Host,
-                    RecordKind::Request,
-                    json!({"type":"queue","id":request,"inputId":input,"text":text}),
-                    vec![Event::InputQueued {
-                        input_id: input.to_string(),
-                    }],
-                    vec![],
-                );
+            Command::Queue(id, input, tx, done) => {
+                self.journal.queue_request(id, &input, &self.secrets);
+                if self.protocol == Protocol::Codex && self.manual_compaction.is_some() {
+                    self.journal.control_decision(
+                        input.request_id,
+                        Some(("busy", "a compaction is running")),
+                    );
+                    let _ = tx.send(Err(Error::Busy));
+                    return Ok(true);
+                }
+                self.journal
+                    .queue_accepted(input.request_id, id, true, None);
                 self.queue.push_back(Queued {
-                    id: input,
-                    text,
+                    id,
+                    text: input.text,
                     done,
                 });
-                self.record(
-                    Direction::Host,
-                    RecordKind::Response,
-                    json!({"type":"accepted","queued":"adapter","requestId":request}),
-                    vec![],
-                    vec![],
-                );
                 let _ = tx.send(Ok(()));
             }
             Command::Withdraw(input, tx) => {
@@ -3030,7 +3027,11 @@ impl Actor {
                     vec![],
                 );
                 if let Err(e) = self
-                    .dispatch(crate::input::Input::text(input.text), input.id, input.done)
+                    .dispatch(
+                        crate::input::Input::from_queue(input.text, input.id),
+                        input.id,
+                        input.done,
+                    )
                     .await
                 {
                     break e.to_string();

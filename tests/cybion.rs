@@ -243,6 +243,14 @@ async fn thread_control_and_replay_use_the_native_api() {
     assert!(matches!(session.prompt("overlap").await, Err(Error::Busy)));
     let (_, queued) = session.queue("quick").await.unwrap();
     let (id, withdrawn) = session.queue("discard").await.unwrap();
+    let admission = withdrawn.admission().unwrap();
+    assert_eq!(admission.request.native["type"], "queue");
+    assert_eq!(
+        admission.request.control_request_id(),
+        admission.response.control_response_to()
+    );
+    assert_eq!(admission.response.native["type"], "accepted");
+    assert_eq!(admission.response.native["queued"], "adapter");
     session.withdraw(id).await.unwrap();
     assert!(withdrawn.wait().await.is_err());
     session.steer("follow-up").await.unwrap();

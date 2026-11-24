@@ -163,7 +163,8 @@ impl Actor {
         }
         events.push(Event::UserMessage { text });
         let request = input.request_id;
-        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
+        let mut stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
+        stamp.carried = input.carried;
         self.record(
             if steer {
                 stamp
@@ -565,25 +566,15 @@ impl Actor {
                 };
                 Self::acknowledge_input(ack, res)?;
             }
-            Command::Queue(id, text, ack, done) => {
-                self.queue.push_back((id, text, done));
-                self.journal.host_event(Event::InputQueued {
-                    input_id: id.to_string(),
-                });
+            Command::Queue(id, input, ack, done) => {
+                self.journal.queue_request(id, &input, &self.secrets);
+                self.journal
+                    .queue_accepted(input.request_id, id, true, None);
+                self.queue.push_back((id, input.text, done));
                 let _ = ack.send(Ok(()));
             }
             Command::Withdraw(id, ack) => {
-                let res = if let Some(i) = self.queue.iter().position(|(k, _, _)| *k == id) {
-                    let (_, _, done) = self.queue.remove(i).unwrap();
-                    let _ = done.send(Err(Error::Refused("input withdrawn".into())));
-                    self.journal.host_event(Event::InputRemoved {
-                        input_id: id.to_string(),
-                    });
-                    Ok(())
-                } else {
-                    Err(Error::Refused("unknown queued input".into()))
-                };
-                let _ = ack.send(res);
+                let _ = ack.send(self.journal.withdraw_held(&mut self.queue, id));
             }
             Command::Steer(input_id, input, ack) => {
                 let request = self.journal.steer_request(input_id, &input, &self.secrets);
@@ -719,7 +710,10 @@ impl Actor {
                 self.journal.host_event(Event::InputRemoved {
                     input_id: id.to_string(),
                 });
-                if let Err(e) = self.submit(Input::text(text), id, Some(done)).await {
+                if let Err(e) = self
+                    .submit(Input::from_queue(text, id), id, Some(done))
+                    .await
+                {
                     break e.to_string();
                 }
             }

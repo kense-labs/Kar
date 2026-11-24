@@ -182,37 +182,36 @@ impl Actor {
             .web
             .request("session/prompt", req.clone())
             .await
-            .and_then(|res| {
-                if res["accepted"] == true {
-                    Ok(())
+            .and_then(|native| {
+                if native["accepted"] == true {
+                    Ok(native)
                 } else {
                     Err(Error::Protocol("DSH omitted the input receipt".into()))
                 }
             });
-        if let Err(error) = result {
-            if !steer {
-                let request = self
-                    .journal
-                    .attempted_prompt(id, &input, false, &self.secrets);
-                self.journal.prompt_error(request, &error, &self.secrets);
+        let receipt = match result {
+            Ok(native) => native,
+            Err(error) => {
+                if !steer && !queued {
+                    let request = self
+                        .journal
+                        .attempted_prompt(id, &input, false, &self.secrets);
+                    self.journal.prompt_error(request, &error, &self.secrets);
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
+        };
         redact(&mut req, &self.secrets);
         let text = super::projection::text(&req["content"], "text");
         let mut events = vec![];
-        if queued {
-            events.push(Event::InputQueued {
-                input_id: id.to_string(),
-            });
-        } else if !steer {
+        if !queued && !steer {
             events.push(Event::PromptDispatched);
         }
         events.push(Event::UserMessage { text });
         let request = input.request_id;
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.journal.push(
-            if steer {
+            if steer || queued {
                 stamp
             } else {
                 stamp.with_prompt_request(
@@ -228,7 +227,12 @@ impl Actor {
             req,
             events,
         );
-        if !steer {
+        if queued {
+            let mut receipt = receipt;
+            redact(&mut receipt, &self.secrets);
+            self.journal
+                .queue_accepted(request, id, false, Some(receipt));
+        } else if !steer {
             self.journal.control_decision(request, None);
         }
         self.sent.insert(id.to_string());
@@ -530,17 +534,21 @@ impl Actor {
             .await?;
         let native = state["queue"]
             .as_array()
-            .into_iter()
-            .flatten()
+            .ok_or_else(|| Error::Protocol("DSH session state omitted the queue".into()))?
+            .iter()
             .find(|i| i["rpcId"] == key)
             .and_then(|i| i["id"].as_str())
             .ok_or_else(|| Error::Refused("DSH input is no longer queued".into()))?;
-        self.web
+        let removed = self
+            .web
             .request(
                 "session/updateQueue",
                 json!({"sessionId":self.id,"itemId":native,"action":{"kind":"remove"}}),
             )
             .await?;
+        if removed["removed"] == false {
+            return Err(Error::Refused("DSH input is no longer queued".into()));
+        }
         self.sent.remove(&key);
         if let Some(t) = self.turns.remove(&key) {
             let _ = t.done.send(Err(Error::Refused("input withdrawn".into())));
@@ -690,16 +698,29 @@ impl Actor {
                 self.journal.control_result(request, &r, &self.secrets);
                 Self::ack(ack, r)?;
             }
-            Command::Queue(id, text, ack, done) => {
+            Command::Queue(id, input, ack, done) => {
+                let request = input.request_id;
+                self.journal.queue_request(id, &input, &self.secrets);
                 let r = if self.compacting.is_some() {
                     Err(Error::Busy)
                 } else {
-                    self.submit(Input::text(text), id, Some(done), true).await
+                    self.submit(input, id, Some(done), true).await
                 };
+                if let Err(error) = &r {
+                    self.journal.prompt_error(request, error, &self.secrets);
+                }
                 Self::ack(ack, r)?;
             }
             Command::Withdraw(id, ack) => {
+                let request = self.journal.withdraw_request(id);
                 let r = self.withdraw(id).await;
+                match &r {
+                    Err(Error::Refused(reason)) if reason == "DSH input is no longer queued" => {
+                        self.journal
+                            .control_decision(request, Some(("not_queued", reason)))
+                    }
+                    _ => self.journal.control_result(request, &r, &self.secrets),
+                }
                 let _ = ack.send(r);
             }
             Command::Abort(ack) => {

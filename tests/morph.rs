@@ -182,6 +182,13 @@ async fn stream_controls_approval_and_resume() {
     let mut stream = session.subscribe(None).unwrap();
     let turn = session.prompt("approval").await.unwrap();
     let (id, withdrawn) = session.queue("withdraw").await.unwrap();
+    let admission = withdrawn.admission().unwrap();
+    assert_eq!(admission.request.native["type"], "queue");
+    assert_eq!(
+        admission.request.control_request_id(),
+        admission.response.control_response_to()
+    );
+    assert_eq!(admission.response.native["type"], "accepted");
     session.withdraw(id).await.unwrap();
     assert!(withdrawn.report().await.is_err());
     let (_, queued) = session.queue("quick").await.unwrap();

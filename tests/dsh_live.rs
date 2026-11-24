@@ -525,6 +525,15 @@ async fn native_inbox_withdraw_and_background_job_stop() {
         .unwrap();
     let (drop_id, discard) = controls.queue("DSH_REMOVE").await.unwrap();
     let (_, keep) = controls.queue("DSH_KEEP").await.unwrap();
+    let admission = discard.admission().unwrap();
+    assert_eq!(admission.request.native["type"], "queue");
+    assert_eq!(
+        admission.request.control_request_id(),
+        admission.response.control_response_to()
+    );
+    assert_eq!(admission.response.native["type"], "accepted");
+    assert_eq!(admission.response.native["native"]["accepted"], true);
+    assert!(admission.response.native.get("queued").is_none());
     controls.withdraw(drop_id).await.unwrap();
     assert!(discard.report().await.is_err());
     data.release.notify_one();
