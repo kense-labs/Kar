@@ -184,7 +184,13 @@ fn run() -> Result<(), String> {
         };
         let case = index
             .iter()
-            .find(|r| r[1] == *source && matches!(r[0].as_str(), "public-case" | "vendor-test"))
+            .find(|r| {
+                r[1] == *source
+                    && matches!(
+                        r[0].as_str(),
+                        "public-case" | "vendor-test" | "vendor-shared"
+                    )
+            })
             .ok_or_else(|| format!("source missing from test index: {source}"))?;
         let snapshot = texts
             .entry((commit, file))
