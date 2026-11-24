@@ -30,7 +30,7 @@ async fn read(
             "use /operations and a stable request ID for writes",
         ));
     }
-    let c = Context::open(app.clone(), project).await?;
+    let c = Context::for_operation(app.clone(), project, &op).await?;
     if let Operation::Pull { number } = op {
         return review::refresh(&app, project, &c, number).await.map(Json);
     }
@@ -75,7 +75,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
     if !input.operation.mutates() {
         return Err(ForgeError::bad("use /query for reads"));
     }
-    let c = Context::open(app.clone(), project).await?;
+    let c = Context::for_operation(app.clone(), project, &input.operation).await?;
     let identity = c.identity();
     let id = input.id;
     let remembered = app.update(|db| {
@@ -158,7 +158,7 @@ async fn reconcile(
     Json(input): Json<Reconcile>,
 ) -> Reply<Value> {
     let Json(m) = operation(State(app.clone()), Path((project, id))).await?;
-    let c = Context::open(app.clone(), project).await?;
+    let c = Context::for_operation(app.clone(), project, &m.operation).await?;
     if c.identity() != m.repository {
         return Err(ForgeError::bad(
             "project origin changed since the operation",
@@ -214,7 +214,6 @@ async fn link(
     Json(input): Json<Link>,
 ) -> Reply<Binding> {
     app.binding(project, input.chat)?;
-    let c = Context::open(app.clone(), project).await?;
     let op = match input.kind.as_str() {
         "pull" => Operation::Pull {
             number: input.number,
@@ -224,6 +223,7 @@ async fn link(
         },
         _ => return Err(ForgeError::bad("kind must be pull or issue")),
     };
+    let c = Context::for_operation(app.clone(), project, &op).await?;
     let object = c.execute(&op).await?;
     if checked_number(&object)? != input.number {
         return Err(ForgeError::bad("object identity mismatch"));
@@ -268,7 +268,7 @@ async fn issue_chat(
     Path((project, n)): Path<(Uuid, u64)>,
     Json(input): Json<OpenIssue>,
 ) -> Reply<Value> {
-    let c = Context::open(app.clone(), project).await?;
+    let c = providers::linear::tracker(app.clone(), project).await?;
     let issue = c.execute(&Operation::Issue { number: n }).await?;
     if checked_number(&issue)? != n {
         return Err(ForgeError::remote(502, "issue identity mismatch"));
@@ -388,9 +388,17 @@ async fn checkout(
     .map(Json)
 }
 
+async fn issue_tracker(State(app): State<Workbench>, Path(project): Path<Uuid>) -> Reply<Value> {
+    let c = providers::linear::tracker(app, project).await?;
+    c.execute(&Operation::Identity).await.map(Json)
+}
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .route("/forge/drivers", get(drivers))
+        .route(
+            "/projects/{project}/forge/issue-tracker",
+            get(issue_tracker),
+        )
         .route("/projects/{project}/forge/query", post(read))
         .route(
             "/projects/{project}/forge/issues/{number}/chat",

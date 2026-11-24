@@ -151,6 +151,20 @@ struct Review {
 struct Config {
     #[serde(default)]
     hosts: Vec<Host>,
+    #[serde(default)]
+    issue_trackers: Vec<providers::linear::Team>,
+}
+impl Config {
+    fn load() -> Result<Self, ForgeError> {
+        match std::env::var_os("KAR_FORGE_CONFIG") {
+            None => Ok(Self {
+                hosts: vec![],
+                issue_trackers: vec![],
+            }),
+            Some(path) => toml::from_str(&std::fs::read_to_string(path).map_err(Error::Io)?)
+                .map_err(|_| ForgeError::bad("invalid host forge configuration")),
+        }
+    }
 }
 #[derive(Deserialize)]
 struct Host {
@@ -297,6 +311,50 @@ fn remote_identity(remote: &str) -> Result<(String, String), ForgeError> {
 }
 
 impl Context {
+    fn base(base: &str) -> Result<Url, ForgeError> {
+        let api_base =
+            Url::parse(base).map_err(|_| ForgeError::bad("invalid host API base URL"))?;
+        if !(api_base.scheme() == "https"
+            || (api_base.scheme() == "http"
+                && api_base.host_str().is_some_and(|h| {
+                    h == "localhost"
+                        || h.parse::<std::net::IpAddr>()
+                            .is_ok_and(|ip| ip.is_loopback())
+                })))
+            || !api_base.username().is_empty()
+            || api_base.password().is_some()
+            || api_base.query().is_some()
+            || api_base.fragment().is_some()
+        {
+            return Err(ForgeError::bad(
+                "forge API requires HTTPS or a loopback fixture",
+            ));
+        }
+        Ok(api_base)
+    }
+    fn client() -> Result<Client, ForgeError> {
+        let client = Client::builder()
+            .user_agent("Kar")
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(25))
+            .build()
+            .map_err(Error::Http)?;
+        Ok(client)
+    }
+    async fn for_operation(
+        app: Workbench,
+        project: Uuid,
+        op: &Operation,
+    ) -> Result<Self, ForgeError> {
+        if matches!(
+            op,
+            Operation::Issues | Operation::Issue { .. } | Operation::SetIssueState { .. }
+        ) {
+            providers::linear::tracker(app, project).await
+        } else {
+            Self::open(app, project).await
+        }
+    }
     async fn open(app: Workbench, project: Uuid) -> Result<Self, ForgeError> {
         tokio::task::spawn_blocking(move || {
             let repo = app.repository(project)?;
@@ -306,11 +364,7 @@ impl Context {
                     .map_err(|_| ForgeError::bad("origin is not UTF-8"))?
                     .trim(),
             )?;
-            let config: Config = match std::env::var_os("KAR_FORGE_CONFIG") {
-                None => Config { hosts: vec![] },
-                Some(path) => toml::from_str(&std::fs::read_to_string(path).map_err(Error::Io)?)
-                    .map_err(|_| ForgeError::bad("invalid host forge configuration"))?,
-            };
+            let config = Config::load()?;
             let (kind, base, key) = if let Some(h) = config
                 .hosts
                 .into_iter()
@@ -348,33 +402,11 @@ impl Context {
                     "TanStack Source requires KAR_TANSTACK_SOURCE=1",
                 ));
             }
-            let api_base =
-                Url::parse(&base).map_err(|_| ForgeError::bad("invalid host API base URL"))?;
-            if !(api_base.scheme() == "https"
-                || (api_base.scheme() == "http"
-                    && api_base.host_str().is_some_and(|h| {
-                        h == "localhost"
-                            || h.parse::<std::net::IpAddr>()
-                                .is_ok_and(|ip| ip.is_loopback())
-                    })))
-                || !api_base.username().is_empty()
-                || api_base.password().is_some()
-                || api_base.query().is_some()
-                || api_base.fragment().is_some()
-            {
-                return Err(ForgeError::bad(
-                    "forge API requires HTTPS or a loopback fixture",
-                ));
-            }
+            let api_base = Self::base(&base)?;
             let token = key
                 .and_then(|key| std::env::var(key).ok())
                 .filter(|s| !s.is_empty());
-            let client = Client::builder()
-                .user_agent("Kar")
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(std::time::Duration::from_secs(25))
-                .build()
-                .map_err(Error::Http)?;
+            let client = Self::client()?;
             Ok(Self {
                 kind,
                 host,
