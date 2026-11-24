@@ -8,6 +8,7 @@ use axum::{
 
 pub(in crate::workbench) fn routes() -> Router<Workbench> {
     Router::new()
+        .merge(super::views::routes())
         .route("/projects/{project}/workflows", get(list))
         .route(
             "/projects/{project}/workflows/{workflow}/webhook/rules",
@@ -25,7 +26,10 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
             "/projects/{project}/workflows/{workflow}/deliveries/{delivery}",
             get(webhook::detail),
         )
-        .route("/projects/{project}/workflows/{workflow}", put(save))
+        .route(
+            "/projects/{project}/workflows/{workflow}",
+            put(save).delete(super::views::remove),
+        )
         .route(
             "/projects/{project}/workflows/{workflow}/runs",
             get(runs).post(trigger),

@@ -602,7 +602,7 @@ name = "多客户端终端显示、观察及元数据流"
 upstream = ["apps/server/src/ws.ts"]
 kar = ["src/workbench/terminal_preview/mod.rs"]
 status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart -- workbench-terminal"
+test_target = "cargo test --locked --test workbench_terminal_preview"
 accept = "对同一终端分别 attach 和 observe，验证写入及尺寸的所属者、快照重放、清屏、关闭和仅元数据订阅。"
 
 [[gap]]

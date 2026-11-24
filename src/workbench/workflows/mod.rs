@@ -3,6 +3,7 @@
 mod routes;
 mod runner;
 mod schedule;
+mod views;
 mod webhook;
 pub(super) use routes::{hooks, routes};
 pub use schedule::Schedule;
@@ -219,6 +220,8 @@ pub enum Action {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Data {
+    #[serde(default)]
+    revision: u64,
     workflows: BTreeMap<Uuid, Workflow>,
     secrets: BTreeMap<Uuid, String>,
     #[serde(default)]
@@ -288,6 +291,10 @@ impl Engine {
         let approved = check(&current)?;
         let mut next = current.clone();
         let value = f(&mut next, approved)?;
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| Error::Protocol("workflow revision overflow".into()))?;
         let parent = self.file.parent().unwrap();
         let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
         serde_json::to_writer(&mut tmp, &next)?;
@@ -364,6 +371,13 @@ impl Workbench {
             let old = d.workflows.get(&id);
             if let Some(old) = old {
                 same_project(project, old.project)?;
+            }
+            if old.is_none()
+                && d.runs
+                    .values()
+                    .any(|r| r.workflow == id && r.project != project)
+            {
+                return Err(missing());
             }
             let preserved = old.filter(|old| {
                 old.definition.enabled && old.definition.schedule == definition.schedule
@@ -451,6 +465,9 @@ impl Workbench {
         e.update(|d| {
             let w = d.workflows.get(&id).ok_or_else(missing)?.clone();
             same_project(project, w.project)?;
+            if matches!(w.definition.schedule, Schedule::Webhook) {
+                return Err(Error::Refused("webhook tasks run on delivery".into()));
+            }
             insert_run(d, &w, Trigger::Manual(operation), input, e.clock.now_ms())
         })
     }

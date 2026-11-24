@@ -58,13 +58,13 @@ git.preparePullRequestThread	packages/contracts/src/rpc.ts#L548	apps/server/src/
 review.getBranchCommits	packages/contracts/src/rpc.ts#L550	apps/server/src/ws.ts#L3368	source-review	src/workbench/git.rs	cargo test --locked --test workbench_forge		已定位处理函数，逐操作对照中
 review.getDiffPreview	packages/contracts/src/rpc.ts#L551	apps/server/src/ws.ts#L3369	source-review	src/workbench/git.rs	cargo test --locked --test workbench_forge		已定位处理函数，逐操作对照中
 review.getDiffFileContents	packages/contracts/src/rpc.ts#L552	apps/server/src/ws.ts#L3370	source-review	src/workbench/git.rs	cargo test --locked --test workbench_forge		已定位处理函数，逐操作对照中
-terminal.open	packages/contracts/src/rpc.ts#L554	apps/server/src/ws.ts#L3371	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test chat_restart -- workbench-terminal		已定位处理函数，逐操作对照中
-terminal.attach	packages/contracts/src/rpc.ts#L555	apps/server/src/ws.ts#L3379	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test chat_restart -- workbench-terminal		已定位处理函数，逐操作对照中
-terminal.observe	packages/contracts/src/rpc.ts#L556	apps/server/src/ws.ts#L3395	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test chat_restart -- workbench-terminal		已定位处理函数，逐操作对照中
-terminal.write	packages/contracts/src/rpc.ts#L557	apps/server/src/ws.ts#L3389	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test chat_restart -- workbench-terminal		已定位处理函数，逐操作对照中
-terminal.resize	packages/contracts/src/rpc.ts#L558	apps/server/src/ws.ts#L3391	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test chat_restart -- workbench-terminal		已定位处理函数，逐操作对照中
+terminal.open	packages/contracts/src/rpc.ts#L554	apps/server/src/ws.ts#L3371	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
+terminal.attach	packages/contracts/src/rpc.ts#L555	apps/server/src/ws.ts#L3379	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
+terminal.observe	packages/contracts/src/rpc.ts#L556	apps/server/src/ws.ts#L3395	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
+terminal.write	packages/contracts/src/rpc.ts#L557	apps/server/src/ws.ts#L3389	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
+terminal.resize	packages/contracts/src/rpc.ts#L558	apps/server/src/ws.ts#L3391	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
 terminal.clear	packages/contracts/src/rpc.ts#L559	apps/server/src/ws.ts#L3393	terminal-clear	projects/{project}/POST terminals/{id}/clear	cargo test --locked --test workbench_terminal_preview	1072da0	实现已集成，待统一验收
-terminal.close	packages/contracts/src/rpc.ts#L560	apps/server/src/ws.ts#L3394	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test chat_restart -- workbench-terminal		已定位处理函数，逐操作对照中
+terminal.close	packages/contracts/src/rpc.ts#L560	apps/server/src/ws.ts#L3394	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
 preview.open	packages/contracts/src/rpc.ts#L562	apps/server/src/ws.ts#L3409					待源码核对
 preview.resize	packages/contracts/src/rpc.ts#L563	apps/server/src/ws.ts#L3410	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	95203f8	实现已集成，待统一验收
 preview.adjust	packages/contracts/src/rpc.ts#L564	apps/server/src/ws.ts#L3411	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	95203f8	实现已集成，待统一验收
@@ -225,7 +225,7 @@ subscribeVcsBranch	packages/contracts/src/rpc.ts#L728	apps/server/src/ws.ts#L323
 vcs.refreshBranch	packages/contracts/src/rpc.ts#L729	apps/server/src/ws.ts#L3232					待源码核对
 subscribeWorktreeSetup	packages/contracts/src/rpc.ts#L730	apps/server/src/ws.ts#L3235					待源码核对
 worktreeSetup.cancel	packages/contracts/src/rpc.ts#L731	apps/server/src/ws.ts#L3236					待源码核对
-subscribeTerminalMetadata	packages/contracts/src/rpc.ts#L732	apps/server/src/ws.ts#L3402	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test chat_restart -- workbench-terminal		已定位处理函数，逐操作对照中
+subscribeTerminalMetadata	packages/contracts/src/rpc.ts#L732	apps/server/src/ws.ts#L3402	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
 subscribePreviewEvents	packages/contracts/src/rpc.ts#L733	apps/server/src/ws.ts#L3417	preview-reports	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	357a2fb	实现已集成，待统一验收
 subscribeDiscoveredLocalServers	packages/contracts/src/rpc.ts#L734	apps/server/src/ws.ts#L3443					待源码核对
 subscribeDeviceState	packages/contracts/src/rpc.ts#L735	apps/server/src/ws.ts#L3441	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
