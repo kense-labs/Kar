@@ -3,6 +3,7 @@ pub(super) mod azure;
 pub(super) mod credentials;
 pub(super) mod hosted;
 pub(super) mod issue;
+pub(super) mod issue_directory;
 pub(super) mod linear;
 pub(super) mod rest;
 pub(super) mod reviews;
@@ -42,6 +43,17 @@ async fn send(
     body: Option<Value>,
     mutation: bool,
 ) -> Result<Value, ForgeError> {
+    send_with_headers(c, method, url, body, mutation)
+        .await
+        .map(|(body, _)| body)
+}
+async fn send_with_headers(
+    c: &Context,
+    method: Method,
+    url: Url,
+    body: Option<Value>,
+    mutation: bool,
+) -> Result<(Value, reqwest::header::HeaderMap), ForgeError> {
     let azure_patch = c.kind == "azure-devops"
         && (method == Method::PATCH
             || method == Method::POST && body.as_ref().is_some_and(Value::is_array));
@@ -102,6 +114,7 @@ async fn send(
             format!("{} returned {status}", c.kind),
         ));
     }
+    let headers = res.headers().clone();
     let mut bytes = Vec::new();
     while let Some(chunk) = res
         .chunk()
@@ -114,9 +127,11 @@ async fn send(
         bytes.extend_from_slice(&chunk);
     }
     if bytes.is_empty() {
-        return Ok(Value::Null);
+        return Ok((Value::Null, headers));
     }
-    serde_json::from_slice(&bytes).map_err(|_| classify("forge returned invalid JSON"))
+    serde_json::from_slice(&bytes)
+        .map(|value| (value, headers))
+        .map_err(|_| classify("forge returned invalid JSON"))
 }
 pub(super) async fn get(c: &Context, url: Url) -> Result<Value, ForgeError> {
     send(c, Method::GET, url, None, false).await

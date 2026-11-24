@@ -352,6 +352,17 @@ async fn scenario() {
     assert_eq!(links.as_array().unwrap().len(), 4);
     actions::repository(&a, &url, &bare, &root).await;
     actions::routing(&a, &forge, &url, id).await;
+    let catalog = ok(a.get(format!("{forge}/issue-tracker/candidates"))).await;
+    assert_eq!(catalog["labels"][0]["name"], "bug");
+    assert_eq!(catalog["assignees"][0]["id"], "kar-test");
+    assert_eq!(catalog["truncated"], true);
+    let templates = ok(a.get(format!("{forge}/issue-tracker/templates"))).await;
+    assert_eq!(templates["blankIssuesEnabled"], false);
+    assert_eq!(templates["templates"][0]["labels"], json!(["bug", "alpha"]));
+    assert_eq!(
+        templates["templates"][0]["body"],
+        "### Reproduce\n\nRequired."
+    );
     actions::issue(&a, &forge, id).await;
     actions::review(&a, &forge, id).await;
     stacked::run(&a, &format!("{url}/projects/{p}"), &repo, &bare, id, &mock).await;

@@ -71,7 +71,7 @@ pub(in crate::workbench::forge) async fn tracker(
     c.repository = format!("{org}/{}", c.repository);
     Ok(c)
 }
-async fn gql(
+pub(super) async fn gql(
     c: &Context,
     query: &str,
     variables: Value,

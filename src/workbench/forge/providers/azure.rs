@@ -358,3 +358,51 @@ pub(in crate::workbench::forge) async fn repository(c: &Context) -> Result<Value
     l.check_repo(&r)?;
     Ok(r)
 }
+
+pub(super) async fn candidates(c: &Context) -> Result<Value, ForgeError> {
+    let l = Location::from(c)?;
+    let tags = get(c, l.url(c, true, "wit", &["tags"])?).await?;
+    let labels = tags["value"]
+        .as_array()
+        .ok_or_else(|| invalid("Azure project tags"))?
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .map(|s| json!({"name":s,"color":null,"description":null}))
+        .collect::<Vec<_>>();
+    let mut url = l.url(c, false, "projects", &[l.project, "teams"])?;
+    url.query_pairs_mut().append_pair("$top", "10");
+    let teams = get(c, url).await?;
+    let mut users = std::collections::BTreeMap::new();
+    for team in teams["value"]
+        .as_array()
+        .ok_or_else(|| invalid("Azure project teams"))?
+        .iter()
+        .take(10)
+    {
+        let id = team["id"]
+            .as_str()
+            .ok_or_else(|| invalid("Azure team ID"))?;
+        let mut u = l.url(c, false, "projects", &[l.project, "teams", id, "members"])?;
+        u.query_pairs_mut().append_pair("$top", "100");
+        let members = get(c, u).await?;
+        for m in members["value"]
+            .as_array()
+            .ok_or_else(|| invalid("Azure team members"))?
+        {
+            let v = &m["identity"];
+            if v["isContainer"] == true {
+                continue;
+            }
+            if let Some(login) = v["uniqueName"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                users.entry(login.to_lowercase()).or_insert_with(||json!({"id":login,"login":login,"name":v["displayName"],"avatarUrl":v["imageUrl"]}));
+            }
+        }
+    }
+    Ok(
+        json!({"labels":labels,"assignees":users.into_values().collect::<Vec<_>>(),"truncated":true}),
+    )
+}

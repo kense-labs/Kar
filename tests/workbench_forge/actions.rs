@@ -87,7 +87,13 @@ pub(super) async fn review_control(
     let comments = json!({"nodes":db.review_comments,"pageInfo":{"hasNextPage":false}});
     let tid = "thread-1";
     let t = json!({"id":tid,"path":"notes.txt","isResolved":db.resolved,"viewerCanResolve":true,"viewerCanUnresolve":true,"viewerCanReply":true,"pullRequest":{"number":1,"repository":{"nameWithOwner":"team/repo"}},"comments":comments});
-    let data = if q.starts_with("query KarReviewThreads") {
+    let data = if q.starts_with("query KarIssueDirectory") {
+        if q.contains("issueTemplates") {
+            json!({"repository":{"issueTemplates":[],"templateDirectory":{"__typename":"Tree","entries":[{"name":"config.yml","object":{"__typename":"Blob","isTruncated":false,"text":"blank_issues_enabled: false"}},{"name":"bug.yml","object":{"__typename":"Blob","isTruncated":false,"text":"name: Bug\ndescription: Report\nlabels: bug, alpha\nbody:\n - type: input\n   attributes:\n     label: Reproduce\n   validations:\n     required: true"}}]}}})
+        } else {
+            json!({"repository":{"labels":{"nodes":[{"name":"bug","color":"ccaa00"}],"pageInfo":{"hasNextPage":true}},"assignableUsers":{"nodes":[{"login":"kar-test","avatarUrl":"https://test.invalid/avatar"}],"pageInfo":{"hasNextPage":false}}}})
+        }
+    } else if q.starts_with("query KarReviewThreads") {
         json!({"repository":{"pullRequest":{"reviewThreads":{"nodes":[t],"pageInfo":{"hasNextPage":false}}}}})
     } else if q.starts_with("query KarThread") {
         json!({"node":if v["id"]==tid {t}else{Value::Null}})

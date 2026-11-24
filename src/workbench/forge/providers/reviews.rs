@@ -2,7 +2,7 @@
 use super::issue::child;
 use super::*;
 use crate::workbench::forge::actions::{self, Comment, Position, Side, Verdict};
-mod github;
+pub(super) mod github;
 mod gitlab;
 mod threads;
 

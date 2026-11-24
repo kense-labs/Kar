@@ -8,7 +8,12 @@ fn endpoint(c: &Context) -> Result<Url, ForgeError> {
     Ok(child(u, &["graphql"]))
 }
 
-async fn gql(c: &Context, query: &str, variables: Value, write: bool) -> Result<Value, ForgeError> {
+pub(in crate::workbench::forge::providers) async fn gql(
+    c: &Context,
+    query: &str,
+    variables: Value,
+    write: bool,
+) -> Result<Value, ForgeError> {
     let r = send(
         c,
         Method::POST,
