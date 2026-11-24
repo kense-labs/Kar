@@ -19,7 +19,7 @@ use std::{io, path::PathBuf};
 
 use uuid::Uuid;
 
-pub(super) struct ApiError(Error);
+pub(super) struct ApiError(pub(super) Error);
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
         Self(e)

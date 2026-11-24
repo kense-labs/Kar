@@ -332,6 +332,15 @@ fn begin(
     });
     Ok(job)
 }
+pub(in crate::workbench) async fn model_start(app: Workbench, id: Uuid, title: String, payload: Value) -> crate::Result<Value> {
+    if let Some(j) = app.0.catalog.lock().unwrap().forge.clones.get(&id) {
+        if payload["directory"] != json!(j.input.dest) { return Err(Error::Refused("clone request ID already used".into())); }
+        return Ok(json!({"projectId":j.project,"cwd":j.input.dest,"phase":j.phase}));
+    }
+    let input = serde_json::from_value(payload)?;
+    let Json(result) = start(State(app),Json(Start{id,title,input})).await.map_err(|e| Error::Refused(e.detail))?;
+    Ok(result)
+}
 async fn start(State(app): State<Workbench>, Json(s): Json<Start>) -> Reply<Value> {
     if s.title.trim().is_empty() {
         return Err(ForgeError::bad("project title is required"));

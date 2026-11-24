@@ -69,6 +69,8 @@ struct Catalog {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     model_worktree_moves: BTreeMap<Uuid, mcp::worktree::Move>,
     #[serde(default)]
+    model_project_commands: BTreeMap<Uuid, mcp::project_tools::Receipt>,
+    #[serde(default)]
     assets: assets::Registry,
     #[serde(default)]
     thread_state: thread_state::Store,

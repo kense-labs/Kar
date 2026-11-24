@@ -128,6 +128,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
     }
     tools.extend(super::forge_tools::tools(caller));
     tools.extend(preview_tools::tools(caller));
+    tools.extend(super::project_tools::tools(caller));
     tools
 }
 pub(super) fn enabled(name: &str, caller: &Caller, deferred: bool) -> bool {
@@ -259,6 +260,7 @@ pub(super) async fn call(
     name: &str,
     input: Value,
 ) -> Result<Value> {
+    if super::project_tools::handles(name) { return super::project_tools::call(&app,&caller,name,input).await; }
     if name.starts_with("kar_preview_") || name.starts_with("kar_device_") || name.starts_with("kar_html_"){return preview_tools::call(&app,&caller,name,input).await;}
     if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
         return issues::call(app, caller, name, input).await;
@@ -358,20 +360,18 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
         }
         "kar_project_list" => {
             let a: Page = args(input)?;
-            let scope = project_scope(c, None)?;
             let rows = app
                 .projects()
                 .into_iter()
-                .filter(|p| !p.metadata.deleted && scope.is_none_or(|id| p.id == id))
+                .filter(|p| !p.metadata.deleted && super::project_tools::visible(c, p))
                 .map(|p| json!(p))
                 .collect();
             page(rows, "projects", a.cursor, a.limit)
         }
         "kar_project_read" => {
             let a: ProjectArgs = args(input)?;
-            project_scope(c, Some(a.project_id))?;
             let p = app.project(a.project_id)?;
-            if p.metadata.deleted {
+            if p.metadata.deleted || !super::project_tools::visible(c, &p) {
                 return Err(super::super::missing());
             }
             Ok(json!(p))

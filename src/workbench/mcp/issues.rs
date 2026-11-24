@@ -18,6 +18,8 @@ pub(in crate::workbench) struct Policy {
     #[serde(default)]
     pub(super) preview_tools: super::preview_tools::Resources,
     #[serde(default)]
+    pub(super) project_access: super::project_tools::Access,
+    #[serde(default)]
     issue_reads: bool,
     #[serde(default)]
     issue_writes: bool,
@@ -43,6 +45,8 @@ struct Configure {
     mode: Mode,
     #[serde(default)]
     pub(super) preview_tools: super::preview_tools::Resources,
+    #[serde(default)]
+    pub(super) project_access: super::project_tools::Access,
     #[serde(default)]
     issue_reads: bool,
     #[serde(default)]
@@ -127,6 +131,7 @@ async fn configure(
         worktree_directory,
         mode: cfg.mode,
         preview_tools: cfg.preview_tools,
+        project_access: cfg.project_access.validate(&app)?,
         issue_reads: cfg.issue_reads,
         issue_writes: cfg.issue_writes,
         workflow_reads: cfg.workflow_reads,

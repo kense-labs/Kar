@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::io;
 
 #[derive(Serialize)]
-pub(super) struct Created {
+pub(in crate::workbench) struct Created {
     #[serde(flatten)]
     project: Project,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -17,7 +17,7 @@ impl Workbench {
     fn managed_root(&self, name: &str) -> Result<PathBuf> {
         self.ensure_directory(&self.0.roots[0].path.join("Kar").join(name))
     }
-    pub(super) fn ensure_scratch(&self) -> Result<Project> {
+    pub(in crate::workbench) fn ensure_scratch(&self) -> Result<Project> {
         self.update(|c| {
             if let Some(p) = c.lifecycle.scratch.and_then(|id| c.projects.get(&id)) {
                 self.workspace_at(&p.root)?;
@@ -67,6 +67,9 @@ impl Workbench {
         self.claim_folder(root, &format!("chat-{id}"))
     }
     pub(super) fn create_named(&self, name: &str) -> Result<Created> {
+        self.create_named_at(name, self.managed_root("projects")?, None)
+    }
+    pub(in crate::workbench) fn create_named_at(&self, name: &str, parent: PathBuf, requested: Option<Uuid>) -> Result<Created> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 200 || name.contains(['\r', '\n', '\0']) {
             return Err(Error::Refused("invalid project name".into()));
@@ -81,7 +84,13 @@ impl Workbench {
         if slug.is_empty() {
             slug.push_str("project");
         }
-        let parent = self.managed_root("projects")?;
+        if let Some(id) = requested {
+            slug = format!("{slug}-{id}");
+            if let Ok(p) = self.project(id) {
+                if p.root != parent.join(&slug) || p.metadata.deleted { return Err(denied()); }
+                return Ok(Created { project:p, commit_error:None });
+            }
+        }
         let stage = tempfile::Builder::new()
             .prefix(".kar-new-project-")
             .tempdir_in(&parent)?;
@@ -135,7 +144,10 @@ impl Workbench {
                         .collect()
                 }
             });
-        let project = self.publish_named(stage, &parent, &slug, name)?;
+        if let Some(id) = requested {
+            git(&root, &["config","kar.projectRequest",&id.to_string()])?;
+        }
+        let project = self.publish_named(stage, &parent, &slug, name, requested)?;
         Ok(Created {
             project,
             commit_error,
@@ -148,19 +160,21 @@ impl Workbench {
         parent: &Path,
         slug: &str,
         title: &str,
+        requested: Option<Uuid>,
     ) -> Result<Project> {
         let workspace = self.workspace_at(parent)?;
         let dir = workspace.parent(Path::new("child"), false)?;
         let src = stage.path().file_name().ok_or_else(denied)?.to_owned();
         self.update(|catalog| {
-            for i in 1..=100 {
+            for i in 1..=if requested.is_some() {1} else {100} {
                 let dest = if i == 1 {
                     slug.to_owned()
                 } else {
                     format!("{slug}-{i}")
                 };
                 let root = parent.join(&dest);
-                if catalog.projects.values().any(|p| p.root == root) {
+                if let Some(project) = catalog.projects.values().find(|p| p.root == root) {
+                    if requested == Some(project.id) && !project.metadata.deleted { return Ok(project.clone()); }
                     continue;
                 }
                 // Publish the fully prepared repo without overwriting even an empty existing folder.
@@ -181,11 +195,16 @@ impl Workbench {
                 };
                 match publish {
                     Ok(()) => {}
-                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                        let ours = requested.is_some_and(|id| root.canonicalize().ok().as_ref() == Some(&root)
+                            && root.join(".git").is_dir() && git(&root,&["config","--local","--get","kar.projectRequest"]).ok()
+                                .is_some_and(|s| String::from_utf8_lossy(&s).trim() == id.to_string()));
+                        if !ours { continue; }
+                    },
                     Err(e) => return Err(e.into()),
                 }
                 let project = Project {
-                    id: Uuid::new_v4(),
+                    id: requested.unwrap_or_else(Uuid::new_v4),
                     name: title.into(),
                     root,
                     metadata: Default::default(),

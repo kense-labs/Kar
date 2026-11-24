@@ -148,6 +148,20 @@ impl Workbench {
         Ok(())
     }
 
+    pub(in crate::workbench) fn bind_model_checkout(&self, project:Uuid, chat:Uuid, cwd:&Path)->Result<()> {
+        self.update(|db|{
+            if let Some(binding)=db.lifecycle.owners.get(&chat) {
+                if binding.project!=project || binding.cwd!=cwd || binding.fork.is_some(){return Err(denied());}
+            } else {
+                match self.0.chats.initial_info(chat) {
+                    Err(Error::Io(e)) if e.kind()==std::io::ErrorKind::NotFound=>{},
+                    Ok(_)=>return Err(denied()), Err(e)=>return Err(e),
+                }
+                db.lifecycle.bind_import(project,chat,cwd.to_owned());
+            }
+            Ok(())
+        })
+    }
     pub(super) fn reserve_chat_directory(&self, project: Uuid, id: Uuid) -> Result<PathBuf> {
         self.update(|c| {
             let p = c.projects.get(&project).ok_or_else(missing)?;
@@ -306,8 +320,11 @@ async fn finish_mutation(
     app: Workbench,
     input: Value,
 ) -> std::result::Result<Json<Project>, ApiError> {
+    Ok(Json(model_mutation(app, input, None).await?))
+}
+pub(in crate::workbench) async fn model_mutation(app: Workbench, input: Value, calling: Option<Uuid>) -> Result<Project> {
     let host = app.clone();
-    let result = blocking(move || host.mutate_project(input)).await?;
+    let result = tokio::task::spawn_blocking(move || host.mutate_project(input)).await.map_err(|e| Error::Closed(e.to_string()))??;
     if result.metadata.deleted {
         super::forge::clone_jobs::finish_discard(&app, result.id).await?;
         let ids: Vec<_> = app
@@ -324,10 +341,13 @@ async fn finish_mutation(
         app.0.access.notify();
         for id in ids {
             let slot = app.controller(id);
-            let mut owner = slot.owner.lock().await;
-            if let Some(session) = owner.take() {
-                session.close().await?;
-            }
+            let close = async move {
+                let mut owner = slot.owner.lock().await;
+                if let Some(session) = owner.take() { session.close().await?; }
+                Ok::<_,Error>(())
+            };
+            // A model making this call is still inside the turn holding its own controller.
+            if Some(id) == calling { tokio::spawn(close); } else { close.await?; }
         }
     }
     Ok(result)

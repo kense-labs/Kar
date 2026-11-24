@@ -1,6 +1,8 @@
 //! Exercise the authenticated Kar listener and the credential handed to a native Codex protocol peer.
 #[path = "workbench_mcp/issues.rs"]
 mod issues;
+#[path = "workbench_mcp/projects.rs"]
+mod projects;
 #[path = "workbench_mcp/worktree.rs"]
 mod worktree;
 #[path = "workbench_mcp/preview_tools.rs"]
@@ -203,6 +205,7 @@ async fn scenario() {
     .await;
     assert_eq!(foreign["result"]["isError"], true);
     let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
+    projects::exercise(&url, &a, p, chat, &root, call).await;
     preview_tools::controls(&url, &a, p, chat, call).await;
     preview_tools::devices(&url,&a,p,chat,call).await;
     preview_tools::html(&url,&a,p,chat,&root,call).await;

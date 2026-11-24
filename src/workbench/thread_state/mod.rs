@@ -352,6 +352,9 @@ impl Metadata {
     }
 }
 
+pub(in crate::workbench) async fn model_rename(app:Workbench, project:Uuid,chat:Uuid,command_id:Uuid,title:String)->Result<()> {
+    change(State(app),Path((project,chat)),Json(Command{command_id,action:Action::Rename{title}})).await.map(|_|()).map_err(|e|e.0)
+}
 async fn change(
     State(app): State<Workbench>,
     Path((p, c)): Path<(Uuid, Uuid)>,
