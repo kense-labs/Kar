@@ -189,10 +189,67 @@ fn assistant(t: &Value) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+async fn fork_prior_codex_turn(
+    f: &Fixture,
+    selected: &Value,
+    expected_native: &Value,
+    child_prompt: &str,
+) -> Value {
+    let before = f.history().await;
+    assert_eq!(before["chat"]["runtime"], "qwen");
+    let child = Uuid::new_v4();
+    let request = json!({"id":child,"turn":selected["id"]});
+    let result = body(f.post("forks", &request)).await;
+    let fork = &result["history"];
+    assert_eq!(fork["chat"]["runtime"], "codex");
+    let old_route = &before["handoffs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["from"]["native_id"] == *expected_native)
+        .unwrap()["from"];
+    assert_eq!(fork["chat"]["model"], old_route["model"]);
+    assert_eq!(fork["chat"]["settings"], old_route["settings"]);
+    assert_eq!(
+        fork["chat"]["forked_from"]["native_source"],
+        *expected_native
+    );
+    assert_eq!(
+        fork["chat"]["forked_from"]["native_workspace"],
+        json!(f.workspace)
+    );
+    assert_eq!(fork["chat"]["id"], child.to_string());
+    assert_ne!(fork["chat"]["native_id"], *expected_native);
+    assert_eq!(
+        fork["turns"].as_array().unwrap().last().unwrap()["id"],
+        selected["id"]
+    );
+    let child_url = f
+        .endpoint("messages")
+        .replace(&f.chat.to_string(), &child.to_string());
+    let answer = body(
+        f.client
+            .post(child_url)
+            .json(&json!({"id":Uuid::new_v4(),"text":child_prompt})),
+    )
+    .await;
+    assert_eq!(answer["status"], "completed");
+    let replay = body(f.post("forks", &request)).await;
+    assert_eq!(
+        replay["history"]["chat"]["native_id"],
+        fork["chat"]["native_id"]
+    );
+    let after = f.history().await;
+    assert_eq!(before["chat"], after["chat"]);
+    assert_eq!(before["turns"], after["turns"]);
+    assert_eq!(before["handoffs"], after["handoffs"]);
+    answer
+}
+
 async fn protocol() {
     let mut f = Fixture::new(false).await;
     let original = f.history().await["chat"]["native_id"].clone();
-    f.send(Uuid::new_v4(), "fact-one and fact-two").await;
+    let first_codex = f.send(Uuid::new_v4(), "fact-one and fact-two").await;
     f.send(Uuid::new_v4(), "collect evidence").await;
     let marker = fs::read_to_string(f.dir.join("side-effect")).unwrap();
     let req = request("qwen");
@@ -236,6 +293,7 @@ async fn protocol() {
     assert!(context.ends_with(prompt));
     assert_eq!(inputs[1]["text"], "B-only next fact");
     assert_eq!(inputs[0]["cwd"], f.workspace.to_str().unwrap());
+    fork_prior_codex_turn(&f, &first_codex, &original, "continue old Codex fork").await;
     let back = f.handoff(&request("codex")).await;
     assert_eq!(back["target"]["native_id"], original);
     assert_eq!(back["resumed_target"], true);
@@ -243,6 +301,14 @@ async fn protocol() {
         (back["from_turn"].as_u64(), back["through_turn"].as_u64()),
         (Some(3), Some(4))
     );
+    let unanchored = f
+        .post("forks", &json!({"id":Uuid::new_v4(),"turn":first}))
+        .send()
+        .await
+        .unwrap();
+    assert!(!unanchored.status().is_success());
+    assert!(unanchored.text().await.unwrap().contains("qwen"));
+    assert_eq!(f.history().await["chat"]["native_id"], original);
     let final_id = Uuid::new_v4();
     f.send(final_id, "continue on source").await;
     let final_input = f.calls().into_iter().last().unwrap();
@@ -360,6 +426,21 @@ async fn live() {
             .iter()
             .all(|i| i["kind"] != "tool")
     );
+    let verify_fork = std::env::var("KAR_HANDOFF_FORK_LIVE").as_deref() == Ok("1");
+    if verify_fork {
+        let branch_answer = fork_prior_codex_turn(
+        &f,
+        &tool,
+        &a,
+        "Without tools repeat both color-prefixed facts and any silver-prefixed fact you remember.",
+    )
+    .await;
+        assert!(
+            assistant(&branch_answer).contains(&fact_one)
+                && assistant(&branch_answer).contains(&fact_two)
+        );
+        assert!(!assistant(&branch_answer).contains(&only_b));
+    }
     f.restart().await;
     let back = f.handoff(&request("codex")).await;
     assert_eq!(back["target"]["native_id"], a, "{}", back["error"]);
@@ -382,7 +463,11 @@ async fn live() {
         f.history().await["chat"]["workspace"],
         f.workspace.to_str().unwrap()
     );
-    assert_eq!(f.calls().len(), 4, "unexpected model input count");
+    assert_eq!(
+        f.calls().len(),
+        if verify_fork { 5 } else { 4 },
+        "unexpected model input count"
+    );
     println!(
         "Installed Codex / Qwen round trip verified through the workbench HTTP process. Four admitted wire inputs, two A facts, a native tool result, one B fact and the original A ID matched."
     );

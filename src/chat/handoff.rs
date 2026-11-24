@@ -29,7 +29,7 @@ pub struct ProviderSession {
     pub settings: SessionSettings,
 }
 impl ProviderSession {
-    fn current(info: &ChatInfo) -> Self {
+    pub(super) fn current(info: &ChatInfo) -> Self {
         Self {
             runtime: info.runtime.clone(),
             protocol: info.protocol,

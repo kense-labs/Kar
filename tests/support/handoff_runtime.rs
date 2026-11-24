@@ -91,7 +91,7 @@ fn fixture(runtime: &str) {
             if runtime == "qwen" {
                 "0.27.4"
             } else {
-                "0.130.0"
+                "0.143.0"
             }
         );
         return;
@@ -138,10 +138,50 @@ fn fixture(runtime: &str) {
                     }
                     reply(info);
                 }
+                Some("thread/fork") => {
+                    let source = v["params"]["threadId"].as_str().unwrap();
+                    assert_eq!(
+                        fs::read(dir.join(source)).unwrap(),
+                        cwd.as_os_str().as_encoded_bytes()
+                    );
+                    assert_eq!(v["params"]["cwd"], serde_json::json!(cwd));
+                    let anchor = v["params"]["lastTurnId"].as_str().unwrap();
+                    let turns = fs::read_to_string(dir.join(format!("{source}.turns"))).unwrap();
+                    let mut prefix = Vec::new();
+                    for turn in turns.lines() {
+                        prefix.push(json!({"id":turn}));
+                        if turn == anchor {
+                            break;
+                        }
+                    }
+                    assert_eq!(prefix.last().unwrap()["id"], anchor);
+                    sid = Uuid::new_v4().to_string();
+                    fs::write(dir.join(&sid), cwd.as_os_str().as_encoded_bytes()).unwrap();
+                    fs::write(
+                        dir.join(format!("{sid}.turns")),
+                        prefix
+                            .iter()
+                            .map(|t| t["id"].as_str().unwrap())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                            + "\n",
+                    )
+                    .unwrap();
+                    reply(json!({"thread":{"id":sid,"cwd":cwd,"turns":prefix},"cwd":cwd}));
+                }
                 Some("turn/start") => {
                     let text = input(runtime, &v).unwrap();
                     audit(json!({"runtime":runtime,"session":sid,"text":text,"cwd":cwd}));
                     let turn = Uuid::new_v4();
+                    writeln!(
+                        std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(dir.join(format!("{sid}.turns")))
+                            .unwrap(),
+                        "{turn}"
+                    )
+                    .unwrap();
                     reply(json!({"turn":{"id":turn}}));
                     emit(
                         json!({"method":"turn/started","params":{"threadId":sid,"turn":{"id":turn}}}),

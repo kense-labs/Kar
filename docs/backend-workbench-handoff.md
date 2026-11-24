@@ -19,3 +19,14 @@
 | 已安装的 Codex 和 Qwen | A 在隔离工作区以工具读出随机文件，B 应凭交接提供两个随机事实和文件内容。重启后 A 应在原生会话内回答 B 的新事实。Rust 转发器检查实际送入 CLI 的用户包和次数 | `KAR_HANDOFF_LIVE=1 KAR_CODEX_BIN=/absolute/path/to/codex KAR_QWEN_BIN=/absolute/path/to/qwen cargo test --locked --test workbench_handoff` | 待统一实测。需两个可执行入口、它们各自可访问的模型和认证、A 的只读工具权限。运行时应记录两个可执行入口的实际版本 |
 
 协议夹具写入各自临时工作区和聊天目录。实机模式沿用调用进程的供应商配置，建议统一验收提供独立的供应商配置目录。测试按随机输入验证回复，省去凭据、模型流和真实聊天记录的复制。其它供应商组合需要按其各自的恢复与身份确认能力补验。Linux 和 Windows 未在此轮运行。
+
+## 在旧供应商的历史回合创建分叉
+
+`POST /projects/{project}/chats/{chat}/forks` 可以选中供应商切换前的回合。Kar 用持久化切换记录中源绑定的原生身份、启动程序、模型、设置和切换时的回合数确认该回合的归属，并核对时间线根会话和检查点。继承自早期分叉的回合会沿原聊天记录逐层核对。原始记录缺失、身份不一致、没有本地可验证原生锚或供应商不支持时，会在修改工作区前拒绝。新子聊天保存选中回合的原生源会话和源工作目录。
+
+父聊天保留当前供应商、模型、原生身份、切换记录与全部回合。原地分叉按既有行为恢复同一工作区的文件；独立工作树入口可保留父工作区当前文件。切换后的父进程私有环境、MCP 与启动参数不会自动传给早期供应商，可重放的启动设置来自选中回合。
+
+| 模式 | 场景与命令 | 状态 |
+| --- | --- | --- |
+| 跨进程 HTTP 协议夹具 | `cargo test --locked --test workbench_handoff`；Codex 完成两轮后切到 Qwen，在 Qwen 上续聊后直接选择第一轮，核对 Codex 原生 fork 的父 ID 与包含式 lastTurnId、仅继承该回合、父聊天仍属 Qwen、子聊天独立续聊。切回 Codex 后再选缺少原生按回合分叉能力的 Qwen 轮次，应明确拒绝。 | macOS 测试目标已编译，待联合运行。 |
+| 原生程序与真实模型 | `KAR_HANDOFF_LIVE=1 KAR_HANDOFF_FORK_LIVE=1 KAR_CODEX_BIN=/absolute/path/to/codex KAR_QWEN_BIN=/absolute/path/to/qwen cargo test --locked --test workbench_handoff`；需 Codex ≥0.143.0、可用 Qwen、两个已认证模型、临时工作区的只读工具权限。子模型应能复述所选 Codex 历史中的两个随机事实，无法返回后来只在 Qwen 出现的随机事实。 | 实机回复与模型上下文待联合验收。 |

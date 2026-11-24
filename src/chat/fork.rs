@@ -1,4 +1,5 @@
 mod request;
+mod source;
 mod worktree;
 use super::{ChatInfo, ChatSession, ChatStore, CheckpointPoint, Sink, TurnStatus, log};
 use crate::{Error, Protocol, Result, Session, SessionOptions};
@@ -17,6 +18,9 @@ pub struct ForkOrigin {
     pub chat: Uuid,
     pub turn: Uuid,
     pub native_source: String,
+    /// Directory of the native provider session which owns the selected turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_workspace: Option<PathBuf>,
     pub anchor: String,
     pub checkpoint_store: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -57,24 +61,6 @@ impl ChatStore {
             .and_then(|child| child.forked_from))
     }
 
-    fn fork_options(&self, parent: &ChatInfo, mut opts: SessionOptions) -> Result<SessionOptions> {
-        if let Some(child) = self.staged_fork(parent.id)? {
-            // Per-provider credentials, MCP endpoints and launch arguments belong to the
-            // live route. A switched parent cannot supply them to a different runtime.
-            if child.runtime != parent.runtime
-                || child.protocol != parent.protocol
-                || child.program != parent.program
-            {
-                opts = child.options();
-            } else {
-                opts.model = child.model;
-                opts.settings = child.settings;
-                opts.approvals = child.approvals;
-                opts.unset_env.extend(child.unset_env);
-            }
-        }
-        Ok(opts)
-    }
     pub(super) fn require_no_pending_fork(&self, source: Uuid) -> Result<()> {
         if let Some(f) = self
             .pending_fork(source)?
@@ -98,10 +84,11 @@ impl ChatStore {
         configure: impl FnOnce(&mut SessionOptions),
     ) -> Result<ChatSession> {
         let log = self.open_controller(source).await?;
-        let mut opts = self.fork_options(&log.state.info, log.state.info.options())?;
-        configure(&mut opts);
-        self.fork_from(Sink(Arc::new(Mutex::new(log))), turn, opts, None)
-            .await
+        let opts = log.state.info.options();
+        let source = Sink(Arc::new(Mutex::new(log)));
+        let mut launch = self.prepare_fork(&source, turn, opts).await?;
+        configure(&mut launch.options);
+        self.fork_from(source, turn, launch, None).await
     }
     /// Fork files and native context into a linked checkout previously created by Kar.
     pub async fn fork_at_in_worktree(
@@ -111,14 +98,11 @@ impl ChatStore {
         checkout: impl Into<PathBuf>,
     ) -> Result<ChatSession> {
         let log = self.open_controller(source).await?;
-        let opts = self.fork_options(&log.state.info, log.state.info.options())?;
-        self.fork_from(
-            Sink(Arc::new(Mutex::new(log))),
-            turn,
-            opts,
-            Some(checkout.into()),
-        )
-        .await
+        let opts = log.state.info.options();
+        let source = Sink(Arc::new(Mutex::new(log)));
+        let launch = self.prepare_fork(&source, turn, opts).await?;
+        self.fork_from(source, turn, launch, Some(checkout.into()))
+            .await
     }
     /// Return the child history for a stable public request, including replays after publication.
     pub async fn fork_at_with_id(
@@ -182,14 +166,14 @@ impl ChatStore {
                 (Sink(Arc::new(Mutex::new(log))), opts)
             }
         };
-        let mut opts = self.fork_options(&source.0.lock().unwrap().state.info, opts)?;
-        configure(&mut opts);
-        crate::stream::retention::check_limit(opts.retained_bytes)?;
+        let mut launch = self.prepare_fork(&source, turn, opts).await?;
+        configure(&mut launch.options);
+        crate::stream::retention::check_limit(launch.options.retained_bytes)?;
         let store = self.clone();
         // Closing the HTTP stream does not cancel native dispatch, publication, or release.
         tokio::spawn(async move {
             let child = store
-                .run_fork(source, turn, opts, worktree, Some(request))
+                .run_fork(source, turn, launch, worktree, Some(request))
                 .await?;
             child.close().await?;
             store.history(child_id)
@@ -258,25 +242,45 @@ impl ChatStore {
             return Err(Error::Protocol("provider resumed a different chat".into()));
         }
         if rt.protocol == Protocol::Codex
-            && info
-                .forked_from
-                .as_ref()
-                .is_some_and(|f| f.worktree_base.is_some())
+            && info.forked_from.as_ref().is_some_and(|f| {
+                f.worktree_base.is_some()
+                    || f.native_workspace
+                        .as_ref()
+                        .is_some_and(|dir| dir != &info.workspace)
+            })
         {
             worktree::confirm(&session, &info.workspace).await?;
         }
         Ok(session)
     }
+    async fn prepare_fork(
+        &self,
+        source: &Sink,
+        turn: Uuid,
+        options: SessionOptions,
+    ) -> Result<source::Launch> {
+        let store = self.clone();
+        let source = source.clone();
+        tokio::task::spawn_blocking(move || {
+            let log = source.0.lock().unwrap();
+            if log.state.active().is_some() || log.state.pending_handoff().is_some() {
+                return Err(Error::Busy);
+            }
+            source::Launch::prepare(&store, &log.state, turn, options)
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?
+    }
     async fn fork_from(
         &self,
         source: Sink,
         turn: Uuid,
-        opts: SessionOptions,
+        launch: source::Launch,
         checkout: Option<PathBuf>,
     ) -> Result<ChatSession> {
-        crate::stream::retention::check_limit(opts.retained_bytes)?;
+        crate::stream::retention::check_limit(launch.options.retained_bytes)?;
         let store = self.clone();
-        tokio::spawn(async move { store.run_fork(source, turn, opts, checkout, None).await })
+        tokio::spawn(async move { store.run_fork(source, turn, launch, checkout, None).await })
             .await
             .map_err(|e| Error::Closed(e.to_string()))?
     }
@@ -284,7 +288,7 @@ impl ChatStore {
         &self,
         source: Sink,
         turn: Uuid,
-        mut opts: SessionOptions,
+        launch: source::Launch,
         checkout: Option<PathBuf>,
         request: Option<Request>,
     ) -> Result<ChatSession> {
@@ -295,17 +299,31 @@ impl ChatStore {
             }
             log.state.info.clone()
         };
+        launch.activate(&mut parent);
         let _pin = parent.pin_worktree()?;
-        opts.cwd = parent.workspace.clone();
-        opts.resume = None;
         let stage = self.fork_stage(parent.id);
         let staged_info = self.staged_fork(parent.id)?;
-        if let Some(staged) = &staged_info {
-            let origin = staged.forked_from.as_ref().expect("validated staged fork");
-            parent.runtime.clone_from(&staged.runtime);
-            parent.protocol = staged.protocol;
-            parent.native_id.clone_from(&origin.native_source);
+        if staged_info.as_ref().map(|i| i.id) != launch.staged {
+            return Err(Error::Busy);
         }
+        let changed_workspace =
+            launch.staged.is_none() && launch.owner.workspace != parent.workspace;
+        if changed_workspace && launch.owner.protocol != Protocol::Codex {
+            return Err(Error::Refused("native owner of this inherited turn belongs to another workspace without a verified directory override".into()));
+        }
+        let _origin_pin = if changed_workspace {
+            if launch.owner.workspace.canonicalize()? != launch.owner.workspace {
+                return Err(Error::Refused(
+                    "historical native workspace now resolves to another directory".into(),
+                ));
+            }
+            launch.owner.pin_worktree()?
+        } else {
+            None
+        };
+        let mut opts = launch.options;
+        opts.cwd = parent.workspace.clone();
+        opts.resume = None;
         let opencode = parent.protocol == Protocol::Acp && parent.runtime == "opencode";
         if !opencode
             && !matches!(
@@ -376,15 +394,9 @@ impl ChatStore {
                 .position(|t| t.id == turn)
                 .ok_or_else(|| Error::Refused("unknown turn in this chat".into()))?;
             let cut = &log.state.turns[index];
-            if !log.state.handoffs.is_empty()
-                && cut
-                    .items
-                    .first()
-                    .and_then(|i| i.source.session_id.as_deref())
-                    != Some(parent.native_id.as_str())
-            {
+            if source::witness(cut)? != parent.native_id {
                 return Err(Error::Refused(
-                    "switch to the native session that owns this turn before forking".into(),
+                    "selected turn changed its native session binding".into(),
                 ));
             }
             if cut.status == TurnStatus::Running
@@ -422,11 +434,7 @@ impl ChatStore {
             }
         }
         let cut = prefix.last_mut().expect("selected turn is in prefix");
-        let native_source = cut
-            .items
-            .first()
-            .and_then(|i| i.source.session_id.clone())
-            .ok_or_else(|| Error::Protocol("turn lacks its native session identity".into()))?;
+        let native_source = parent.native_id.clone();
         let saved = if let Some(info) = staged_info {
             if destination.as_ref().map(|d| (d.id, d.workspace.as_path()))
                 != info
@@ -499,8 +507,8 @@ impl ChatStore {
                     opencode_fork::open(&rt, opts.clone(), &native_source, Target::Turn(cut))
                         .await?
                 };
-                if let Some(dest) = &destination {
-                    worktree::confirm(&branch, &dest.workspace).await?;
+                if changed_workspace || destination.is_some() {
+                    worktree::confirm(&branch, &opts.cwd).await?;
                 }
                 Ok::<_, Error>((branch, anchor))
             }
@@ -522,6 +530,7 @@ impl ChatStore {
                 chat: parent.id,
                 turn,
                 native_source,
+                native_workspace: Some(launch.owner.workspace.clone()),
                 anchor,
                 checkpoint_store: parent.checkpoint_store(),
                 worktree_base,
@@ -660,7 +669,8 @@ impl ChatSession {
                 turn,
                 self.sender
                     .store
-                    .fork_options(self.info(), self.launch.clone())?,
+                    .prepare_fork(&self.sender.sink, turn, self.launch.clone())
+                    .await?,
                 None,
             )
             .await
@@ -698,7 +708,8 @@ impl ChatSession {
                 turn,
                 self.sender
                     .store
-                    .fork_options(self.info(), self.launch.clone())?,
+                    .prepare_fork(&self.sender.sink, turn, self.launch.clone())
+                    .await?,
                 Some(checkout.into()),
             )
             .await
@@ -740,6 +751,7 @@ mod staged_route_tests {
             chat: parent.id,
             turn: Uuid::new_v4(),
             native_source: "previous-parent".into(),
+            native_workspace: None,
             anchor: "original-turn".into(),
             checkpoint_store: parent.id,
             worktree_base: None,
@@ -754,7 +766,7 @@ mod staged_route_tests {
         options
             .env
             .insert("CURRENT_PROVIDER_KEY".into(), "not-for-child".into());
-        let restored = store.fork_options(&parent, options).unwrap();
+        let restored = source::options(&parent, &child, options);
         assert_eq!(restored.model, child.model);
         assert_eq!(
             restored.settings.system_prompt,
