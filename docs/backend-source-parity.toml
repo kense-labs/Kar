@@ -545,7 +545,7 @@ name = "工作台配置、更新任务、快捷键和服务生命周期"
 upstream = ["apps/server/src/serverSettings.ts", "apps/server/src/keybindings.ts", "apps/server/src/ws.ts"]
 kar = ["src/workbench/mod.rs"]
 implementation_commit = "01a1d6e"
-status = "配置、两客户端修订订阅、快捷键优先级、外部文件变更和损坏修复已接入。桌面更新准备和提交需要独立桌面更新宿主。"
+status = "配置、两客户端修订订阅、快捷键优先级、外部文件变更和损坏修复已接入。桌面更新准备、提交及重启对账通过 Kar 控制通道交给宿主；真实安装需要独立桌面发行环境。"
 test_target = "cargo test --locked --test workbench_configuration"
 accept = "重启后读取设置、实例更新与快捷键；验证版本探测、进度、准备/提交桌面更新、配置与生命周期订阅的初始状态及变更。使用 Kar 更新来源。"
 

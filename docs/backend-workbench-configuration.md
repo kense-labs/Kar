@@ -18,4 +18,10 @@ macOS 开发编译使用 cargo check --locked --all-targets。统一验收入口
 
 ### 桌面应用自身更新
 
-固定源码 apps/server/src/desktopUpdate/DesktopAppUpdate.ts:63 只有在 desktop 模式且桌面宿主提供控制文件描述符时才启用。服务端在第 177 行发起准备请求，按返回 requestId 跟踪进度，并在第 216 行将提交命令交给同一宿主。真正开始安装及重启的是 apps/desktop/src/updates/DesktopRemoteUpdates.ts 里的桌面更新器。Kar 当前是独立 Rust 工作台后端。这批配置提交没有添加桌面发布包、桌面宿主更新器或等价的宿主控制协议，也没有完成桌面更新准备或提交的实机验收。内置供应商发布包安装有独立入口与证据。
+固定源码 apps/server/src/desktopUpdate/DesktopAppUpdate.ts:63 只有在 desktop 模式且桌面宿主提供控制文件描述符时才启用。服务端在第 177 行发起准备请求，按返回 requestId 跟踪进度，并在第 216 行将提交命令交给同一宿主。真正开始安装及重启的是 apps/desktop/src/updates/DesktopRemoteUpdates.ts 里的桌面更新器。早期配置提交中 Kar 是独立 Rust 工作台后端。这批配置提交没有添加桌面发布包、桌面宿主更新器或等价的宿主控制协议，也没有完成桌面更新准备或提交的实机验收。内置供应商发布包安装有独立入口与证据。
+
+## 桌面更新控制通道
+
+Kar 后端可连接由桌面宿主提供的私有 Unix 套接字 `KAR_DESKTOP_UPDATE_SOCKET`。没有该宿主时，`GET /server/desktop-update` 返回 `available: false`。宿主创建套接字后启动 Kar；两者应使用同一系统用户。宿主必须只接受它启动的 Kar 后端进程，以进程身份验证对端，并自行验证和安装 Kar 的发行包。服务端也会校验套接字和对端的用户身份。
+
+所有者向 `POST /server/desktop-update` 发送 `{"request_id":"<uuid>","track":"stable"}`，通过 `GET /server/desktop-update/{id}/events` 订阅最新状态及修订，准备好后向 `POST /server/desktop-update/{id}/commit` 提交。后端发送以换行分隔的 JSON 消息，包含 `protocol: kar-desktop-update/1`、`request_id`、`operation` 及可选的 `track`。宿主按请求 ID 持久记录操作，逐行回报相同 ID 及 `stage`、可选的 `version` 与 `message`。准备阶段可报告 `checking`、`downloading`、`ready` 或 `current`，提交阶段报告 `installing` 和 `installed`。两阶段都可报告 `failed`。断线后保留 `unknown`；重启后查询或重新订阅会以 `status` 向宿主对账，继续使用同一 ID。测试 `desktop_host_prepares_once_and_commits_the_same_request_after_server_restart` 使用本地模拟宿主；真实下载、签名验证及重启应在独立的 Kar 桌面发布环境验收。

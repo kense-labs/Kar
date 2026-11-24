@@ -125,3 +125,88 @@ async fn shortcuts_and_preferences_reconnect() {
     );
     proc.kill().await.unwrap();
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn desktop_host_prepares_once_and_commits_the_same_request_after_server_restart() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let dir = tempfile::Builder::new()
+        .prefix("kar-upd")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = dir.path().join("desktop.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let id = uuid::Uuid::new_v4();
+    let peer = tokio::spawn(async move {
+        for (expected, stages) in [
+            ("prepare", vec!["checking", "downloading", "ready"]),
+            ("commit", vec!["installing", "installed"]),
+        ] {
+            let (s, _) = listener.accept().await.unwrap();
+            let mut r = BufReader::new(s);
+            let mut line = String::new();
+            r.read_line(&mut line).await.unwrap();
+            let v: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(v["operation"], expected);
+            assert_eq!(v["request_id"], id.to_string());
+            assert_eq!(v["track"], "beta");
+            for stage in stages {
+                let mut report =
+                    json!({"request_id":id,"stage":stage,"version":"1.4.0"}).to_string();
+                report.push('\n');
+                r.get_mut().write_all(report.as_bytes()).await.unwrap();
+            }
+        }
+    });
+    let root = dir.path().join("workspace");
+    std::fs::create_dir(&root).unwrap();
+    let state = dir.path().join("state");
+    let env = [("KAR_DESKTOP_UPDATE_SOCKET", socket.as_os_str())];
+    let (mut child, base) = server::serve_with_env(&state, &root, dir.path(), &env).await;
+    let host = server::client();
+    let endpoint = format!("{base}/server/desktop-update");
+    assert_eq!(server::json(host.get(&endpoint)).await["available"], true);
+    let req = json!({"request_id":id,"track":"beta"});
+    server::json(host.post(&endpoint).json(&req)).await;
+    let wait_for = async |url: String, stage: &str| {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            let mut stream = host
+                .get(url + "/events")
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .bytes_stream()
+                .eventsource();
+            while let Some(e) = stream.next().await {
+                let row: Value = serde_json::from_str(&e.unwrap().data).unwrap();
+                if row["stage"] == stage {
+                    return;
+                }
+            }
+            panic!("update ended before requested stage");
+        })
+        .await
+        .unwrap();
+    };
+    wait_for(format!("{endpoint}/{id}"), "ready").await;
+    assert_eq!(
+        server::json(host.post(&endpoint).json(&req)).await["stage"],
+        "ready"
+    );
+    child.kill().await.unwrap();
+    child.wait().await.unwrap();
+    let (mut child, base) = server::serve_with_env(&state, &root, dir.path(), &env).await;
+    let read = format!("{base}/server/desktop-update/{id}");
+    assert_eq!(server::json(host.get(&read)).await["stage"], "ready");
+    server::json(host.post(format!("{read}/commit"))).await;
+    wait_for(read.clone(), "installed").await;
+    assert_eq!(
+        server::json(host.post(format!("{read}/commit"))).await["stage"],
+        "installed"
+    );
+    peer.await.unwrap();
+    child.kill().await.unwrap();
+    child.wait().await.unwrap();
+}

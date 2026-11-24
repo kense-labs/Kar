@@ -23,7 +23,7 @@
 
 - 固定工作台对 Cursor 的后台 shell 有专门的等待与停止回调。Kar 的 Cursor ACP 未取得等价原生句柄，该项目前是传输实现缺口。 [固定 SDK 补丁](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/patches/%40cursor__sdk%401.4.2.patch)
 - 普通原生登录、退出与额度已有入口。共享同一凭据的运行中聊天如何在账号变更前协调停机、账号档案导入与重新连接，以及第三方 MCP 服务单独登录，需要逐操作对照。 [Kar 账号入口及边界](backend-account-workbench.md)
-- 服务器端能管理供应商 CLI 的安装和自己的设置。桌面应用更新的准备及提交还需要 Kar 桌面更新宿主提供控制通道。 [上游桌面更新服务](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/desktopUpdate/DesktopAppUpdate.ts)
+- 服务器端能管理供应商 CLI 的安装和自己的设置。桌面更新的准备、提交和状态已接通 Kar 本机控制通道。真实安装及重启需要 Kar 桌面更新宿主和签名发行包。 [上游桌面更新服务](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/desktopUpdate/DesktopAppUpdate.ts)
 - 确认应单列的动作还包括父聊天删除和侧聊天联动、绑定到原生工具条目的 MCP App 交互，以及外部 MCP 客户端按游标订阅里程碑。普通聊天分叉、原生登录、全量聊天 SSE 和工具清单通知各自已有独立用途。这三项在逐项清单内跟踪。
 
 **运行时的独立差异。** 对共享 Morph Console 和远端 Cybion 聊天，原实现会在释放本地控制权时同时发出退出事件。固定上游只在实际停止进程后报告退出。Kar 在 `ee61e23` 保留原关闭回执，并区分控制器释放和原生退出；接手方可用 `cargo test --locked --test cybion` 和 [Morph 实机用例](../tests/morph_live.rs) 对照。安装计划从 `1a01ff5` 起给出来源、程序、参数、网络及执行身份。运行时 SDK 的历史成员映射仍有标为「部分契约」的行，包含同一操作的多种导出、Rust 类型差异和已在后续提交修正的旧结论；例如某些安装被拒绝时的结构化原因、实际安装/更新结果的标准输出和错误输出，还存在对外可见的差别。 [运行时契约映射](backend-sdk-map.tsv)

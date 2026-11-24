@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, convert::Infallible};
 mod keys;
+pub(in crate::workbench) mod desktop;
 type Reply = std::result::Result<Json<Value>, ApiError>;
 fn bad(s: &str) -> Error {
     Error::Refused(s.into())
@@ -134,7 +135,7 @@ fn snapshot(app: &Workbench) -> Result<Value> {
         .collect::<Vec<_>>();
     let root = app.0.roots.first().map(|r| r.path.clone());
     Ok(
-        json!({"revision":db.server.revision,"environment":env,"auth":{"sessionCookieName":"kar_session","sessionMethods":["browser-session-cookie","bearer-access-token","dpop-access-token"]},"cwd":root,"newProjectsRoot":root,"providers":providers,"keybindings":keys::resolved(&db.server.bindings)?,"issues":db.server.issues,"keybindingsConfigPath":app.0.state.join("keybindings.json"),"settings":settings(&db),"serverTime":jiff::Timestamp::now().to_string()}),
+        json!({"desktopUpdateAvailable":desktop::available(),"revision":db.server.revision,"environment":env,"auth":{"sessionCookieName":"kar_session","sessionMethods":["browser-session-cookie","bearer-access-token","dpop-access-token"]},"cwd":root,"newProjectsRoot":root,"providers":providers,"keybindings":keys::resolved(&db.server.bindings)?,"issues":db.server.issues,"keybindingsConfigPath":app.0.state.join("keybindings.json"),"settings":settings(&db),"serverTime":jiff::Timestamp::now().to_string()}),
     )
 }
 pub(super) fn next_revision(current: &Catalog, next: &mut Catalog) {

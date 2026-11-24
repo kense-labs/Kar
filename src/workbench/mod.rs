@@ -68,6 +68,8 @@ pub struct Project {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
+    #[serde(default)]
+    desktop_jobs: BTreeMap<Uuid,configuration::desktop::Job>,
     #[serde(default)] server:configuration::Config,
     #[serde(default)]
     environment: mcp::collaboration_tools::environment::Environment,
@@ -130,6 +132,7 @@ impl Controller {
 }
 
 struct Inner {
+    desktop_updates:configuration::desktop::Service,
     managed_providers:managed_providers::Manager,
     config_changes:tokio::sync::watch::Sender<u64>,
     keybindings_lock:Mutex<()>,
@@ -238,6 +241,7 @@ impl Workbench {
             Inner {
                 relay: Default::default(),
                 managed_providers:Default::default(),
+                desktop_updates:Default::default(),
                 config_changes:tokio::sync::watch::channel(catalog.server.revision).0,
                 keybindings_lock:Default::default(),
                 acp_registry: Default::default(),

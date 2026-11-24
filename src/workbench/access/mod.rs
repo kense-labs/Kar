@@ -381,6 +381,7 @@ pub(super) fn routes(app: Workbench, auth: Auth) -> Router {
         .merge(super::relay_client::routes())
         .merge(super::acp_registry::owner_routes())
         .merge(super::managed_providers::owner_routes())
+        .merge(super::configuration::desktop::routes())
         .merge(super::mcp::collaboration_tools::environment::owner_routes())
         .route("/access/pairings", post(grant))
         .route("/access/devices", get(devices))
