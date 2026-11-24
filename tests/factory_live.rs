@@ -933,6 +933,8 @@ async fn native_mcp_transports_on_create_and_resume() {
     host.close().await;
 }
 
+#[path = "support/declared_turn.rs"]
+mod declared_turn;
 #[path = "support/public_readbacks.rs"]
 mod public_readbacks;
 
@@ -941,8 +943,11 @@ mod public_readbacks;
 async fn public_prompt_readbacks() {
     let f = fixture().await;
     f.model.tool_seen.send_replace(true);
+    let declared = declared_turn::prepare(&f.runtime, &f.opts).await;
     let session = f.runtime.open(f.opts.clone()).await.unwrap();
+    declaration::check(&declared, session.capabilities());
     public_readbacks::check(&session).await.unwrap();
+    declared_turn::completed(&declared, &session).await;
     public_readbacks::stream::check(&session).await.unwrap();
     let active = f.runtime.open(f.opts.clone()).await.unwrap();
     let held = active.prompt("FACTORY_HOLD").await.unwrap();

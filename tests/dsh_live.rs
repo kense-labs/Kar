@@ -1635,6 +1635,8 @@ async fn legacy_refuses_scoped_directories_before_prompt() {
     tb.server.abort();
 }
 
+#[path = "support/declared_turn.rs"]
+mod declared_turn;
 #[path = "support/public_readbacks.rs"]
 mod public_readbacks;
 
@@ -1645,8 +1647,11 @@ async fn public_prompt_readbacks() {
         let f = testbed(protocol).await;
         let mut options = f.opts.clone();
         options.settings.append_system_prompt = Some("KAR_PUBLIC_READBACK_FIXTURE".into());
+        let declared = declared_turn::prepare(&f.runtime, &options).await;
         let session = f.runtime.open(options).await.unwrap();
+        declaration::check(&declared, session.capabilities());
         public_readbacks::check(&session).await.unwrap();
+        declared_turn::completed(&declared, &session).await;
         public_readbacks::stream::check(&session).await.unwrap();
         let active = f.runtime.open(f.opts.clone()).await.unwrap();
         public_readbacks::stream::dispose_mid_turn(&active)

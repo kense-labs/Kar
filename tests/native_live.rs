@@ -9,6 +9,10 @@ mod claude_history;
 mod codex_startup;
 #[path = "native_live/cursor.rs"]
 mod cursor;
+#[path = "support/declaration.rs"]
+mod declaration;
+#[path = "support/declared_turn.rs"]
+mod declared_turn;
 #[path = "native_live/pi_history.rs"]
 mod pi_history;
 #[path = "support/public_readbacks.rs"]
@@ -603,7 +607,9 @@ multi_agent_v2 = true
         .insert("KAR_FIXTURE_KEY".into(), "only-a-fixture".into());
     let provider = runtime("codex").unwrap();
     missing_target(&provider, &opts).await;
+    let declared = declared_turn::prepare(&provider, &opts).await;
     let session = provider.open(opts.clone()).await.unwrap();
+    declaration::check(&declared, session.capabilities());
     let turn = session.prompt("Reply with one word.").await.unwrap();
     let outcome = tokio::time::timeout(Duration::from_secs(40), turn.wait())
         .await
@@ -638,6 +644,7 @@ multi_agent_v2 = true
     );
     let id = session.id().to_string();
     let stream = session.stream_id();
+    declared_turn::completed(&declared, &session).await;
     let usage = session.usage().total.expect("actual Codex token report");
     assert_eq!((usage.input, usage.output), (2, 2));
     let anchor = records
@@ -1058,7 +1065,9 @@ async fn actual_claude_turn_and_resume() {
     opts.model = Some("sonnet".into());
     let provider = runtime("claude").unwrap();
     missing_target(&provider, &opts).await;
+    let declared = declared_turn::prepare(&provider, &opts).await;
     let session = provider.open(opts.clone()).await.unwrap();
+    declaration::check(&declared, session.capabilities());
     assert!(session.models().await.unwrap().is_array());
     let assert_turn = async |session: &kar::Session| {
         let outcome = tokio::time::timeout(
@@ -1088,6 +1097,7 @@ async fn actual_claude_turn_and_resume() {
         );
     };
     assert_turn(&session).await;
+    declared_turn::completed(&declared, &session).await;
     let usage = session.usage().total.expect("actual Claude token report");
     assert_eq!((usage.input, usage.output), (3, 3));
     let occupancy = session.current_context().expect("Claude context report");
@@ -1356,7 +1366,9 @@ async fn real_protocol_turn(provider_id: &str) {
     if provider_id == "pi" {
         missing_target(&runtime, &opts).await;
     }
+    let declared = declared_turn::prepare(&runtime, &opts).await;
     let session = runtime.open(opts.clone()).await.unwrap();
+    declaration::check(&declared, session.capabilities());
     let opencode1 = provider_id == "opencode"
         && session.records().iter().any(|r| {
             r.native
@@ -1398,6 +1410,7 @@ async fn real_protocol_turn(provider_id: &str) {
             .flat_map(|r| &r.events)
             .any(|e| matches!(e,Event::TextDelta{text} if text.contains("rust-wire-ok")))
     );
+    declared_turn::completed(&declared, &session).await;
     if opencode1 {
         // v1 returns only its final model step. Preserve the whole-prompt
         // meter as unknown while exposing the separately reported context.

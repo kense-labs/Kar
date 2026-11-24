@@ -5,6 +5,11 @@ pub async fn for_installation(rt: &Runtime, opts: &SessionOptions) -> SessionCap
         .probe_installation(&opts.installation_options())
         .await
         .unwrap();
+    assert!(
+        matches!(installation, kar::InstallationSnapshot::Available { .. }),
+        "{} installation {installation:?}",
+        rt.id
+    );
     rt.session_capabilities(&installation)
         .expect("available native installation")
 }
