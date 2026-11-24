@@ -447,6 +447,8 @@ pub struct SessionOptions {
     pub workbench_registration: Option<crate::WorkbenchRegistration>,
     #[doc(hidden)]
     pub account_admission: Option<crate::account::AccountAdmission>,
+    #[doc(hidden)]
+    pub account_instance: Option<String>,
     pub mcp_servers: BTreeMap<String, crate::McpServer>,
     pub env: BTreeMap<OsString, OsString>,
     /// Names removed from the inherited environment. Explicit `env` values take precedence.
@@ -498,6 +500,7 @@ impl SessionOptions {
             prompt_suggestions: None,
             workbench_registration: None,
             account_admission: None,
+            account_instance: None,
             mcp_servers: BTreeMap::new(),
             env: BTreeMap::new(),
             unset_env: Default::default(),

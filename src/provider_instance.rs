@@ -65,6 +65,7 @@ pub struct HistoryInstance {
 }
 impl HistoryInstance {
     pub(crate) fn configure(&self, opt: &mut SessionOptions) {
+        opt.account_instance = Some(self.id.clone());
         if self.runtime == HistoryRuntime::Pi {
             opt.pi_session_root = Some(self.sessions.clone());
         }

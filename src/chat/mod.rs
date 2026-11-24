@@ -293,6 +293,7 @@ impl ChatStore {
     pub(crate) fn resolve_runtime(&self, id: &str, opts: &mut SessionOptions) -> Result<crate::Runtime> {
         let binding = crate::account::binding::Key::new(id, opts);
         opts.account_admission = Some(self.accounts.admit(binding)?);
+        if id == "codex" { crate::workbench::chatgpt::configure(self, opts)?; }
         if crate::workbench::acp_registry::dynamic(id) {
             crate::workbench::acp_registry::resolve(self, id, opts)
         } else {

@@ -26,6 +26,7 @@ fn settled(result: &Value) -> bool {
 async fn inspect(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String)>) -> Reply {
     let (rt, installation, binding) = builtin::context(&app, p, &id)?;
     let _guard = app.0.chats.accounts.operation(binding)?;
+    crate::workbench::chatgpt::native_quota(&app.0.chats, &id)?;
     let value = if rt.id == "claude" {
         // Legacy Claude can spend on entry. The native guard refuses that version here.
         serde_json::to_value(
@@ -71,6 +72,7 @@ async fn redeem(
     }
     let profile = binding.fingerprint();
     let _guard = app.0.chats.accounts.operation(binding)?;
+    crate::workbench::chatgpt::native_quota(&app.0.chats, &id)?;
     let dir = app.0.chats.directory().join("workbench/quota-resets");
     // Same login home through two configured instances maps to the same serialization point.
     let _profile_lock = lock_path(&dir.join("locks").join(&profile), true)?;

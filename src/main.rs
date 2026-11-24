@@ -43,6 +43,8 @@ enum Action {
     #[cfg(target_os = "macos")]
     #[command(hide = true)]
     WorkbenchMcpBridge { socket: PathBuf },
+    #[command(hide = true)]
+    ManagedChatgptToken { directory: PathBuf, revision: String },
     /// Manage repositories and independent chat worktrees.
     Git(git_cli::Git),
     /// Report installed executables, versions and pre-open session capabilities.
@@ -443,6 +445,7 @@ fn json_line(value: &impl serde::Serialize, mut out: impl Write) -> Result<()> {
 async fn execute(command: Action) -> Result<()> {
     match command {
         Action::Chat(chat) => chat.run().await?,
+        Action::ManagedChatgptToken { directory, revision } => kar::workbench::write_managed_chatgpt_token(&directory, &revision).await?,
         #[cfg(target_os = "macos")]
         Action::WorkbenchMcpBridge { socket } => {
             use std::{io, net::Shutdown, os::unix::net::UnixStream};

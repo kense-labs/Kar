@@ -9,6 +9,8 @@ mod http_content;
 mod background;
 pub use background::BackgroundTasks;
 mod chat_controls;
+pub(crate) mod chatgpt;
+#[doc(hidden)] pub use chatgpt::write_managed_chatgpt_token;
 mod configuration;
 pub(crate) mod managed_providers;
 mod devices;
@@ -151,6 +153,7 @@ struct Inner {
     relay: relay_client::tunnel::Service,
     acp_registry: acp_registry::Catalog,
     acp_auth: acp_registry::auth::Jobs,
+    chatgpt: chatgpt::Jobs,
     mcp: mcp::Registry,
     milestone_hub:mcp::milestones::Hub,
     shell: shell::Service,
@@ -264,6 +267,7 @@ impl Workbench {
                 keybindings_lock:Default::default(),
                 acp_registry: Default::default(),
                 acp_auth: Default::default(),
+                chatgpt: Default::default(),
                 mcp: Default::default(),
                 milestone_hub,
                 shell,

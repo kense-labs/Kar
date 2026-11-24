@@ -382,6 +382,7 @@ pub(super) fn routes(app: Workbench, auth: Auth) -> Router {
         .merge(super::storage::routes())
         .merge(super::relay_client::routes())
         .merge(super::acp_registry::owner_routes())
+        .merge(super::chatgpt::routes())
         .merge(super::managed_providers::owner_routes())
         .merge(super::configuration::desktop::routes())
         .merge(super::mcp::collaboration_tools::environment::owner_routes())
