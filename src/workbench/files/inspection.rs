@@ -1,4 +1,5 @@
 //! Directory pickers, file metadata and Git ignore decisions for workbench clients.
+mod search;
 use super::*;
 use crate::workbench::http::{ApiError, blocking};
 use axum::{
@@ -15,6 +16,8 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
         .route("/projects/{project}/entries", get(entries))
         .route("/projects/{project}/ignored-files", get(ignored_files))
         .route("/projects/{project}/browse", get(browse))
+        .route("/projects/{project}/search/entries", get(search::entries))
+        .route("/projects/{project}/search/contents", get(search::contents))
         .route("/filesystem/metadata", post(metadata))
 }
 type Reply = std::result::Result<Json<Value>, ApiError>;
@@ -93,6 +96,18 @@ impl Workspace {
     }
 
     fn indexed(&self) -> Result<(Vec<Entry>, bool)> {
+        let mut entries = Vec::new();
+        self.visit_indexed(|e| {
+            entries.push(e);
+            Ok(entries.len() <= 25_000)
+        })?;
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        let truncated = entries.len() > 25_000;
+        entries.truncate(25_000);
+        Ok((entries, truncated))
+    }
+
+    fn visit_indexed(&self, mut visit: impl FnMut(Entry) -> Result<bool>) -> Result<()> {
         let private = self.private.clone();
         let mut builder = ignore::WalkBuilder::new(&self.root);
         builder
@@ -102,7 +117,6 @@ impl Workspace {
             .filter_entry(move |e| {
                 !e.file_name().eq_ignore_ascii_case(".git") && !e.path().starts_with(&private)
             });
-        let mut entries = Vec::new();
         for entry in builder.build() {
             let entry = entry.map_err(|e| Error::Protocol(e.to_string()))?;
             let path = entry
@@ -129,19 +143,15 @@ impl Workspace {
                 }
                 _ => continue,
             };
-            entries.push(Entry {
+            if !visit(Entry {
                 path: path.into(),
                 kind,
                 ignored: false,
-            });
-            if entries.len() > 25_000 {
+            })? {
                 break;
             }
         }
-        entries.sort_by(|a, b| a.path.cmp(&b.path));
-        let truncated = entries.len() > 25_000;
-        entries.truncate(25_000);
-        Ok((entries, truncated))
+        Ok(())
     }
 
     fn ignored(&self, query: &str) -> Result<Value> {

@@ -127,6 +127,43 @@ async fn scenario() {
         );
         let dirs = json(a.get(format!("{scope}/browse?partial_path=NO"))).await;
         assert_eq!(dirs["entries"][0]["name"], "notes");
+        std::fs::write(path.join("notes/find.txt"), "🦀 KAr Karpet Kar [\n").unwrap();
+        std::fs::write(path.join("cover.PNG"), b"image").unwrap();
+        let images = json(
+            a.get(format!("{scope}/search/entries"))
+                .query(&[("image_only", "true"), ("query", "cov")]),
+        )
+        .await;
+        assert_eq!(images["entries"][0]["path"], "cover.PNG");
+        let found = json(
+            b.get(format!("{scope}/search/contents"))
+                .query(&[("query", "Kar"), ("whole_word", "true")]),
+        )
+        .await;
+        let hit = found["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["path"] == "notes/find.txt")
+            .unwrap();
+        assert_eq!(
+            hit["match_ranges"],
+            json!([{"start":3,"end":6},{"start":14,"end":17}])
+        );
+        let literal = json(b.get(format!("{scope}/search/contents")).query(&[
+            ("query", "["),
+            ("use_regex", "true"),
+            ("limit", "1"),
+        ]))
+        .await;
+        assert!(literal["regex_fallback_error"].is_string());
+        assert!(
+            literal["matches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["path"] == "notes/find.txt")
+        );
         let magic = path.join("report");
         std::fs::write(&magic, b"%PDF-1.7").unwrap();
         let info = json(
