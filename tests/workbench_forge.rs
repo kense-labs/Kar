@@ -311,6 +311,8 @@ async fn scenario() {
 
 #[path = "workbench_forge/hosted.rs"]
 mod hosted;
+#[path = "workbench_forge/providers.rs"]
+mod providers;
 fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("hosted-github") => tokio::runtime::Runtime::new()
@@ -319,9 +321,12 @@ fn main() {
         Some("app-server") => codex_chat_peer::agent(),
         Some("--version") => println!("codex 0.169.0"),
         _ => tokio::runtime::Runtime::new().unwrap().block_on(async {
-            tokio::time::timeout(Duration::from_secs(120), scenario())
-                .await
-                .unwrap()
+            tokio::time::timeout(Duration::from_secs(120), async {
+                scenario().await;
+                providers::run().await;
+            })
+            .await
+            .unwrap()
         }),
     }
 }
