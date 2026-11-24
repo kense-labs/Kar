@@ -141,7 +141,11 @@ pub(super) async fn controls(
             .unwrap()
             .is_empty()
     );
-    let grant = server::json(host.post(format!("{remote_url}/access/pairings"))).await;
+    let grant = server::json(
+        host.post(format!("{remote_url}/api/auth/pairing-token"))
+            .json(&json!({"purpose":"peer-link","access":"read-only"})),
+    )
+    .await;
     let got =
         server::json(host.post(format!("{cards}/{req}")).json(
             &json!({"accept":true,"input":{"url":remote_url,"credential":grant["credential"]}}),
@@ -163,6 +167,46 @@ pub(super) async fn controls(
         remote_desc["result"]["structuredContent"]["environment_id"],
         *destination_id
     );
+    let project = server::json(
+        host.post(format!("{remote_url}/projects"))
+            .json(&json!({"root":root,"name":"remote"})),
+    )
+    .await;
+    let project = project["id"].as_str().unwrap();
+    let target = Uuid::new_v4();
+    server::json(
+        host.post(format!("{remote_url}/projects/{project}/chats"))
+            .json(&json!({"runtime":"codex","id":target})),
+    )
+    .await;
+    let proxied = format!(
+        "{url}/environment/links/{}/projects/{project}/chats/{target}",
+        destination_id.as_str().unwrap()
+    );
+    let page = server::json(host.get(format!("{proxied}/history?limit=1"))).await;
+    assert!(page["turns"].is_array());
+    assert!(server::json(host.get(format!("{proxied}/item?item=absent"))).await["item"].is_null());
+    let mut stream = host
+        .get(format!("{proxied}/events"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let mut prefix = Vec::new();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while !String::from_utf8_lossy(&prefix).contains("event: snapshot") {
+            prefix.extend(
+                stream
+                    .chunk()
+                    .await
+                    .unwrap()
+                    .expect("missing peer snapshot"),
+            );
+        }
+    })
+    .await
+    .unwrap();
     let removed = server::json(invoke(
         "kar_environment_unlink",
         json!({"environment_id":destination_id}),
@@ -175,6 +219,20 @@ pub(super) async fn controls(
             .as_array()
             .unwrap()
             .is_empty()
+    );
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while matches!(stream.chunk().await, Ok(Some(_))) {}
+    })
+    .await
+    .expect("unlink must close a live viewer");
+    assert!(
+        !host
+            .get(format!("{proxied}/history"))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
     );
     remote.kill().await.unwrap();
     remote.wait().await.unwrap();

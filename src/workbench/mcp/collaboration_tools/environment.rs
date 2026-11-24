@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub(in crate::workbench) mod cards;
 pub(super) mod links;
+pub(in crate::workbench) use links::peer_request;
+mod threads;
 pub(in crate::workbench) mod secrets;
 mod theme;
 
@@ -149,12 +151,14 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
         .route("/environment", get(read))
         .route("/environment/theme", get(read_theme))
         .merge(links::session_routes())
+        .merge(threads::remote_routes())
 }
 pub(in crate::workbench) fn owner_routes() -> Router<Workbench> {
     Router::new()
         .route("/environment/preferences", put(save))
         .route("/environment/theme/settings", put(save_theme))
         .merge(cards::routes())
+        .merge(threads::local_routes())
 }
 pub(super) fn tools(c: &Caller) -> Vec<Tool> {
     let id = json!({"type":"string","format":"uuid"});

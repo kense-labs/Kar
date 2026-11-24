@@ -36,6 +36,37 @@ fn client() -> Result<reqwest::Client> {
         .timeout(std::time::Duration::from_secs(8))
         .build()?)
 }
+/// Build a request only to a recorded peer origin. Treat each dynamic identifier as one path segment.
+pub(in crate::workbench) fn peer_request(
+    app: &Workbench,
+    id: Uuid,
+    method: reqwest::Method,
+    segments: &[&str],
+) -> Result<reqwest::RequestBuilder> {
+    let db = app.0.catalog.lock().unwrap();
+    let p = db
+        .environment
+        .links
+        .get(&id)
+        .ok_or_else(|| bad("unknown environment link"))?;
+    let mut url = origin(&p.origin)?;
+    if segments
+        .iter()
+        .any(|s| matches!(*s, "" | "." | "..") || s.contains(['/', '\\', '\0']))
+    {
+        return Err(bad("invalid remote path segment"));
+    }
+    url.path_segments_mut()
+        .map_err(|_| bad("invalid linked environment origin"))?
+        .clear()
+        .extend(segments);
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(8))
+        .read_timeout(std::time::Duration::from_secs(75))
+        .build()?;
+    Ok(http.request(method, url).bearer_auth(&p.token))
+}
 async fn request(peer: &Peer, method: reqwest::Method, path: &str) -> Result<Value> {
     let url = origin(&peer.origin)?
         .join(path)

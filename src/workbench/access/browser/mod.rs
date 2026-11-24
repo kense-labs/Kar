@@ -44,6 +44,8 @@ pub(super) struct Account {
     #[serde(default)]
     cloud: Option<Uuid>,
     method: String,
+    #[serde(default)]
+    peer_thread_read: bool,
     pub(super) until: u64,
     #[serde(default)]
     renew_until: Option<u64>,
@@ -245,6 +247,7 @@ fn required(method: &Method, path: &str) -> Option<&'static str> {
     match parts.as_slice() {
         ["server","config"]|["server","config","events"]|["server","settings"] if read=>Some("orchestration:read"),
         ["server","settings"|"keybindings"] if !read=>Some("settings:write"),
+        ["peer","threads",_,_,"history" | "item" | "events"] if method == Method::GET => Some("orchestration:read"),
         ["environment"] | ["projects"] | ["projects", _, "chats"] if read => {
             Some("orchestration:read")
         }
@@ -358,9 +361,13 @@ pub(super) fn authenticate(auth: &Auth, req: &Request) -> AccessResult<DeviceLea
         }
         d
     };
+    let thread_read = path.starts_with("/peer/threads/");
+    if thread_read && (req.headers().contains_key("origin") || !d.account.as_ref().is_some_and(|a| a.peer_thread_read)) {
+        return Err(AccessError::Denied);
+    }
     if let Some(a) = &d.account {
         if a.method == "peer-link"
-            && !((path == "/environment" && req.method() == Method::GET)
+            && !((thread_read && req.method() == Method::GET) || (path == "/environment" && req.method() == Method::GET)
                 || (path == "/access/current-device" && req.method() == Method::DELETE))
         {
             return Err(AccessError::Denied);
@@ -401,6 +408,7 @@ fn session(
         account: Some(Account {
             cloud,
             method: method.into(),
+            peer_thread_read: method == "peer-link" && grant.peer,
             until: now() + if proof.is_some() { 3600000 } else { TTL },
             renew_until: (proof.is_some() && cloud.is_none()).then(|| now() + TTL),
             scopes,
