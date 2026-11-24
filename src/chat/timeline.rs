@@ -739,51 +739,65 @@ impl Frame {
         }))
     }
     /// Restore full native item snapshots over the matching partial local items.
-    pub(super) fn kimi_recovery(id: &str, root: &str, record: &Record) -> Option<Self> {
+    pub(super) fn kimi_recovery(local: &ChatTurn, root: &str, record: &Record) -> Option<Self> {
         let n = &record.native;
-        if n["type"] != "turns" || n["session_id"] != root || n["agent_id"] != "main" {
+        if !record.agent_path.is_empty()
+            || record.session_id.as_deref() != Some(root)
+            || n["type"] != "turns"
+            || n["session_id"] != root
+            || n["agent_id"] != "main"
+        {
             return None;
         }
-        let turn = n["turns"]
-            .as_array()?
-            .iter()
-            .find(|t| t["turn_id"] == id && t["status"] == "ended" && t["kind"] != "system")?;
+        let (turn, claimed) = crate::kimi::recovery_turn(&n["turns"], local)?;
+        let id = turn["turn_id"].as_str()?;
+        let ended = turn["status"] == "ended";
         let mut edits = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for item in turn["items"].as_array().into_iter().flatten() {
-            let Some(key) = item["item_id"].as_str() else {
-                continue;
-            };
-            if !seen.insert(key) {
-                return None;
-            }
-            match item["type"].as_str() {
-                Some(kind @ ("assistant_message" | "reasoning")) => {
-                    if let Some(text) = item["text"].as_str() {
-                        edits.push(Edit::Text {
-                            role: if kind == "reasoning" {
-                                Role::Reasoning
-                            } else {
-                                Role::Assistant
-                            },
-                            key: Some(key.into()),
-                            text: text.into(),
-                            final_text: true,
-                        });
-                    }
-                }
-                Some("tool_call") => edits.extend(
-                    crate::kimi::tool_snapshot(key, item)
-                        .into_iter()
-                        .map(|event| Edit::Activity { event }),
-                ),
-                _ => {}
-            }
+        if claimed {
+            edits.push(Edit::Activity {
+                event: Event::NativeInput {
+                    input_id: local.id,
+                    receipt: crate::InputReceipt::Started,
+                },
+            });
         }
-        let mut events = Vec::new();
-        let outcome = crate::kimi::turn_outcome(turn, &mut events);
-        events.push(Event::TurnEnded { outcome });
-        edits.extend(events.into_iter().map(|event| Edit::Activity { event }));
+        let mut seen = std::collections::HashSet::new();
+        if ended {
+            for item in turn["items"].as_array().into_iter().flatten() {
+                let Some(key) = item["item_id"].as_str() else {
+                    continue;
+                };
+                if !seen.insert(key) {
+                    return None;
+                }
+                match item["type"].as_str() {
+                    Some(kind @ ("assistant_message" | "reasoning")) => {
+                        if let Some(text) = item["text"].as_str() {
+                            edits.push(Edit::Text {
+                                role: if kind == "reasoning" {
+                                    Role::Reasoning
+                                } else {
+                                    Role::Assistant
+                                },
+                                key: Some(key.into()),
+                                text: text.into(),
+                                final_text: true,
+                            });
+                        }
+                    }
+                    Some("tool_call") => edits.extend(
+                        crate::kimi::tool_snapshot(key, item)
+                            .into_iter()
+                            .map(|event| Edit::Activity { event }),
+                    ),
+                    _ => {}
+                }
+            }
+            let mut events = Vec::new();
+            let outcome = crate::kimi::turn_outcome(turn, &mut events);
+            events.push(Event::TurnEnded { outcome });
+            edits.extend(events.into_iter().map(|event| Edit::Activity { event }));
+        }
         snapshot_tools(&mut edits, record.elided);
         Some(Self {
             elided: record.elided,
@@ -1302,6 +1316,49 @@ impl MessageIds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kimi_recovery_requires_one_matching_root_opener_before_a_host_receipt() {
+        use serde_json::json;
+        let local = ChatTurn::new(Uuid::new_v4(), 0, "root", Some("same words".into()));
+        let id = local.id;
+        let native = json!({"kind":"agent","status":"running","turn_id":"t",
+            "items":[{"type":"user_message","item_id":"u","placement":"opener","origin":{"kind":"user"},
+                "prompt_ids":[id],"text":"same words"}]});
+        let journal = crate::stream::Journal::new(None).unwrap();
+        journal.bind_root("root");
+        journal.push(
+            crate::Direction::FromRuntime,
+            crate::RecordKind::Frame,
+            None,
+            vec![],
+            json!({"type":"turns","session_id":"root","agent_id":"main","turns":[native]}),
+            vec![],
+        );
+        let mut record = (*journal.records()[0]).clone();
+        let frame = Frame::kimi_recovery(&local, "root", &record).unwrap();
+        assert!(
+            matches!(frame.edits.as_slice(),[Edit::Activity{event: Event::NativeInput{input_id,receipt:crate::InputReceipt::Started}}] if *input_id==id)
+        );
+        for (path, value) in [
+            ("/turns/0/items/0/placement", json!("steer")),
+            ("/turns/0/items/0/origin/kind", json!("system")),
+            ("/turns/0/kind", json!("system")),
+            ("/turns/0/items/0/prompt_ids", json!([id, Uuid::new_v4()])),
+            ("/agent_id", json!("child")),
+            ("/session_id", json!("foreign")),
+            ("/turns/0/items/0/prompt_ids", json!([Uuid::new_v4()])),
+        ] {
+            let mut other = record.clone();
+            *other.native.pointer_mut(path).unwrap() = value;
+            assert!(
+                Frame::kimi_recovery(&local, "root", &other).is_none(),
+                "{path}"
+            );
+        }
+        record.native["turns"].as_array_mut().unwrap().push(native);
+        assert!(Frame::kimi_recovery(&local, "root", &record).is_none());
+    }
 
     #[test]
     fn native_transcript_updates_one_closed_tool_and_orders_new_siblings() {

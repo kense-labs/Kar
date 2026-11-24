@@ -157,10 +157,6 @@ pub(super) struct State {
     pub(super) stream: Option<Uuid>,
 }
 impl State {
-    pub(super) fn recovery_turn(&self) -> Option<(&ChatTurn, &str)> {
-        let last = self.unfinished_turn()?;
-        Some((last, last.native_turn_id.as_deref()?))
-    }
     pub(super) fn unfinished_turn(&self) -> Option<&ChatTurn> {
         self.turns
             .last()
@@ -814,6 +810,12 @@ impl State {
             ChatUpdate::Reconciled { id, mut frame } => {
                 let native_proves_input = match self.info.protocol {
                     Protocol::Dsh => true,
+                    Protocol::KimiKap => {
+                        frame.source.path.is_empty()
+                            && frame.source.session_id.as_deref()==Some(self.info.native_id.as_str())
+                            && frame.edits.iter().any(|edit|matches!(edit,
+                                super::ChatEdit::Activity {event:Event::NativeInput{input_id,receipt:crate::InputReceipt::Started}} if *input_id==id))
+                    }
                     Protocol::Acp if self.info.runtime == "opencode" => {
                         frame.source.path.is_empty()
                             && frame.source.session_id.as_deref()
@@ -1187,9 +1189,7 @@ impl Log {
                         Protocol::Codex => {
                             Frame::codex_recovery(last.native_turn_id.as_deref()?, session.id(), r)
                         }
-                        Protocol::KimiKap => {
-                            Frame::kimi_recovery(last.native_turn_id.as_deref()?, session.id(), r)
-                        }
+                        Protocol::KimiKap => Frame::kimi_recovery(last, session.id(), r),
                         Protocol::Dsh => crate::dsh::recovery::frame(last, session.id(), r),
                         _ => None,
                     })

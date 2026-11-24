@@ -18,11 +18,48 @@ pub(crate) fn kap_candidate(v: &semver::Version) -> bool {
             && v >= &semver::Version::parse("2.7.2-botiverse.1").unwrap())
 }
 
+/// A host can die after the HTTP request arrives but before the native turn ID is saved.
+pub(crate) fn recovery_turn<'a>(
+    turns: &'a Value,
+    local: &crate::chat::ChatTurn,
+) -> Option<(&'a Value, bool)> {
+    let key = local.id.to_string();
+    let mut candidates = turns.as_array()?.iter().filter_map(|turn| {
+        let native = turn["turn_id"].as_str().filter(|id| !id.is_empty())?;
+        if turn["kind"] == "system" {
+            return None;
+        }
+        let claimed = !local.native_continuation
+            && turn["kind"] == "agent"
+            && turn["items"].as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item["type"] == "user_message"
+                        && item["placement"] == "opener"
+                        && item["origin"]["kind"] == "user"
+                        && item["prompt_ids"]
+                            .as_array()
+                            .is_some_and(|ids| matches!(ids.as_slice(),[id] if id==&key))
+                })
+            });
+        let matches = local
+            .native_turn_id
+            .as_deref()
+            .map_or(claimed, |id| id == native);
+        matches.then_some((turn, claimed))
+    });
+    let (turn, claimed) = candidates.next()?;
+    if candidates.next().is_some() {
+        return None;
+    }
+    let needs_receipt = !local.input_sent || local.native_turn_id.is_none();
+    (turn["status"] == "ended" || (claimed && needs_receipt)).then_some((turn, claimed))
+}
+
 pub(crate) async fn open(
     rt: &Runtime,
     mut opts: SessionOptions,
     allow_acp: bool,
-    recover_turn: Option<&str>,
+    recover_turn: Option<&crate::chat::ChatTurn>,
 ) -> Result<Session> {
     if opts
         .resume

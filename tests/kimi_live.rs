@@ -423,6 +423,53 @@ async fn exercise(kap: bool) {
     assert_eq!(recovered.status, TurnStatus::Completed);
     assert_eq!(recovered.items, *items);
     assert_eq!(requests.messages.lock().unwrap().len(), before);
+    // Only Begin survived. The torn record carried no native turn id, so
+    // recovery must rely on the native opener's prompt UUID.
+    for matching in [true, false] {
+        let path = dir.path().join(if matching {
+            "before-receipt"
+        } else {
+            "unknown-receipt"
+        });
+        let peer = ChatStore::open(&path).unwrap();
+        let mut rows = Vec::new();
+        let request = if matching {
+            recovered.id
+        } else {
+            Uuid::new_v4()
+        };
+        for raw in log.split_inclusive(|byte| *byte == b'\n') {
+            let mut row: Value = serde_json::from_slice(raw).unwrap();
+            if row["kind"] == "begin" && row["id"] == recovered.id.to_string() {
+                row["id"] = request.to_string().into();
+                rows.extend(serde_json::to_vec(&row).unwrap());
+                rows.push(b'\n');
+                break;
+            }
+            rows.extend_from_slice(raw);
+        }
+        std::fs::write(path.join(format!("{id}.karchat")), rows).unwrap();
+        std::fs::File::create(path.join(format!("{id}.lock"))).unwrap();
+        let turn = peer.history(id).unwrap().turns.pop().unwrap();
+        assert_eq!(turn.id, request);
+        assert!(!turn.input_sent && turn.native_turn_id.is_none());
+        let owner = peer
+            .resume_with(id, |o| o.env = opts.env.clone())
+            .await
+            .unwrap();
+        let duplicate = owner.send(request, "KAP_FIRST").await.unwrap();
+        assert_eq!(duplicate.input_sent, matching);
+        if matching {
+            assert_eq!(duplicate.status, TurnStatus::Completed);
+            assert_eq!(duplicate.native_turn_id, recovered.native_turn_id);
+            assert_eq!(duplicate.items, *items);
+        } else {
+            assert_eq!(duplicate.status, TurnStatus::Interrupted);
+            assert!(duplicate.native_turn_id.is_none());
+        }
+        owner.close().await.unwrap();
+        assert_eq!(requests.messages.lock().unwrap().len(), before);
+    }
     let queued = Uuid::new_v4();
     store.enqueue(id, queued, "KAP_SECOND").unwrap();
     let chat = store

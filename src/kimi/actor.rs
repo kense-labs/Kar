@@ -113,17 +113,13 @@ impl Actor {
         redact(&mut body, &self.secrets);
         self.journal.push(dir, kind, None, vec![], body, events);
     }
-    pub(super) fn capture_recovery(&self, snapshot: &Value, id: &str) {
+    pub(super) fn capture_recovery(&self, snapshot: &Value, local: &crate::chat::ChatTurn) {
         if snapshot["type"] == "turns"
             && snapshot["agent_id"] == "main"
-            && let Some(turn) = snapshot["turns"].as_array().and_then(|turns| {
-                turns
-                    .iter()
-                    .find(|t| t["turn_id"] == id && t["status"] == "ended" && t["kind"] != "system")
-            })
+            && let Some((turn, _)) = super::recovery_turn(&snapshot["turns"], local)
         {
-            // Keep only the interrupted local turn. Replaying every historical turn
-            // through the live journal would republish prior messages and token usage.
+            // Retain only this host input's snapshot. Replaying an entire history
+            // would publish old messages and token totals on the new stream.
             self.record(
                 Direction::FromRuntime,
                 RecordKind::Frame,
