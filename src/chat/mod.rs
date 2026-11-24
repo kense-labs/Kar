@@ -14,6 +14,7 @@ pub use rewind::{ContextRewind, PreparedRewind, RewindRequest};
 mod workspace_handoff;
 mod http_feed;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
+pub use queue::MergedContext;
 pub use handoff::{Handoff, HandoffRequest, HandoffStatus, ProviderSession};
 pub use http_feed::HttpChatFeed;
 pub use log::ChatUpdate;
@@ -992,7 +993,7 @@ impl Sender {
             if let Some(turn) = log.existing(id, &text, &attachments)? {
                 return Ok(turn);
             }
-            info.forked_from.as_ref().and_then(|f| {
+            info.forked_from.as_ref().filter(|f| !f.context_only).and_then(|f| {
                 log.state
                     .turns
                     .last()
@@ -1024,7 +1025,7 @@ impl Sender {
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;
-        let (wire_text, background_note) = {
+        let (wire_text, background_note, merged_context) = {
             let log = self.sink.0.lock().unwrap();
             let delivery = log.state.background_delivery(automatic);
             if automatic && delivery.as_ref().is_none_or(|d| d.input != id) {
@@ -1034,7 +1035,9 @@ impl Sender {
             let prompt = note
                 .as_ref()
                 .map_or_else(|| text.clone(), |n| n.prompt(&text));
-            (log.state.dispatch_text(&prompt), note)
+            let merge = store.next_merge(&log.state)?;
+            let prompt = merge.as_ref().map_or(prompt.clone(), |m| m.prompt(&prompt));
+            (log.state.dispatch_text(&prompt), note, merge)
         };
         let wire_text = if let Some(schema) = store.run_schema(self.info.id, id)? {
             format!("{wire_text}\n\nWhen the work is complete, call kar_submit_output with JSON text matching this schema. Correct any validation error before finishing.\n{schema}")
@@ -1054,6 +1057,7 @@ impl Sender {
             ));
         }
         let admission = Admission {
+            merged_context,
             background_note,
             attachments,
             store: store.clone(),

@@ -96,6 +96,8 @@ pub enum ChatUpdate {
     Begin {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         background_note: Option<super::BackgroundNote>,
+        #[serde(default,skip_serializing_if="Option::is_none")]
+        merged_context: Option<super::MergedContext>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<super::Attachment>,
         id: Uuid,
@@ -765,6 +767,7 @@ impl State {
             }
             ChatUpdate::Begin {
                 background_note,
+                merged_context,
                 attachments,
                 id,
                 at,
@@ -776,6 +779,7 @@ impl State {
                 let turn = self.turns.last_mut().unwrap();
                 turn.attachments = attachments;
                 turn.background_note = background_note;
+                turn.merged_context = merged_context;
                 if let Some(h) = self
                     .handoffs
                     .iter_mut()
@@ -1677,11 +1681,13 @@ impl Log {
         before: &super::checkpoint::Capture,
         attachments: Vec<super::Attachment>,
         background_note: Option<super::BackgroundNote>,
+        merged_context: Option<super::MergedContext>,
     ) -> Result<()> {
         self.ids = MessageIds::default();
         self.dispatched = false;
         self.commit(ChatUpdate::Begin {
             background_note,
+            merged_context,
             attachments,
             id,
             at: super::now(),
@@ -1881,6 +1887,7 @@ impl Log {
         self.dispatched = true;
         self.commit(ChatUpdate::Begin {
             background_note: None,
+            merged_context: None,
             attachments: Vec::new(),
             id: input
                 .filter(|id| self.state.find(*id).is_none())

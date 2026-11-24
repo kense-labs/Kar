@@ -223,6 +223,7 @@ mod tests {
         state
             .apply(super::super::super::ChatUpdate::Begin {
                 background_note: None,
+                merged_context: None,
                 attachments: Vec::new(),
                 id: turn,
                 at: 2,
@@ -240,6 +241,7 @@ mod tests {
         };
         assert!(check(&state).contains("does not match"));
         state.info.forked_from = Some(ForkOrigin {
+            context_only:false,
             mode: ForkMode::Native,
             chat: Uuid::new_v4(),
             turn,

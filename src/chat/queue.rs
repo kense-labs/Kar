@@ -1,6 +1,8 @@
 //! Producers can add inputs while another process owns the native session. The queue
 //! stores admission order. The chat journal is authoritative about dispatch attempts.
 mod commands;
+mod merge;
+pub use merge::MergedContext;
 mod workspace_move;
 mod promotion;
 use super::{ChatInfo, ChatSession, ChatStore, Sender, Sink, TurnStatus};
@@ -176,6 +178,8 @@ impl Entry {
 }
 #[derive(Serialize, Deserialize)]
 struct Inbox {
+    #[serde(default,skip_serializing_if="std::collections::BTreeMap::is_empty")]
+    context_transfers:std::collections::BTreeMap<Uuid,merge::Transfer>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     workspace_gate: Option<workspace_move::WorkspaceGate>,
     chat: Uuid,
@@ -207,6 +211,7 @@ impl ChatStore {
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 return Ok(Inbox {
                     workspace_gate:None,
+                    context_transfers:Default::default(),
                     chat: chat.id,
                     native_id: self.initial_info(chat.id)?.native_id,
                     entries: vec![],
@@ -446,6 +451,7 @@ fn different_prompt() -> Error {
 /// Executed by the actor after its busy check and before its first native prompt write.
 /// A durable Begin consumes the input even if the process dies before a receipt arrives.
 pub(crate) struct Admission {
+    pub(super) merged_context: Option<MergedContext>,
     pub(super) background_note: Option<super::BackgroundNote>,
     pub(super) attachments: Vec<super::Attachment>,
     pub(super) store: ChatStore,
@@ -474,7 +480,7 @@ impl Admission {
         {
             return Err(Error::Refused("input dispatch has already started".into()));
         }
-        let inbox = self.store.read_inbox(&log.state.info)?;
+        let mut inbox = self.store.read_inbox(&log.state.info)?;
         if inbox.workspace_gate.is_some() {return Err(Error::Busy);}
         if let Some(entry) = inbox.entries.iter().find(|e| e.id == self.id) {
             if entry.text != self.text || entry.attachments != self.attachments {
@@ -515,13 +521,22 @@ impl Admission {
         if self.background_note != expected || automatic && !inbox.allows_background(&log.state) {
             return Err(Error::Busy);
         }
+        if inbox.next_merge(&log.state) != self.merged_context.as_ref() {
+            return Err(Error::Busy);
+        }
+        let transfer_id = self.merged_context.as_ref().map(|m|m.id);
         log.begin(
             self.id,
             &self.text,
             &self.checkpoint.before,
             self.attachments,
             self.background_note,
+            self.merged_context,
         )?;
+        if let Some(id)=transfer_id {
+            inbox.context_transfers.get_mut(&id).unwrap().bound=Some(self.id);
+            self.store.save_inbox(&inbox)?;
+        }
         log.checkpoint = Some(self.checkpoint);
         Ok(())
     }

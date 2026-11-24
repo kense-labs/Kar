@@ -1,3 +1,4 @@
+mod context;
 mod request;
 pub(super) mod source;
 mod worktree;
@@ -42,6 +43,9 @@ impl ForkPolicy {
 /// The parent chat and the provider-issued anchor copied into a new native session.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ForkOrigin {
+    /// A chat-only fork preserves the live shared worktree.
+    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    pub context_only: bool,
     #[serde(default)]
     pub mode: ForkMode,
     pub chat: Uuid,
@@ -831,6 +835,7 @@ impl ChatStore {
                 ForkMode::PortableContext
             };
             let origin = ForkOrigin {
+                context_only:false,
                 mode,
                 chat: parent.id,
                 turn,
@@ -1082,6 +1087,7 @@ mod staged_route_tests {
         child.model = Some("selected-turn-model".into());
         child.settings.system_prompt = Some("original instructions".into());
         child.forked_from = Some(ForkOrigin {
+            context_only:false,
             mode: ForkMode::Native,
             chat: parent.id,
             turn: Uuid::new_v4(),

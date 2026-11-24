@@ -80,6 +80,8 @@ pub struct TimelineItem {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatTurn {
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub merged_context: Option<super::MergedContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_note: Option<super::BackgroundNote>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -345,6 +347,7 @@ impl ChatTurn {
             fork_anchor: None,
             native_turn_id: None,
             background_note: None,
+            merged_context: None,
             pi_input_timestamp_ms: None,
             pi_image_content_sha256: None,
             input_sent: false,

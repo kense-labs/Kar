@@ -1,5 +1,6 @@
 //! Thread operations require a host-granted scope and retain the native turn or request identity.
 mod reads;
+mod transfer;
 mod writes;
 use super::*;
 use crate::{Error, Result, workbench::Catalog};
@@ -28,7 +29,7 @@ pub(super) fn visible(db: &Catalog, c: &Caller, id: Uuid) -> bool {
     c.grant.as_ref().is_none_or(|g| {
         g.active()
             && Policy::current(db, g.project, g.chat) == c.policy.as_ref()
-            && (g.chat == id || super::project_tools::launched_by(db, g.chat, id)
+            && (g.chat == id || super::project_tools::launched_by(db, g.chat, id) || transfer::created_by(db,g.chat,id)
                 || c.policy
                     .as_ref()
                     .and_then(|p| p.thread_tools.as_ref())
@@ -115,6 +116,7 @@ pub(in crate::workbench) fn handles(name: &str) -> bool {
         name,
         "kar_thread_search"
             | "kar_thread_wait"
+            | "kar_thread_transfer"
             | "kar_thread_update"
             | "kar_thread_organize"
             | "kar_thread_send"
@@ -160,6 +162,8 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         &[],
     );
     let write = !c.plan && p.executes() && scope.write;
+    tool("kar_thread_transfer","Fork a conversation through a completed run or checkpoint, without changing files. Merge a fork's contributions into its parent on its next message.",
+        json!({"action":{"enum":if write {vec!["fork","merge_back","status"]}else{vec!["status"]}},"source_point":{"type":"object"},"target_thread_id":id,"title":s,"policy":{"enum":["native","prefer_native"]},"command_id":id}),&["action"]);
     tool(
         "kar_pending_request",
         "Read outstanding user questions or answer an exact question occurrence.",
@@ -214,6 +218,8 @@ pub(in crate::workbench) struct Record {
     project: Uuid,
     source: Uuid,
     target: Uuid,
+    #[serde(default)]
+    transfer_turn:Option<Uuid>,
     name: String,
     args: Value,
     input: Uuid,
@@ -224,7 +230,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
     let fields = input.as_object_mut().ok_or_else(denied)?;
     let project = parse(fields.remove("project_id").unwrap_or_default())?;
     let thread = parse(fields.remove("thread_id").unwrap_or_default())?;
-    let read = matches!(name.as_str(), "kar_thread_search" | "kar_thread_wait")
+    let read = (name=="kar_thread_transfer" && fields.get("action").is_some_and(|s|s=="status")) || matches!(name.as_str(), "kar_thread_search" | "kar_thread_wait")
         || matches!(
             name.as_str(),
             "kar_thread_configure" | "kar_pending_request"
@@ -242,6 +248,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
     }
     let (p, t) = target(&app, &c, project, thread, !read)?;
     if read {
+        if name=="kar_thread_transfer"{ return transfer::status(&app,&c,p,t); }
         return reads::call(&app, &c, p, t, &name, input).await;
     }
     let id = parse(fields.remove("command_id").unwrap_or_default())?;
@@ -256,6 +263,8 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
     tokio::spawn(async move {
         let gate = app.0.mcp.command_gate(id);
         let _guard = gate.lock().await;
+        let prior=app.0.catalog.lock().unwrap().model_thread_commands.contains_key(&id);
+        let transfer_turn=if name=="kar_thread_transfer" && !prior { Some(transfer::select(&app.0.chats.history(t)?,&input)?) }else{None};
         let (rec, previous) = app.update(|db| {
             authorize(db, &c, p, t, true)?;
             if let Some(old) = db.model_thread_commands.get(&id) {
@@ -273,6 +282,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
                 project: p,
                 source,
                 target: t,
+                transfer_turn,
                 name,
                 args: input,
                 input: Uuid::new_v4(),
@@ -287,7 +297,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
         if previous
             && !matches!(
                 rec.name.as_str(),
-                "kar_thread_send"
+                "kar_thread_send" | "kar_thread_transfer"
                     | "kar_thread_update"
                     | "kar_thread_organize"
                     | "kar_thread_configure"
@@ -297,7 +307,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
                 "original native control has no confirmed receipt".into(),
             ));
         }
-        let out = writes::call(&app, &c, id, &rec).await;
+        let out = if rec.name=="kar_thread_transfer"{transfer::apply(&app,&c,id,&rec).await}else{writes::call(&app, &c, id, &rec).await};
         let saved = out.as_ref().map(Clone::clone).map_err(ToString::to_string);
         app.update(|db| {
             let row = db.model_thread_commands.get_mut(&id).ok_or_else(denied)?;

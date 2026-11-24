@@ -306,7 +306,7 @@ impl super::log::State {
             && self
                 .turns
                 .iter()
-                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty() && t.background_note.is_none())
+                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty() && t.background_note.is_none() && t.merged_context.is_none())
         {
             return Cow::Borrowed(&self.turns);
         }
@@ -339,6 +339,7 @@ impl super::log::State {
                             if let Some(note) = &turn.background_note {
                                 *text = note.prompt(text);
                             }
+                            if let Some(m)=&turn.merged_context { *text=m.prompt(text); }
                             if let Some(h) = handoff {
                                 *text = h.native_input(text);
                             }
@@ -365,7 +366,7 @@ impl super::log::State {
         let Some(original) = turn.prompt() else {
             return;
         };
-        if handoff.is_none() && turn.background_note.is_none() {
+        if handoff.is_none() && turn.background_note.is_none() && turn.merged_context.is_none() {
             return;
         }
         if !frame.source.path.is_empty()
@@ -384,11 +385,9 @@ impl super::log::State {
                 _ => continue,
             };
             let carried = handoff.and_then(|h| h.user_input(text)).unwrap_or(text);
-            let matches = if let Some(note) = &turn.background_note {
-                carried == note.prompt(original)
-            } else {
-                carried == original
-            };
+            let mut expected=turn.background_note.as_ref().map_or_else(||original.to_owned(),|n|n.prompt(original));
+            if let Some(m)=&turn.merged_context {expected=m.prompt(&expected);}
+            let matches=carried==expected;
             if matches {
                 *text = original.to_owned();
             }

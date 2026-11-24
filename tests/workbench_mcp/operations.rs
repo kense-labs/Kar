@@ -90,6 +90,78 @@ pub(super) async fn exercise(
         .await["result"]["isError"],
         true
     );
+    // Fork a completed turn while retaining the current working files. Its contribution
+    // is held for the parent's next actual message, not dispatched as a new turn.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let snap =
+                server::json(host.get(format!("{url}/projects/{project}/chats/{target}/snapshot")))
+                    .await;
+            if snap["history"]["turns"].as_array().is_some_and(|ts| {
+                ts.iter()
+                    .any(|r| r["id"] == id && r["status"] == "completed")
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let base_turn = Uuid::new_v4();
+    server::json(
+        host.post(format!("{url}/projects/{project}/chats/{target}/messages"))
+            .json(&json!({"id":base_turn,"text":"fork anchor"})),
+    )
+    .await;
+    let child = Uuid::new_v4();
+    let fork_args = json!({"action":"fork","command_id":child,"thread_id":target,"source_point":{"type":"run","turn_id":base_turn}});
+    let first = server::json(invoke("kar_thread_transfer", fork_args.clone())).await;
+    assert_eq!(
+        first["result"]["structuredContent"]["target_thread_id"],
+        json!(child)
+    );
+    assert_eq!(
+        server::json(invoke("kar_thread_transfer", fork_args)).await["result"],
+        first["result"]
+    );
+    let child_turn = Uuid::new_v4();
+    server::json(
+        host.post(format!("{url}/projects/{project}/chats/{child}/messages"))
+            .json(&json!({"id":child_turn,"text":"branch contribution"})),
+    )
+    .await;
+    observer.recv(&mut [0u8; 192]).await.unwrap();
+    let merge = Uuid::new_v4();
+    let args = json!({"action":"merge_back","command_id":merge,"thread_id":child,"target_thread_id":target});
+    assert_eq!(
+        server::json(invoke("kar_thread_transfer", args.clone())).await["result"]["structuredContent"]
+            ["status"],
+        "pending"
+    );
+    assert_eq!(
+        server::json(invoke("kar_thread_transfer", args)).await["result"]["structuredContent"]["status"],
+        "pending"
+    );
+    let next = Uuid::new_v4();
+    let next = server::json(
+        host.post(format!("{url}/projects/{project}/chats/{target}/messages"))
+            .json(&json!({"id":next,"text":"consume the merged context"})),
+    )
+    .await;
+    assert_eq!(next["merged_context"]["id"], json!(merge));
+    assert!(
+        next["merged_context"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("branch contribution")
+    );
+    let later = server::json(
+        host.post(format!("{url}/projects/{project}/chats/{target}/messages"))
+            .json(&json!({"id":Uuid::new_v4(),"text":"stay in the same native chat"})),
+    )
+    .await;
+    assert!(later.get("merged_context").is_none());
     server::json(
         host.put(&policy)
             .json(&json!({"mode":"plan","thread_tools":{"targets":[target]}})),
