@@ -782,6 +782,7 @@ impl ThreadActor {
             Command::Rpc(method, _, _, ack) => {
                 let _ = ack.send(Err(Error::Unsupported(method)));
             }
+            Command::WorkbenchMcpReply(_) => unreachable!("ACP-only controller message"),
             Command::Send(_, ack) | Command::Respond(_, _, ack) => {
                 let _ = ack.send(Err(Error::Unsupported(
                     "Cybion exposes no stdio or approval channel".into(),

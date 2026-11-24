@@ -1,3 +1,4 @@
+mod acp_mcp;
 mod background;
 mod codex_admission;
 mod codex_processes;
@@ -166,6 +167,7 @@ pub(crate) enum Command {
         Reply<Value>,
     ),
     Send(Value, Reply<()>),
+    WorkbenchMcpReply(Value),
     Prompt(
         uuid::Uuid,
         crate::input::Input,
@@ -318,6 +320,7 @@ pub(crate) struct Launch {
 }
 
 pub(crate) struct Actor {
+    acp_mcp: Option<acp_mcp::Proxy>,
     output_schema: Option<serde_json::Map<String, Value>>,
     background: background::ClaudeBackground,
     acp_failures: wire::failure::AcpFailures,
@@ -406,6 +409,8 @@ impl Actor {
             startup_stderr.spawn(crate::process::diagnostic::startup_tail(stderr, sensitive));
         }
         let actor = Self {
+            acp_mcp: (runtime.protocol == Protocol::Acp).then(||
+                options.workbench_registration.as_ref().and_then(|r|acp_mcp::Proxy::new(r,tx.downgrade()))).flatten(),
             muse: (runtime.protocol == Protocol::Muse).then(|| muse::Projection::new(options)),
             background: background::ClaudeBackground::for_runtime(runtime.protocol, &runtime.id),
             close_ack: None,
@@ -597,6 +602,18 @@ impl Actor {
             self.journal.push(stamp, kind, session, path, v, events);
         }
     }
+    async fn write_private(&mut self, packet: &Value) -> Result<()> {
+        let mut bytes = serde_json::to_vec(packet)?;
+        bytes.push(b'\n');
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| Error::Closed("agent stdin closed".into()))?;
+        tokio::time::timeout(Duration::from_secs(10), stdin.write_all(&bytes))
+            .await
+            .map_err(|_| Error::Timeout("writing to agent".into()))??;
+        Ok(())
+    }
     async fn write(&mut self, packet: Value, kind: RecordKind) -> Result<()> {
         self.write_packet(packet, kind, None).await
     }
@@ -613,15 +630,7 @@ impl Actor {
         {
             packet["session_id"] = self.session().into();
         }
-        let mut bytes = serde_json::to_vec(&packet)?;
-        bytes.push(b'\n');
-        let stdin = self
-            .stdin
-            .as_mut()
-            .ok_or_else(|| Error::Closed("agent stdin closed".into()))?;
-        tokio::time::timeout(Duration::from_secs(10), stdin.write_all(&bytes))
-            .await
-            .map_err(|_| Error::Timeout("writing to agent".into()))??;
+        self.write_private(&packet).await?;
         if self.suggestions.is_some() && private_suggestion(&packet) {
             return Ok(());
         }
@@ -1185,6 +1194,7 @@ impl Actor {
                     )));
                 }
             },
+            Command::WorkbenchMcpReply(packet) => self.write_private(&packet).await?,
             Command::Send(packet, tx) => {
                 self.write(packet, RecordKind::Frame).await?;
                 let _ = tx.send(Ok(()));
@@ -1520,6 +1530,7 @@ impl Actor {
         Ok(())
     }
     async fn cancel_acp(&mut self) -> Result<()> {
+        if let Some(proxy) = &mut self.acp_mcp { proxy.stop_calls(); }
         let cancel = json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.session()}});
         if self.end_turn_processes
             && self.manual_compaction.is_none()
@@ -1711,6 +1722,12 @@ impl Actor {
                 }
                 return Ok(());
             }
+        }
+        if let Some(proxy) = &mut self.acp_mcp
+            && let Some(reply) = proxy.dispatch(&v)
+        {
+            if let Some(packet) = reply {self.write_private(&packet).await?;}
+            return Ok(());
         }
         if self.protocol == Protocol::Qwen
             && let Some(error) = crate::opening::qwen_missing_auth(&v)

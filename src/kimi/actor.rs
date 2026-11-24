@@ -681,7 +681,7 @@ impl Actor {
             Command::Send(_, tx) => {
                 let _ = tx.send(Err(Error::Unsupported("raw Kimi input".into())));
             }
-            Command::Close(_) => unreachable!(),
+            Command::WorkbenchMcpReply(_) | Command::Close(_) => unreachable!(),
         }
         Ok(())
     }

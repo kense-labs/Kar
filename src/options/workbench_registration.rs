@@ -5,6 +5,8 @@ use std::fmt;
 #[derive(Clone)]
 pub struct WorkbenchRegistration {
     pub(crate) http: McpServer,
+    pub(crate) acp_id: String,
+    pub(crate) acp: std::sync::Arc<std::sync::atomic::AtomicU8>,
     pub(crate) stdio: Option<McpServer>,
     #[cfg(target_os = "macos")]
     pub(crate) root: tokio::sync::watch::Sender<Option<crate::resources::tree::ProcessId>>,
@@ -19,6 +21,8 @@ impl WorkbenchRegistration {
     pub(crate) fn new(http: McpServer) -> Self {
         Self {
             http,
+            acp_id: uuid::Uuid::new_v4().to_string(),
+            acp: Default::default(),
             stdio: None,
             #[cfg(target_os = "macos")]
             root: tokio::sync::watch::channel(None).0,

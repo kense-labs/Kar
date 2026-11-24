@@ -68,7 +68,7 @@ impl Command {
                 {
                     (Uuid::new_v4(), json!({"type":method,"params":params}))
                 }
-                Self::Close(_) | Self::Send(..) | Self::Respond(..) | Self::Rpc(..) => return None,
+                Self::Close(_) | Self::Send(..) | Self::WorkbenchMcpReply(_) | Self::Respond(..) | Self::Rpc(..) => return None,
             };
             body["id"] = Value::String(request.to_string());
             redact(&mut body, secrets);

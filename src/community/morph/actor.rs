@@ -485,7 +485,7 @@ impl Actor {
             Command::Send(_, ack) => {
                 let _ = ack.send(Err(Error::Unsupported("raw stdio on Morph".into())));
             }
-            Command::Close(_) => unreachable!("close is handled by run"),
+            Command::WorkbenchMcpReply(_) | Command::Close(_) => unreachable!("close is handled by run"),
         }
     }
     async fn settle(&mut self) {

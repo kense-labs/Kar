@@ -957,8 +957,11 @@ impl Session {
                         "ACP server did not advertise HTTP MCP".into(),
                     ));
                 }
+                let in_band = init.pointer("/agentCapabilities/mcpCapabilities/acp") == Some(&Value::Bool(true))
+                    && runtime.id != "dsh" && options.workbench_registration.as_ref().is_some_and(|r|
+                        r.acp.compare_exchange(1, 2, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire).is_ok());
                 let before = options.mcp_servers.len();
-                if runtime.id != "dsh" && options.workbench_registration.is_some() {
+                if !in_band && runtime.id != "dsh" && options.workbench_registration.is_some() {
                     let http = init.pointer("/agentCapabilities/mcpCapabilities/http")
                         == Some(&Value::Bool(true));
                     let sensitive = crate::options::availability::credential_refusal(
@@ -980,13 +983,17 @@ impl Session {
                         options.add_workbench_server(crate::McpTransport::Stdio);
                     }
                 }
-                let optional_acp = options.mcp_servers.len() > before;
-                let servers: Vec<_> = options
+                let optional_acp = in_band || options.mcp_servers.len() > before;
+                let mut servers: Vec<_> = options
                     .mcp_servers
                     .iter()
                     .filter(|_| runtime.id != "dsh")
                     .map(|(name, s)| s.acp(name))
                     .collect();
+                if in_band {
+                    let registration = options.workbench_registration.as_ref().expect("negotiated ACP");
+                    servers.push(json!({"type":"acp","name":crate::WorkbenchRegistration::NAME,"serverId":registration.acp_id}));
+                }
                 let mut params = json!({"cwd":cwd_str,"mcpServers":servers});
                 if runtime.id == "fx" {
                     params["_meta"] = json!({"fx":{"profileMcpServers":true}});
@@ -1072,6 +1079,9 @@ impl Session {
                     let opened = session.acp_rpc(method, params.clone(), Some(open_step), open_limit).await;
                     match opened {
                         Err(Error::Open(error)) if include_workbench && error.rejected_mcp_parameters(method) => {
+                            if let Some(registration) = &options.workbench_registration {
+                                registration.acp.store(0, std::sync::atomic::Ordering::Release);
+                            }
                             if let Some(entries) = params["mcpServers"].as_array_mut() {
                                 entries.retain(|e| e["name"] != crate::WorkbenchRegistration::NAME);
                             }

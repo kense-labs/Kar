@@ -854,7 +854,7 @@ impl Actor {
             Command::Send(_, ack) => {
                 let _ = ack.send(Err(Error::Unsupported("raw DSH input".into())));
             }
-            Command::Close(_) => unreachable!(),
+            Command::WorkbenchMcpReply(_) | Command::Close(_) => unreachable!(),
         };
         Ok(())
     }

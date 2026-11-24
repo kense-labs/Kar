@@ -30,18 +30,19 @@ fn acp(id: &str, args: &[String]) {
     let session = format!("native-{id}");
     let mut configured = id == "cursor";
     let mut rejected = false;
-    for line in std::io::stdin().lock().lines() {
+    let mut lines = std::io::stdin().lock().lines();
+    while let Some(line) = lines.next() {
         let request: Value = serde_json::from_str(&line.unwrap()).unwrap();
         let params = &request["params"];
         let value = match request["method"].as_str().unwrap() {
             "initialize" => json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true,
-                "mcpCapabilities":{"http":id=="cursor"}}}),
+                "mcpCapabilities":{"http":id=="cursor", "acp":registration::mode().as_deref()==Some("in-band")}}}),
             "session/new" | "session/load" => {
                 assert_eq!(
                     params["cwd"].as_str(),
                     std::env::current_dir().unwrap().to_str()
                 );
-                if registration::acp(&request, &mut rejected) {
+                if registration::acp(&request, &mut rejected, &mut lines) {
                     continue;
                 }
                 if id == "fx" {

@@ -35,7 +35,11 @@ fn who() -> Value {
         json!({"name":"orchestrator_capabilities","arguments":{}}),
     )
 }
-pub(super) fn acp(req: &Value, rejected: &mut bool) -> bool {
+pub(super) fn acp(
+    req: &Value,
+    rejected: &mut bool,
+    lines: &mut impl Iterator<Item = std::io::Result<String>>,
+) -> bool {
     let Some(mode) = mode() else { return false };
     assert!(std::env::var_os("KAR_WORKBENCH_TOKEN").is_none());
     let method = req["method"].as_str().unwrap();
@@ -60,6 +64,58 @@ pub(super) fn acp(req: &Value, rejected: &mut bool) -> bool {
         assert_eq!(mode, "legacy");
         assert!(*rejected);
         record(method, json!("continued without optional server"));
+        return false;
+    }
+    if mode == "in-band" {
+        let [s] = entries.as_slice() else {
+            panic!("expected a single negotiated server")
+        };
+        assert_eq!(s["type"], "acp");
+        assert_eq!(s["name"], "kar_workbench");
+        assert!(s.get("headers").is_none() && s.get("command").is_none());
+        let mut call = |id, method, params| {
+            emit(rpc(id, method, params));
+            let r: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+            assert_eq!(r["id"], id);
+            r
+        };
+        assert!(
+            call(199, "mcp/connect", json!({"serverId":"unknown"}))
+                .get("error")
+                .is_some()
+        );
+        let conn =
+            call(200, "mcp/connect", json!({"serverId":s["serverId"]}))["result"]["connectionId"]
+                .clone();
+        assert!(conn.is_string());
+        let init = call(
+            201,
+            "mcp/message",
+            json!({"connectionId":conn,"method":"initialize","params":initialize()["params"]}),
+        );
+        assert_eq!(init["result"]["serverInfo"]["name"], "Kar");
+        let who = call(
+            202,
+            "mcp/message",
+            json!({"connectionId":conn,"method":"tools/call","params":who()["params"]}),
+        );
+        record(
+            method,
+            json!({"scope":who["result"]["structuredContent"]["provider_session"]}),
+        );
+        assert_eq!(
+            call(203, "mcp/disconnect", json!({"connectionId":conn}))["result"],
+            json!({})
+        );
+        assert!(
+            call(
+                204,
+                "mcp/message",
+                json!({"connectionId":conn,"method":"ping"})
+            )
+            .get("error")
+            .is_some()
+        );
         return false;
     }
     assert_eq!(mode, "bridge");
@@ -204,7 +260,7 @@ async fn workbench(id: &str, mode: &str) {
             "session-load"
         },
     );
-    if matches!(mode, "muse" | "bridge") {
+    if matches!(mode, "muse" | "bridge" | "in-band") {
         for r in [&created, &resumed] {
             assert_eq!(r["scope"]["project_id"], p);
             assert_eq!(r["scope"]["thread_id"], chat.to_string());
@@ -217,7 +273,7 @@ async fn workbench(id: &str, mode: &str) {
     next.kill().await.unwrap();
 }
 pub(super) async fn scenario() {
-    for (id, m) in [("muse", "muse"), ("muse", "muse-old")] {
+    for (id, m) in [("muse", "muse"), ("muse", "muse-old"), ("kiro", "in-band")] {
         workbench(id, m).await;
     }
     #[cfg(target_os = "macos")]
