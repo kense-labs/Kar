@@ -197,3 +197,8 @@ harness = false
 name = "workbench_acp_registry"
 path = "tests/workbench_acp_registry.rs"
 harness = false
+
+[[test]]
+name = "workbench_quota_resets"
+path = "tests/workbench_quota_resets.rs"
+harness = false

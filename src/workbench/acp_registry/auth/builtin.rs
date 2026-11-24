@@ -2,7 +2,7 @@
 use super::*;
 use crate::account::{AccountUsageOptions, AuthStatusOptions, LoginOptions, LoginResult};
 
-fn context(
+pub(super) fn context(
     app: &Workbench,
     p: Uuid,
     id: &str,

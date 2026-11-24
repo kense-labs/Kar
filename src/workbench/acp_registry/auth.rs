@@ -2,6 +2,7 @@
 mod flow;
 pub(in crate::workbench) use flow::client as client_key;
 mod builtin;
+mod resets;
 use axum::http::HeaderMap;
 use super::*;
 use crate::account::AccountWire;
@@ -16,7 +17,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 pub(super) fn routes() -> Router<Workbench> {
-    Router::new().merge(builtin::routes())
+    Router::new().merge(builtin::routes()).merge(resets::routes())
         .route(
             "/projects/{project}/acp-registry/{runtime}/auth/methods",
             get(methods),

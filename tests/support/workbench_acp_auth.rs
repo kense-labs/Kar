@@ -141,6 +141,11 @@ pub(super) async fn exercise(client: &Client, base: &str, p: &str, exe: &Path, t
     assert_eq!(client.post(format!("{account}/login")).send().await.unwrap().status(),StatusCode::BAD_REQUEST);
     let unsupported=server::json(client.get(format!("{base}/projects/{p}/accounts/fx/quota"))).await;
     assert_eq!(unsupported["kind"],"unsupported");
+    let quota_request=json!({"request_id":uuid::Uuid::new_v4()});
+    let quota_url=format!("{account}/quota/resets/redeem");
+    assert_eq!(client.post(&quota_url).json(&quota_request).send().await.unwrap().status(),StatusCode::BAD_REQUEST);
+    assert_eq!(Client::new().post(&quota_url).bearer_auth(token).json(&quota_request).send().await.unwrap().status(),StatusCode::FORBIDDEN);
+    assert_eq!(scoped_client.post(&quota_url).json(&json!({"request_id":uuid::Uuid::nil()})).send().await.unwrap().status(),StatusCode::BAD_REQUEST);
     let other=client;
     let client=&scoped_client;
     let input = json!({"source":"local","name":"Authentication fixture","command_path":exe,"command_args":["auth-fixture"],"auth_method_id":"auto"});

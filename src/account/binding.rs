@@ -13,6 +13,16 @@ pub(crate) struct Key {
     home: Option<PathBuf>,
 }
 impl Key {
+    pub(crate) fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(self.runtime.as_bytes());
+        h.update([0]);
+        if let Some(path) = &self.home {
+            h.update(path.as_os_str().as_encoded_bytes());
+        }
+        format!("{:x}", h.finalize())
+    }
     pub(crate) fn new(runtime: &str, options: &SessionOptions) -> Self {
         let home_env = match runtime {
             "codex" => Some(("CODEX_HOME", ".codex")),
@@ -71,6 +81,7 @@ pub struct AccountAdmission {
 struct Row {
     epoch: u64,
     changing: bool,
+    account_operations: usize,
     live: Vec<Weak<Session>>,
 }
 #[derive(Default, Clone)]
@@ -100,11 +111,24 @@ impl Bindings {
         r.live.push(Arc::downgrade(session));
         Ok(())
     }
+    /// Keep hosted credential changes out of a quota operation without stopping running chats.
+    pub(crate) fn operation(&self, key: Key) -> Result<AccountOperation> {
+        let mut db = self.0.lock().unwrap();
+        let r = db.entry(key.clone()).or_default();
+        if r.changing {
+            return Err(Error::Busy);
+        }
+        r.account_operations += 1;
+        Ok(AccountOperation {
+            key,
+            bindings: self.clone(),
+        })
+    }
     pub(crate) async fn change(&self, key: Key) -> Result<Changing> {
         let (guard, live) = {
             let mut db = self.0.lock().unwrap();
             let r = db.entry(key.clone()).or_default();
-            if r.changing {
+            if r.changing || r.account_operations != 0 {
                 return Err(Error::Busy);
             }
             r.epoch = r
@@ -138,6 +162,21 @@ impl Bindings {
                 Error::Timeout("could not release all chats using this credential profile".into())
             })??;
         Ok(guard)
+    }
+}
+pub(crate) struct AccountOperation {
+    key: Key,
+    bindings: Bindings,
+}
+impl Drop for AccountOperation {
+    fn drop(&mut self) {
+        self.bindings
+            .0
+            .lock()
+            .unwrap()
+            .get_mut(&self.key)
+            .unwrap()
+            .account_operations -= 1;
     }
 }
 pub(crate) struct Changing {
