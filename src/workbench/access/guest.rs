@@ -1,6 +1,7 @@
 //! A guest can see public messages in one chat and propose a message for its owner.
 use super::*;
-use crate::chat::{ChatCursor, Item, Role};
+use crate::chat::{ChatCursor, InputStatus, Item, Role};
+mod retention;
 use axum::{
     Extension,
     extract::{DefaultBodyLimit, Query},
@@ -9,6 +10,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::stream;
+pub(super) use retention::{maintain, needs_maintenance};
 use std::{collections::HashMap, convert::Infallible, time::Duration};
 
 const DAY_MS: u64 = 86_400_000;
@@ -25,6 +27,11 @@ pub(super) struct Share {
     revision: u64,
     guests: BTreeMap<Uuid, Guest>,
     proposals: BTreeMap<Uuid, Proposal>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    retired: BTreeMap<Uuid, retention::Retired>,
+    /// Original chat turn that published each immutable attachment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    published: BTreeMap<Uuid, retention::Published>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Guest {
@@ -40,11 +47,18 @@ struct Proposal {
     files: Vec<Attachment>,
     status: Decision,
     created_ms: u64,
+    #[serde(default)]
+    sequence: u64,
+    #[serde(default)]
+    signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delivery: Option<InputStatus>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 struct Attachment {
     id: Uuid,
     name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     base64: String,
     size: usize,
 }
@@ -58,8 +72,12 @@ enum Decision {
 }
 impl Proposal {
     fn view(&self, share: &Share) -> Value {
-        json!({"id":self.id,"request_id":self.key,"author":share.guests.get(&self.author).map(|g|&g.name),"text":self.text,"status":self.status,
-            "attachments":self.files.iter().map(|f|json!({"id":f.id,"name":f.name,"bytes":f.size})).collect::<Vec<_>>()})
+        let mut view = json!({"id":self.id,"request_id":self.key,"author":share.guests.get(&self.author).map(|g|&g.name),"text":self.text,"status":self.status,
+            "attachments":self.files.iter().map(|f|json!({"id":f.id,"name":f.name,"bytes":f.size})).collect::<Vec<_>>()});
+        if let Some(status) = self.delivery {
+            view["delivery"] = json!(status);
+        }
+        view
     }
 }
 impl Share {
@@ -108,6 +126,8 @@ async fn create(
                 revision: 0,
                 guests: Default::default(),
                 proposals: Default::default(),
+                retired: Default::default(),
+                published: Default::default(),
             },
         );
         Ok(json!({"id":id,"project":project,"chat":chat,"expires_ms":expires_ms,"credential":code}))
@@ -208,6 +228,8 @@ async fn guest_auth(
 
 #[derive(Deserialize)]
 struct FileInput {
+    #[serde(default)]
+    content_type: String,
     name: String,
     base64: String,
 }
@@ -236,6 +258,23 @@ fn attachments(input: Vec<FileInput>) -> AccessResult<Vec<Attachment>> {
         let bytes = STANDARD
             .decode(&f.base64)
             .map_err(|_| AccessError::Bad("invalid attachment data".into()))?;
+        let mime = f
+            .content_type
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let valid = match mime.as_str() {
+            "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
+            "image/gif" => bytes.starts_with(b"GIF8"),
+            "image/webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
+            other => !other.starts_with("image/"),
+        };
+        if bytes.is_empty() || !valid {
+            return Err(AccessError::Bad("empty file or unsupported image".into()));
+        }
         size += bytes.len();
         if size > MESSAGE_BYTES {
             return Err(AccessError::Bad("attachments exceed 10 MiB".into()));
@@ -267,24 +306,21 @@ async fn submit(
             .filter(|s| s.active(&host))
             .ok_or(AccessError::Invalid)?;
         let files = attachments(p.attachments)?;
+        let signature = retention::signature(&p.text, &files);
         if let Some(old) = s
             .proposals
             .values()
             .find(|v| v.author == who.guest && v.key == p.request_id)
         {
-            if old.text != p.text
-                || old.files.len() != files.len()
-                || !old
-                    .files
-                    .iter()
-                    .zip(&files)
-                    .all(|(a, b)| a.name == b.name && a.base64 == b.base64)
-            {
-                return Err(AccessError::Conflict(
-                    "request ID belongs to another proposal".into(),
-                ));
-            }
+            old.check_signature(&signature)?;
             return Ok(old.view(s));
+        }
+        if let Some((id, old)) = s
+            .retired
+            .iter()
+            .find(|(_, v)| v.author == who.guest && v.key == p.request_id)
+        {
+            return old.replay(*id, s, &signature, &p.text, files);
         }
         let pending: Vec<_> = s
             .proposals
@@ -310,6 +346,9 @@ async fn submit(
             files,
             status: Decision::Pending,
             created_ms: now(),
+            sequence: s.revision + 1,
+            signature,
+            delivery: None,
         };
         let view = item.view(s);
         s.proposals.insert(item.id, item);
@@ -324,18 +363,9 @@ async fn attached(
     Extension(who): Extension<Principal>,
     Path((_, id)): Path<(Uuid, Uuid)>,
 ) -> AccessResult<Response> {
-    let db = app.0.access.registry.lock().unwrap();
-    let s = db.shares.get(&who.share).ok_or(AccessError::Missing)?;
-    let file = s
-        .proposals
-        .values()
-        .filter(|p| p.author == who.guest || p.status == Decision::Accepted)
-        .flat_map(|p| &p.files)
-        .find(|f| f.id == id)
-        .ok_or(AccessError::Missing)?;
-    let bytes = STANDARD
-        .decode(&file.base64)
-        .map_err(|_| Error::Protocol("invalid saved attachment".into()))?;
+    let bytes = tokio::task::spawn_blocking(move || retention::read_attachment(&app, who, id))
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
     Ok((
         [
             (header::CONTENT_TYPE, "application/octet-stream"),
@@ -348,7 +378,7 @@ async fn attached(
 }
 
 fn visible(app: &Workbench, who: Principal) -> AccessResult<Value> {
-    let (project, chat, revision, proposals) = {
+    let (project, chat, revision, proposals, mut files) = {
         let db = app.0.access.registry.lock().unwrap();
         let share = db
             .shares
@@ -365,6 +395,7 @@ fn visible(app: &Workbench, who: Principal) -> AccessResult<Value> {
                 .filter(|p| p.author == who.guest)
                 .map(|p| p.view(share))
                 .collect::<Vec<_>>(),
+            retention::chat_files(&db, share),
         )
     };
     app.binding(project, chat)?;
@@ -386,7 +417,11 @@ fn visible(app: &Workbench, who: Principal) -> AccessResult<Value> {
                     _ => None,
                 })
                 .collect();
-            json!({"id":t.id,"status":t.status,"messages":messages})
+            let mut turn = json!({"id":t.id,"status":t.status,"messages":messages});
+            if let Some(attached) = files.remove(&t.id) {
+                turn["attachments"] = json!(attached);
+            }
+            turn
         })
         .collect();
     Ok(
@@ -483,70 +518,213 @@ async fn review(
     Path((id, msg)): Path<(Uuid, Uuid)>,
     Json(r): Json<Review>,
 ) -> AccessResult<Json<Value>> {
-    // Persist the chosen input ID before any side effect. A retry after lost acknowledgement uses it again.
     let host = app.clone();
-    let Json((project, chat, item, done)) = update(app.clone(), move |db| {
+    let Json((view, sending)) = update(app.clone(), move |db| {
         let s = db.shares.get_mut(&id).ok_or(AccessError::Missing)?;
+        if let Some(old) = s.retired.get(&msg) {
+            if (r.accept && old.status == Decision::Accepted)
+                || (!r.accept && old.status == Decision::Dismissed)
+            {
+                return Ok((old.receipt(msg, s), false));
+            }
+            return Err(AccessError::Conflict("proposal is already decided".into()));
+        }
         let active = s.active(&host);
         let p = s.proposals.get_mut(&msg).ok_or(AccessError::Missing)?;
-        let done = match (r.accept, p.status) {
-            (true, Decision::Accepted) | (false, Decision::Dismissed) => true,
+        match (r.accept, p.status) {
+            (true, Decision::Accepted | Decision::Sending) | (false, Decision::Dismissed) => {}
             (false, Decision::Pending) => {
                 p.status = Decision::Dismissed;
                 s.revision += 1;
-                true
             }
             (true, Decision::Pending) if active => {
                 p.status = Decision::Sending;
                 s.revision += 1;
-                false
             }
-            (true, Decision::Sending) => false,
             _ => {
                 return Err(AccessError::Conflict(
                     "proposal is already decided or the share is inactive".into(),
                 ));
             }
         };
-        Ok((s.project, s.chat, p.clone(), done))
+        let p = &s.proposals[&msg];
+        Ok((p.view(s), p.status == Decision::Sending))
     })
     .await?;
-    if !done {
+    if !sending {
+        return Ok(Json(view));
+    }
+    app.wake_queue();
+    // An immediate native receipt is useful to callers. A busy or offline runtime leaves a
+    // durable, inspectable decision; dispatch does not depend on this HTTP connection.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
         let work = app.clone();
-        let text = tokio::task::spawn_blocking(move || -> crate::Result<String> {
-            let workspace = work.workspace(&work.project(project)?)?;
-            let mut text = item.text;
-            for f in item.files {
-                let path = PathBuf::from(".kar-attachments")
-                    .join(item.id.to_string())
-                    .join(format!("{}-{}", f.id, f.name));
-                let bytes = STANDARD
-                    .decode(f.base64)
-                    .map_err(|_| Error::Protocol("invalid saved attachment".into()))?;
-                workspace.publish_attachment(&path, &bytes)?;
-                text.push_str(&format!("\n\nAttachment: {}", path.display()));
+        let result: AccessResult<(Value, bool)> = tokio::task::spawn_blocking(move || {
+            reconcile(&work, id, msg)?;
+            let db = work.0.access.registry.lock().unwrap();
+            let s = db.shares.get(&id).ok_or(AccessError::Missing)?;
+            if let Some(p) = s.proposals.get(&msg) {
+                return Ok((
+                    p.view(s),
+                    p.status == Decision::Sending && p.delivery != Some(InputStatus::Uncertain),
+                ));
             }
-            Ok(text)
+            Ok((
+                s.retired
+                    .get(&msg)
+                    .ok_or(AccessError::Missing)?
+                    .receipt(msg, s),
+                false,
+            ))
         })
         .await
-        .map_err(|e| Error::Closed(e.to_string()))??;
-        app.send(project, chat, msg, text).await?;
-        let Json(()) = update(app.clone(), move |db| {
+        .map_err(|e| Error::Closed(e.to_string()))?;
+        let (view, waiting) = result?;
+        if !waiting || tokio::time::Instant::now() >= deadline {
+            return Ok(Json(view));
+        }
+        tokio::time::sleep(Duration::from_millis(125)).await;
+    }
+}
+
+fn attachment_path(msg: Uuid, f: &Attachment) -> PathBuf {
+    PathBuf::from(".kar-attachments")
+        .join(msg.to_string())
+        .join(format!("{}-{}", f.id, f.name))
+}
+
+fn reconcile(app: &Workbench, id: Uuid, msg: Uuid) -> AccessResult<()> {
+    let (project, chat, text) = {
+        let db = app.0.access.registry.lock().unwrap();
+        let s = db.shares.get(&id).ok_or(AccessError::Missing)?;
+        let Some(p) = s
+            .proposals
+            .get(&msg)
+            .filter(|p| p.status == Decision::Sending)
+        else {
+            return Ok(());
+        };
+        let mut text = p.text.clone();
+        for f in &p.files {
+            text.push_str(&format!(
+                "\n\nAttachment: {}",
+                attachment_path(msg, f).display()
+            ));
+        }
+        (s.project, s.chat, text)
+    };
+    let info = app.binding(project, chat)?;
+    let receipt = if let Some(record) = app
+        .0
+        .chats
+        .queued_inputs(chat)?
+        .into_iter()
+        .find(|q| q.id == msg)
+    {
+        if record.text != text {
+            return Err(AccessError::Conflict(
+                "input ID belongs to another message".into(),
+            ));
+        }
+        record
+    } else {
+        if !app.0.chats.history(chat)?.turns.iter().any(|t| t.id == msg) {
+            if app.archived(chat) {
+                return Ok(());
+            }
+            match crate::input::check_text(&text, crate::input::text_limit(&info.runtime)) {
+                Err(Error::InputTooLarge { .. }) => {
+                    return record_delivery(app, id, msg, InputStatus::TooLarge);
+                }
+                other => other?,
+            }
+            let files = {
+                let db = app.0.access.registry.lock().unwrap();
+                let Some(item) = db
+                    .shares
+                    .get(&id)
+                    .and_then(|s| s.proposals.get(&msg))
+                    .filter(|p| p.status == Decision::Sending)
+                else {
+                    return Ok(());
+                };
+                item.files.clone()
+            };
+            let workspace = app.workspace(&app.project(project)?)?;
+            for f in files {
+                let bytes = STANDARD
+                    .decode(&f.base64)
+                    .map_err(|_| Error::Protocol("invalid saved guest attachment".into()))?;
+                workspace.publish_attachment(&attachment_path(msg, &f), &bytes)?;
+            }
+        }
+        // enqueue compares the original prompt for both an existing UUID and legacy direct-send turns.
+        let receipt = app.0.chats.enqueue(chat, msg, text)?;
+        app.wake_queue();
+        receipt
+    };
+    record_delivery(app, id, msg, receipt.status)
+}
+
+fn record_delivery(app: &Workbench, id: Uuid, msg: Uuid, status: InputStatus) -> AccessResult<()> {
+    let decision = match status {
+        InputStatus::Sent | InputStatus::Duplicate => Decision::Accepted,
+        InputStatus::Refused
+        | InputStatus::Cancelled
+        | InputStatus::Withdrawn
+        | InputStatus::TooLarge => Decision::Dismissed,
+        InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain => Decision::Sending,
+    };
+    let current = {
+        let db = app.0.access.registry.lock().unwrap();
+        db.shares
+            .get(&id)
+            .and_then(|s| s.proposals.get(&msg))
+            .is_some_and(|p| p.status == Decision::Sending && p.delivery != Some(status))
+    };
+    if current {
+        app.0.access.update(|db| {
             let s = db.shares.get_mut(&id).ok_or(AccessError::Missing)?;
-            let p = s.proposals.get_mut(&msg).ok_or(AccessError::Missing)?;
-            if p.status == Decision::Sending {
-                p.status = Decision::Accepted;
+            if let Some(p) = s
+                .proposals
+                .get_mut(&msg)
+                .filter(|p| p.status == Decision::Sending && p.delivery != Some(status))
+            {
+                p.status = decision;
+                p.delivery = Some(status);
                 s.revision += 1;
             }
             Ok(())
-        })
-        .await?;
+        })?;
     }
-    let db = app.0.access.registry.lock().unwrap();
-    let s = db.shares.get(&id).ok_or(AccessError::Missing)?;
-    Ok(Json(
-        s.proposals.get(&msg).ok_or(AccessError::Missing)?.view(s),
-    ))
+    Ok(())
+}
+
+pub(in crate::workbench) fn reconcile_guest_inputs(app: &Workbench) {
+    let (mut sending, cleanup) = {
+        let db = app.0.access.registry.lock().unwrap();
+        let sending: Vec<_> = db
+            .shares
+            .iter()
+            .flat_map(|(id, s)| {
+                s.proposals
+                    .values()
+                    .filter(|p| p.status == Decision::Sending)
+                    .map(move |p| (p.created_ms, p.sequence, *id, p.id))
+            })
+            .collect();
+        (sending, db.shares.values().any(needs_maintenance))
+    };
+    if cleanup && let Err(e) = app.0.access.update(|_| Ok(())) {
+        eprintln!("Kar guest share retention: {e:?}");
+    }
+    sending.sort_unstable();
+    for (_, _, share, id) in sending {
+        if let Err(e) = reconcile(app, share, id) {
+            eprintln!("Kar guest delivery {id}: {e:?}");
+        }
+    }
 }
 
 pub(super) fn admin() -> Router<Workbench> {

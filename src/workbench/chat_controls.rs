@@ -100,6 +100,10 @@ impl Workbench {
             .insert(id, (Instant::now(), e.to_string()));
     }
 
+    pub(super) fn wake_queue(&self) {
+        self.0.pump.wake.notify_one();
+    }
+
     pub(super) fn start_services(&self) -> Result<()> {
         self.start_workflows()?;
         self.0.pump.started.call_once(||{
@@ -110,7 +114,7 @@ impl Workbench {
                     let Some(inner)=weak.upgrade() else{return};
                     let app=Workbench(inner);
                     let scan=app.clone();
-                    match tokio::task::spawn_blocking(move||scan.queued_chats()).await {
+                    match tokio::task::spawn_blocking(move||{ super::access::reconcile_guest_inputs(&scan); scan.queued_chats() }).await {
                         Ok(Ok(pending))=>for(project,chat)in pending{
                             let app=app.clone();
                             tokio::spawn(async move {

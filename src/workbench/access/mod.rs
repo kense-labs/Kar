@@ -1,4 +1,5 @@
 //! Owner-issued, one-use pairing grants and revocable device credentials.
+pub(super) use guest::reconcile_guest_inputs;
 mod guest;
 use super::Workbench;
 use crate::Error;
@@ -108,22 +109,31 @@ type AccessResult<T> = Result<T, AccessError>;
 impl AccessStore {
     pub(super) fn open(state: &FsPath) -> crate::Result<Self> {
         let file = state.join("access.json");
-        let registry = match File::open(&file) {
+        let registry: Registry = match File::open(&file) {
             Ok(f) => serde_json::from_reader(f)?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Registry::default(),
             Err(e) => return Err(e.into()),
         };
-        Ok(Self {
+        let migrate = registry.shares.values().any(guest::needs_maintenance);
+        let access = Self {
             file,
             registry: Mutex::new(registry),
             changed: watch::channel(()).0,
-        })
+        };
+        if migrate {
+            access.update(|_| Ok(())).map_err(|e| match e {
+                AccessError::Internal(e) => e,
+                _ => Error::Protocol(format!("invalid saved share: {e:?}")),
+            })?;
+        }
+        Ok(access)
     }
     fn update<T>(&self, f: impl FnOnce(&mut Registry) -> AccessResult<T>) -> AccessResult<T> {
         let mut current = self.registry.lock().unwrap();
         let mut db = current.clone();
         let result = f(&mut db)?;
         let parent = self.file.parent().expect("workbench state directory");
+        guest::maintain(&mut db, parent)?;
         let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(Error::Io)?;
         serde_json::to_writer(&mut tmp, &db).map_err(Error::from)?;
         tmp.as_file().sync_all().map_err(Error::Io)?;
