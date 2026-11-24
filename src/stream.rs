@@ -757,6 +757,7 @@ impl Journal {
         let (code, mut reason) = match error {
             Error::Busy => ("busy", "busy".to_owned()),
             Error::Refused(reason) => ("runtime_refused", reason.clone()),
+            Error::Unsupported(reason) => ("unsupported", reason.clone()),
             _ => (
                 "error",
                 "native admission could not be confirmed".to_owned(),

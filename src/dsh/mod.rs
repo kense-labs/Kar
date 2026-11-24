@@ -2,6 +2,7 @@
 mod actor;
 mod compaction;
 mod goals;
+mod images;
 pub(crate) mod profile;
 mod projection;
 pub(crate) mod recovery;
@@ -116,6 +117,16 @@ pub(crate) async fn open(
     let (tx, rx) = tokio::sync::mpsc::channel(64);
     let file = web.file.clone();
     let process_root = web.process_root();
+    let selected = &baseline["projections"]["values"]["modelSelection"];
+    let fallback = route
+        .map(|(p, m)| json!({"provider":p,"model":m}))
+        .or_else(|| {
+            selected["next"]
+                .is_object()
+                .then(|| selected["next"].clone())
+        })
+        .unwrap_or_else(|| selected["lastUsed"].clone());
+    let limits = web.images().image_limits(&id, &fallback).await;
     let mut actor = actor::Actor::new(
         web,
         ws,
@@ -125,6 +136,7 @@ pub(crate) async fn open(
         &opts,
         journal.clone(),
     );
+    actor.image_fallback = fallback;
     if opts.settings.goals {
         let ready = tokio::time::timeout(opts.handshake_timeout, actor.initialize_goals()).await;
         if let Err(e) =
@@ -145,8 +157,9 @@ pub(crate) async fn open(
         tx,
         journal,
         id.clone(),
-        json!({"sessionId":id}),
+        json!({"sessionId":id,"imageTypes":limits.media_types,"imageLimits":limits}),
     );
+    session.image_input = !limits.media_types.is_empty();
     session.process_root = process_root;
     session.dsh_file = Some(file);
     Ok(session)

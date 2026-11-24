@@ -119,6 +119,7 @@ fn declaration(
         resumed_session_options: native_resume_options(protocol, id),
         steering: Some(!matches!(protocol, Qwen | Acp)),
         image_input: match protocol {
+            Dsh => None,
             Acp if id != "grok" => None,
             p => Some(!matches!(p, Qoder | Qwen | Morph)),
         },

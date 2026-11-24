@@ -17,6 +17,7 @@ pub(super) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub(super) struct Web {
     child: crate::process::OwnedProcess,
     client: Client,
+    image_addon: Option<tempfile::NamedTempFile>,
     pub timeout: Duration,
     base: String,
     cookie: String,
@@ -24,6 +25,15 @@ pub(super) struct Web {
     pub(super) patch: super::profile::Patch,
 }
 impl Web {
+    pub(super) fn images(&self) -> super::images::ImageStore<'_> {
+        super::images::ImageStore {
+            client: &self.client,
+            base: &self.base,
+            cookie: &self.cookie,
+            timeout: self.timeout,
+            enabled: self.image_addon.is_some(),
+        }
+    }
     pub(super) async fn confirm(&mut self, receipt: super::profile::Receipt) -> Result<()> {
         receipt.confirm(self.child.wait(), self.timeout).await
     }
@@ -35,7 +45,7 @@ impl Web {
     pub async fn start(
         rt: &Runtime,
         opts: &SessionOptions,
-        rows: Vec<Value>,
+        mut rows: Vec<Value>,
         version: Option<&str>,
     ) -> Result<Self> {
         let client = Client::builder()
@@ -45,6 +55,7 @@ impl Web {
             .build()?;
         let mut cmd = opts.command(&rt.program)?;
         cmd.args(["--profile", "web"]);
+        let image_addon = super::images::install(opts, &mut rows, &mut cmd)?;
         let patch = super::profile::Patch::prepare(rt, opts, version, &mut cmd, rows).await?;
         cmd.args(["--no-open", "--host", "127.0.0.1", "--port", "0"])
             .current_dir(&opts.cwd)
@@ -61,6 +72,7 @@ impl Web {
             cookie: String::new(),
             file: Default::default(),
             patch,
+            image_addon,
         };
         let out = web.child.inner().stdout.take().unwrap();
         let mut lines = BufReader::new(out).lines();

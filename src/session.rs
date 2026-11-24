@@ -117,7 +117,7 @@ pub struct Session {
     id: String,
     protocol: Protocol,
     info: Value,
-    image_input: bool,
+    pub(crate) image_input: bool,
     native_resume: bool,
     cursor_parameterized: bool,
     acp_steering: bool,
@@ -152,10 +152,7 @@ impl Session {
             id,
             info,
             protocol,
-            image_input: matches!(
-                protocol,
-                Protocol::Cybion | Protocol::KimiKap | Protocol::Dsh
-            ),
+            image_input: matches!(protocol, Protocol::Cybion | Protocol::KimiKap),
             request_capture: None,
             process_root: None,
             factory_dir: None,

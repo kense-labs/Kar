@@ -6,6 +6,7 @@ fn main() {
         "pipe",
         "dsh_skills",
         "dsh_models",
+        "dsh_images",
         "dsh_profile",
         "dsh_agent_controls",
         "dsh_agent_startup",
@@ -28,6 +29,7 @@ fn main() {
     for (source, library) in [
         ("dsh_skills", "dsh-skills"),
         ("dsh_profile", "dsh-profile"),
+        ("dsh_images", "dsh-images"),
         ("pi_tools", "pi-tools"),
         ("pi_mcp", "pi-mcp"),
         ("pi_requests", "pi-requests"),

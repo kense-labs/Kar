@@ -19,3 +19,16 @@ Qwen 不收图片是固定上游运行时适配器的能力约定。Qwen 的 `in
 Qwen 测试额外通过实际 `kar run qwen 'what is this?' --image <path> --json --record <file>` 核对非零退出、关联的拒绝回执、标准输出与完整录制文件逐字节一致，模型端仍未收到请求。Grok 用例读取移除新增图片元数据的旧式 Kar JSON 记录，保留其既有提示身份。
 
 Windows 和远程托管模型未做本次实测。上述命令需要可执行的对应供应商 CLI，npm 发行包还需要 Node；测试自行创建用户目录、工作区并启动回环模型服务。
+
+## DSH Web 图片输入
+
+原清单的公共用例为 `session.images-travel-with-input`。Kar 在当前 DSH 进程调用 `llm.resolveModelInfo` 并读取 `attachments.imageLimits`。确认模型接受图片、所有 MIME、单图/整批字节和数量限制后，向原生 `/api/session/uploadFileBinary` 逐个上传，再把同一会话的 `receiptId` 交给 `session/prompt`。仅图片输入省略文本块。原生确认写入的附件 ID 可以从 DSH 会话文件读回。模型或存储未报告支持时，当前会话的图片能力为关闭。DSH 发行包中的 Web 模型目录省略了输入模态，Kar 的探针为随 Rust 二进制分发的 Rust Node-API 插件。
+
+macOS 已完成 `cargo check --locked --offline --tests --example backend_suite`。以下两项待统一执行。
+
+| 环境 | 复验命令 | 检查内容 |
+| --- | --- | --- |
+| macOS，Rust 协议对端 | `cargo test --locked --lib dsh::images` | 当前类型过滤、单图/总量/数量限制、按输入顺序上传、上传途中只返回部分回执、不产生可提交内容。 |
+| macOS，官方 DSH Web 0.2.2-rc.5、原生插件及图像编解码器，本地模型响应 | 设置 `KAR_DSH_BIN`，执行 `cargo test --locked --test dsh_live images::uploads_images_to_the_selected_route_and_recovers_native_references -- --ignored --exact` | 文本和 PNG、仅 PNG 排队、原生用户消息与持久附件引用、同一会话改开纯文本模型后的拒绝，以及超过原生数量上限时模型端无请求。 |
+
+对照提交为 `2b15859a13dcc50e8b66cbaee5a007832aa00e08` 中的 `src/runtimes/dsh/bridge-input.ts`。官方 DSH 0.2.2-rc.5 的通路见 `dsh-client-file-upload/src/http-route.ts`、`dsh-client-file-upload/src/index.ts` 和 `dsh-api-session-controller/src/commands.ts`。此处开发证据为源码核查与 macOS 编译；DSH 供应商实测结果待填。

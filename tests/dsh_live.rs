@@ -6,6 +6,8 @@ mod busy_prompt;
 mod cli_routing;
 #[path = "support/declaration.rs"]
 mod declaration;
+#[path = "dsh_live/images.rs"]
+mod images;
 #[path = "dsh_live/prompts.rs"]
 mod prompts;
 #[cfg(unix)]
@@ -33,6 +35,7 @@ use uuid::Uuid;
 #[derive(Clone, Default)]
 struct Model {
     requests: Arc<Mutex<Vec<Value>>>,
+    image_routes: Arc<std::sync::atomic::AtomicBool>,
     prompt_sessions: Arc<Mutex<Vec<(String, String)>>>,
     upload_requests: Arc<Mutex<Vec<(String, bool)>>>,
     child_requested: Arc<std::sync::atomic::AtomicBool>,
@@ -48,7 +51,13 @@ struct Model {
     hold_model_reply: tokio::sync::watch::Sender<bool>,
     compact_entered: Arc<tokio::sync::Notify>,
 }
-async fn models() -> Json<Value> {
+async fn models(State(model): State<Model>) -> Json<Value> {
+    if model
+        .image_routes
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return Json(json!({"data":[{"id":"deepseek-flash"},{"id":"deepseek-v4-pro"}]}));
+    }
     Json(json!({"data":[{"id":"deepseek-flash","name":"DeepSeek-V4.1-Flash"}]}))
 }
 async fn message(
@@ -60,6 +69,10 @@ async fn message(
         return completion("confirmed", None);
     }
     let messages = body["messages"].to_string();
+    if messages.contains("DSH_IMAGE_ROUTE") {
+        model.requests.lock().unwrap().push(body);
+        return completion("image received",None);
+    }
     if messages.contains("KAR_QUEUE_CRASH") {
         let held = body["messages"]
             .as_array()

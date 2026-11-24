@@ -51,6 +51,7 @@ devin	setup_cli	devin	KAR_DEVIN_BIN	standalone macOS Devin CLI with a recognized
 devin	skill_inventory_live	devin	KAR_DEVIN_BIN	requires KAR_DEVIN_BIN
 dsh	dsh_live	acp_scoped_writable_directories	KAR_DSH_ACP_ROOTS_BIN,KAR_DSH_ACP_BIN	requires official DeepSeek Harness 0.2.2-rc.3 with a working native process sandbox
 dsh	dsh_live	cli_routing::cli_routes_to_the_selected_native_runtime	KAR_DSH_BIN,KAR_KIMI_ACP_BIN	requires official DSH Web and Kimi ACP; two isolated loopback model endpoints
+dsh	dsh_live	images::uploads_images_to_the_selected_route_and_recovers_native_references	KAR_DSH_BIN	requires official DSH Web 0.2.2-rc.5, native addons and the macOS image codec; uses a loopback model
 dsh	dsh_live	legacy_cli_opens_using_acp	KAR_DSH_ACP_BIN	requires the official earlier DSH CLI with the ACP profile
 dsh	dsh_live	legacy_refuses_scoped_directories_before_prompt	KAR_DSH_ACP_BIN	requires official DeepSeek Harness 0.2.1-rc.5
 dsh	dsh_live	legacy_scoped_tool_policy	KAR_DSH_ACP_BIN	requires official DeepSeek Harness with the ACP transport

@@ -31,6 +31,7 @@ struct Source {
 }
 pub(super) struct Actor {
     web: Web,
+    pub(super) image_fallback: Value,
     ws: Socket,
     id: String,
     client: String,
@@ -74,6 +75,7 @@ impl Actor {
         };
         Self {
             web,
+            image_fallback: Value::Null,
             ws,
             id,
             client,
@@ -170,28 +172,64 @@ impl Actor {
             || !self.turns.is_empty()
             || self.sources["root"].projection.active.is_some()
     }
+    async fn send_native_input(
+        &mut self,
+        input: &Input,
+        id: Uuid,
+        steer: bool,
+        queued: bool,
+        target: Option<crate::transport::TurnTarget>,
+    ) -> Result<(Value, Value)> {
+        let blocks = self
+            .web
+            .images()
+            .stage_images(&self.id, &self.image_fallback, input)
+            .await?;
+        if !input.images.is_empty() && !queued {
+            // A slow upload can outlive its foreground turn. Drain the native state cut
+            // before an image steer can be handed to a different run.
+            let state = self
+                .web
+                .request("session/state", json!({"sessionId":self.id}))
+                .await?;
+            let cut = state["cursor"]
+                .as_i64()
+                .ok_or_else(|| Error::Protocol("DSH omitted the input state cursor".into()))?;
+            tokio::time::timeout(self.web.timeout, self.catch_up(cut))
+                .await
+                .map_err(|_| Error::Timeout("DSH input admission state".into()))??;
+            if steer {
+                if state["running"] != true || !self.busy() {
+                    return Err(Error::Refused("no active DSH turn".into()));
+                }
+                if target.is_some_and(|t| t.pin(&self.journal).is_none()) {
+                    return Err(crate::transport::AbortRequest::stale());
+                }
+            } else if state["running"] != false || self.busy() {
+                return Err(Error::Busy);
+            }
+        }
+        let req = json!({"sessionId":self.id, "requestId":id, "mode":if steer{"steer"}else{"queue"}, "content":blocks});
+        let receipt = self.web.request("session/prompt", req.clone()).await?;
+        if receipt["accepted"] != true {
+            return Err(Error::Protocol("DSH omitted the input receipt".into()));
+        }
+        Ok((req, receipt))
+    }
     async fn submit(
         &mut self,
         input: Input,
         id: Uuid,
         done: Option<Reply<TurnReport>>,
         queued: bool,
+        target: Option<crate::transport::TurnTarget>,
     ) -> Result<()> {
         let steer = done.is_none();
-        let mut req = json!({"sessionId":self.id,"requestId":id,"mode":if steer{"steer"}else{"queue"},"content":input.blocks(Protocol::Dsh)});
         let result = self
-            .web
-            .request("session/prompt", req.clone())
-            .await
-            .and_then(|native| {
-                if native["accepted"] == true {
-                    Ok(native)
-                } else {
-                    Err(Error::Protocol("DSH omitted the input receipt".into()))
-                }
-            });
-        let receipt = match result {
-            Ok(native) => native,
+            .send_native_input(&input, id, steer, queued, target)
+            .await;
+        let (mut req, receipt) = match result {
+            Ok(pair) => pair,
             Err(error) => {
                 if !steer && !queued {
                     let request = self
@@ -202,7 +240,12 @@ impl Actor {
                 return Err(error);
             }
         };
-        crate::input::omit_image_bytes(&mut req);
+        // Native upload receipts are private to this process and session.
+        for block in req["content"].as_array_mut().into_iter().flatten() {
+            if block["type"] == "file" {
+                *block = json!({"type":"image"});
+            }
+        }
         redact(&mut req, &self.secrets);
         let text = super::projection::text(&req["content"], "text");
         let mut events = vec![];
@@ -686,7 +729,7 @@ impl Actor {
                     Err(self.journal.busy_prompt(id, &input, false, &self.secrets))
                 } else {
                     match crate::chat::Admission::commit(a).await {
-                        Ok(()) => self.submit(input, id, Some(done), false).await,
+                        Ok(()) => self.submit(input, id, Some(done), false, None).await,
                         Err(e) => Err(e),
                     }
                 };
@@ -711,7 +754,7 @@ impl Actor {
                 let r = if self.compacting.is_some() {
                     Err(Error::Busy)
                 } else if self.busy() {
-                    self.submit(input, input_id, None, false)
+                    self.submit(input, input_id, None, false, target)
                         .await
                         .map(|_| Value::Null)
                 } else {
@@ -726,7 +769,7 @@ impl Actor {
                 let r = if self.compacting.is_some() || self.turns.contains_key(&id.to_string()) {
                     Err(Error::Busy)
                 } else {
-                    self.submit(input, id, Some(done), true).await
+                    self.submit(input, id, Some(done), true, None).await
                 };
                 if let Err(error) = &r {
                     self.journal.prompt_error(request, error, &self.secrets);

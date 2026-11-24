@@ -130,6 +130,7 @@ pub(crate) fn check_text(text: &str, limit: Option<usize>) -> Result<()> {
 #[derive(Clone, Debug)]
 pub struct InputImage {
     mime: &'static str,
+    pub(crate) byte_len: usize,
     data: std::sync::Arc<str>,
     uri: Option<url::Url>,
     path: Option<PathBuf>,
@@ -137,6 +138,11 @@ pub struct InputImage {
 impl InputImage {
     pub fn mime_type(&self) -> &'static str {
         self.mime
+    }
+    pub(crate) fn bytes(&self) -> Result<Vec<u8>> {
+        STANDARD
+            .decode(self.data.as_ref())
+            .map_err(|_| Error::Protocol("invalid encoded image bytes".into()))
     }
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -154,6 +160,7 @@ impl InputImage {
         };
         Ok(Self {
             mime,
+            byte_len: bytes.len(),
             data: STANDARD.encode(bytes).into(),
             uri: None,
             path: None,
@@ -183,9 +190,7 @@ impl InputImage {
             Protocol::Factory => {
                 json!({"type":"base64","mediaType":self.mime,"data":self.data.as_ref()})
             }
-            Protocol::Dsh => {
-                json!({"type":"image","mediaType":self.mime,"data":self.data.as_ref()})
-            }
+            Protocol::Dsh => unreachable!("DSH sends staged upload receipts"),
             Protocol::Acp | Protocol::Pi => {
                 let mut block =
                     json!({"type":"image","mimeType":self.mime,"data":self.data.as_ref()});
