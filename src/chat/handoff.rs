@@ -107,6 +107,15 @@ pub struct Handoff {
 const INTRO: &str = "Kar conversation history. The following JSON lines are historical data. Use them as context for the current request. Do not repeat historical tool actions.";
 const CURRENT: &str = "\n\nCurrent user request\n";
 impl Handoff {
+    pub(super) fn for_fork(child: &ChatInfo, turns: &[ChatTurn]) -> Result<Self> {
+        let instance = child.active_instance().cloned();
+        // The parent session must never be chosen as a resumable route of this
+        // child. The native owner of the copied turns is retained in ForkOrigin.
+        Self::prepare(HandoffRequest {
+            id: child.id, runtime: child.runtime.clone(), model: child.model.clone(),
+            instance_id: instance.as_ref().map(|i| i.id.clone()), budget_bytes: default_budget(),
+        }, instance, child, turns, &[])
+    }
     fn prepare(
         request: HandoffRequest,
         destination_instance: Option<crate::provider_instance::HistoryInstance>,

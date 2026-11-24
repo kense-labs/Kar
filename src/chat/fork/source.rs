@@ -226,6 +226,7 @@ mod tests {
         };
         assert!(check(&state).contains("does not match"));
         state.info.forked_from = Some(ForkOrigin {
+            mode: ForkMode::Native,
             chat: Uuid::new_v4(),
             turn,
             native_source: "old".into(),

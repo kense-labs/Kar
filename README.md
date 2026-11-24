@@ -407,7 +407,7 @@ kar workbench --root "$PWD"
 | 时间线与续收 | `GET /projects/{p}/chats/{c}/snapshot` 和 `/events` 使用 Kar 的聊天快照与 SSE，支持 `Last-Event-ID`。 |
 | 队列和恢复投递 | 对聊天路径下的 `/queue` 使用 `POST {"id":"输入UUID","text":"消息"}` 持久入队，`GET` 读取状态及最近的接管错误，`DELETE /queue/{id}` 撤回。工作台重启后会扫描已注册项目的队列并恢复原生会话，继续按入队顺序处理。 |
 | 逐回合文件与工作区回滚 | `GET /checkpoints` 列出该聊天每个回合的检查点和文件。`POST /rollback` 接收 `turn`、可选 `before` 和 `dry_run`。 |
-| 从指定回合继续聊 | 向 `POST /projects/{p}/chats/{c}/forks` 提交 `{"turn":"回合UUID","id":"子聊天UUID"}`，在原工作区恢复到该轮并创建原生子会话。Codex 还可传 `destination_project`，指定同仓库中已注册的 Kar 独立工作树项目，在那里恢复文件并保留父工作区。返回目标项目和子聊天历史，随后可直接向子聊天发送消息。操作重试沿用同一个子聊天 UUID。 |
+| 从指定回合继续聊 | 向 `POST /projects/{p}/chats/{c}/forks` 提交 `{"turn":"回合UUID","id":"子聊天UUID"}`。工作台优先采用原生分叉；缺少按轮分叉能力时，创建新的供应商会话，首次输入携带截止该轮的历史摘要。返回的 `history.chat.forked_from.mode` 为 `native` 或 `portable_context`。可传 `"policy":"native"` 要求原生分叉。传 `destination_project` 可在同仓库中已注册的独立工作树恢复所选文件；Codex 可在父聊天仍运行后续回合时使用已完成的原生回合。重试沿用子聊天 UUID。 |
 | 归档或重新打开 | `PUT /projects/{p}/chats/{c}/archive` 接受 `{"archived":true}` 或 `false`。 |
 | 读取或保存普通文本文件 | `GET` 或 `PUT /projects/{p}/file?path=relative/path`，正文使用 `{"text":"…"}`。 |
 | 搜索 | `GET /projects/{p}/search?q=关键词&kind=paths`，也可选 `content` 或 `messages`。跨可见项目查聊天用 `GET /search/chats?q=关键词`。 |

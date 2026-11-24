@@ -90,6 +90,7 @@ impl Request {
         turn: Uuid,
         child: Uuid,
         checkout: Option<&Path>,
+        policy: ForkPolicy,
     ) -> Result<Option<super::super::ChatHistory>> {
         if !store.path(child).try_exists()? {
             return Ok(None);
@@ -110,6 +111,7 @@ impl Request {
                 "published chat does not match its fork request".into(),
             ));
         }
+        policy.check(h.chat.forked_from.as_ref().unwrap().mode)?;
         Ok(Some(h))
     }
 
@@ -119,8 +121,9 @@ impl Request {
         turn: Uuid,
         child: Uuid,
         checkout: Option<&Path>,
+        policy: ForkPolicy,
     ) -> Result<super::super::ChatHistory> {
-        if let Some(history) = Self::published(store, source, turn, child, checkout)? {
+        if let Some(history) = Self::published(store, source, turn, child, checkout, policy)? {
             return Ok(history);
         }
         Self::read(store, source, turn, child, checkout)?;

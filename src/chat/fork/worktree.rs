@@ -16,12 +16,6 @@ impl Destination {
     }
 
     pub fn open(parent: &ChatInfo, requested: &Path, opts: &mut SessionOptions) -> Result<Self> {
-        if parent.protocol != Protocol::Codex {
-            return Err(Error::Unsupported(format!(
-                "forking {} into a different worktree requires a verified native directory override",
-                parent.runtime
-            )));
-        }
         let source = Repository::open(&parent.workspace)?;
         let path = requested.canonicalize()?;
         let repo = Repository::open(&path)?;

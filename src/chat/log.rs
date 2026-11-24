@@ -1191,6 +1191,10 @@ pub(super) fn info(mut file: File, id: Uuid) -> Result<ChatInfo> {
 pub(super) fn staged_info(file: File) -> Result<ChatInfo> {
     Ok(parse_header(&mut BufReader::new(file), None)?.0.info)
 }
+pub(super) fn prepare_portable_fork(file: &mut File, child: &ChatInfo, handoff: super::Handoff) -> Result<()> {
+    append(file, &ChatUpdate::HandoffPrepared { handoff: Box::new(handoff) })?;
+    append(file, &ChatUpdate::HandoffReady { id: child.id, target: Box::new(super::ProviderSession::current(child)) })
+}
 pub(super) fn inherit(file: &mut File, turns: Vec<ChatTurn>) -> Result<()> {
     append(file, &ChatUpdate::Inherited { turns })
 }

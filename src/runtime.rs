@@ -208,6 +208,17 @@ impl Runtime {
         options: SessionOptions,
         child: Option<uuid::Uuid>,
     ) -> Result<Session> {
+        self.fork_selected_version(source, through, options, child, None)
+            .await
+    }
+    pub(crate) async fn fork_selected_version(
+        &self,
+        source: &str,
+        through: Option<&str>,
+        options: SessionOptions,
+        child: Option<uuid::Uuid>,
+        version: Option<&str>,
+    ) -> Result<Session> {
         self.validate_placement()?;
         crate::options::launch_args::validate(self, &options, true)?;
         if source.trim().is_empty()
@@ -224,34 +235,14 @@ impl Runtime {
                 return crate::dsh::open(self, options, Some((source, through)), None, None).await;
             }
             Protocol::Codex | Protocol::Claude if through.is_some() => {
-                let report = self.launch_version(&options).await?;
-                let version = report
-                    .split_whitespace()
-                    .find_map(|s| semver::Version::parse(s.trim_start_matches('v')).ok());
-                let min = if self.protocol == Protocol::Codex {
-                    semver::Version::new(0, 143, 0)
+                let detected;
+                let report = if let Some(report) = version {
+                    report
                 } else {
-                    semver::Version::new(2, 1, 323)
+                    detected = self.launch_version(&options).await?;
+                    &detected
                 };
-                if version.is_none_or(|v| v < min) {
-                    let message =
-                        format!("forking through a turn requires {} {min} or later", self.id);
-                    if self.protocol == Protocol::Codex {
-                        return Err(crate::OpenError::RuntimeFailure {
-                            failure: crate::TurnFailure::new(
-                                crate::FailureClass::InvalidRequest,
-                                message,
-                            ),
-                            code: Some(crate::RuntimeFailureCode::RuntimeOutdated),
-                            cause: Some(crate::NativeCause {
-                                method: "--version".into(),
-                                native: serde_json::json!({"version":report.trim()}),
-                            }),
-                        }
-                        .redacted(&crate::options::session_secrets(&options)));
-                    }
-                    return Err(Error::Unsupported(message));
-                }
+                self.check_turn_fork_version(report, &options)?;
             }
             Protocol::Codex | Protocol::Claude => {}
             Protocol::Acp if self.id == "opencode" => {
@@ -270,6 +261,36 @@ impl Runtime {
             }
         }
         Session::open(self, options, Some((source, through)), child).await
+    }
+    pub(crate) fn check_turn_fork_version(
+        &self,
+        report: &str,
+        options: &SessionOptions,
+    ) -> Result<()> {
+        let version = report
+            .split_whitespace()
+            .find_map(|s| semver::Version::parse(s.trim_start_matches('v')).ok());
+        let min = if self.protocol == Protocol::Codex {
+            semver::Version::new(0, 143, 0)
+        } else {
+            semver::Version::new(2, 1, 323)
+        };
+        if version.is_none_or(|v| v < min) {
+            let message = format!("forking through a turn requires {} {min} or later", self.id);
+            if self.protocol == Protocol::Codex {
+                return Err(crate::OpenError::RuntimeFailure {
+                    failure: crate::TurnFailure::new(crate::FailureClass::InvalidRequest, message),
+                    code: Some(crate::RuntimeFailureCode::RuntimeOutdated),
+                    cause: Some(crate::NativeCause {
+                        method: "--version".into(),
+                        native: serde_json::json!({"version":report.trim()}),
+                    }),
+                }
+                .redacted(&crate::options::session_secrets(options)));
+            }
+            return Err(Error::Unsupported(message));
+        }
+        Ok(())
     }
     /// Read the version from the selected local installation.
     pub async fn version(&self) -> Result<String> {

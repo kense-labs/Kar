@@ -331,6 +331,8 @@ async fn checkpoints(
 
 #[derive(Deserialize)]
 struct Fork {
+    #[serde(default)]
+    policy: crate::chat::ForkPolicy,
     id: Uuid,
     turn: Uuid,
     destination_project: Option<Uuid>,
@@ -404,11 +406,12 @@ async fn fork(
         // can be retrieved while either conversation is processing another turn.
         app.0
             .chats
-            .fork_at_with_id_configured(
+            .fork_at_with_policy(
                 chat,
                 request.turn,
                 request.id,
                 destination,
+                request.policy,
                 isolate_host_token,
             )
             .await?
@@ -429,7 +432,7 @@ async fn fork(
             };
             if let Some(source) = owner.as_ref().filter(|s| !s.is_closed()) {
                 source
-                    .fork_at_with_id(request.turn, request.id, destination, isolate_host_token)
+                    .fork_at_with_policy(request.turn, request.id, destination, request.policy, isolate_host_token)
                     .await
             } else {
                 if let Some(closed) = owner.take() {
@@ -437,11 +440,12 @@ async fn fork(
                 }
                 app.0
                     .chats
-                    .fork_at_with_id_configured(
+                    .fork_at_with_policy(
                         chat,
                         request.turn,
                         request.id,
                         destination,
+                        request.policy,
                         isolate_host_token,
                     )
                     .await

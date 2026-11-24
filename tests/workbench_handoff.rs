@@ -314,7 +314,10 @@ async fn protocol() {
         (Some(3), Some(4))
     );
     let unanchored = f
-        .post("forks", &json!({"id":Uuid::new_v4(),"turn":first}))
+        .post(
+            "forks",
+            &json!({"id":Uuid::new_v4(),"turn":first,"policy":"native"}),
+        )
         .send()
         .await
         .unwrap();
@@ -385,6 +388,63 @@ async fn protocol() {
     assert!(bounded["context"].as_str().unwrap().len() <= 512);
     assert!(bounded["omitted_items"].as_u64().unwrap() > 0);
     workflow_stop(&mut f).await;
+    f.stop().await;
+}
+async fn portable_fork() {
+    let mut f = Fixture::new(false).await;
+    f.chat = Uuid::new_v4();
+    body(
+        f.client
+            .post(format!("{}/projects/{}/chats", f.base, f.project))
+            .json(&json!({"id":f.chat,"runtime":"qwen"})),
+    )
+    .await;
+    f.send(Uuid::new_v4(), "portable-write-first").await;
+    let cut = f.send(Uuid::new_v4(), "portable-write-second").await;
+    f.send(Uuid::new_v4(), "portable-write-future").await;
+    let child = Uuid::new_v4();
+    let request = json!({"id":child,"turn":cut["id"]});
+    let fork = body(f.post("forks", &request)).await;
+    let history = &fork["history"];
+    assert_eq!(history["chat"]["forked_from"]["mode"], "portable_context");
+    assert!(history["chat"]["forked_from"].get("anchor").is_none());
+    assert_eq!(history["turns"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        fs::read_to_string(f.workspace.join("portable-state")).unwrap(),
+        "portable-write-second"
+    );
+    let strict = json!({"id":child,"turn":cut["id"],"policy":"native"});
+    assert!(
+        !f.post("forks", &strict)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    f.restart().await;
+    assert_eq!(
+        body(f.post("forks", &request)).await["history"]["chat"]["id"],
+        child.to_string()
+    );
+    let parent = f.chat;
+    f.chat = child;
+    let id = Uuid::new_v4();
+    let before = f.calls().len();
+    let answer = f.send(id, "continue the branch").await;
+    let calls = f.calls();
+    assert_eq!(calls.len(), before + 1);
+    let wire = calls.last().unwrap()["text"].as_str().unwrap();
+    assert!(wire.contains("portable-write-first") && wire.contains("portable-write-second"));
+    assert!(!wire.contains("portable-write-future") && wire.ends_with("continue the branch"));
+    f.restart().await;
+    assert_eq!(f.send(id, "continue the branch").await, answer);
+    f.send(Uuid::new_v4(), "second child request").await;
+    let calls = f.calls();
+    assert_eq!(calls.len(), before + 2);
+    assert_eq!(calls.last().unwrap()["text"], "second child request");
+    f.chat = parent;
+    assert_eq!(f.history().await["turns"].as_array().unwrap().len(), 3);
     f.stop().await;
 }
 async fn workflow_stop(f: &mut Fixture) {
@@ -567,6 +627,7 @@ fn main() {
                     live().await
                 } else {
                     protocol().await;
+                    portable_fork().await;
                     named_instances().await
                 }
             },

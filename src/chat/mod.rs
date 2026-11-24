@@ -13,7 +13,7 @@ pub use http_feed::HttpChatFeed;
 pub use log::ChatUpdate;
 pub use timeline::{Edit as ChatEdit, Frame as ChatFrame, MorphProgress};
 mod fork;
-pub use fork::{ForkOrigin, ForkWorktreeBase};
+pub use fork::{ForkMode, ForkOrigin, ForkPolicy, ForkWorktreeBase};
 pub(crate) use fork::LiveFork;
 pub(crate) mod import;
 pub use checkpoint::{

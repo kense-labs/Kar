@@ -257,6 +257,9 @@ fn fixture(runtime: &str) {
             );
         } else if let Some(text) = input(runtime, &v) {
             audit(json!({"runtime":runtime,"session":sid,"text":text,"cwd":cwd,"uuid":v["uuid"]}));
+            if runtime == "qwen" && text.starts_with("portable-write-") {
+                fs::write("portable-state", text).unwrap();
+            }
             if runtime == "claude" && text == "start native workflow" {
                 emit(
                     json!({"type":"system","subtype":"task_started","task_id":"job","task_type":"local_workflow","session_id":sid,"is_backgrounded":true}),
