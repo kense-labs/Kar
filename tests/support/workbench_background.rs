@@ -6,7 +6,12 @@ use super::{
 use kar::chat::{ChatFeedSnapshot, ChatReplica};
 use reqwest::Client;
 use serde_json::{Value, json};
-use std::{ffi::OsStr, fs, io::BufRead, time::Duration};
+use std::{
+    ffi::OsStr,
+    fs,
+    io::{BufRead, Write},
+    time::Duration,
+};
 use uuid::Uuid;
 
 /// Scripted Claude wire behavior, exercised only by the isolated workbench fixture.
@@ -46,15 +51,46 @@ pub(crate) fn peer() {
     for line in std::io::stdin().lock().lines().map_while(Result::ok) {
         let v: Value = serde_json::from_str(&line).unwrap();
         match v["type"].as_str() {
-            Some("control_request") => emit(
-                json!({"type":"control_response","response":{"subtype":"success","request_id":v["request_id"],"response":{"commands":[],"models":[]}}}),
-            ),
+            Some("control_request") => {
+                let result = if v["request"]["subtype"] == "get_status" {
+                    json!({"sections":[{"rows":[{"label":"Session ID","value":session}]}]})
+                } else {
+                    json!({"commands":[],"models":[]})
+                };
+                emit(
+                    json!({"type":"control_response","response":{"subtype":"success","request_id":v["request_id"],"response":result}}),
+                );
+            }
             Some("user") => {
                 let input = v["message"]["content"]
                     .as_str()
                     .or_else(|| v["message"]["content"][0]["text"].as_str())
                     .unwrap();
-                match input {
+                let file = std::path::PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR").unwrap())
+                    .join("prompts.jsonl");
+                let mut journal = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(file)
+                    .unwrap();
+                writeln!(journal, "{}", json!({"id":v["uuid"],"text":input})).unwrap();
+                let action = if input.starts_with("Background work stopped") {
+                    input
+                        .split_once("\n\n")
+                        .map_or("automatic recovery", |(_, user)| user)
+                } else {
+                    input
+                };
+                let home = std::path::PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR").unwrap());
+                if action == "automatic recovery" && home.join("hold-auto").exists() {
+                    fs::write(home.join("received-auto"), []).unwrap();
+                    let until = std::time::Instant::now() + Duration::from_secs(25);
+                    while home.join("hold-auto").exists() {
+                        assert!(std::time::Instant::now() < until, "recovery gate timed out");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                match action {
                     "first" => {
                         tool("tool.build", "Bash", "make test");
                         start("build", "tool.build", true);
@@ -75,11 +111,17 @@ pub(crate) fn peer() {
                         );
                     }
                     "new process" => start("build", "tool.after-restart", true),
+                    "exit after result" => start("detached", "tool.exit", true),
+                    "start then close" => start("closed", "tool.close", true),
+                    "automatic recovery" | "check progress" | "after explicit close" => {}
                     _ => panic!("unexpected prompt {input}"),
                 }
                 frame(
                     json!({"type":"result","subtype":"success","user_message_uuid":v["uuid"],"is_error":false,"result":"done"}),
                 );
+                if action == "exit after result" {
+                    return;
+                }
             }
             _ => {}
         }
@@ -249,7 +291,43 @@ async fn scenario() {
                 && t["background_work"]["turn_id"] == before_restart.to_string()
                 && t["started_at"] == old)
     );
-    error(&b, &mark, json!({"task_ids":["build"]}), "unavailable").await;
+    let prompts = || -> Vec<Value> {
+        fs::read_to_string(native.join("prompts.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    };
+    // With an explicit wait mark the service reattaches, even without a queue file or user input.
+    tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            let h = ok(a.get(format!("{chat}/snapshot"))).await;
+            if h["history"]["turns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|turn| {
+                    turn["background_note"]["automatic"] == true && turn["status"] == "completed"
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        prompts()
+            .iter()
+            .filter(|p| p["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Background work stopped"))
+            .count(),
+        1
+    );
+    error(&b, &mark, json!({"task_ids":["build"]}), "unmatched").await;
     let new = send(&b, &chat, "new process").await;
     let r = ok(a.get(&tasks)).await;
     assert_eq!(
@@ -265,5 +343,87 @@ async fn scenario() {
         "unmatched",
     )
     .await;
+    // An ordinary unawaited shell produces a note only with the next actual input.
+    server.kill().await.unwrap();
+    let (mut server, base) = serve_with_env(&state, &work, &native, &env).await;
+    let chat = format!("{base}{path}");
+    let admission = Uuid::new_v4();
+    let input = json!({"id":admission,"text":"check progress"});
+    let recovered = ok(b.post(format!("{chat}/messages")).json(&input)).await;
+    assert_eq!(recovered["items"][0]["text"], "check progress");
+    assert_eq!(recovered["background_note"]["automatic"], false);
+    let count = prompts().len();
+    let last = prompts().last().unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        last.contains("Kar restarted")
+            && last.contains("build")
+            && last.ends_with("check progress")
+    );
+    assert_eq!(
+        ok(a.post(format!("{chat}/messages")).json(&input)).await,
+        recovered
+    );
+    assert_eq!(count, prompts().len());
+    // A provider can exit after a successful foreground reply while Kar stays up.
+    send(&a, &chat, "exit after result").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let tasks = ok(a.get(format!("{chat}/background-tasks"))).await;
+            if tasks["lost"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["id"] == "detached" && t["background_exit"] == "provider_exit")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    send(&a, &chat, "check progress").await;
+    assert!(
+        prompts().last().unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .contains("provider process exited")
+    );
+    let turn = send(&a, &chat, "start then close").await;
+    ok(a.post(format!("{chat}/background-tasks/await"))
+        .json(&json!({"task_ids":["closed"]})))
+    .await;
+    ok(a.post(format!("{chat}/force-stop"))
+        .json(&json!({"turn":turn})))
+    .await;
+    send(&a, &chat, "after explicit close").await;
+    assert_eq!(prompts().last().unwrap()["text"], "after explicit close");
+    // Interrupt between admission and the model result. The original stream may
+    // have reached the vendor; neither a restart nor a later user input resends it.
+    send(&a, &chat, "new process").await;
+    ok(a.post(format!("{chat}/background-tasks/await"))
+        .json(&json!({"task_ids":["build"]})))
+    .await;
+    server.kill().await.unwrap();
+    fs::write(native.join("hold-auto"), []).unwrap();
+    let (mut server, _) = serve_with_env(&state, &work, &native, &env).await;
+    tokio::time::timeout(Duration::from_secs(25), async {
+        while !native.join("received-auto").exists() {
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+    })
+    .await
+    .unwrap();
+    server.kill().await.unwrap();
+    fs::remove_file(native.join("hold-auto")).unwrap();
+    let admitted = prompts().len();
+    let (mut server, base) = serve_with_env(&state, &work, &native, &env).await;
+    let chat = format!("{base}{path}");
+    send(&a, &chat, "check progress").await;
+    assert_eq!(prompts().len(), admitted + 1);
+    assert_eq!(prompts().last().unwrap()["text"], "check progress");
     server.kill().await.unwrap();
 }

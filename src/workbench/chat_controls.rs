@@ -26,18 +26,22 @@ pub(super) struct QueuePump {
     started: Once,
     wake: Arc<Notify>,
     errors: Mutex<HashMap<Uuid, (Instant, String)>>,
+    settled_background: Mutex<HashMap<Uuid, (u64, std::time::SystemTime)>>,
 }
 
 impl Workbench {
-    // Existing .inputs journals also cover chats first opened with the CLI.
+    // Chats opened through the CLI also participate. An awaited task may be
+    // the only outstanding work, with no inbox file on disk.
     fn queued_chats(&self) -> Result<Vec<(Uuid, Uuid)>> {
         let projects = self.projects();
-        let mut found = Vec::new();
+        let mut found = std::collections::BTreeSet::new();
         for e in std::fs::read_dir(self.0.chats.directory())? {
             let path = e?.path();
-            if path.extension().is_none_or(|v| v != "inputs") {
-                continue;
-            }
+            let background = match path.extension().and_then(|v| v.to_str()) {
+                Some("inputs") => false,
+                Some("karchat") => true,
+                _ => continue,
+            };
             let Some(id) = path
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -64,6 +68,29 @@ impl Workbench {
                 Ok(slot) if slot.as_ref().is_none_or(ChatSession::is_closed) => {}
                 _ => continue,
             }
+            if background {
+                let metadata = std::fs::metadata(&path)?;
+                let stamp = (metadata.len(), metadata.modified()?);
+                if self.0.pump.settled_background.lock().unwrap().get(&id) == Some(&stamp) {
+                    continue;
+                }
+                match self.0.chats.needs_background_wake(id) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        self.0
+                            .pump
+                            .settled_background
+                            .lock()
+                            .unwrap()
+                            .insert(id, stamp);
+                        continue;
+                    }
+                    Err(e) => {
+                        self.queue_error(id, &e);
+                        continue;
+                    }
+                }
+            }
             let info = match self.0.chats.saved_info(id) {
                 Ok(info) => info,
                 Err(e) => {
@@ -77,6 +104,10 @@ impl Workbench {
             }) else {
                 continue;
             };
+            if background {
+                found.insert((project.id, id));
+                continue;
+            }
             match self.0.chats.queued_inputs(id) {
                 Ok(q)
                     if q.iter().any(|e| {
@@ -86,13 +117,13 @@ impl Workbench {
                         )
                     }) =>
                 {
-                    found.push((project.id, id))
+                    found.insert((project.id, id));
                 }
                 Err(e) => self.queue_error(id, &e),
                 _ => {}
             }
         }
-        Ok(found)
+        Ok(found.into_iter().collect())
     }
     fn queue_error(&self, id: Uuid, e: &Error) {
         self.0

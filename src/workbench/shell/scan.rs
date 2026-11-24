@@ -85,7 +85,7 @@ impl Sources {
                     host_turn: turns
                         .iter()
                         .rev()
-                        .find(|t| !t.native_continuation)
+                        .find(|t| t.host_message())
                         .map(|t| (t.id, t.started_ms)),
                     pending_questions: replica
                         .pending_requests()

@@ -23,4 +23,4 @@
 
 - `packages/provider-acp/src/server/adapter.ts:10240`、`provider-cursor/src/server/adapter.ts:3396`、`provider-opencode/src/server/v2/adapter.ts:5271` 均定义自己的任务标识和匹配方式。`AntigravityAdapterV2.test.ts:1777` 还断言跟踪过的命令可匹配。Kar 当前等待入口支持 Claude。其他适配器的公开契约是实现缺口；逐个使用该供应商的真实命令与工作台复验。
 - `ThreadManagementService.ts:1743` 按子线程去重递归停止应用托管的委派任务，包括远程子环境、已有结果后的后续工作和部分失败汇总。`ClaudeAdapterV2.ts:14892` 处理原生子代理停止，`provider-opencode/src/server/v2/adapter.ts:5299` 实现该适配器的任务停止。Kar 当前单个工作流停止尚未覆盖这些调用链。
-- `RestartBackgroundNote.ts:232,258,433` 区分用户主动取消和进程丢失，并按是否等待决定何时把中断说明送回模型。Kar 已保存原回合、启动游标和失联状态；自动选择下一次唤醒、把中断说明送入模型以及多次跨重启的唤醒去重仍待实现和实机复验。
+- `RestartBackgroundNote.ts:232,258,433` 区分用户主动取消和进程丢失，并按是否等待决定何时把中断说明送回模型。Kar 在原生进程退出或控制器重启后，将失联说明和首次承载它的输入一同持久化。带等待标记且前台已完成的任务可自动唤醒；普通后台命令在下一次用户输入时告知模型。主动停止不触发恢复说明。协议候选覆盖发送次数、原因、原用户输入和主动关闭，供应商实机待统一复验。

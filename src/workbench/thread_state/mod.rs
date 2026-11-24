@@ -296,7 +296,7 @@ impl Metadata {
                         .turns
                         .iter()
                         .rev()
-                        .find(|t| !t.native_continuation)
+                        .find(|t| t.host_message())
                         .map(|t| t.id),
                     questions: history
                         .pending_requests

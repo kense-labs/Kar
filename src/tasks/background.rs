@@ -6,6 +6,14 @@ use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum BackgroundExit {
+    HostClosed,
+    ProviderExit,
+    ServerRestart,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BackgroundKind {
     Command,
     Monitor,
@@ -67,6 +75,17 @@ pub struct BackgroundWaitReceipt {
 }
 
 impl NativeTask {
+    pub(crate) fn background_exit(&self) -> Option<BackgroundExit> {
+        if !self.ended_on_exit || self.background_work.is_none() {
+            return None;
+        }
+        self.background_exit.or(match self.error.as_deref() {
+            Some("owning controller disconnected") => Some(BackgroundExit::ServerRestart),
+            Some("runtime exited") => Some(BackgroundExit::ProviderExit),
+            _ => None,
+        })
+    }
+
     pub fn pending_background(&self) -> bool {
         self.background_work.as_ref().is_some_and(|w| w.pending) && !self.status.is_terminal()
     }
@@ -83,6 +102,7 @@ pub(crate) fn controller_lost(rows: &[NativeTask]) -> Vec<NativeTask> {
             row.background_work.as_mut().unwrap().pending = false;
             row.status = TaskStatus::Disconnected;
             row.ended_on_exit = true;
+            row.background_exit = Some(BackgroundExit::ServerRestart);
             row.error = Some("owning controller disconnected".into());
             row
         })

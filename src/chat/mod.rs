@@ -1,4 +1,6 @@
 //! Persistent native chats. A per-chat file lock gives one process ownership of the provider session.
+mod background_note;
+pub use background_note::BackgroundNote;
 mod attachments;
 mod native_profile;
 pub use attachments::{Attachment, AttachmentKind};
@@ -871,7 +873,7 @@ impl ChatSession {
                 tokio::task::spawn_blocking(move || store.attachments(chat, &attachment_ids))
                     .await
                     .map_err(|e| Error::Closed(e.to_string()))??;
-            sender.run_turn(id, text, attachments).await
+            sender.run_turn(id, text, attachments, false).await
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))?
@@ -894,6 +896,7 @@ impl Sender {
         id: Uuid,
         text: String,
         attachments: Vec<Attachment>,
+        automatic: bool,
     ) -> Result<ChatTurn> {
         if let Some(turn) = self
             .sink
@@ -960,7 +963,18 @@ impl Sender {
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;
-        let wire_text = self.sink.0.lock().unwrap().state.dispatch_text(&text);
+        let (wire_text, background_note) = {
+            let log = self.sink.0.lock().unwrap();
+            let delivery = log.state.background_delivery(automatic);
+            if automatic && delivery.as_ref().is_none_or(|d| d.input != id) {
+                return Err(Error::Busy);
+            }
+            let note = delivery.map(|d| d.note);
+            let prompt = note
+                .as_ref()
+                .map_or_else(|| text.clone(), |n| n.prompt(&text));
+            (log.state.dispatch_text(&prompt), note)
+        };
         crate::input::check_text(&wire_text, crate::input::text_limit(&self.info.runtime))?;
         let store_for_input = store.clone();
         let chat = self.info.id;
@@ -976,6 +990,7 @@ impl Sender {
             ));
         }
         let admission = Admission {
+            background_note,
             attachments,
             store: store.clone(),
             sink: self.sink.clone(),

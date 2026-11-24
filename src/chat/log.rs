@@ -85,6 +85,8 @@ pub enum ChatUpdate {
         open_tools: Vec<String>,
     },
     Begin {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        background_note: Option<super::BackgroundNote>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<super::Attachment>,
         id: Uuid,
@@ -704,6 +706,7 @@ impl State {
                 self.turns[index].input_sent = true;
             }
             ChatUpdate::Begin {
+                background_note,
                 attachments,
                 id,
                 at,
@@ -712,7 +715,9 @@ impl State {
                 repositories,
             } => {
                 self.begin_turn(id, at, Some(text), None, before_tree, repositories)?;
-                self.turns.last_mut().unwrap().attachments = attachments;
+                let turn = self.turns.last_mut().unwrap();
+                turn.attachments = attachments;
+                turn.background_note = background_note;
                 if let Some(h) = self
                     .handoffs
                     .iter_mut()
@@ -1552,10 +1557,12 @@ impl Log {
         text: &str,
         before: &super::checkpoint::Capture,
         attachments: Vec<super::Attachment>,
+        background_note: Option<super::BackgroundNote>,
     ) -> Result<()> {
         self.ids = MessageIds::default();
         self.dispatched = false;
         self.commit(ChatUpdate::Begin {
+            background_note,
             attachments,
             id,
             at: super::now(),
@@ -1753,6 +1760,7 @@ impl Log {
         self.ids = MessageIds::default();
         self.dispatched = true;
         self.commit(ChatUpdate::Begin {
+            background_note: None,
             attachments: Vec::new(),
             id: input
                 .filter(|id| self.state.find(*id).is_none())

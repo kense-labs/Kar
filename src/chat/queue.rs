@@ -139,6 +139,17 @@ struct Inbox {
     #[serde(default)]
     commands: std::collections::BTreeMap<Uuid, commands::SavedCommand>,
 }
+impl Inbox {
+    fn allows_background(&self, state: &super::log::State) -> bool {
+        !self.held
+            && !self.entries.iter().any(|entry| {
+                matches!(
+                    entry.status(state),
+                    InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
+                )
+            })
+    }
+}
 impl ChatStore {
     pub(crate) fn inbox_path(&self, id: Uuid) -> std::path::PathBuf {
         self.dir.join(format!("{id}.inputs"))
@@ -352,6 +363,7 @@ fn different_prompt() -> Error {
 /// Executed by the actor after its busy check and before its first native prompt write.
 /// A durable Begin consumes the input even if the process dies before a receipt arrives.
 pub(crate) struct Admission {
+    pub(super) background_note: Option<super::BackgroundNote>,
     pub(super) attachments: Vec<super::Attachment>,
     pub(super) store: ChatStore,
     pub(super) sink: Sink,
@@ -409,11 +421,17 @@ impl Admission {
         {
             return Err(Error::Busy);
         }
+        let automatic = self.background_note.as_ref().is_some_and(|n| n.automatic);
+        let expected = log.state.background_delivery(automatic).map(|d| d.note);
+        if self.background_note != expected || automatic && !inbox.allows_background(&log.state) {
+            return Err(Error::Busy);
+        }
         log.begin(
             self.id,
             &self.text,
             &self.checkpoint.before,
             self.attachments,
+            self.background_note,
         )?;
         log.checkpoint = Some(self.checkpoint);
         Ok(())
@@ -477,6 +495,27 @@ impl Sender {
                 .map(|e| (e.id, e.text.clone(), e.attachments.clone()))
         };
         let Some((id, text, attachments)) = next else {
+            let input = {
+                let log = self.sink.0.lock().unwrap();
+                if !inbox.allows_background(&log.state) {
+                    return Ok(false);
+                }
+                let input = log.state.background_delivery(true).map(|d| d.input);
+                if input.is_some() && log.state.active().is_some() {
+                    return Err(Error::Busy);
+                }
+                input
+            };
+            if let Some(id) = input {
+                self.run_turn(
+                    id,
+                    super::background_note::CONTINUE.into(),
+                    Vec::new(),
+                    true,
+                )
+                .await?;
+                return Ok(true);
+            }
             return Ok(false);
         };
         if text.is_empty() && attachments.is_empty() {
@@ -496,7 +535,10 @@ impl Sender {
             )?;
             return Ok(true);
         }
-        match self.run_turn(id, text.clone(), attachments.clone()).await {
+        match self
+            .run_turn(id, text.clone(), attachments.clone(), false)
+            .await
+        {
             Ok(_) => Ok(true),
             Err(error) => {
                 if self
@@ -578,7 +620,7 @@ impl QueueWorker {
                 .and_then(|m| Ok((m.len(), m.modified()?)))
                 .ok();
             more = false;
-            if waiter.is_none() && stamp == drained {
+            if waiter.is_none() && Some(&stamp) == drained.as_ref() {
                 continue;
             }
             let work = sender.pump_one();
@@ -599,7 +641,7 @@ impl QueueWorker {
                 Err(Error::Busy) => {}
                 result => {
                     if matches!(result, Ok(false)) {
-                        drained = stamp;
+                        drained = Some(stamp);
                     }
                     if let Some(waiter) = waiter.take() {
                         let _ = waiter.send(result.map(|_| ()));

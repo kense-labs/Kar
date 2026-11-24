@@ -298,7 +298,7 @@ impl super::log::State {
             && self
                 .turns
                 .iter()
-                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty())
+                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty() && t.background_note.is_none())
         {
             return Cow::Borrowed(&self.turns);
         }
@@ -318,19 +318,7 @@ impl super::log::State {
             })
             .map(|(_, t)| {
                 let mut turn = t.clone();
-                if let Some(h) = self.handoffs.iter().find(|h| h.input == Some(turn.id))
-                    && let Some(super::TimelineItem {
-                        item:
-                            Item::Message {
-                                role: Role::User,
-                                text,
-                                ..
-                            },
-                        ..
-                    }) = turn.items.first_mut()
-                {
-                    *text = h.native_input(text);
-                }
+                let handoff = self.handoffs.iter().find(|h| h.input == Some(turn.id));
                 for (index, item) in turn.items.iter_mut().enumerate() {
                     if let Item::Message {
                         role: Role::User,
@@ -340,6 +328,12 @@ impl super::log::State {
                     } = &mut item.item
                     {
                         let refs = if index == 0 {
+                            if let Some(note) = &turn.background_note {
+                                *text = note.prompt(text);
+                            }
+                            if let Some(h) = handoff {
+                                *text = h.native_input(text);
+                            }
                             Some(&turn.attachments)
                         } else {
                             provider_id
@@ -358,9 +352,14 @@ impl super::log::State {
         Cow::Owned(turns)
     }
     pub(super) fn clean_handoff_echo(&self, id: Uuid, frame: &mut super::ChatFrame) {
-        let Some(h) = self.current_handoff().filter(|h| h.input == Some(id)) else {
+        let handoff = self.current_handoff().filter(|h| h.input == Some(id));
+        let Some(turn) = self.find(id) else { return };
+        let Some(original) = turn.prompt() else {
             return;
         };
+        if handoff.is_none() && turn.background_note.is_none() {
+            return;
+        }
         if !frame.source.path.is_empty()
             || frame.source.session_id.as_deref() != Some(&self.info.native_id)
         {
@@ -376,10 +375,13 @@ impl super::log::State {
                 | super::ChatEdit::UserInput { text, .. } => text,
                 _ => continue,
             };
-            if let Some(original) = h
-                .user_input(text)
-                .filter(|s| self.find(id).and_then(ChatTurn::prompt) == Some(*s))
-            {
+            let carried = handoff.and_then(|h| h.user_input(text)).unwrap_or(text);
+            let matches = if let Some(note) = &turn.background_note {
+                carried == note.prompt(original)
+            } else {
+                carried == original
+            };
+            if matches {
                 *text = original.to_owned();
             }
         }

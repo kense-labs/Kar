@@ -57,7 +57,8 @@ impl Workbench {
                 ) && lost.iter().any(|r| {
                     r.background_work
                         .as_ref()
-                        .is_some_and(|w| w.awaited && w.turn_id == Some(t.id))
+                        .is_some_and(|w| w.awaited && w.turn_id == Some(t.id)
+                            && r.background_exit != Some(crate::BackgroundExit::HostClosed))
                 })
             })
             .map(|t| t.id)

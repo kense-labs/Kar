@@ -1,7 +1,7 @@
 pub(crate) mod background;
 use crate::{Event, Record, observe::Agent};
 pub use background::{
-    BackgroundKind, BackgroundWaitReceipt, BackgroundWaitRequest, BackgroundWork,
+    BackgroundExit, BackgroundKind, BackgroundWaitReceipt, BackgroundWaitRequest, BackgroundWork,
 };
 use serde::{Deserialize, Serialize};
 
@@ -107,6 +107,8 @@ pub struct NativeTask {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ended_on_exit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_exit: Option<BackgroundExit>,
 }
 
 impl NativeTask {
@@ -126,6 +128,7 @@ impl NativeTask {
             output_file: None,
             error: None,
             ended_on_exit: false,
+            background_exit: None,
         }
     }
     fn apply(&mut self, change: &TaskChange, at: u64) {
@@ -143,6 +146,7 @@ impl NativeTask {
                 self.error = None;
             }
             self.ended_on_exit = false;
+            self.background_exit = None;
         }
         match change {
             TaskChange::Background { work } => {
@@ -267,7 +271,8 @@ pub(crate) fn changes(rows: &[NativeTask], record: &Record, root: bool) -> Vec<N
                 let stopped = matches!(
                     reason.as_str(),
                     "closed by host" | "last session handle dropped" | "session closed"
-                );
+                ) || (record.direction == crate::Direction::Host
+                    && record.native["requestId"].is_string());
                 for prior in rows.iter().filter(|t| !t.status.is_terminal()) {
                     let mut next = prior.clone();
                     next.status = if next.pending_background() {
@@ -281,6 +286,11 @@ pub(crate) fn changes(rows: &[NativeTask], record: &Record, root: bool) -> Vec<N
                     next.ended_on_exit = true;
                     if let Some(work) = &mut next.background_work {
                         work.pending = false;
+                        next.background_exit = Some(if stopped {
+                            BackgroundExit::HostClosed
+                        } else {
+                            BackgroundExit::ProviderExit
+                        });
                     }
                     if !stopped && next.error.is_none() {
                         next.error = Some("runtime exited".into());
