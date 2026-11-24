@@ -1937,6 +1937,8 @@ async fn manual_compaction_replay() {
 mod cursor_children;
 #[path = "support/cursor_interactions.rs"]
 mod cursor_interactions;
+#[path = "support/workbench_fork.rs"]
+mod workbench_fork;
 #[path = "support/workbench_projects.rs"]
 mod workbench_projects;
 #[path = "support/workbench_queue.rs"]
@@ -1947,6 +1949,10 @@ mod workbench_server;
 #[path = "support/worktree_chats.rs"]
 mod worktree_chats;
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("workbench-fork") {
+        workbench_fork::run();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("workbench-queue") {
         workbench_queue::run();
         return;

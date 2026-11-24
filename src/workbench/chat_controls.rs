@@ -3,8 +3,9 @@ use super::{
     http::{ApiError, blocking},
 };
 use crate::{
-    Error, Result,
-    chat::{ChatSession, CheckpointPoint, InputStatus, QueuedInput, RollbackReport},
+    Error, Result, SessionOptions,
+    chat::{ChatHistory, ChatSession, CheckpointPoint, InputStatus, QueuedInput, RollbackReport},
+    workbench_git::Repository,
 };
 use axum::{
     Json, Router,
@@ -250,6 +251,110 @@ async fn checkpoints(
     }).await
 }
 
+#[derive(Deserialize)]
+struct Fork {
+    id: Uuid,
+    turn: Uuid,
+    destination_project: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+struct ForkResult {
+    project: Uuid,
+    history: ChatHistory,
+}
+
+fn isolate_host_token(options: &mut SessionOptions) {
+    options.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
+}
+
+async fn fork(
+    State(app): State<Workbench>,
+    Path((p, chat)): Path<(Uuid, Uuid)>,
+    Json(request): Json<Fork>,
+) -> std::result::Result<Json<ForkResult>, ApiError> {
+    let project = request.destination_project.unwrap_or(p);
+    let host = app.clone();
+    let (destination, published) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let info = host.binding(p, chat)?;
+        host.workspace(&host.project(p)?)?;
+        let destination = if project == p {
+            None
+        } else {
+            let target = host.workspace(&host.project(project)?)?.root;
+            // A project at a checkout subdirectory must map to precisely that
+            // subdirectory in the target. The core also pins the managed checkout ID.
+            let source_repo = Repository::open(&info.workspace)?;
+            let target_repo = Repository::open(&target)?;
+            let source_subdir = info
+                .workspace
+                .strip_prefix(source_repo.root())
+                .map_err(|_| super::denied())?;
+            if !source_repo.same_repository(&target_repo)
+                || target.strip_prefix(target_repo.root()).ok() != Some(source_subdir)
+            {
+                return Err(Error::Refused(
+                    "fork projects must use corresponding directories in the same repository"
+                        .into(),
+                ));
+            }
+            Some(target)
+        };
+        let published = match host.0.chats.initial_info(request.id) {
+            Ok(_) => true,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e),
+        };
+        Ok((destination, published))
+    })
+    .await
+    .map_err(|e| Error::Closed(e.to_string()))??;
+    let history = if published {
+        // The core checks the original request binding. A reply lost after publication
+        // can be retrieved while either conversation is processing another turn.
+        app.0
+            .chats
+            .fork_at_with_id_configured(
+                chat,
+                request.turn,
+                request.id,
+                destination,
+                isolate_host_token,
+            )
+            .await?
+    } else {
+        tokio::spawn(async move {
+            let slot = app.controller(chat);
+            let mut owner = slot.try_lock().map_err(|_| Error::Busy)?;
+            if app.archived(chat) {
+                return Err(Error::Refused("chat is archived".into()));
+            }
+            if let Some(source) = owner.as_ref().filter(|s| !s.is_closed()) {
+                source
+                    .fork_at_with_id(request.turn, request.id, destination, isolate_host_token)
+                    .await
+            } else {
+                if let Some(closed) = owner.take() {
+                    closed.close().await?;
+                }
+                app.0
+                    .chats
+                    .fork_at_with_id_configured(
+                        chat,
+                        request.turn,
+                        request.id,
+                        destination,
+                        isolate_host_token,
+                    )
+                    .await
+            }
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??
+    };
+    Ok(Json(ForkResult { project, history }))
+}
+
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .route(
@@ -265,4 +370,5 @@ pub(super) fn routes() -> Router<Workbench> {
             get(checkpoints),
         )
         .route("/projects/{project}/chats/{chat}/rollback", post(rollback))
+        .route("/projects/{project}/chats/{chat}/forks", post(fork))
 }

@@ -267,7 +267,10 @@ impl Workbench {
         let mut owner = slot.lock().await;
         match self.0.chats.initial_info(id) {
             Ok(info)
-                if info.workspace == p.root && info.runtime == runtime && info.model == model =>
+                if info.forked_from.is_none()
+                    && info.workspace == p.root
+                    && info.runtime == runtime
+                    && info.model == model =>
             {
                 return Ok(ProjectChat {
                     project,
