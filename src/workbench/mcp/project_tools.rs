@@ -115,7 +115,7 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         tools.push(Tool{name:"kar_project_clone",description:"Start a tracked repository clone into a granted directory and register the project.",properties:json!({"command_id":id,"project_id":id,"title":string,"directory":string,"source":string,"lookup":{"type":"object"},"protocol":{"enum":["https","ssh","auto"]}}),required:&["command_id","title","directory"]});
     }
     if policy.project_access.launch {
-        tools.push(Tool{name:"kar_thread_launch",description:"Launch a top-level chat in a project, scratch folder, or verified worktree. Reuse command_id after a lost reply.",properties:json!({"command_id":id,"project_id":id,"scratch":flag,"title":string,"runtime":string,"model":string,"message":string,"attachments":{"type":"array","items":id},"workspace":{"enum":["root","worktree","existing_worktree"]},"directory":string,"base_ref":string,"branch":string,"start_from_origin":flag,"effort":string,"acp_mode":string}),required:&["command_id","title"]});
+        tools.push(Tool{name:"kar_thread_launch",description:"Launch a top-level chat in a project, scratch folder, or verified worktree. Reuse command_id after a lost reply.",properties:json!({"command_id":id,"project_id":id,"scratch":flag,"title":string,"runtime":string,"model":string,"message":string,"attachments":{"type":"array","items":id},"requested_output_schema":{},"workspace":{"enum":["root","worktree","existing_worktree"]},"directory":string,"base_ref":string,"branch":string,"start_from_origin":flag,"effort":string,"acp_mode":string}),required:&["command_id","title"]});
     }
     tools
 }

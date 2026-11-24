@@ -65,6 +65,9 @@ pub(super) async fn run(
         .get("message")
         .map(|v| v.as_str().ok_or_else(|| refused("invalid launch message")))
         .transpose()?;
+    if input.get("requested_output_schema").is_some() && message.is_none() {
+        return Err(refused("requested_output_schema needs a launch message"));
+    }
     let strategy = input
         .get("workspace")
         .map(|_| string(input, "workspace"))
@@ -160,6 +163,9 @@ pub(super) async fn run(
     if message.is_some() || !attachments.is_empty() {
         let input_id =
             crate::chat::stable_id([chat.as_bytes().as_slice(), b"model-launch-message"]);
+        if let Some(schema) = input.get("requested_output_schema") {
+            app.register_run_schema(project, chat, input_id, schema.clone())?;
+        }
         let copied = attachments
             .iter()
             .map(|a| {
