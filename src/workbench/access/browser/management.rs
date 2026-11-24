@@ -7,7 +7,7 @@ struct Pairing {
     access: Option<String>,
     purpose: Option<String>,
 }
-fn authorize(
+pub(super) fn authorize(
     auth: &Auth,
     h: &HeaderMap,
     method: &Method,
@@ -69,6 +69,7 @@ async fn issue(
             digest(&raw),
             Grant {
                 id,
+                cloud: None,
                 until,
                 scopes,
                 label: label.clone(),

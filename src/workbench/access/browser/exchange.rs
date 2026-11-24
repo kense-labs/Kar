@@ -83,8 +83,9 @@ fn exchange(auth: &Auth, h: HeaderMap, body: &[u8]) -> AccessResult<Value> {
                 proof.consume(db)?;
                 let d = db.devices.get_mut(&id).ok_or(AccessError::Invalid)?;
                 let a = d.account.as_mut().ok_or(AccessError::Invalid)?;
-                if a.method != "dpop-access-token"
-                    || a.until <= now()
+                if a.cloud.is_some()
+                    || a.method != "dpop-access-token"
+                    || a.renew_until.unwrap_or(a.until) <= now()
                     || d.digest != hash
                     || a.proof.as_ref() != Some(&proof.thumb)
                 {
@@ -92,7 +93,8 @@ fn exchange(auth: &Auth, h: HeaderMap, body: &[u8]) -> AccessResult<Value> {
                 }
                 let secret = credential()?;
                 d.digest = digest(&secret);
-                a.until = now() + TTL;
+                a.until = now() + 3600000;
+                a.renew_until = Some(now() + TTL);
                 Ok((d.clone(), format!("{id}.{secret}")))
             })?
         }
@@ -100,6 +102,6 @@ fn exchange(auth: &Auth, h: HeaderMap, body: &[u8]) -> AccessResult<Value> {
     };
     let a = d.account.unwrap();
     Ok(
-        json!({"access_token":token,"issued_token_type":ACCESS,"token_type":if a.proof.is_some(){"DPoP"}else{"Bearer"},"expires_in":TTL/1000,"scope":a.scopes.into_iter().collect::<Vec<_>>().join(" ")}),
+        json!({"access_token":token,"issued_token_type":ACCESS,"token_type":if a.proof.is_some(){"DPoP"}else{"Bearer"},"expires_in":a.until.saturating_sub(now())/1000,"scope":a.scopes.into_iter().collect::<Vec<_>>().join(" ")}),
     )
 }

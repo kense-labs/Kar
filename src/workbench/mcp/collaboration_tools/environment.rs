@@ -27,7 +27,7 @@ fn bad(msg: &str) -> Error {
     Error::Refused(msg.into())
 }
 type Reply = std::result::Result<Json<Value>, ApiError>;
-fn id(app: &Workbench) -> Result<Uuid> {
+pub(in crate::workbench) fn id(app: &Workbench) -> Result<Uuid> {
     if let Some(id) = app.0.catalog.lock().unwrap().environment.id {
         return Ok(id);
     }

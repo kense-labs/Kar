@@ -6,6 +6,7 @@ use axum::{
     http::{Method, Uri},
 };
 use std::collections::BTreeSet;
+pub(super) mod connect;
 mod exchange;
 mod management;
 mod proof;
@@ -32,19 +33,27 @@ const SCOPES: &[&str] = &[
 ];
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct Store {
+    #[serde(default)]
+    cloud: connect::Store,
     grants: BTreeMap<String, Grant>,
     tickets: BTreeMap<String, Ticket>,
     proofs: BTreeMap<String, u64>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Account {
+    #[serde(default)]
+    cloud: Option<Uuid>,
     method: String,
     pub(super) until: u64,
+    #[serde(default)]
+    renew_until: Option<u64>,
     scopes: BTreeSet<String>,
     proof: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Grant {
+    #[serde(default)]
+    cloud: Option<connect::Binding>,
     id: Uuid,
     until: u64,
     scopes: BTreeSet<String>,
@@ -180,6 +189,7 @@ fn consume(db: &mut Registry, code: &str) -> AccessResult<Grant> {
     if db.grants.remove(&hashed).is_some_and(|n| n > now()) {
         return Ok(Grant {
             id: Uuid::nil(),
+            cloud: None,
             until: now(),
             scopes: all(),
             label: "Kar device".into(),
@@ -196,7 +206,8 @@ pub(super) fn consume_approval(
     peer: bool,
 ) -> AccessResult<()> {
     let g = consume(db, raw)?;
-    if (g.access.is_some() && g.peer != peer)
+    if g.cloud.is_some()
+        || (g.access.is_some() && g.peer != peer)
         || g.access.as_ref().is_some_and(|s| s != mode)
         || !super::oauth::scopes(mode)
             .iter()
@@ -346,6 +357,7 @@ fn session(
     if grant.access.is_some() {
         return Err(AccessError::Denied);
     }
+    let cloud = connect::validate_device(db, &grant, proof.as_deref())?;
     let scopes = requested.unwrap_or_else(|| grant.scopes.clone());
     if !scopes.is_subset(&grant.scopes) || scopes.is_empty() {
         return Err(AccessError::Denied);
@@ -358,8 +370,10 @@ fn session(
         created_ms: now(),
         digest: digest(&raw),
         account: Some(Account {
+            cloud,
             method: method.into(),
-            until: now() + TTL,
+            until: now() + if proof.is_some() { 3600000 } else { TTL },
+            renew_until: (proof.is_some() && cloud.is_none()).then(|| now() + TTL),
             scopes,
             proof,
         }),
@@ -462,6 +476,7 @@ pub(super) fn routes(auth: Auth) -> Router {
         .route("/api/auth/websocket-ticket/{purpose}", post(mint))
         .route("/oauth/token", post(exchange::token))
         .merge(management::routes())
+        .merge(connect::routes())
         .layer(DefaultBodyLimit::max(32768))
         .layer(middleware::from_fn(super::oauth::no_cache))
         .with_state(auth)

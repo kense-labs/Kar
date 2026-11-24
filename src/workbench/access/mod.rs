@@ -1,6 +1,7 @@
 //! Owner-issued, one-use pairing grants and revocable device credentials.
 pub(super) use guest::reconcile_guest_inputs;
 mod browser;
+pub(in crate::workbench) use browser::connect::ManagedTunnelConfig;
 mod guest;
 pub(in crate::workbench) mod oauth;
 use super::Workbench;
@@ -53,6 +54,7 @@ struct Device {
 }
 
 pub(super) struct AccessStore {
+    connect_lock: tokio::sync::Mutex<()>,
     file: PathBuf,
     registry: Mutex<Registry>,
     changed: watch::Sender<()>,
@@ -84,6 +86,7 @@ pub(super) fn digest(secret: &str) -> String {
 
 #[derive(Debug)]
 enum AccessError {
+    Pending(String),
     Invalid,
     Denied,
     Missing,
@@ -99,6 +102,13 @@ impl From<Error> for AccessError {
 impl IntoResponse for AccessError {
     fn into_response(self) -> Response {
         let (code, msg) = match self {
+            Self::Pending(code) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"code":"connect_approval_pending","verificationCode":code})),
+                )
+                    .into_response();
+            }
             Self::Invalid => (
                 StatusCode::UNAUTHORIZED,
                 "invalid or expired credential".into(),
@@ -134,6 +144,7 @@ impl AccessStore {
         let access = Self {
             file,
             registry: Mutex::new(registry),
+            connect_lock: Default::default(),
             changed: watch::channel(()).0,
         };
         if migrate {
