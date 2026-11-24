@@ -186,6 +186,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = ChatStore::open(dir.path().join("chats")).unwrap();
         let info = ChatInfo {
+            antigravity_profile: None,
             provider_instance: None,
             imported: None,
             id: Uuid::new_v4(),

@@ -62,7 +62,7 @@ struct Fork {
     created: i64,
 }
 pub(super) fn rows(db: &Tables) -> io::Result<Vec<Entry>> {
-    if !db.tables.contains_key("message") && !db.tables.contains_key("session_message") {
+    if !db.has_table("message") && !db.has_table("session_message") {
         return Err(invalid("OpenCode database has no supported message table"));
     }
     let mut forks: BTreeMap<String, Fork> = BTreeMap::new();

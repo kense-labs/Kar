@@ -1,6 +1,8 @@
 //! Persistent native chats. A per-chat file lock gives one process ownership of the provider session.
 mod attachments;
+mod native_profile;
 pub use attachments::{Attachment, AttachmentKind};
+pub use native_profile::{AntigravityProfile, NativeChildOrigin};
 pub(crate) mod checkpoint;
 pub(crate) mod feed;
 mod handoff;
@@ -42,6 +44,8 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antigravity_profile: Option<AntigravityProfile>,
     pub id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported: Option<import::native::Origin>,
@@ -484,6 +488,7 @@ impl ChatStore {
             ));
         }
         let info = ChatInfo {
+            antigravity_profile: None,
             provider_instance: None,
             imported: None,
             id,
@@ -554,6 +559,9 @@ impl ChatStore {
         }
         let mut opts = info.options();
         configure(&info.runtime, &mut opts)?;
+        if let Some(profile) = &info.antigravity_profile {
+            profile.configure(&mut opts)?;
+        }
         opts.cwd = info.workspace.clone();
         let session = match Self::open_saved(&log.state, opts.before_chat_attach()?).await {
             Ok(session) => session,
@@ -621,7 +629,8 @@ impl ChatSession {
         launch: SessionOptions,
     ) -> Result<Self> {
         if log.state.stream != Some(session.stream_id()) {
-            log.attach(session.stream_id())?;
+            let profile = AntigravityProfile::at_launch(&log.state.info.runtime, &launch);
+            log.attach(session.stream_id(), profile)?;
         }
         if session.capabilities().goals
             || session.protocol() == Protocol::Claude

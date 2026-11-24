@@ -89,6 +89,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::agent_sessions::routes())
         .merge(super::chat_controls::routes())
         .merge(super::thread_find::routes())
+        .merge(super::native_child_work::routes())
         .merge(super::thread_state::routes())
         .merge(super::shell::routes())
         .merge(super::interactions::routes())

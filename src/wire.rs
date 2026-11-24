@@ -1,5 +1,6 @@
 use crate::{Event, Outcome, Protocol, RecordKind};
 pub(crate) mod acp_prompt;
+pub(crate) mod antigravity_children;
 pub(crate) mod argument_stream;
 pub(crate) mod claude_input;
 pub(crate) mod compaction;

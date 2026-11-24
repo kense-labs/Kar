@@ -22,6 +22,8 @@ fn default_budget() -> usize {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antigravity_profile: Option<super::AntigravityProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance: Option<crate::provider_instance::HistoryInstance>,
     pub runtime: String,
     pub protocol: Protocol,
@@ -33,6 +35,7 @@ pub struct ProviderSession {
 impl ProviderSession {
     pub(super) fn current(info: &ChatInfo) -> Self {
         Self {
+            antigravity_profile: info.antigravity_profile.clone(),
             instance: info.active_instance().cloned(),
             runtime: info.runtime.clone(),
             protocol: info.protocol,
@@ -43,6 +46,8 @@ impl ProviderSession {
         }
     }
     pub(super) fn activate(&self, info: &mut ChatInfo) {
+        info.antigravity_profile
+            .clone_from(&self.antigravity_profile);
         info.provider_instance.clone_from(&self.instance);
         info.runtime.clone_from(&self.runtime);
         info.protocol = self.protocol;
@@ -442,6 +447,13 @@ impl super::ChatStore {
         }
         opts.model = h.request.model.clone();
         configure(&mut opts)?;
+        if let Some(profile) = h
+            .target
+            .as_ref()
+            .and_then(|t| t.antigravity_profile.as_ref())
+        {
+            profile.configure(&mut opts)?;
+        }
         opts.remove_env("KAR_WORKBENCH_TOKEN")?;
         opts.cwd = log.state.info.workspace.clone();
         opts.resume = h.target.as_ref().map(|target| target.native_id.clone());
@@ -481,6 +493,7 @@ impl super::ChatStore {
             }
         };
         let target = ProviderSession {
+            antigravity_profile: super::AntigravityProfile::at_launch(&runtime.id, &opts),
             instance: h.target.as_ref().and_then(|s| s.instance.clone()),
             runtime: runtime.id,
             protocol: session.protocol(),

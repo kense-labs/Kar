@@ -73,6 +73,8 @@ pub enum ChatUpdate {
         goal: Option<crate::GoalSnapshot>,
     },
     Opened {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        antigravity_profile: Option<super::AntigravityProfile>,
         stream: Uuid,
     },
     /// A new controller is observing the same native Morph task and local turn.
@@ -361,6 +363,15 @@ impl State {
         }
         self.ids.insert(id, self.turns.len());
         let mut turn = ChatTurn::new(id, at, &self.info.native_id, text);
+        turn.native_child_origin =
+            self.info
+                .antigravity_profile
+                .as_ref()
+                .map(|profile| super::NativeChildOrigin {
+                    chat: self.info.id,
+                    profile: profile.clone(),
+                    root_session: self.info.native_id.clone(),
+                });
         turn.native_turn_id = native_turn;
         if let Some(before_tree) = before_tree {
             turn.checkpoint = Some(Checkpoint {
@@ -655,7 +666,11 @@ impl State {
                 self.pending_requests.clear();
                 self.stream = Some(stream);
             }
-            ChatUpdate::Opened { stream } => {
+            ChatUpdate::Opened {
+                stream,
+                antigravity_profile,
+            } => {
+                self.info.antigravity_profile = antigravity_profile;
                 if self.active().is_some() {
                     return Err(Error::Protocol(
                         "chat stream opened with unsettled turn".into(),
@@ -1127,6 +1142,10 @@ pub(super) fn visit_info_changes(
     #[derive(Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case")]
     enum Change {
+        Opened {
+            #[serde(default)]
+            antigravity_profile: Option<super::AntigravityProfile>,
+        },
         HandoffReady {
             target: Box<super::ProviderSession>,
         },
@@ -1146,7 +1165,12 @@ pub(super) fn visit_info_changes(
         match serde_json::from_slice(&line)? {
             Change::HandoffReady { target } => target.activate(info),
             Change::HandoffTargetReopened { native_id } => info.native_id = native_id,
-            Change::Other => continue,
+            Change::Opened {
+                antigravity_profile,
+            } if info.antigravity_profile != antigravity_profile => {
+                info.antigravity_profile = antigravity_profile;
+            }
+            Change::Opened { .. } | Change::Other => continue,
         }
         visit(info);
     }
@@ -1338,11 +1362,18 @@ impl Log {
         }
         Ok(())
     }
-    pub fn attach(&mut self, stream: Uuid) -> Result<()> {
+    pub fn attach(
+        &mut self,
+        stream: Uuid,
+        antigravity_profile: Option<super::AntigravityProfile>,
+    ) -> Result<()> {
         self.ledger = Default::default();
         self.graph = Default::default();
         self.closed_codex_turns.clear();
-        self.commit(ChatUpdate::Opened { stream })
+        self.commit(ChatUpdate::Opened {
+            stream,
+            antigravity_profile,
+        })
     }
     pub async fn recover(
         &mut self,

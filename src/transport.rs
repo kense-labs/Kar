@@ -2116,6 +2116,9 @@ impl Actor {
                 events.extend(self.compactions.observe(self.protocol, &v));
                 events
             });
+        if matches!(self.acp_failures, wire::failure::AcpFailures::Antigravity(_)) {
+            wire::antigravity_children::project(root.as_deref(), &v, &mut events);
+        }
         let mut independent = None;
         if self.protocol == Protocol::Pi {
             let kind = v["type"].as_str().unwrap_or_default();

@@ -45,6 +45,7 @@ impl ChatStore {
         }
         let worktree = crate::workbench_git::pin_checkout(&workspace)?;
         let info = ChatInfo {
+            antigravity_profile: None,
             provider_instance: None,
             imported: None,
             worktree_id: worktree.as_ref().map(|(id, _)| *id),
@@ -74,7 +75,7 @@ impl ChatStore {
         if info.protocol == Protocol::Claude || info.runtime == "grok" {
             writer.native_store = Some(self.clone());
         }
-        writer.attach(id)?;
+        writer.attach(id, None)?;
         let records = std::iter::once(Result::Ok(first))
             .chain(lines.map(|line| Ok(serde_json::from_str(&line?)?)));
         for (seq, r) in records.enumerate() {

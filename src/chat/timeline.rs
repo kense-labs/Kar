@@ -80,6 +80,8 @@ pub struct TimelineItem {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatTurn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_child_origin: Option<super::NativeChildOrigin>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<super::Attachment>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -305,6 +307,7 @@ impl ChatTurn {
         Self {
             id,
             started_ms,
+            native_child_origin: None,
             finished_ms: None,
             attachments: Vec::new(),
             steered_attachments: BTreeMap::new(),

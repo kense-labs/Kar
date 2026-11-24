@@ -2026,6 +2026,8 @@ mod workbench_server;
 mod worktree_chats;
 #[path = "support/workbench_devices.rs"]
 mod workbench_devices;
+#[path = "support/workbench_child_work.rs"]
+mod workbench_child_work;
 #[path = "support/workbench_cloud_live.rs"]
 mod workbench_cloud_live;
 #[path = "support/workbench_usage.rs"]
@@ -2040,6 +2042,12 @@ fn main() {
         return;
     }
     let mode = std::env::args().nth(1);
+    if mode.as_deref() == Some("workbench-native-child-work") { workbench_child_work::run(); return; }
+    if mode.as_deref() == Some("workbench-native-child-work-live") { workbench_child_work::live(); return; }
+    if mode.as_deref() == Some("acp") && std::env::var_os("KAR_TEST_CHILD_PROFILE").is_some() {
+        workbench_child_work::peer();
+        return;
+    }
     if matches!(mode.as_deref(), Some("workbench-simlock-live" | "workbench-expo-live")) {
         workbench_cloud_live::run(mode.as_deref() == Some("workbench-expo-live"));
         return;

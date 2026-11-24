@@ -769,6 +769,7 @@ mod staged_route_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = ChatStore::open(dir.path().join("store")).unwrap();
         let parent = ChatInfo {
+            antigravity_profile: None,
             provider_instance: None,
             imported: None,
             id: Uuid::new_v4(),

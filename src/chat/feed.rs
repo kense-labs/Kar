@@ -342,6 +342,9 @@ impl ChatFeed {
                     ChatUpdate::NotificationsInterrupted => self.may_have_notification = false,
                     ChatUpdate::SteeringUnconfirmed => self.may_have_steering = false,
                     ChatUpdate::Opened { .. } | ChatUpdate::MorphReattached { .. } => {
+                        if let ChatUpdate::Opened { antigravity_profile, .. } = &event.update {
+                            self.info.antigravity_profile.clone_from(antigravity_profile);
+                        }
                         self.may_be_running =
                             matches!(event.update, ChatUpdate::MorphReattached { .. });
                         self.may_have_notification = false;
