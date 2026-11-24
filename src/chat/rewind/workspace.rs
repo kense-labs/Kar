@@ -60,7 +60,11 @@ impl ChatStore {
         require_clean(&report)?;
         // All repository changes and the visible timeline are now committed. A reader
         // can clean up a reservation after a crash at this exact point.
-        std::fs::remove_file(&reservation)?;
+        match std::fs::remove_file(&reservation) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
         lease.finish_fork();
         Ok(log
             .state

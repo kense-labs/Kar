@@ -347,6 +347,9 @@ async fn rewind(
             old.check(&request)?;
             return Ok(old);
         }
+        if history.chat.process_only {
+            return Err(Error::Unsupported("provider cannot resume a rewound conversation".into()));
+        }
         let mut owner = controller.owner.try_lock().map_err(|_| Error::Busy)?;
         if app.archived(chat) {
             return Err(Error::Refused("chat is archived".into()));
