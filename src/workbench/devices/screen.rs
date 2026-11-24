@@ -10,15 +10,16 @@ enum Frame {
     End,
 }
 #[derive(Default)]
-pub(super) struct Screens(Mutex<HashMap<String, watch::Sender<Frame>>>);
+pub(super) struct Screens(Mutex<HashMap<(String, String), watch::Sender<Frame>>>);
 impl Screens {
     fn subscribe(&self, app: &Workbench, device: Device) -> watch::Receiver<Frame> {
         let mut feeds = self.0.lock().unwrap();
-        if let Some(tx) = feeds.get(&device.id) {
+        let key = (device.host_id.clone(), device.id.clone());
+        if let Some(tx) = feeds.get(&key) {
             return tx.subscribe();
         }
         let (tx, rx) = watch::channel(Frame::Initial);
-        feeds.insert(device.id.clone(), tx.clone());
+        feeds.insert(key.clone(), tx.clone());
         let weak = std::sync::Arc::downgrade(&app.0);
         tokio::spawn(async move {
             loop {
@@ -28,19 +29,23 @@ impl Screens {
                 {
                     let mut feeds = inner.devices.screens.0.lock().unwrap();
                     if tx.receiver_count() == 0 {
-                        feeds.remove(&device.id);
+                        feeds.remove(&key);
                         return;
                     }
                 }
                 let visible = {
                     let live = inner.devices.live.lock().await;
-                    live.settings.enabled && live.sessions.iter().any(|s| s.device_id == device.id)
+                    live.settings.enabled
+                        && live
+                            .sessions
+                            .iter()
+                            .any(|s| s.device_id == device.id && s.host_id == device.host_id)
                 };
                 if !visible {
                     break;
                 }
                 drop(inner);
-                match native::screenshot(&device).await {
+                match remote::at(device.ssh.as_ref(), native::screenshot(&device)).await {
                     Ok(png) => {
                         tx.send_replace(Frame::Png(Bytes::from(png)));
                     }
@@ -49,7 +54,7 @@ impl Screens {
                 tokio::select! {_=tx.closed()=>{},_=tokio::time::sleep(Duration::from_millis(500))=>{}}
             }
             if let Some(inner) = weak.upgrade() {
-                inner.devices.screens.0.lock().unwrap().remove(&device.id);
+                inner.devices.screens.0.lock().unwrap().remove(&key);
             }
             tx.send_replace(Frame::End);
         });
@@ -61,23 +66,26 @@ pub(super) struct View {
     project: Uuid,
     chat: Uuid,
     device_id: String,
+    host_id: Option<String>,
 }
 pub(super) async fn stream(State(app): State<Workbench>, Query(q): Query<View>) -> Reply<Response> {
     app.binding(q.project, q.chat)?;
     let svc = &app.0.devices;
     let live = svc.live.lock().await;
+    let host = q.host_id.as_deref().unwrap_or("local");
     let claim = live
         .sessions
         .iter()
         .find(|v| {
-            v.project == q.project
+            v.host_id == host
+                && v.project == q.project
                 && v.chat == q.chat
                 && v.device_id == q.device_id
                 && !app.archived(q.chat)
         })
         .ok_or_else(super::super::missing)?;
     let id = claim.view_id;
-    let d = live.device(&q.device_id)?;
+    let d = live.device(host, &q.device_id)?;
     if !d.booted {
         return Err(Error::Refused("boot the device before opening its screen".into()).into());
     }

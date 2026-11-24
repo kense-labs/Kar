@@ -3,6 +3,8 @@ mod account;
 mod actions;
 mod agent;
 mod native;
+mod remote;
+use remote::SshHost;
 mod screen;
 use super::{Workbench, http::ApiError};
 use crate::{Error, Result};
@@ -30,12 +32,15 @@ use uuid::Uuid;
 #[serde(default)]
 struct Settings {
     enabled: bool,
+    ssh_hosts: Vec<SshHost>,
     agent_access_enabled: bool,
     onboarding_completed: bool,
 }
 #[derive(Clone, Serialize)]
 struct Device {
-    host_id: &'static str,
+    host_id: String,
+    #[serde(skip)]
+    ssh: Option<SshHost>,
     id: String,
     platform: &'static str,
     name: String,
@@ -53,7 +58,8 @@ impl Device {
         physical: bool,
     ) -> Self {
         Self {
-            host_id: "local",
+            host_id: "local".into(),
+            ssh: None,
             id: id.into(),
             platform,
             name: name.into(),
@@ -72,7 +78,7 @@ struct Session {
     agent_config: Option<PathBuf>,
     project: Uuid,
     chat: Uuid,
-    host_id: &'static str,
+    host_id: String,
     device_id: String,
     platform: &'static str,
     opened_at: String,
@@ -89,28 +95,34 @@ struct Live {
 }
 impl Live {
     fn snapshot(&self) -> Value {
-        let platforms:Vec<_>=["ios","android"].into_iter().map(|p|{
-            let mut v=json!({"platform":p,"available":self.inspected && !self.errors.contains_key(p)});
-            if let Some(e)=self.errors.get(p){v["reason"]=json!(e);}v
+        let hosts:Vec<_>=std::iter::once(("local","local","This machine")).chain(self.settings.ssh_hosts.iter().map(|h|(h.id.as_str(),"ssh",h.label.as_str()))).map(|(id,kind,label)|{
+            let platforms:Vec<_>=["ios","android"].into_iter().map(|p|{
+                let k=format!("{id}/{p}");let mut v=json!({"platform":p,"available":self.inspected && !self.errors.contains_key(&k)});
+                if let Some(e)=self.errors.get(&k){v["reason"]=json!(e);}v
+            }).collect();
+            let status=if !self.settings.enabled{"disabled"}else if !self.inspected{"idle"}else if platforms.iter().all(|p|p["available"]==false){"failed"}else{"ready"};
+            json!({"id":id,"kind":kind,"label":label,"platforms":platforms,"status":status})
         }).collect();
-        let status = if !self.settings.enabled {
-            "disabled"
-        } else if !self.inspected {
-            "idle"
-        } else if self.errors.len() == 2 {
-            "failed"
-        } else {
-            "ready"
-        };
-        json!({"settings":self.settings,"revision":self.revision,"host_status":status,"hosts":[{"id":"local","kind":"local","label":"This machine","platforms":platforms}],"incomplete_platforms":self.errors.keys().collect::<Vec<_>>(),"devices":self.devices,"sessions":self.sessions,"booting_devices":self.booting})
+        json!({"settings":self.settings,"revision":self.revision,"host_status":hosts[0]["status"],"hosts":hosts,"incomplete_platforms":self.errors.keys().collect::<Vec<_>>(),"devices":self.devices,"sessions":self.sessions,"booting_devices":self.booting})
     }
-    fn device(&self, id: &str) -> Result<Device> {
+    fn remote(&self, id: &str) -> Result<Option<&SshHost>> {
+        if id == "local" {
+            return Ok(None);
+        }
+        self.settings
+            .ssh_hosts
+            .iter()
+            .find(|v| v.id == id)
+            .map(Some)
+            .ok_or_else(|| Error::Refused("unknown device host".into()))
+    }
+    fn device(&self, host: &str, id: &str) -> Result<Device> {
         if !self.settings.enabled {
             return Err(Error::Refused("device support is disabled".into()));
         }
         self.devices
             .iter()
-            .find(|d| d.id == id)
+            .find(|d| d.id == id && d.host_id == host)
             .cloned()
             .ok_or_else(|| Error::Refused("device unavailable on the selected host".into()))
     }
@@ -154,29 +166,56 @@ impl Service {
         v
     }
     async fn refresh(&self, s: &mut Live) -> Value {
+        let mut hosts = vec![None];
+        hosts.extend(s.settings.ssh_hosts.iter().cloned().map(Some));
+        self.refresh_hosts(s, hosts).await
+    }
+    async fn refresh_hosts(&self, s: &mut Live, hosts: Vec<Option<SshHost>>) -> Value {
+        use futures_util::StreamExt;
         let before = s.snapshot();
-        let timeout = std::time::Duration::from_secs(20);
-        let (ios, android) = tokio::join!(
-            tokio::time::timeout(timeout, native::ios_list()),
-            tokio::time::timeout(timeout, native::android_list())
-        );
-        let ios = ios.unwrap_or_else(|_| Err(Error::Refused("Xcode discovery timed out".into())));
-        let android =
-            android.unwrap_or_else(|_| Err(Error::Refused("Android discovery timed out".into())));
-        for (platform, result) in [("ios", ios), ("android", android)] {
-            match result {
-                Ok(rows) => {
-                    s.errors.remove(platform);
-                    s.devices.retain(|d| d.platform != platform);
-                    s.devices.extend(rows);
-                }
-                Err(e) => {
-                    s.errors.insert(platform.into(), e.to_string());
+        let mut work = futures_util::stream::iter(hosts)
+            .map(|host| async move {
+                let timeout = std::time::Duration::from_secs(20);
+                let (ios, android) = remote::at(host.as_ref(), async {
+                    tokio::join!(
+                        tokio::time::timeout(timeout, native::ios_list()),
+                        tokio::time::timeout(timeout, native::android_list())
+                    )
+                })
+                .await;
+                (
+                    host,
+                    ios.unwrap_or_else(|_| Err(Error::Refused("Xcode discovery timed out".into()))),
+                    android.unwrap_or_else(|_| {
+                        Err(Error::Refused("Android discovery timed out".into()))
+                    }),
+                )
+            })
+            .buffer_unordered(4);
+        while let Some((host, ios, android)) = work.next().await {
+            let id = host.as_ref().map_or("local", |s| s.id.as_str());
+            for (platform, result) in [("ios", ios), ("android", android)] {
+                let key = format!("{id}/{platform}");
+                match result {
+                    Ok(mut rows) => {
+                        s.errors.remove(&key);
+                        s.devices
+                            .retain(|d| d.host_id != id || d.platform != platform);
+                        for row in &mut rows {
+                            row.host_id = id.into();
+                            row.ssh = host.clone();
+                        }
+                        s.devices.extend(rows);
+                    }
+                    Err(e) => {
+                        s.errors.insert(key, e.to_string());
+                    }
                 }
             }
         }
-        s.devices
-            .sort_by(|a, b| (a.platform, &a.name, &a.id).cmp(&(b.platform, &b.name, &b.id)));
+        s.devices.sort_by(|a, b| {
+            (&a.host_id, a.platform, &a.name, &a.id).cmp(&(&b.host_id, b.platform, &b.name, &b.id))
+        });
         s.inspected = true;
         if before == s.snapshot() {
             before
@@ -184,16 +223,17 @@ impl Service {
             self.publish(s)
         }
     }
-    async fn resolve(&self, s: &mut Live, id: &str) -> Result<Device> {
+    async fn resolve(&self, s: &mut Live, host: &str, id: &str) -> Result<Device> {
         if !s.settings.enabled {
             return Err(Error::Refused("device support is disabled".into()));
         }
-        self.refresh(s).await;
-        let device = s.device(id)?;
-        if let Some(cause) = s.errors.get(device.platform) {
+        let selected = s.remote(host)?.cloned();
+        self.refresh_hosts(s, vec![selected]).await;
+        let d = s.device(host, id)?;
+        if let Some(cause) = s.errors.get(&format!("{host}/{}", d.platform)) {
             return Err(Error::Refused(cause.clone()));
         }
-        Ok(device)
+        Ok(d)
     }
     fn save(&self, settings: &Settings) -> Result<()> {
         let parent = self.file.parent().expect("workbench state");
@@ -207,18 +247,10 @@ impl Service {
     }
 }
 type Reply<T> = std::result::Result<T, ApiError>;
-fn host(id: Option<&str>) -> Result<()> {
-    if id.is_none_or(|v| v == "local") {
-        Ok(())
-    } else {
-        Err(Error::Unsupported(
-            "host is not configured for local device operations".into(),
-        ))
-    }
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Configure {
+    ssh_hosts: Option<Vec<SshHost>>,
     enabled: Option<bool>,
     agent_access_enabled: Option<bool>,
     onboarding_completed: Option<bool>,
@@ -227,6 +259,16 @@ async fn configure(State(app): State<Workbench>, Json(q): Json<Configure>) -> Re
     let svc = &app.0.devices;
     let mut s = svc.live.lock().await;
     let mut next = s.settings.clone();
+    if let Some(hosts) = q.ssh_hosts {
+        let mut ids = std::collections::BTreeSet::new();
+        for h in &hosts {
+            h.validate()?;
+            if !ids.insert(&h.id) {
+                return Err(Error::Refused("duplicate SSH device host".into()).into());
+            }
+        }
+        next.ssh_hosts = hosts;
+    }
     if let Some(b) = q.enabled {
         next.enabled = b;
     }
@@ -240,11 +282,7 @@ async fn configure(State(app): State<Workbench>, Json(q): Json<Configure>) -> Re
     if next.enabled && next.agent_access_enabled {
         for row in &s.sessions {
             if row.grant.is_none() {
-                grants.push((
-                    row.chat,
-                    row.device_id.clone(),
-                    svc.agents.grant(&app).await?,
-                ));
+                grants.push((row.view_id, svc.agents.grant(&app).await?));
             }
         }
     }
@@ -252,15 +290,25 @@ async fn configure(State(app): State<Workbench>, Json(q): Json<Configure>) -> Re
     for row in &mut s.sessions {
         if !next.agent_access_enabled || !next.enabled {
             row.revoke();
-        } else if let Some(i) = grants
-            .iter()
-            .position(|(chat, d, _)| *chat == row.chat && *d == row.device_id)
-        {
-            let grant = grants.swap_remove(i).2;
+        } else if let Some(i) = grants.iter().position(|(view, _)| *view == row.view_id) {
+            let grant = grants.swap_remove(i).1;
             row.agent_config = Some(grant.file.clone());
             row.grant = Some(grant);
         }
     }
+    let changed: Vec<_> = s
+        .settings
+        .ssh_hosts
+        .iter()
+        .filter(|h| !next.ssh_hosts.contains(h))
+        .map(|h| h.id.clone())
+        .collect();
+    revoke_matching(&mut s, |v| changed.contains(&v.host_id));
+    s.devices.retain(|d| !changed.contains(&d.host_id));
+    s.errors
+        .retain(|k, _| !changed.iter().any(|h| k.starts_with(&format!("{h}/"))));
+    s.booting
+        .retain(|v| !changed.iter().any(|h| v["host_id"] == *h));
     s.settings = next;
     if !s.settings.enabled {
         s.sessions.clear();
@@ -283,7 +331,6 @@ struct List {
     update_tool: Option<String>,
 }
 async fn list(State(app): State<Workbench>, Query(q): Query<List>) -> Reply<Json<Value>> {
-    host(q.retry_host_id.as_deref())?;
     if q.update_tool.is_some() {
         return Err(Error::Unsupported(
             "device tools are managed by Xcode and the Android SDK".into(),
@@ -292,81 +339,37 @@ async fn list(State(app): State<Workbench>, Query(q): Query<List>) -> Reply<Json
     }
     let svc = &app.0.devices;
     let mut s = svc.live.lock().await;
+    let host_id = q.retry_host_id.as_deref().unwrap_or("local");
+    let selected = s.remote(host_id)?.cloned();
     if q.inspect_only == Some(true) {
-        // Inspection must not start an adb daemon, boot a simulator or install tools.
-        let (xcode, adb, emulator) = tokio::join!(
-            native::text("xcrun", &["--find", "simctl"]),
-            native::text("adb", &["version"]),
-            native::text("emulator", &["-version"])
-        );
+        let (xcode, adb, emulator) = remote::at(selected.as_ref(), async {
+            tokio::join!(
+                native::text("xcrun", &["--find", "simctl"]),
+                native::text("adb", &["version"]),
+                native::text("emulator", &["-version"])
+            )
+        })
+        .await;
         let mut v = s.snapshot();
-        v["hosts"][0]["tool_inspection"] = json!({"simctl":xcode.ok(),"adb":adb.ok().and_then(|s|s.lines().next().map(str::to_string)),"emulator":emulator.ok().and_then(|s|s.lines().next().map(str::to_string))});
+        if let Some(h) = v["hosts"]
+            .as_array_mut()
+            .and_then(|hs| hs.iter_mut().find(|h| h["id"] == host_id))
+        {
+            h["tool_inspection"] = json!({"simctl":xcode.ok(),"adb":adb.ok().and_then(|s|s.lines().next().map(str::to_string)),"emulator":emulator.ok().and_then(|s|s.lines().next().map(str::to_string))});
+        }
         return Ok(Json(v));
     }
-    Ok(Json(if s.settings.enabled {
-        svc.refresh(&mut s).await
-    } else {
+    Ok(Json(if !s.settings.enabled {
         s.snapshot()
+    } else if q.retry_host_id.is_some() {
+        svc.refresh_hosts(&mut s, vec![selected]).await
+    } else {
+        svc.refresh(&mut s).await
     }))
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SshProbe {
-    id: String,
-    label: String,
-    target: String,
-    port: Option<u16>,
-    identity_file: Option<PathBuf>,
-    kind: Option<String>,
+async fn probe(Json(host): Json<SshHost>) -> Reply<Json<Value>> {
+    Ok(Json(host.probe().await?))
 }
-async fn probe(Json(q): Json<SshProbe>) -> Reply<Json<Value>> {
-    if q.kind.as_deref().is_some_and(|s| s != "ssh")
-        || q.id == "local"
-        || q.id.is_empty()
-        || q.label.trim().is_empty()
-        || q.port == Some(0)
-        || q.target.is_empty()
-        || q.target.starts_with('-')
-        || q.target.len() > 512
-        || !q
-            .target
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"@._:[]%-".contains(&c))
-    {
-        return Err(Error::Refused("invalid SSH device host".into()).into());
-    }
-    let mut args = vec![
-        "-T",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=8",
-        "-o",
-        "ClearAllForwardings=yes",
-    ];
-    let port = q.port.map(|n| n.to_string());
-    if let Some(p) = &port {
-        args.extend(["-p", p]);
-    }
-    if let Some(path) = &q.identity_file {
-        let path = path
-            .to_str()
-            .filter(|_| path.is_absolute() && path.is_file())
-            .ok_or_else(|| Error::Refused("invalid SSH identity file".into()))?;
-        args.extend(["-i", path]);
-    }
-    // Only a fixed capability probe runs remotely. The destination and key path remain separate local argv.
-    args.extend(["--",&q.target,"uname -s; command -v xcrun >/dev/null && printf 'ios\n'; command -v adb >/dev/null && printf 'android\n'; true"]);
-    let result = native::text("ssh", &args)
-        .await
-        .map_err(|_| Error::Refused("could not complete the SSH device host probe".into()))?;
-    Ok(Json(
-        json!({"id":q.id,"label":q.label,"kind":"ssh","platforms":[
-        {"platform":"ios","available":result.lines().any(|s|s=="Darwin") && result.lines().any(|s|s=="ios")},
-        {"platform":"android","available":result.lines().any(|s|s=="android")}]}),
-    ))
-}
-
 #[derive(Deserialize)]
 struct Target {
     host_id: Option<String>,
@@ -387,21 +390,21 @@ async fn open(State(app): State<Workbench>, Json(q): Json<Open>) -> Reply<Json<S
         .map_err(|e| Error::Closed(e.to_string()))?
 }
 async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
-    host(q.target.host_id.as_deref())?;
+    let host = q.target.host_id.as_deref().unwrap_or("local");
     app.binding(q.project, q.chat)?;
     let svc = &app.0.devices;
     let _operation = svc.lifecycle.lock().await;
     let mut s = svc.live.lock().await;
-    let mut device = svc.resolve(&mut s, &q.target.device_id).await?;
+    let mut device = svc.resolve(&mut s, host, &q.target.device_id).await?;
     if device.platform != q.platform {
         return Err(Error::Refused("device platform differs".into()).into());
     }
     if !device.booted && q.boot.unwrap_or(true) {
         let attempt = Uuid::new_v4();
-        s.booting.push(json!({"id":device.id,"platform":device.platform,"host_id":"local","chat":q.chat,"attempt":attempt}));
+        s.booting.push(json!({"id":device.id,"platform":device.platform,"host_id":host,"chat":q.chat,"attempt":attempt}));
         svc.publish(&mut s);
         drop(s);
-        let boot = native::boot(&device).await;
+        let boot = remote::at(device.ssh.as_ref(), native::boot(&device)).await;
         s = svc.live.lock().await;
         let valid = s
             .booting
@@ -413,7 +416,7 @@ async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
             return Err(Error::Refused("device configuration changed during boot".into()).into());
         }
         let id = boot?;
-        device = svc.resolve(&mut s, &id).await?;
+        device = svc.resolve(&mut s, host, &id).await?;
         if !device.booted {
             return Err(Error::Refused("device did not finish booting".into()).into());
         }
@@ -430,13 +433,13 @@ async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
         grant,
         project: q.project,
         chat: q.chat,
-        host_id: "local",
+        host_id: host.into(),
         device_id: device.id,
         platform: device.platform,
         opened_at: jiff::Timestamp::now().to_string(),
     };
     revoke_matching(&mut s, |v| {
-        v.chat == q.chat && v.device_id == session.device_id
+        v.host_id == host && v.chat == q.chat && v.device_id == session.device_id
     });
     s.sessions.push(session.clone());
     svc.publish(&mut s);
@@ -460,68 +463,77 @@ fn revoke_matching(s: &mut Live, mut matches: impl FnMut(&Session) -> bool) {
     });
 }
 async fn close(State(app): State<Workbench>, Json(q): Json<Close>) -> Reply<Json<()>> {
-    host(q.host_id.as_deref())?;
     let svc = &app.0.devices;
     let _operation = svc.lifecycle.lock().await;
     let mut s = svc.live.lock().await;
+    if let Some(host) = q.host_id.as_deref() {
+        s.remote(host)?;
+    }
     let ids: Vec<_> = s
         .sessions
         .iter()
-        .filter(|v| v.chat == q.chat && q.device_id.as_ref().is_none_or(|id| *id == v.device_id))
-        .map(|v| v.device_id.clone())
+        .filter(|v| {
+            v.chat == q.chat
+                && q.device_id.as_ref().is_none_or(|id| *id == v.device_id)
+                && q.host_id.as_ref().is_none_or(|h| *h == v.host_id)
+        })
+        .map(|v| (v.host_id.clone(), v.device_id.clone()))
         .collect();
-    for id in ids {
+    for (host, id) in ids {
+        let host = host.as_str();
         if q.shutdown.unwrap_or(false) {
-            let d = svc.resolve(&mut s, &id).await?;
-            native::shutdown(&d).await?;
-            revoke_matching(&mut s, |v| v.device_id == id);
+            let d = svc.resolve(&mut s, host, &id).await?;
+            remote::at(d.ssh.as_ref(), native::shutdown(&d)).await?;
+            revoke_matching(&mut s, |v| v.host_id == host && v.device_id == id);
             s.devices
                 .iter_mut()
-                .filter(|d| d.id == id)
+                .filter(|d| d.id == id && d.host_id == host)
                 .for_each(|d| d.booted = false);
         } else {
-            revoke_matching(&mut s, |v| v.device_id == id && v.chat == q.chat);
+            revoke_matching(&mut s, |v| {
+                v.host_id == host && v.device_id == id && v.chat == q.chat
+            });
         }
         svc.publish(&mut s);
     }
     Ok(Json(()))
 }
 async fn shutdown(State(app): State<Workbench>, Json(q): Json<Target>) -> Reply<Json<()>> {
-    host(q.host_id.as_deref())?;
+    let host = q.host_id.as_deref().unwrap_or("local");
     let svc = &app.0.devices;
     let _operation = svc.lifecycle.lock().await;
     let mut s = svc.live.lock().await;
-    let d = svc.resolve(&mut s, &q.device_id).await?;
-    native::shutdown(&d).await?;
-    revoke_matching(&mut s, |v| v.device_id == d.id);
+    let d = svc.resolve(&mut s, host, &q.device_id).await?;
+    remote::at(d.ssh.as_ref(), native::shutdown(&d)).await?;
+    revoke_matching(&mut s, |v| v.host_id == host && v.device_id == d.id);
     svc.refresh(&mut s).await;
     Ok(Json(()))
 }
 async fn detail(State(app): State<Workbench>, Query(q): Query<Target>) -> Reply<Json<Value>> {
-    host(q.host_id.as_deref())?;
+    let host = q.host_id.as_deref().unwrap_or("local");
     let svc = &app.0.devices;
     let mut s = svc.live.lock().await;
-    let d = svc.resolve(&mut s, &q.device_id).await?;
-    Ok(Json(actions::detail(&d).await?))
+    let d = svc.resolve(&mut s, host, &q.device_id).await?;
+    Ok(Json(remote::at(d.ssh.as_ref(), actions::detail(&d)).await?))
 }
 async fn action(State(app): State<Workbench>, Json(q): Json<Value>) -> Reply<Json<Value>> {
     let target: Target = serde_json::from_value(q.clone())
         .map_err(|_| Error::Refused("invalid device target".into()))?;
-    host(target.host_id.as_deref())?;
+    let host = target.host_id.as_deref().unwrap_or("local");
     let svc = &app.0.devices;
     let mut s = svc.live.lock().await;
-    let d = svc.resolve(&mut s, &target.device_id).await?;
-    actions::apply(&d, &q).await?;
-    Ok(Json(actions::detail(&d).await?))
+    let d = svc.resolve(&mut s, host, &target.device_id).await?;
+    remote::at(d.ssh.as_ref(), actions::apply(&d, &q)).await?;
+    Ok(Json(remote::at(d.ssh.as_ref(), actions::detail(&d)).await?))
 }
 async fn screenshot(State(app): State<Workbench>, Query(q): Query<Target>) -> Reply<Response> {
-    host(q.host_id.as_deref())?;
+    let host = q.host_id.as_deref().unwrap_or("local");
     let svc = &app.0.devices;
     let mut s = svc.live.lock().await;
-    let d = svc.resolve(&mut s, &q.device_id).await?;
+    let d = svc.resolve(&mut s, host, &q.device_id).await?;
     Ok((
         [(axum::http::header::CONTENT_TYPE, "image/png")],
-        native::screenshot(&d).await?,
+        remote::at(d.ssh.as_ref(), native::screenshot(&d)).await?,
     )
         .into_response())
 }

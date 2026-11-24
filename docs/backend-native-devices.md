@@ -6,7 +6,7 @@
 | --- | --- |
 | device.configure | `POST /devices/configure` 保存设备开关、onboarding 和 agent access 设置。开启 agent access 时签发每聊天、每设备独立的配置文件，关闭授权即时撤销。关闭设备支持时释放聊天的设备会话，保留设备本身的开机状态。 |
 | device.list | `GET /devices`。用 `inspect_only=true` 只探测工具安装情况，不启动 adb 或模拟器。读取 iOS simulator、已连接 Android 及已安装的 AVD。在一个平台读失败时保留该平台上次的结果和失败原因，另一侧继续更新。Kar 使用主机安装的 Xcode 和 Android SDK。 |
-| device.testHost | `POST /devices/test-host`。通过 SSH BatchMode 向指定主机读取系统与 Xcode、adb 的可用性，支持端口和指定的 SSH 身份文件。 |
+| device.testHost | `POST /devices/test-host`。通过 SSH BatchMode 向指定主机读取系统与 Xcode、adb 的可用性，支持端口和指定的 SSH 身份文件。将同样的主机对象加入 `POST /devices/configure` 的 `ssh_hosts` 数组，可选择 `host_id` 实际启动、控制、截图、订阅该主机的模拟器。不同主机上的相同设备 ID 分开计入资源与授权。替换或移除主机会释放其视图和代理配置。 |
 | device.easAccount | `POST /devices/eas-account`。向 Expo 官方 GraphQL 获取账户名称和应用。支持传入 token、EXPO_TOKEN 与 EAS 本机登录。 |
 | device.simlockIdentity | `POST /devices/simlock-identity`。向指定网关请求 /v1/identity，校验 agent 角色。仅匹配本机配置的网关能使用对应环境凭证。 |
 | device.open | `POST /devices/open` 接收 project、chat、device_id、platform、boot 并校验聊天归属。可以启动指定 iOS 模拟器或已安装的 Android AVD。启动中对订阅方公布 booting_devices，完成后重新扫描并用真实设备 ID 创建视图。 |
@@ -21,4 +21,4 @@
 - 真实 iOS 入口为 `KAR_DEVICE_LIVE_ID=<专用已开机模拟器的UDID> cargo test --locked --test chat_restart -- workbench-devices-live`。需要安装 Xcode、对应 iOS Runtime 并启动模拟器。用相同的外观设置验证控制链，关闭视图后保留开机状态。真实 Xcode 动作和截图尚待统一执行。聊天对端在该测试中仍为 Codex 协议替身。
 - Android 真实操作需要可用的 adb、Android SDK Emulator 和已安装 AVD 或已授权真机。外部账号和 SSH 需要有效 Expo 登录、可达 Simlock 网关与 agent token，或已配置登录的 SSH 主机。集中验收必须记录实际工具版本、目标设备与读回。SSH 探测和账号读取单独验收。
 - 启用代理授权后，打开设备的响应含 `agent_config`。从同一主机运行 `kar device-agent --config <file> detail`、`screenshot` 或 `action --json <动作对象>`。独立回环入口只接受该聊天及设备的令牌。关闭视图、撤销 agent access 或重启均使旧令牌失效。配置文件权限为 0600。正常 HTTP 与 CLI 的代理授予及撤销检查归入上述两个复验入口。
-- 跨主机 SSH 设备操作、Expo 按时长计费的远端模拟器、Simlock 租约续租、流媒体转发和远端代理接入仍是 Kar 实现缺口。账号查询成功不足以覆盖这些场景。
+- Expo 按时长计费的远端模拟器、Simlock 租约续租、云主机流媒体转发和云代理接入仍是 Kar 实现缺口。SSH 主机真实复验需要预先可用的批处理登录和安装了 Xcode 或 Android SDK 的远端。账号查询成功不足以覆盖这些场景。

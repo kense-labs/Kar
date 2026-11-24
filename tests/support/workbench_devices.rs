@@ -51,7 +51,30 @@ pub(super) fn peer(args: &[String]) {
             "ro.build.version.release",
         ] => println!("14"),
         ["-s", "serial42", "shell", ..] => {}
-        ["-T", ..] => println!("Darwin\nios"),
+        ["-T", .., cmd] => {
+            let words: Vec<_> = cmd.split_whitespace().collect();
+            match words.as_slice() {
+                ["xcrun", "simctl", "list", "devices", "available", "--json"] => println!(
+                    "{}",
+                    json!({"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-20-0":[{"udid":UDID,"name":"Remote simulator","state":"Booted","isAvailable":true}]}})
+                ),
+                ["adb", "devices", "-l"] => println!("List of devices attached"),
+                ["printenv", "KAR_DEVICE_IOS_AX_HELPER"] => std::process::exit(1),
+                ["emulator", "-list-avds"] => {}
+                ["xcrun", "simctl", "ui", UDID, "appearance", v] => {
+                    fs::write(temp.join("remote-appearance"), v).unwrap()
+                }
+                ["xcrun", "simctl", "ui", UDID, "appearance"] => println!(
+                    "{}",
+                    fs::read_to_string(temp.join("remote-appearance"))
+                        .unwrap_or_else(|_| "dark".into())
+                ),
+                ["xcrun", "simctl", "ui", UDID, "content_size"] => println!("large"),
+                ["xcrun", "simctl", "ui", UDID, "increase_contrast"] => println!("disabled"),
+                ["sh", "-c", ..] if cmd.contains("uname -s") => println!("Darwin\nios"),
+                _ => panic!("unexpected fixture SSH command {cmd}"),
+            }
+        }
         other => panic!("unexpected device command {other:?}"),
     }
 }
@@ -252,6 +275,54 @@ async fn scenario(live: bool) {
             action.as_array().unwrap().last().unwrap(),
             "'https://example.test/a?q=x&z='\\''y'\\'''"
         );
+    }
+    if !live {
+        let configured = json(
+            a.post(format!("{url}/devices/configure"))
+                .json(&json!({"ssh_hosts":[{"id":"lab","label":"Lab Mac","target":"user@host"}]})),
+        )
+        .await;
+        assert_eq!(
+            configured["devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|d| d["id"] == id)
+                .count(),
+            2
+        );
+        let view = json(a.post(format!("{url}/devices/open")).json(
+            &json!({"host_id":"lab","project":p,"chat":chats[0],"platform":"ios","device_id":id}),
+        ))
+        .await;
+        assert_eq!(view["host_id"], "lab");
+        let remote_file = PathBuf::from(view["agent_config"].as_str().unwrap());
+        let result =
+            json(a.post(format!("{url}/devices/action")).json(
+                &json!({"host_id":"lab","device_id":id,"type":"setAppearance","value":"light"}),
+            ))
+            .await;
+        assert_eq!(result["host_id"], "lab");
+        assert_eq!(
+            fs::read_to_string(native.join("remote-appearance")).unwrap(),
+            "light"
+        );
+        assert_eq!(
+            fs::read_to_string(native.join("appearance")).unwrap(),
+            "dark"
+        );
+        json(
+            a.post(format!("{url}/devices/close"))
+                .json(&json!({"host_id":"local","chat":chats[0],"device_id":id})),
+        )
+        .await;
+        assert!(remote_file.exists());
+        json(
+            a.post(format!("{url}/devices/configure"))
+                .json(&json!({"ssh_hosts":[]})),
+        )
+        .await;
+        assert!(!remote_file.exists());
     }
     server.kill().await.unwrap();
     let (mut restarted, url) = serve_with_env(&state, &work, &native, &vars).await;

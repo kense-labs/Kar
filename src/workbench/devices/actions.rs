@@ -44,7 +44,7 @@ async fn adb(id: &str, args: &[&str]) -> Result<String> {
     v.extend_from_slice(args);
     text("adb", &v).await
 }
-fn quote(s: &str) -> String {
+pub(super) fn quote(s: &str) -> String {
     if !s.is_empty()
         && s.bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&c))
@@ -68,13 +68,14 @@ fn size(q: &Value) -> Result<usize> {
 }
 const IOS_SIZE: [&str; 4] = ["small", "large", "extra-extra-large", "accessibility-large"];
 const SIZE: [&str; 4] = ["small", "default", "large", "extra-large"];
-fn helper() -> Result<String> {
-    std::env::var("KAR_DEVICE_IOS_AX_HELPER")
-        .ok()
-        .filter(|p| Path::new(p).is_absolute())
-        .ok_or_else(|| {
-            Error::Unsupported("the simulator accessibility helper is unavailable".into())
-        })
+async fn helper(name: &str, purpose: &str) -> Result<String> {
+    let path = if remote::active() {
+        text("printenv", &[name]).await.ok()
+    } else {
+        std::env::var(name).ok()
+    };
+    path.filter(|p| Path::new(p).is_absolute())
+        .ok_or_else(|| Error::Unsupported(format!("the simulator {purpose} helper is unavailable")))
 }
 fn ax_toggle(k: &str) -> Result<&'static str> {
     match k {
@@ -125,7 +126,7 @@ pub(super) async fn apply(d: &Device, q: &Value) -> Result<()> {
                     id,
                     "spawn",
                     &[
-                        &helper()?,
+                        &helper("KAR_DEVICE_IOS_AX_HELPER", "accessibility").await?,
                         "set",
                         ax_toggle(setting)?,
                         if b { "on" } else { "off" },
@@ -147,7 +148,17 @@ pub(super) async fn apply(d: &Device, q: &Value) -> Result<()> {
                     )?,
                 )
             };
-            ios(id, "spawn", &[&helper()?, "set", k, v]).await?;
+            ios(
+                id,
+                "spawn",
+                &[
+                    &helper("KAR_DEVICE_IOS_AX_HELPER", "accessibility").await?,
+                    "set",
+                    k,
+                    v,
+                ],
+            )
+            .await?;
         }
         "setLocation" => {
             ios(
@@ -171,14 +182,11 @@ pub(super) async fn apply(d: &Device, q: &Value) -> Result<()> {
             let verb = choice(q, "decision", &["grant", "revoke", "reset"])?;
             let permission = field(q, "permission")?;
             if permission == "notifications" {
-                let program = std::env::var("KAR_DEVICE_IOS_PERMISSION_HELPER")
-                    .ok()
-                    .filter(|p| Path::new(p).is_absolute())
-                    .ok_or_else(|| {
-                        Error::Unsupported(
-                            "the simulator notification permission helper is unavailable".into(),
-                        )
-                    })?;
+                let program = helper(
+                    "KAR_DEVICE_IOS_PERMISSION_HELPER",
+                    "notification permission",
+                )
+                .await?;
                 text(
                     &program,
                     &["permissions", verb, permission, app(q)?, "-d", id],
@@ -445,7 +453,7 @@ pub(super) async fn detail(d: &Device) -> Result<Value> {
         if let Ok(v) = contrast {
             settings["increaseContrast"] = json!(v == "enabled");
         }
-        if let Ok(helper) = helper()
+        if let Ok(helper) = helper("KAR_DEVICE_IOS_AX_HELPER", "accessibility").await
             && let Ok(v) = ios(id, "spawn", &[&helper, "status"]).await
             && let Ok(ax) = serde_json::from_str::<Value>(&v)
         {
@@ -518,6 +526,6 @@ pub(super) async fn detail(d: &Device) -> Result<Value> {
         }
     }
     Ok(
-        json!({"host_id":"local","device_id":id,"settings":settings,"foreground_app":foreground,"read_at":jiff::Timestamp::now().to_string()}),
+        json!({"host_id":d.host_id,"device_id":id,"settings":settings,"foreground_app":foreground,"read_at":jiff::Timestamp::now().to_string()}),
     )
 }

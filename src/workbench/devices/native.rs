@@ -30,7 +30,7 @@ fn tool(program: &str) -> PathBuf {
     }
     program.into()
 }
-fn command(program: &str) -> Command {
+pub(super) fn local_command(program: &str) -> Command {
     let mut c = Command::new(tool(program));
     c.env_remove("KAR_WORKBENCH_TOKEN")
         .env_remove("EXPO_TOKEN")
@@ -46,8 +46,15 @@ pub(super) async fn run(program: &str, args: &[&str], input: Option<Vec<u8>>) ->
     } else {
         crate::process::OUTPUT_LIMIT
     };
-    let mut command = command(program);
-    command.args(args);
+    run_limited(program, args, input, limit).await
+}
+async fn run_limited(
+    program: &str,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+    limit: u64,
+) -> Result<Vec<u8>> {
+    let mut command = remote::command(program, args);
     if input.is_some() {
         command.stdin(Stdio::piped());
     }
@@ -195,9 +202,8 @@ pub(super) async fn boot(d: &Device) -> Result<String> {
     let avd =
         d.id.strip_prefix("avd:")
             .ok_or_else(|| Error::Refused("not an installed Android AVD".into()))?;
-    let mut cmd = command("emulator");
-    cmd.args(["-avd", avd])
-        .stdout(Stdio::null())
+    let mut cmd = remote::command("emulator", &["-avd", avd]);
+    cmd.stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
     let mut child = cmd.spawn()?;
@@ -245,7 +251,19 @@ pub(super) async fn shutdown(d: &Device) -> Result<()> {
     Ok(())
 }
 pub(super) async fn screenshot(d: &Device) -> Result<Vec<u8>> {
-    let bytes = if d.platform == "ios" {
+    let bytes = if d.platform == "ios" && remote::active() {
+        // The PNG belongs to the simulator host. Return its bytes over SSH and remove the temporary file there.
+        let script = r#"f=$(mktemp -t kar-device-screen) || exit 1
+trap 'rm -f "$f"' EXIT
+xcrun simctl io "$1" screenshot --type=png "$f" >/dev/null && cat "$f""#;
+        run_limited(
+            "sh",
+            &["-c", script, "kar-device-screen", &d.id],
+            None,
+            32 * 1024 * 1024,
+        )
+        .await?
+    } else if d.platform == "ios" {
         let tmp = tempfile::tempdir()?;
         let path: OsString = tmp.path().join("screen.png").into();
         text(

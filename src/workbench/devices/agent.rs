@@ -140,23 +140,26 @@ async fn use_device(weak: WeakApp, headers: HeaderMap, op: Operation) -> Respons
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let device = claim.device_id.clone();
+    let host = claim.host_id.clone();
     let result: Result<Response> = async {
-        let d = svc.resolve(&mut s, &device).await?;
+        let d = svc.resolve(&mut s, &host, &device).await?;
         Ok(match op {
             Operation::Screenshot => (
                 [(axum::http::header::CONTENT_TYPE, "image/png")],
-                native::screenshot(&d).await?,
+                remote::at(d.ssh.as_ref(), native::screenshot(&d)).await?,
             )
                 .into_response(),
-            Operation::Detail => Json(actions::detail(&d).await?).into_response(),
+            Operation::Detail => {
+                Json(remote::at(d.ssh.as_ref(), actions::detail(&d)).await?).into_response()
+            }
             Operation::Action(q) => {
                 if q.get("device_id").is_some() || q.get("host_id").is_some() {
                     return Err(Error::Refused(
                         "agent action targets its bound device".into(),
                     ));
                 }
-                actions::apply(&d, &q).await?;
-                Json(actions::detail(&d).await?).into_response()
+                remote::at(d.ssh.as_ref(), actions::apply(&d, &q)).await?;
+                Json(remote::at(d.ssh.as_ref(), actions::detail(&d)).await?).into_response()
             }
         })
     }
