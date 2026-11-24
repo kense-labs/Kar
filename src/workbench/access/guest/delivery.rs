@@ -44,21 +44,8 @@ pub(super) fn reconcile(app: &Workbench, id: Uuid, msg: Uuid) -> AccessResult<()
 
     let info = app.binding(project, chat)?;
     let store = &app.0.chats;
-    if let Some(sent) = store.queued_inputs(chat)?.into_iter().find(|q| q.id == msg) {
-        if sent.text != text
-            || !sent
-                .attachments
-                .iter()
-                .map(|f| f.id)
-                .eq(ids.iter().copied())
-        {
-            return Err(AccessError::Conflict(
-                "input ID belongs to another message".into(),
-            ));
-        }
-        return record_delivery(app, id, msg, sent.status);
-    }
-    if !store.history(chat)?.turns.iter().any(|t| t.id == msg) {
+    let in_queue = store.queued_inputs(chat)?.iter().any(|q| q.id == msg);
+    if !in_queue && !store.history(chat)?.turns.iter().any(|t| t.id == msg) {
         if app.archived(chat) {
             return Ok(());
         }
@@ -81,6 +68,8 @@ pub(super) fn reconcile(app: &Workbench, id: Uuid, msg: Uuid) -> AccessResult<()
         }
     }
     let receipt = store.enqueue_attached(chat, msg, text, &ids)?;
-    app.wake_queue();
+    if !in_queue {
+        app.wake_queue();
+    }
     record_delivery(app, id, msg, receipt.status)
 }

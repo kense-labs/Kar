@@ -530,6 +530,18 @@ pub async fn legacy_registry() {
             .count(),
         1
     );
+    // The owner can edit a queued input from an earlier version before letting it run.
+    let edited = format!("{} (edited)", items[2].0["text"].as_str().unwrap());
+    let msg = &items[2].0;
+    let wire = format!(
+        "{edited}\n\nAttachment: .kar-attachments/{}/{}-file.txt",
+        msg["id"].as_str().unwrap(),
+        msg["attachments"][0]["id"].as_str().unwrap()
+    );
+    ok(host
+        .post(format!("{base}{path}/commands"))
+        .json(&json!({"command_id":Uuid::new_v4(),"action":"edit","input":msg["id"],"text":wire})))
+    .await;
     ok(host
         .post(format!("{base}{path}/commands"))
         .json(&json!({"command_id":Uuid::new_v4(),"action":"resume"})))
@@ -550,7 +562,13 @@ pub async fn legacy_registry() {
             .unwrap();
         assert_eq!(bytes.as_ref(), b"old bytes");
         assert_eq!(post(&public, &base, s, &who, &draft).await["id"], msg["id"]);
-        assert_eq!(calls(&native, msg["text"].as_str().unwrap()), 1);
+        let original = msg["text"].as_str().unwrap();
+        let text = if edited.starts_with(original) {
+            &edited
+        } else {
+            original
+        };
+        assert_eq!(calls(&native, text), 1);
     }
     assert!(
         !fs::read_to_string(file)
