@@ -33,7 +33,8 @@ pub(super) fn peer(id: &str, args: &[String]) {
     if args == ["--version"] {
         let v = match id {
             "claude" if mode == "logout_old" => "2.0.0 (Claude Code)",
-            "antigravity" if mode.starts_with("skills_") => "1.5.15",
+            // Exercise the native /skills response and its rejection paths.
+            "antigravity" if mode.starts_with("skills_") => "1.5.0",
             "pi" if mode.starts_with("skills_") => "1.6.0",
             "kimi" => "kimi 2.3.3",
             "claude" => "2.1.330 (Claude Code)",

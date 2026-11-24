@@ -88,7 +88,7 @@ Pi RPC 从原生 `get_commands` 读取已加载的技能、提示模板和扩展
 
 `kar tools pi --cwd .` 会等工作区扩展完成启动，再从 Pi 注册表读取工具。已停用的工具带 `active: false`，受信任项目在启动时动态注册的工具也会出现。已在 macOS 用 Pi 的 npm 版 1.4.0、1.6.0 和 Node 24.15.0 核对参数、启用状态、工作区信任与会话目录。使用独立版时，用 `KAR_PI_SDK_DIR` 指定官方 npm 包 `@earendil-works/pi-coding-agent` 的安装根目录，并在 PATH 中提供支持原生模块的 Node。Rust 会核对 CLI 和 SDK 版本，通过 SDK 自带的 CLI 入口读取同一工作区和账号目录的注册表。已在 macOS 用独立版 1.6.0 和同版本 SDK 验证。仅安装独立程序时返回 `native_query_unavailable`，指定的 SDK 版本不匹配时返回 `version_unsupported`。
 
-在 macOS 和 Linux 上，Antigravity 1.5.10 与 1.5.11 可在未登录时直接读取工作区和用户技能文件。结果始终带 `partial: true`，因为原生运行时还会按条件加载内置技能。其他受支持的版本和平台会先核对登录状态，再查询原生 `/skills`。已在 macOS 上用 1.5.10、1.5.11 和 1.5.15 逐项对照原生输出，包括插件技能和调用权限。
+在 macOS 和 Linux 上，Antigravity 1.5.10、1.5.11、1.5.14 和 1.5.15 可在未登录时直接读取工作区和用户技能文件。结果始终带 `partial: true`，因为原生运行时还会按条件加载内置技能。其他受支持的版本和平台会先核对登录状态，再查询原生 `/skills`。已在 macOS 上用这四个版本逐项对照原生输出，包括插件技能和调用权限。
 
 `kar skills dsh --cwd <工作区>` 会在打开聊天前读取 ACP 配置的全局技能。Rust 插件等 DSH 加载完配置后调用 `skills.snapshot({cwd})`，结果包含项目、用户、内置及插件来源，并保留用户和模型的调用权限。`partial` 来自运行时的完整性标记。DSH 的 Node 宿主需要能够加载原生插件。已在 macOS 上用 DSH 0.2.1-rc.5 和 0.2.2-rc.5 验证五种技能来源和禁止用户调用的条目，查询期间没有创建聊天记录。
 

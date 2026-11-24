@@ -20,7 +20,7 @@ pub(super) async fn skills(
         ));
     }
     if cfg!(any(target_os = "macos", target_os = "linux"))
-        && matches!(version, Some("1.5.10" | "1.5.11"))
+        && matches!(version, Some("1.5.10" | "1.5.11" | "1.5.14" | "1.5.15"))
     {
         let home = account::profile_home(probe).ok_or_else(invalid)?;
         let items = files::discover(&probe.cwd, &home).await?;

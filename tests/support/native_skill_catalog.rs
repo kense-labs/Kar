@@ -219,7 +219,7 @@ fn antigravity_skills() {
     let version = make(Path::new(&program)).arg("--version").output().unwrap();
     let version = String::from_utf8(version.stdout).unwrap();
     let file_reader = cfg!(any(target_os = "macos", target_os = "linux"))
-        && matches!(version.trim(), "1.5.10" | "1.5.11");
+        && matches!(version.trim(), "1.5.10" | "1.5.11" | "1.5.14" | "1.5.15");
     let query = |signed_in: bool| {
         let mut cmd = make(Path::new(env!("CARGO_BIN_EXE_kar")));
         if signed_in {
