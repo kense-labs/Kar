@@ -32,6 +32,7 @@ impl ChatStore {
                 return Err(different_prompt());
             }
             inbox.entries.push(Entry {
+                uncertainty_acknowledged: false,
                 refusal: None,
                 attachments: Vec::new(),
                 initial_attachments: None,
