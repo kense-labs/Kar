@@ -1,6 +1,8 @@
 //! Incremental projections over live records and recordings.
 mod session_state;
 mod tool_groups;
+mod turn_end;
+pub use turn_end::{ObservedTurnEnd, turn_end_after};
 pub use tool_groups::{
     ToolAction, ToolActionKind, ToolActionState, ToolCount, ToolGroupPart, ToolGroupSegment,
     group_tool_activity, tool_group_summary,

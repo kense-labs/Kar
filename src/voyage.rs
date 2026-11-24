@@ -130,6 +130,9 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
             method: body["type"].as_str().unwrap_or("native").into(),
         });
     }
+    if kind == RecordKind::Response && body["kind"] == "released" {
+        events.push(Event::Released);
+    }
     if kind == RecordKind::Response && body["kind"] == "exited" {
         events.push(Event::Exited {
             reason: body["reason"].as_str().unwrap_or("runtime exited").into(),
