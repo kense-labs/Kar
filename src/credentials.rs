@@ -1,4 +1,4 @@
-//! Static credential declarations from OAR 0.129.1 and the native Cursor CLI, shared by native and Wasm hosts.
+//! Static credential declarations from botiverse (0.129.1) and the native Cursor CLI, shared by native and Wasm hosts.
 //! Describes configuration by name. Inspecting the declarations performs no I/O.
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::LazyLock};

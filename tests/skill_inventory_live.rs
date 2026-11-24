@@ -176,10 +176,10 @@ fn native_mcp(id: &str) {
     let config = tmp.path().join("codex");
     fs::create_dir_all(&workspace).unwrap();
     fs::create_dir_all(&config).unwrap();
-    let oar = env!("CARGO_BIN_EXE_kar");
+    let kar_bin = env!("CARGO_BIN_EXE_kar");
     match id {
         "claude" => {
-            fs::write(config.join(".claude.json"),serde_json::json!({"hasCompletedOnboarding":true,"mcpServers":{"fixture":{"type":"stdio","command":oar,"args":["mcp","--runtimes","codex"]}}}).to_string()).unwrap();
+            fs::write(config.join(".claude.json"),serde_json::json!({"hasCompletedOnboarding":true,"mcpServers":{"fixture":{"type":"stdio","command":kar_bin,"args":["mcp","--runtimes","codex"]}}}).to_string()).unwrap();
             let skill = workspace.join(".claude/skills/test-command");
             fs::create_dir_all(&skill).unwrap();
             fs::write(skill.join("SKILL.md"),"---\nname: test-command\ndescription: Run a local fixture task\nargument-hint: FILE\n---\nTest command.").unwrap();
@@ -189,7 +189,7 @@ fn native_mcp(id: &str) {
         config.join("config.toml"),
         format!(
             "[mcp_servers.fixture]\ncommand = {}\nargs = [\"mcp\",\"--runtimes\",\"codex\"]\n",
-            serde_json::to_string(oar).unwrap()
+            serde_json::to_string(kar_bin).unwrap()
         ),
     )
     .unwrap();
@@ -197,7 +197,7 @@ fn native_mcp(id: &str) {
         _ => unreachable!(),
     }
     let call = |name: &str| {
-        let mut cmd = Command::new(oar);
+        let mut cmd = Command::new(kar_bin);
         cmd.env_clear()
             .env("HOME", tmp.path())
             .env("USERPROFILE", tmp.path())

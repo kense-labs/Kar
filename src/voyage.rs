@@ -1,4 +1,4 @@
-//! Import the upstream oar-voyage/3 recording format.
+//! Import legacy version 3 session recordings.
 use crate::{Direction, Error, Event, Outcome, Record, RecordKind, Result};
 use serde::Serialize;
 use serde_json::Value;
@@ -24,7 +24,7 @@ pub fn import(
         .ok_or_else(|| Error::Protocol("empty voyage".into()))?;
     let header: Value = serde_json::from_str(&first)?;
     if header["kind"] != "header" || header["format"] != "oar-voyage/3" {
-        return Err(Error::Protocol("expected an oar-voyage/3 header".into()));
+        return Err(Error::Protocol("expected a version 3 voyage recording header".into()));
     }
     let mut summary = VoyageSummary {
         header,

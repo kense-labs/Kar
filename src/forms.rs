@@ -133,7 +133,7 @@ pub struct RuntimeConfigForm {
     pub fields: Vec<ConfigField>,
 }
 
-/// The forms shipped by OAR 0.129.1. Discovery neither starts a runtime nor looks up credentials.
+/// Return the available configuration forms without starting a runtime or reading credentials.
 pub fn config_form(runtime: &str) -> Option<RuntimeConfigForm> {
     config_forms().get(runtime).cloned()
 }

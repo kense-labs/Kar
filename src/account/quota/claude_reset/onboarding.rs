@@ -1,4 +1,4 @@
-// Recorded Claude Code 2.1.322 first-run screens from OAR 0.129.1.
+// Claude Code 2.1.322 first-run screens recorded by botiverse (0.129.1).
 use std::sync::LazyLock;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Page {

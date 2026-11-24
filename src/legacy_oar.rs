@@ -1,4 +1,4 @@
-//! Compatibility entry point for existing scripts invoking `oar`.
+//! Compatibility entry point for existing command-line scripts.
 #![forbid(unsafe_code)]
 
 #[path = "main.rs"]

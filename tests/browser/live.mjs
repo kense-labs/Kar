@@ -17,7 +17,7 @@ const wasm = await readFile(join(dir,"kar_bg.wasm"));
 let calls = 0;
 const prompts = new Map();
 const server = createServer(async (req,res)=>{
-    if(req.url==="/" || req.url==="/favicon.ico"){res.writeHead(200,{"content-type":"text/html"});return res.end("<!doctype html><title>OAR integration test</title>");}
+    if(req.url==="/" || req.url==="/favicon.ico"){res.writeHead(200,{"content-type":"text/html"});return res.end("<!doctype html><title>Kar integration test</title>");}
     if(req.url==="/host.js"){res.writeHead(200,{"content-type":"text/javascript"});return res.end(result.outputFiles[0].contents);}
     if(req.url==="/kar_bg.wasm"){res.writeHead(200,{"content-type":"application/wasm"});return res.end(wasm);}
     if(req.method!=="POST" || !req.url.startsWith("/v1/messages")){res.writeHead(404);return res.end();}

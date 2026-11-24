@@ -306,7 +306,7 @@ impl ChatStore {
             format!("{prefix}/{}/{side}", point.turn),
             id,
             gix::refs::transaction::PreviousValue::Any,
-            "OAR checkpoint",
+            "Kar checkpoint",
         )
         .map_err(err)?;
         Ok(())

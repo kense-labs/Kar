@@ -37,7 +37,7 @@ impl ChatStore {
     pub(super) fn require_no_pending_fork(&self, source: Uuid) -> Result<()> {
         if let Some(f) = self.pending_fork(source)? {
             return Err(Error::Refused(format!(
-                "finish the pending fork: oar chat fork {} --chat {source}",
+                "finish the pending fork: kar chat fork {} --chat {source}",
                 f.turn
             )));
         }

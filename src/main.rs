@@ -123,7 +123,7 @@ enum Action {
         #[arg(long, default_value_t = 600)]
         timeout: u64,
     },
-    /// Import a TypeScript OAR voyage into a new Rust JSONL recording.
+    /// Import a legacy v3 recording into a new Kar JSONL file.
     Import { input: PathBuf, output: PathBuf },
     /// Print previously recorded records, optionally after a stream-specific cursor.
     Replay {

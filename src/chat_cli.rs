@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 #[derive(Args)]
 pub(super) struct Chat {
-    /// Directory containing saved chats (defaults to OAR_CHAT_DIR or the local state directory).
+    /// Directory containing saved chats. Defaults to the configured chat store.
     #[arg(long, global = true)]
     store: Option<PathBuf>,
     #[arg(long, global = true)]
@@ -141,7 +141,7 @@ enum Action {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Adopt an earlier oar run --record JSONL file from the original workspace.
+    /// Adopt an earlier `kar run --record` JSONL file from the original workspace.
     Import {
         runtime: String,
         recording: PathBuf,

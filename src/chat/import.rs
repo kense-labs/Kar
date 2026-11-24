@@ -10,7 +10,7 @@ use std::{
 };
 
 impl ChatStore {
-    /// Adopt a previous `oar run --record` capture. The stream id becomes its stable chat id.
+    /// Adopt a previous `kar run --record` capture. The stream id becomes its stable chat id.
     pub fn import_recording(
         &self,
         runtime_id: &str,

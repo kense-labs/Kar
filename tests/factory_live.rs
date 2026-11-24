@@ -49,7 +49,7 @@ fn model_and_skill_catalogs_before_session_creation() {
     fs::create_dir_all(&skill).unwrap();
     fs::write(
         skill.join("SKILL.md"),
-        "---\nname: oar-catalog\ndescription: OAR project fixture\n---\nPRIVATE_SKILL_CONTENT\n",
+        "---\nname: oar-catalog\ndescription: Kar project fixture\n---\nPRIVATE_SKILL_CONTENT\n",
     )
     .unwrap();
     let settings = json!({"customModels":[{"model":"fixture","displayName":"CatalogFixture","baseUrl":"http://127.0.0.1:1/v1","apiKey":"PRIVATE_FIXTURE_KEY","provider":"generic-chat-completion-api","maxOutputTokens":4096}]});
@@ -76,7 +76,7 @@ fn model_and_skill_catalogs_before_session_creation() {
         .find(|row| row["name"] == "oar-catalog")
         .expect("workspace skill");
     assert_eq!(entry["location"], "project");
-    assert_eq!(entry["description"], "OAR project fixture");
+    assert_eq!(entry["description"], "Kar project fixture");
     assert!(!report.to_string().contains("PRIVATE_SKILL_CONTENT"));
     assert!(!has_session_file(&home.join(".factory/sessions")));
 }

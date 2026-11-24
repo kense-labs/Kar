@@ -1,10 +1,8 @@
 # Kar
 
-Kar 是用 Rust 编写的编程 agent 运行库和命令行。应用可以用同一套接口打开本地 agent 会话、发送任务、处理工具请求、读取输出，再用原生会话 ID 继续对话。库和 CLI 由 Cargo 构建（Rust 1.89 或更高版本），直接与供应商进程通信。运行时无需启动 Node.js 服务或加载 TypeScript OAR。各家 agent 的安装和账号由相应供应商管理。
+Kar 是用 Rust 编写的编程 agent 运行库和命令行。应用可以用同一套接口打开本地 agent 会话、发送任务、处理工具请求、读取输出，再用原生会话 ID 继续对话。库和 CLI 由 Cargo 构建（Rust 1.89 或更高版本），直接与供应商进程通信。各家 agent 的安装和账号由相应供应商管理。
 
 ## 开始使用
-
-命令行使用 `kar`。原有脚本也可以继续调用兼容命令 `oar`，两个命令共用聊天记录。
 
 在项目目录执行：
 
@@ -37,7 +35,7 @@ cargo build --release --locked
 | `kar tools codex --cwd .` | 查看 MCP 服务提供的工具和输入参数 |
 | `kar commands claude --cwd .` | 查看 Claude 在该目录下公布的斜杠命令 |
 | `kar run claude '解释这个函数' --json --record run.jsonl` | 实时输出事件并创建新的 JSONL 记录 |
-| `kar import upstream.jsonl run.jsonl` | 将 TypeScript OAR 的 `oar-voyage/3` 记录导入新文件，保留原始事件 |
+| `kar import upstream.jsonl run.jsonl` | 导入旧版 v3 会话记录，保留原始事件并写入新的 JSONL 文件 |
 | `kar replay run.jsonl` | 验证事件顺序并重放记录。可传 `--stream <UUID> --after <序号>` |
 | `kar mcp --runtimes codex,claude --max-sessions 4 --cwd .` | 向支持 MCP 的宿主提供一组可委派的 agent |
 
@@ -67,7 +65,7 @@ kar account claude redeem-limit-reset --reset-id weekly --idempotency-key "$ATTE
 
 支持的种类为 `five_hour`、`weekly`、`fable`、`full`。旧版 Claude 可能在提交命令时就消耗五小时重置。默认会在需要时重新查询五小时额度，选择其他种类兑换时还会检查原生配置中的功能状态。若返回 `consent_required`，宿主应告知用户可能消耗五小时重置次数。用户接受后，才为该次操作设置 `five_hour_limit_consent` 或 CLI 的 `--five-hour-limit-consent`。指定种类、作用范围或选项文字发生变化时，Rust 控制器不会确认兑换。
 
-Claude 的兑换回执保存在相应原生配置目录的 `oar-limit-resets` 下。宿主为每次用户操作保存唯一的 `ATTEMPT_ID`。重试时传入相同的 ID 和种类，进程重启后也会读取原回执。若兑换命令已经提交而原生结果丢失，返回 `unknown`。普通查询不写兑换回执。Rust 的 `redeem_limit_reset_report` 和 CLI 结果还会报告此次是否完成了原生首次启动引导。交互驱动适用于 macOS 和 Linux，在 Windows 返回 `unsupported_platform`。
+Claude 的兑换回执保存在对应账号的原生配置目录下。宿主为每次用户操作保存唯一的 `ATTEMPT_ID`。重试时传入相同的 ID 和种类，进程重启后也会读取原回执。若兑换命令已经提交而原生结果丢失，返回 `unknown`。普通查询不写兑换回执。Rust 的 `redeem_limit_reset_report` 和 CLI 结果还会报告此次是否完成了原生首次启动引导。交互驱动适用于 macOS 和 Linux，在 Windows 返回 `unsupported_platform`。
 
 在 macOS 上，Claude Code 2.1.322 和 2.1.330 都已通过隔离账号和本地模拟额度服务验证。两版的查询均可关闭原生确认窗，兑换周额度后以同一 ID 重试只产生一次兑换请求。
 
@@ -88,7 +86,7 @@ OpenCode 1.x 用原生调试命令读取技能，较大的目录通过临时文�
 
 Pi RPC 从原生 `get_commands` 读取已加载的技能、提示模板和扩展命令。查询沿用所选账号目录和 Pi 保存的工作区信任设置。已用 Pi 1.6.0 验证同一个项目在已信任和未信任时的目录差异，并核对查询前后的信任文件及会话记录。
 
-`kar tools pi --cwd .` 会等工作区扩展完成启动，再从 Pi 注册表读取工具。已停用的工具带 `active: false`，受信任项目在启动时动态注册的工具也会出现。已在 macOS 用 Pi 的 npm 版 1.4.0、1.6.0 和 Node 24.15.0 核对参数、启用状态、工作区信任与会话目录。使用独立版时，将 `OAR_PI_SDK_DIR` 指向已安装的官方 npm 包 `@earendil-works/pi-coding-agent` 的根目录，并在 PATH 中提供支持原生模块的 Node。Rust 会核对 CLI 和 SDK 版本，通过 SDK 自带的 CLI 入口读取同一工作区和账号目录的注册表。已在 macOS 用独立版 1.6.0 和同版本 SDK 验证。仅安装独立程序时返回 `native_query_unavailable`，指定的 SDK 版本不匹配时返回 `version_unsupported`。上游 OAR 的这项查询使用随 OAR 捆绑的 Pi SDK。[上游 Pi 工具目录](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/packages/oar/src/runtimes/pi/inventory.ts#L42-L61)
+`kar tools pi --cwd .` 会等工作区扩展完成启动，再从 Pi 注册表读取工具。已停用的工具带 `active: false`，受信任项目在启动时动态注册的工具也会出现。已在 macOS 用 Pi 的 npm 版 1.4.0、1.6.0 和 Node 24.15.0 核对参数、启用状态、工作区信任与会话目录。使用独立版时，按 [Pi SDK 路径配置](src/pi_sdk.rs) 指定官方 npm 包 `@earendil-works/pi-coding-agent` 的安装根目录，并在 PATH 中提供支持原生模块的 Node。Rust 会核对 CLI 和 SDK 版本，通过 SDK 自带的 CLI 入口读取同一工作区和账号目录的注册表。已在 macOS 用独立版 1.6.0 和同版本 SDK 验证。仅安装独立程序时返回 `native_query_unavailable`，指定的 SDK 版本不匹配时返回 `version_unsupported`。
 
 在 macOS 和 Linux 上，Antigravity 1.5.10 与 1.5.11 可在未登录时直接读取工作区和用户技能文件。结果始终带 `partial: true`，因为原生运行时还会按条件加载内置技能。其他受支持的版本和平台会先核对登录状态，再查询原生 `/skills`。已在 macOS 上用 1.5.10、1.5.11 和 1.5.15 逐项对照原生输出，包括插件技能和调用权限。
 
@@ -98,7 +96,7 @@ Cursor 按 SDK 1.4.0 的规则读取工作区和用户技能文件。Git 项目�
 
 ### 识别本机安装
 
-`kar list` 的 `installation.command` 给出选中的可执行文件。通过 PATH 找到多个安装时，`shadowed` 按搜索顺序列出其余路径。同一目录、重复 PATH 项和指向同一文件的别名只计算一次。通过 `OAR_<运行时>_BIN` 指定程序时只检查该项。GUI 宿主的 PATH 找不到 CLI 时，还会检查相应供应商的安装目录，包括 macOS 的 ChatGPT/Codex 应用包。创建持久化聊天时会保存实际选中的启动路径。
+`kar list` 的 `installation.command` 给出选中的可执行文件。通过 PATH 找到多个安装时，`shadowed` 按搜索顺序列出其余路径。同一目录、重复 PATH 项和指向同一文件的别名只计算一次。显式指定可执行文件时，只检查指定的路径。GUI 宿主的 PATH 找不到 CLI 时，还会检查相应供应商的安装目录，包括 macOS 的 ChatGPT/Codex 应用包。创建持久化聊天时会保存实际选中的启动路径。
 
 在打开聊天之前，`kar list codex --cwd .` 可查看指定安装的 `session_capabilities`，也可以用 `--bin` 选择可执行文件。Rust 宿主先调用 `probe_installation(&options.installation_options())`，再把返回值传给 `runtime.session_capabilities(&installation)`。后一步只读取已有的探测结果。报告包含当前安装已知的图片输入、回合内追加、工具传输、子任务、压缩、上下文和设置限制。缺少字段表示尚未确认，显式 `false` 或空列表表示对应能力不可用。Kimi 在同一版本仍可能选择 ACP 或 KAP，打开前只展示两条路径共有的能力，连接后再由原生会话报告。缺失或未通过就绪检查的安装只返回安装状态。
 
@@ -108,7 +106,7 @@ Rust SDK 可用 `Runtime::probe_installation(&InstallationOptions)` 指定工作
 
 `kar config-form` 列出全部已发布的表单，`kar config-form grok` 输出 Grok 的表单。读取表单无需安装 Grok。模型和推理强度可以用 `kar models grok --cwd <工作区>` 查询。Rust 通过 Grok 的 ACP 目录接口读取可选模型、默认模型以及每个模型支持的推理强度，查询期间无需创建聊天。已用 Grok 1.0.92 和隔离的本机配置验证。
 
-Rust 宿主通过 `kar::forms::config_form` 发现表单，调用 `Runtime::form_model_listing` 获取实时目录或使用宿主随附的备用目录。返回值会标明未登录、超时、空目录或其他失败原因。调用 `form.validate` 时传入创建或编辑上下文，编辑已有配置时可保留当前目录无法列出的原值。启动时用 `form.map_launch` 解析模型、推理强度及已由宿主取出的凭据，Grok 的结果可直接 `apply_to(&mut options)`。原版 OAR 0.129.1 发布的设置表单只有 Grok。[上游表单契约](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/docs/spec/config-form.md)
+Rust 宿主通过 `kar::forms::config_form` 发现表单，调用 `Runtime::form_model_listing` 获取实时目录或使用宿主随附的备用目录。返回值会标明未登录、超时、空目录或其他失败原因。调用 `form.validate` 时传入创建或编辑上下文，编辑已有配置时可保留当前目录无法列出的原值。启动时用 `form.map_launch` 解析模型、推理强度及已由宿主取出的凭据，Grok 的结果可直接 `apply_to(&mut options)`。当前提供 Grok 的设置表单。
 
 ### 账号登录、退出与凭据声明
 
@@ -128,15 +126,15 @@ OpenCode 2 的 Rust 入口是 `Runtime::opencode_provider_auth`。在 CLI 中，
 
 `kar providers opencode login <供应商> oauth` 支持设备码、浏览器回调和手动授权码，`api-key` 支持需要填写账号 ID 等附加信息的供应商。标准输出逐行给出 JSON 事件、提示和结果，宿主用标准输入逐行回答 JSON 字符串。远程客户端可在 `login` 子命令前传 `--refuse-loopback`，在展示授权链接前拒绝只能由服务端本机浏览器完成的方式。取消、过期或超时会清理已取得 ID 的授权尝试。Rust 服务绑定本机回环地址，空闲时关闭，宿主退出也会关闭其标准输入。OpenCode 2.3.2 的密钥替换、附加表单和登出已通过真实 CLI 验证。DigitalOcean 的原生 OAuth 也验证了展示链接后取消，以及远程模式在展示前拒绝本机回调。OAuth 的设备码、手动输入与浏览器竞速、取消和超时经过本地协议测试。
 
-Pi 1.6 的 `kar providers pi menu` 列出 43 个内置供应商，并合并当前 `models.json` 的自定义供应商和名称覆盖。每个条目包含 Pi 声明的登录方式、订阅标记和登录按钮文字。`list` 查询已保存的凭据类型，`list --resolve` 与 `status` 让 Pi 解析凭据。供应商操作与聊天默认使用同一配置目录，`OAR_PI_AGENT_DIR` 优先于 `PI_CODING_AGENT_DIR`。
+Pi 1.6 的 `kar providers pi menu` 列出 43 个内置供应商，并合并当前 `models.json` 的自定义供应商和名称覆盖。每个条目包含 Pi 声明的登录方式、订阅标记和登录按钮文字。`list` 查询已保存的凭据类型，`list --resolve` 与 `status` 让 Pi 解析凭据。供应商操作与聊天默认使用同一配置目录。可以用 `PI_CODING_AGENT_DIR` 指定 Pi 的配置目录。
 
-使用 Pi 的 npm 版或为独立版配置同版本的 `OAR_PI_SDK_DIR` 后，Rust 原生模块从所选 SDK 读取登录菜单，调用 Pi 的供应商登录、凭据状态和退出接口。菜单读取不会创建凭据文件。`set-key <供应商>` 从管道读取字面密钥，保留 `$` 和开头的 `!`。`login <供应商> api-key` 支持 Cloudflare、Bedrock、Vertex 的多步表单。`login <供应商> oauth` 将 Pi 发出的授权链接、设备码、轮询间隔、有效期和手动输入提示传给宿主。原生回调完成时，Rust 会撤销仍在等待的手动输入。
+使用 Pi 的 npm 版或为独立版指定同版本的官方 SDK 后，Rust 原生模块从所选 SDK 读取登录菜单，调用 Pi 的供应商登录、凭据状态和退出接口。菜单读取不会创建凭据文件。`set-key <供应商>` 从管道读取字面密钥，保留 `$` 和开头的 `!`。`login <供应商> api-key` 支持 Cloudflare、Bedrock、Vertex 的多步表单。`login <供应商> oauth` 将 Pi 发出的授权链接、设备码、轮询间隔、有效期和手动输入提示传给宿主。原生回调完成时，Rust 会撤销仍在等待的手动输入。
 
-`kar providers pi login openai oauth --agent-name <名称> --device-id <UUID>` 可指定 ChatGPT 授权页收到的宿主名称和设备身份。Rust 接口 `PiProviders::login_with_options` 支持按需获取设备 UUID。适配代码使用 Rust，SDK 需要能加载原生模块的 Node。Pi 1.6 独立版可配合同版本 SDK 获取完整设备码元数据并传入宿主身份。仅安装独立程序时使用 Pi 的无浏览器终端流程。已用 Pi 1.6.0、隔离的配置目录和本机 Radius 服务验证凭据存取和设备码授权，并核对 ChatGPT 授权 URL 中的身份字段和取消后回调端口释放。[上游 Pi 供应商登录契约](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/packages/oar/src/runtimes/pi/auth.ts)
+`kar providers pi login openai oauth --agent-name <名称> --device-id <UUID>` 可指定 ChatGPT 授权页收到的宿主名称和设备身份。Rust 接口 `PiProviders::login_with_options` 支持按需获取设备 UUID。适配代码使用 Rust，SDK 需要能加载原生模块的 Node。Pi 1.6 独立版可配合同版本 SDK 获取完整设备码元数据并传入宿主身份。仅安装独立程序时使用 Pi 的无浏览器终端流程。已用 Pi 1.6.0、隔离的配置目录和本机 Radius 服务验证凭据存取和设备码授权，并核对 ChatGPT 授权 URL 中的身份字段和取消后回调端口释放。
 
 启用 Pi SDK 时，`kar providers pi --auth-path accounts/team.json --models-path configs/team.json menu` 可为这次操作选定凭据文件和模型配置文件。相对路径按 `--cwd` 解析。`--no-models` 对应 Pi 的 `modelsPath: null`。Rust 的 `Runtime::pi_provider_auth_with_paths` 接受同样的选项。代理设置和默认设备身份继续取自 agent 目录。只安装独立程序时，终端接口使用默认文件。显式指定的 SDK 版本不匹配或无法加载时，账号操作会返回错误。
 
-`kar providers pi catalog --provider anthropic` 读取模型目录、供应商配置状态和默认模型。每个模型包含协议、服务地址、上下文窗口、最大输出、推理能力和输入类型。读取快照不请求远程目录。`--refresh` 让 Pi 刷新所选供应商，`--refresh --offline` 重读配置和缓存。`Runtime::pi_model_catalog` 返回可重复刷新的目录。`CatalogCancellation` 可取消正在等待的请求。真实 Pi 1.6.0 测试用本机 HTTPS 服务验证了远程模型、按供应商返回错误、取消后再次刷新，以及重新打开后使用 ETag 验证缓存。在同一份隔离配置中，与 OAR 0.129.1 逐项比对了刷新前后的 1,699 个模型、43 个供应商和每个供应商的默认模型。[上游模型目录契约](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/packages/oar/src/contracts/model-catalog.ts)
+`kar providers pi catalog --provider anthropic` 读取模型目录、供应商配置状态和默认模型。每个模型包含协议、服务地址、上下文窗口、最大输出、推理能力和输入类型。读取快照不请求远程目录。`--refresh` 让 Pi 刷新所选供应商，`--refresh --offline` 重读配置和缓存。`Runtime::pi_model_catalog` 返回可重复刷新的目录。`CatalogCancellation` 可取消正在等待的请求。真实 Pi 1.6.0 测试用本机 HTTPS 服务验证了远程模型、按供应商返回错误、取消后再次刷新，以及重新打开后使用 ETag 验证缓存。在同一份隔离配置中，测试逐项核对了刷新前后的 1,699 个模型、43 个供应商和每个供应商的默认模型。
 
 Qwen 的 `Runtime::qwen_provider_auth` 通过私有 ACP 进程查询或写入配置。例如 `kar providers qwen --cwd . connect custom-openai-compatible --protocol openai --base-url http://127.0.0.1:8080/v1 --model local-model --scope workspace --key-stdin` 从管道读取密钥，省略 `--key-stdin` 时由 Qwen 复用已有配置。真实 CLI 测试验证了 `user` 和 `workspace` 两种写入位置，配置期间模型服务收到零个请求。成功回执表示 Qwen 已写入配置。读取凭据、写入配置和账号登录均独立于聊天事件流。
 
@@ -156,7 +154,7 @@ kar chat resume --chat <聊天ID>
 
 时间线保留回合中的用户输入、助手回复、推理、工具活动和供应商提供的补丁。流式片段与最终消息合并。宿主在回复中途退出时，可以查看已经写入的部分，未确认结束的回合会显示为 `interrupted`。恢复 Codex 时，如果原生会话已有该回合的终态，会按原生条目 ID 补全回复、推理和工具结果。恢复聊天不会自动重发中断的输入。
 
-在默认配置下，日志位于 `$XDG_STATE_HOME/oar/chats` 或 `~/.local/state/oar/chats`。可用 `OAR_CHAT_DIR` 或 `--store` 指定目录。一个聊天同一时间由一个进程续写，其他进程可以读取历史。若有以前通过 `kar run --record` 保存的单事件流 Rust JSONL，可用下面的命令导入，并通过输出的聊天 ID 继续原生会话。续聊需要原工作区和供应商保存的会话仍然可用。
+聊天日志默认保存在用户状态目录下。需要固定存储位置时，可用 `kar chat --store <目录>`。一个聊天同一时间由一个进程续写，其他进程可以读取历史。若有以前通过 `kar run --record` 保存的单事件流 Rust JSONL，可用下面的命令导入，并通过输出的聊天 ID 继续原生会话。续聊需要原工作区和供应商保存的会话仍然可用。
 
 ```sh
 kar chat import codex old.jsonl --cwd /path/to/original/workspace
@@ -316,7 +314,7 @@ kar chat rollback <回合UUID> --before
 
 默认恢复到指定回合结束时，`--before` 恢复到它开始前。回滚只应用这些回合涉及的文件变化；跨回合保留的聊天记录与原生会话可继续使用。回滚后继续发送会产生新的工作区历史分支，旧回合仍可查看和恢复。若目标路径上有冲突的本地改动，命令会列出路径并在写入前停止。若宿主在写入中途退出，重新执行同一条回滚命令即可继续。
 
-Git 对象保存在聊天目录的 `<根聊天UUID>.git` 裸仓库。根聊天的引用为 `refs/oar/turns/<回合UUID>/before` 和 `after`。子聊天复用已有对象，新回合的引用位于 `refs/oar/chats/<子聊天UUID>/turns/` 下。Rust 的 `gix` 直接读写 Git 对象。工作区自己的 HEAD、分支和暂存区独立于这些检查点。检查点覆盖工作区目录内的已跟踪文件和未忽略的新文件，包含二进制、符号链接及 Unix 可执行位。普通目录也支持检查点，并遵循其 `.gitignore`。嵌套仓库、子模块工作树和聊天存储目录不参与快照。回合执行期间其他程序对同一工作区的修改也会出现在文件清单中。
+Git 对象保存在聊天目录的 `<根聊天UUID>.git` 裸仓库。每个回合分别保存开始和结束时的 Git 引用。子聊天复用已有对象，并单独保存新回合的引用。Rust 的 `gix` 直接读写 Git 对象。工作区自己的 HEAD、分支和暂存区独立于这些检查点。检查点覆盖工作区目录内的已跟踪文件和未忽略的新文件，包含二进制、符号链接及 Unix 可执行位。普通目录也支持检查点，并遵循其 `.gitignore`。嵌套仓库、子模块工作树和聊天存储目录不参与快照。回合执行期间其他程序对同一工作区的修改也会出现在文件清单中。
 
 Rust 后端可以直接读取 `ChatTurn.checkpoint.files`。在已打开且空闲的聊天上使用 `ChatSession::rollback`，关闭聊天后使用 `ChatStore::rollback`。传入 `CheckpointPoint { turn, before }` 和 `dry_run`，从返回值读取 `files`、`conflicts` 和 `applied`。旧聊天从升级后的下一回合开始记录检查点。缺少结束快照的回合会标为不可用。
 
@@ -427,9 +425,9 @@ Claude Code 2.1.274 及以上版本、配有官方 SDK 和原生模块宿主的 
 
 结果包含请求时间、模型、供应商、请求格式和经过凭据遮盖的原生请求体。Claude 部分隐藏推理、隐藏正文或只登记了请求时，`withheld` 分别标明 `thinking`、`body` 或 `not_captured`。已有助手消息而原生索引尚未到达时，读取最多等待两秒，超时返回错误。请求体仅供当前宿主按需读取，聊天日志、快照和 SSE 均不包含这份请求体。关闭会话会清理专用临时目录。已使用 Claude Code 2.1.330 和回环模型验证工具审批前后读到的请求，以及恢复后首次读取的边界。
 
-Pi 使用所选 npm 安装自带的 SDK，或独立版通过 `OAR_PI_SDK_DIR` 指定的同版本 SDK，从根会话读取用户扩展异步改写后的请求体。支持 Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses。首次发送前以及关闭后返回 `None`。后续请求切换到未支持的 API，或请求体无法编码为 JSON 时，读取会返回对应错误。请求体只存于当前 Pi 进程的内存，由 Rust 宿主按需读取。启用这项观测需要能够加载原生模块的 Node。已用 Pi 1.6.0 的两种安装方式与本机模型服务核对请求内容。
+Pi 使用所选 npm 安装自带的 SDK，或为独立版指定的同版本 SDK，从根会话读取用户扩展异步改写后的请求体。支持 Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses。首次发送前以及关闭后返回 `None`。后续请求切换到未支持的 API，或请求体无法编码为 JSON 时，读取会返回对应错误。请求体只存于当前 Pi 进程的内存，由 Rust 宿主按需读取。启用这项观测需要能够加载原生模块的 Node。已用 Pi 1.6.0 的两种安装方式与本机模型服务核对请求内容。
 
-已用 macOS、Pi 1.6.0、Node 24.15.0 和本机 HTTP 模型服务，逐一核对三种格式在服务响应前的请求体、嵌套 SDK 会话隔离，以及断线客户端续收的公开事件。适配代码和 Node 原生模块均使用 Rust。[上游 Pi 请求观测契约](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/packages/oar/src/runtimes/pi/model-requests.ts)
+已用 macOS、Pi 1.6.0、Node 24.15.0 和本机 HTTP 模型服务，逐一核对三种格式在服务响应前的请求体、嵌套 SDK 会话隔离，以及断线客户端续收的公开事件。适配代码和 Node 原生模块均使用 Rust。
 
 ### Token 用量与子会话
 
@@ -441,7 +439,7 @@ Pi 使用所选 npm 安装自带的 SDK，或独立版通过 `OAR_PI_SDK_DIR` �
 
 `Session::resources().await` 和 `ChatSession::resources().await` 按需返回运行时进程树的常驻内存字节数 `rss` 和进程数 `processes`。同一进程位于子孙树和进程组时只统计一次。并发读取共用当次采样，结果不写入聊天记录。macOS 使用 Darwin 进程接口，Linux 读取 `/proc`，两者都核对进程启动时间。
 
-两个会话共用 OAR 启动的 Morph Console 时，结果带有 `scope: "shared_process"`。关闭其中一个会话后，只要另一个会话仍持有该 Console，仍可查询整棵进程树。外部连接、无法取得完整统计、已退出的独占进程和未实现读取器的平台会返回 `None`。
+两个会话共用 Kar 启动的 Morph Console 时，结果带有 `scope: "shared_process"`。关闭其中一个会话后，只要另一个会话仍持有该 Console，仍可查询整棵进程树。外部连接、无法取得完整统计、已退出的独占进程和未实现读取器的平台会返回 `None`。
 
 ### 中止 Codex 回合时清理命令
 
@@ -484,7 +482,7 @@ Claude Code 2.1.326 及以上可用 `kar chat ask '解释刚才的决定' --chat
 
 `SessionOptions.mcp_servers` 接受命名的 stdio 或 HTTP 工具服务器。Codex、Claude Code、Qwen Code、Kimi KAP 和 ACP 分别通过各自的会话配置接入，ACP 会检查 HTTP 能力。Claude 的配置通过临时私有文件传递。DSH 在每个会话的私有启动配置中注册 stdio 服务，等待所有服务激活后才打开聊天。服务名支持 1 到 32 个 ASCII 字母、数字、下划线和连字符。工作目录是聊天工作区，命令与参数分别传入。DSH 会拒绝 HTTP 服务和附带环境变量的配置。恢复时由宿主重新提供 MCP 服务，前一轮的工具结果保留在聊天记录中。已用两个版本验证工具调用、同时打开的会话互相隔离、恢复时更换服务，以及名称冲突或程序缺失时拒绝启动。
 
-Pi RPC 支持会话级 stdio 和 HTTP MCP 服务。工具以 `mcp__服务名__工具名` 直接提供给模型，恢复原聊天时由宿主重新传入服务。托管的 Pi 聊天与上游 OAR 一样，忽略用户和工作区的 `mcp.json`。每个会话独立注册，关闭会话会释放其连接。名称中的连字符会映射为下划线，映射后冲突会导致打开失败。RPC 会拒绝服务配置中的非空 `env` 或 `headers`。使用 npm 版 Pi 或通过 `OAR_PI_SDK_DIR` 配置的同版本官方 SDK，并在 PATH 上提供能加载原生模块的 Node。Rust 适配器通过 Pi SDK 自带的 CLI 启动 RPC 会话。已用 macOS 上的 Pi 1.4.0 和 1.6.0 核对两种传输、服务名冲突、双客户端续收、工具过滤和重启后的服务替换。[上游 Pi MCP 契约](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/docs/runtimes/pi.md#session-mcp-servers)
+Pi RPC 支持会话级 stdio 和 HTTP MCP 服务。工具以 `mcp__服务名__工具名` 直接提供给模型，恢复原聊天时由宿主重新传入服务。Kar 托管的 Pi 聊天忽略用户和工作区的 `mcp.json`。每个会话独立注册，关闭会话会释放其连接。名称中的连字符会映射为下划线，映射后冲突会导致打开失败。RPC 会拒绝服务配置中的非空 `env` 或 `headers`。使用 npm 版 Pi 或为独立版配置同版本的官方 SDK，并在 PATH 上提供能加载原生模块的 Node。Rust 适配器通过 Pi SDK 自带的 CLI 启动 RPC 会话。已用 macOS 上的 Pi 1.4.0 和 1.6.0 核对两种传输、服务名冲突、双客户端续收、工具过滤和重启后的服务替换。
 
 `agents::Crew` 负责子会话容量、并行任务、后续输入和结果读取。命令行的 stdio MCP 服务提供 `runtimes`、`spawn`、`run`、`send`、`wait`、`list`、`interrupt` 和 `close`。关闭客户端连接会释放该服务拥有的会话。
 
@@ -505,15 +503,15 @@ Pi RPC 支持会话级 stdio 和 HTTP MCP 服务。工具以 `mcp__服务名__�
 | Mister Morph Console Runtime API，HTTP 和 WebSocket | Morph（显式启用） | Morph 0.3.128 |
 | 浏览器内嵌 Harness，WebAssembly | Pi Durable（浏览器宿主提供） | Pi Durable 1.6.0，Chromium 145，IndexedDB |
 
-Codex、Claude Code、OpenCode、Pi、Qwen Code 和 Morph 均通过真实程序的发送、回复与恢复测试，模型服务运行在本机回环地址。Claude 的审批用例确认临时文件只在宿主允许后才创建。Qwen 的恢复用例检查了模型实际收到的历史消息，并验证了中断。九个真实程序用例均在 PATH 不含 Node.js 时通过，供应商程序可以自带运行环境。其余 ACP 注册项尚待逐个验证。可用 `OAR_CODEX_BIN`、`OAR_CLAUDE_BIN`、`OAR_QWEN_BIN` 等环境变量指定供应商程序。SDK 也接受 `Runtime::new` 注册自定义 ACP 程序。
+Codex、Claude Code、OpenCode、Pi、Qwen Code 和 Morph 均通过真实程序的发送、回复与恢复测试，模型服务运行在本机回环地址。Claude 的审批用例确认临时文件只在宿主允许后才创建。Qwen 的恢复用例检查了模型实际收到的历史消息，并验证了中断。九个真实程序用例均在 PATH 不含 Node.js 时通过，供应商程序可以自带运行环境。其余 ACP 注册项尚待逐个验证。可在 `kar open` 或 `kar run` 中用 `--bin <路径>` 选择供应商程序。SDK 也接受 `Runtime::new` 注册自定义 ACP 程序。
 
 Qoder 新聊天按 CLI 版本选择传输。1.1.78–1.1.80 用 worker，1.1.81 起为每个原生会话启动独立 SDK daemon。以前按 ACP 保存的聊天仍用原传输恢复。1.1.78 的真实 worker 在隔离 HOME 中使用内置模型回放，两个独立进程通过同一原生会话 ID 对话，实测核对了同一份原生转录中的两轮问答。1.1.83 在匿名环境完成 daemon 握手和创建会话，随后要求有效凭据；该版本的发送、恢复、任务控制与手动压缩已通过 Rust 协议测试，尚待已登录的真实 CLI 验证。
 
-Kimi 新聊天先按 CLI 版本和服务端公布的能力选择 KAP 或 ACP。`OAR_KIMI_BIN` 可指定 CLI。恢复时沿用聊天创建时保存的协议和原生会话 ID。KAP 实测使用 OAR 上游的 Kimi 补丁版本和本机模型服务。两个订阅者在回合结束前看到了同一次 Bash 调用。重连后，两端的时间线一致。重启后，模型收到了前一轮问答，排队的输入只投递了一次。另一个测试只保留到工具开始时的本地日志，再用 Kimi 已完成的原生回合恢复。客户端从原游标收到了完整回复和工具输出，模型调用次数保持不变。官方 2.7.2 则通过 ACP 完成了重启续聊测试。[Kimi 补丁版本](https://github.com/botiverse/kimi-code-sdk/tree/4ca80ab5cdf3e51391804cb7cce4d0ccae32daff)
+Kimi 新聊天先按 CLI 版本和服务端公布的能力选择 KAP 或 ACP。可用 `kar open kimi --bin <路径>` 指定 CLI。恢复时沿用聊天创建时保存的协议和原生会话 ID。KAP 实测使用 Kimi 补丁版本和本机模型服务。两个订阅者在回合结束前看到了同一次 Bash 调用。重连后，两端的时间线一致。重启后，模型收到了前一轮问答，排队的输入只投递了一次。另一个测试只保留到工具开始时的本地日志，再用 Kimi 已完成的原生回合恢复。客户端从原游标收到了完整回复和工具输出，模型调用次数保持不变。官方 2.7.2 则通过 ACP 完成了重启续聊测试。[Kimi 补丁版本](https://github.com/botiverse/kimi-code-sdk/tree/4ca80ab5cdf3e51391804cb7cce4d0ccae32daff)
 
 Kimi ACP 在原生握手声明支持时，可用 `--add-dir` 给新聊天加入额外目录。Kimi 只在创建时接收这些目录，持久化聊天重开时沿用原生会话。使用官方 2.7.2 和本地模型服务，已核对新建和重启后两次模型请求的系统消息均包含额外目录。
 
-DeepSeek Harness 使用认证后的本机接口接收带序号的原生事件。可通过 `OAR_DSH_BIN` 指定程序。DSH 0.2.2-rc.5 起选择 Web，较早版本选择 ACP。0.2.1-rc.5 的 ACP 声明了 `session/resume`，已验证关闭控制器后能重新打开原生会话。以前通过 ACP 保存的聊天仍按原协议打开。实测中，两个客户端在回合结束前都收到了 Bash 调用；断开并从各自游标补收后，两端的聊天历史一致。关闭控制器后排队的消息在原会话触发了一次模型请求。按回合分叉的测试同时核对了工作区文件和模型实际收到的消息。崩溃恢复测试把本地日志分别截到回执前、工具开始后和回复写入一部分之后。恢复时按请求 UUID 和已结束的原生回合补回时间线，随后提交相同 UUID 不会再次调用模型。控制器离线期间的工作区状态不能据此补建 Git 检查点。测试使用真实 DSH CLI 和本机模拟模型服务。会话文件路径取自 DSH 导出的元数据，可在文件生成后查询。[DSH 原生会话接口](https://github.com/deepseek-ai/deepseek-harness/tree/9c2670d3bce5275e0d1610272958121af87787bb/packages/api/session-controller)
+DeepSeek Harness 使用认证后的本机接口接收带序号的原生事件。可用 `kar open dsh --bin <路径>` 指定程序。DSH 0.2.2-rc.5 起选择 Web，较早版本选择 ACP。0.2.1-rc.5 的 ACP 声明了 `session/resume`，已验证关闭控制器后能重新打开原生会话。以前通过 ACP 保存的聊天仍按原协议打开。实测中，两个客户端在回合结束前都收到了 Bash 调用；断开并从各自游标补收后，两端的聊天历史一致。关闭控制器后排队的消息在原会话触发了一次模型请求。按回合分叉的测试同时核对了工作区文件和模型实际收到的消息。崩溃恢复测试把本地日志分别截到回执前、工具开始后和回复写入一部分之后。恢复时按请求 UUID 和已结束的原生回合补回时间线，随后提交相同 UUID 不会再次调用模型。控制器离线期间的工作区状态不能据此补建 Git 检查点。测试使用真实 DSH CLI 和本机模拟模型服务。会话文件路径取自 DSH 导出的元数据，可在文件生成后查询。[DSH 原生会话接口](https://github.com/deepseek-ai/deepseek-harness/tree/9c2670d3bce5275e0d1610272958121af87787bb/packages/api/session-controller)
 
 `kar models factory` 和 `kar inventory factory skills --cwd <工作区>` 通过 Droid 自有协议读取目录。Rust SDK 可调用 `Runtime::catalog`。默认查询无需创建聊天，模型使用 Droid 可接受的 ID，技能结果包含所属范围及原生的 `projectAvailable`。新聊天通过 `droid.initialize_session` 创建，重启时用 `droid.load_session` 打开原会话并核对工作目录。老版本 Rust 已经保存的 ACP 聊天沿用 ACP。输入的 UUID 同时用作 Factory 的消息 ID，以同一 ID 的原生回合终态确认结束。Droid 原生上下文占用和包含缓存的 token 用量可在聊天快照中读取。
 
@@ -525,24 +523,24 @@ Pi 1.6 的一次输入可以包含多次模型请求。控制器等待原生 `ag
 
 Qwen 以 `initialize` 作为首帧，确认原生会话 ID 后再接受提示。它通过标准输入接收会话级 MCP 配置，权限请求遵循宿主设置。模型列表来自 `get_available_models`。支持上下文查询的版本还可通过 `session.context_usage().await` 返回原始报告，其中 `isEstimated` 标记估算值。
 
-实现以 TypeScript OAR 0.129.1 的会话模型为参考，采用独立的 Rust API 和 JSONL 格式。目录、账号、更新和压缩接口按运行时提供，缺少实现的操作会明确返回 `Unsupported`。[上游项目](https://github.com/botiverse/oar/tree/2582c9018b539b43a7fa271201ddbc80691ad209)
+Kar 提供 Rust API，并用 JSONL 保存会话记录。目录、账号、更新和压缩接口按运行时提供，缺少实现的操作会明确返回 `Unsupported`。
 
-### 面向 T3 Code 类产品的移植差距
+### 后端能力与支持范围
 
-2026-11-24 对照上游公开契约、供应商适配器和 T3 Code 的 provider 接口。上游同一项能力在不同供应商上也有差异，表中优先级按对编码工作流的影响排列。[OAR 会话契约](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/packages/oar/src/contracts/session.ts) · [OAR 运行时矩阵](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/docs/spec/runtime-matrix.md) · [T3 Code provider 接口](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-core/src/server/ProviderAdapter.ts)
+截至 2026-11-24，各运行时支持的能力及待验证项如下。
 
 | 领域 | Rust 已有 | 后续优先事项 |
 | --- | --- | --- |
 | 聊天时间线与断线恢复 | 本地工作区和原生会话绑定、按回合保存的消息与推理、工具卡片、补丁、回显去重、中断恢复、跨控制器重启的 SSE 多客户端续传、Rust HTTP 客户端按已提交游标自动重连，Factory、DSH、Kimi KAP、Codex、Pi RPC、Morph 和 OpenCode 2 可从原生历史补全已结束的回合，失败原因含 OpenCode、Grok、CodeBuddy 的专有分类、Antigravity 倒计时、Codex 当前回合的额度窗口及 Pi Durable 原生回执，打开会话时可报告原生会话丢失、工作区冲突和部分凭据或配置错误 | 其余供应商的专有失败原因、设置确认和更多原生历史补全能力 |
 | 审批与提问 | 多客户端待办、跨供应商提问表单和带游标的原生答复，Codex 逐项授权及策略建议、Claude 原生策略建议、ACP 按选项 ID 授权、Cursor 根会话的单选、多选和计划审核、Factory 原生问卷、行选择器、授权策略和计划编辑，Kimi KAP 和 DSH 原生审批和提问 | 其余供应商的专有交互、非标准 MCP 表单和运行时策略更新 |
 | 代码审阅 | Codex 回合补丁和已生效文件列表，多协议工具输入、输出及终态，Claude、Qwen、Qoder、Kimi KAP 和 DSH 流式工具参数、按 agent 分组、Codex 回合结束后的工具输出归属、OpenCode 后台子会话的迟到回复与工具结果、Pi Durable 的根工具和嵌套工具卡片、Morph 和 Cybion 的原生工具输入与结果 | Cybion 工具结果仍待真实部署验证 |
-| 工作区与模型设置 | 启动时选择模型、设置并核实推理强度和服务等级，支持原生会话命名、额外工作目录、会话级 MCP、按供应商支持的系统指令与工具限制、Pi RPC 的 stdio 和 HTTP MCP 服务、DSH 原生标题及恢复、会话级系统提示词、工具限制、可写目录、日志上传控制及 stdio MCP 服务、Claude 用户级配置隔离、Qwen 后台记忆默认开关与生效状态及 Codex、Claude、Grok 的结构化输出，七个原生适配器的模型选择回读错误和 Pi Durable 的浏览器模型回读，十二个运行时的独立技能目录，包括 DSH 会话前的全局技能快照、三个运行时的 MCP 服务目录、Codex 和 Claude 的 MCP 工具目录、Pi npm 版及配有同版本官方 SDK 的独立版的注册工具目录、Claude 和 Pi RPC 命令目录、Pi SDK 的模型能力、默认模型和按供应商刷新、Grok 原生模型目录、Cursor 参数化模型目录及推理强度回读、上游已发布的配置表单、宿主自定义工具的 HTTP MCP 服务和工具列表变更通知、按会话移除继承的环境变量、按原生连接报告 MCP 传输类型、聊天创建前按安装版本查询能力和设置限制 | 其余供应商的专有设置与验证 |
+| 工作区与模型设置 | 启动时选择模型、设置并核实推理强度和服务等级，支持原生会话命名、额外工作目录、会话级 MCP、按供应商支持的系统指令与工具限制、Pi RPC 的 stdio 和 HTTP MCP 服务、DSH 原生标题及恢复、会话级系统提示词、工具限制、可写目录、日志上传控制及 stdio MCP 服务、Claude 用户级配置隔离、Qwen 后台记忆默认开关与生效状态及 Codex、Claude、Grok 的结构化输出，七个原生适配器的模型选择回读错误和 Pi Durable 的浏览器模型回读，十二个运行时的独立技能目录，包括 DSH 会话前的全局技能快照、三个运行时的 MCP 服务目录、Codex 和 Claude 的 MCP 工具目录、Pi npm 版及配有同版本官方 SDK 的独立版的注册工具目录、Claude 和 Pi RPC 命令目录、Pi SDK 的模型能力、默认模型和按供应商刷新、Grok 原生模型目录、Cursor 参数化模型目录及推理强度回读、Grok 设置表单、宿主自定义工具的 HTTP MCP 服务和工具列表变更通知、按会话移除继承的环境变量、按原生连接报告 MCP 传输类型、聊天创建前按安装版本查询能力和设置限制 | 其余供应商的专有设置与验证 |
 | 会话续写与分叉 | 按聊天 ID 回到原工作区续聊、按请求 UUID 幂等发送，Codex、Claude、Pi RPC、DSH 和 OpenCode 2 可从指定回合同步恢复文件及原生上下文，声明能力的 ACP 可复制整段会话，原生持久化聊天和浏览器均可跨重启投递队列，OpenCode 1 和声明支持的 OpenCode 2 可在回合中追加指令并同步回执，Antigravity 支持同轮带图追加、请求交错结算和跨客户端续收，Claude 支持带图追加指令，可区分同轮接纳和另起一轮、重复输入、开始前取消及插入的原生通知，2.1.326+ 支持临时分叉提问，Grok 支持带图插话、原生排队回执和自主回合，Codex 和 Grok 支持中止回合时分别清理所属命令及托管终端 | 其余供应商按回合分叉取决于原生协议支持 |
 | 子任务与并行 agent | 会话关系图、Crew 并行调度、Codex 和 DSH 原生目标读写和续跑，多协议原生任务列表，Codex、Claude、Qoder 和 Kimi KAP 定向停止子任务，DSH 定向停止后台 shell 作业，OpenCode 和 Cursor ACP 嵌套子会话、后台输出与原回合的归属 | 其余供应商的子 agent 归属及控制 |
 | 用量与长任务 | 按原生连接、agent 路径和独立子会话统计 token，支持离线查询和 SSE 续收，六个运行时的聊天前账号额度查询、Codex 幂等兑换额度重置、Claude 原生重置查询和带持久化回执的兑换、多协议上下文占用、Claude 上下文明细、静默诊断、按回合保存压缩边界，Qoder 逐次累加根会话用量，Kimi KAP 按 agent 汇总逐步用量并核对回合终值，DSH 汇总原生请求的用量，Factory 按回合累加自身和子任务 token，Codex、Claude、Pi、OpenCode 2.x、Grok、Qoder、Kimi KAP、Factory 和 DSH 可关联手动压缩请求与最终结果 | 更多供应商的上下文占用及专有压缩协议 |
 | 安装与运维 | 发现 PATH 多份安装及供应商安装目录、CLI 身份与版本就绪检查、安装、11 个运行时的账号状态、15 个运行时的凭据声明、7 个运行时的宿主登录、9 个运行时的结构化退出、OpenCode 2 的供应商登录与密钥管理、Pi 1.6 的独立凭据及模型配置、供应商登录菜单、密钥表单、SDK 原生 OAuth 交互和宿主身份、状态查询与退出、Qwen 的供应商配置、部分更新接口、Codex、Pi、Factory 和 DSH 原生会话文件定位、macOS/Linux 本机进程树的内存和进程数，Claude 和配有 SDK 的 Pi 根会话的原生模型请求观测 | 其余运行时的宿主交互式登录、部分账号资料查询、Windows 原生环境实测，以及更多供应商实机验证 |
 
-应用可以通过 `serve_mcp_tools` 把 Rust 函数提供给本机的原生会话。保留返回的服务句柄，把 `host.entry()` 插入各会话的 `mcp_servers`。每次初始化分配独立 MCP 会话 ID，两个会话可以同时使用同一个调用 ID。处理函数可通过 `CancellationToken` 响应取消、客户端断开或服务关闭。[上游宿主工具契约](https://github.com/botiverse/oar/blob/2582c9018b539b43a7fa271201ddbc80691ad209/packages/oar/src/mcp/serve-tools.ts)
+应用可以通过 `serve_mcp_tools` 把 Rust 函数提供给本机的原生会话。保留返回的服务句柄，把 `host.entry()` 插入各会话的 `mcp_servers`。每次初始化分配独立 MCP 会话 ID，两个会话可以同时使用同一个调用 ID。处理函数可通过 `CancellationToken` 响应取消、客户端断开或服务关闭。
 
 ```rust,no_run
 use kar::{SessionOptions, host_tools::HostTool, serve_mcp_tools};
@@ -568,9 +566,9 @@ let session = kar::runtime("codex").unwrap().open(options).await?;
 
 前端可以从 `session.capabilities().mcp_transports` 读取已确认的传输类型。缺省表示当前版本或连接尚未验证，空列表表示不支持。DSH 报告 stdio。已识别的 Qwen Code 0.26.0 之前的版本只接受 stdio，配置 HTTP 工具会在启动前返回错误。Pi 配置会话级 MCP 并完成 SDK 工具注册后报告 stdio 和 HTTP。Factory Droid 1.17.2 已验证新建会话调用 HTTP 工具、在原会话恢复后调用 stdio 工具，两次结果均回到模型。通过安装探测确定 Factory 版本时会报告相应的传输类型。Codex 的 `mcp_startup` 能力说明首个模型请求可能在部分服务仍在启动时发出，服务的实时状态可从快照读取。
 
-上游还有基于厂商 SDK 的执行模式。当前 Rust 通过 RPC 驱动 Pi 原生进程，请求观测和会话级 MCP 使用 Pi SDK 的 Node 宿主。浏览器接入 Pi Durable，Cursor 使用 CLI 的 ACP。上游 Pi 和 Cursor 的进程内 SDK 能力仍需逐项对齐。
+当前 Rust 通过 RPC 驱动 Pi 原生进程，请求观测和会话级 MCP 使用 Pi SDK 的 Node 宿主。浏览器接入 Pi Durable，Cursor 使用 CLI 的 ACP。Pi 和 Cursor 的进程内 SDK 模式尚未完整支持。
 
-产品服务可以复用 ChatStore 的会话绑定、每回合 Git 检查点、文件清单和工作区回滚。原生会话分叉复制 agent 的对话历史。多客户端可通过同一 SSE 端点订阅。[T3 线程分叉](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/orchestration-v2/ThreadForkService.ts) · [T3 检查点回滚](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/orchestration-v2/CheckpointRollbackService.ts)
+产品服务可以复用 ChatStore 的会话绑定、每回合 Git 检查点、文件清单和工作区回滚。原生会话分叉复制 agent 的对话历史。多客户端可通过同一 SSE 端点订阅。
 
 ### 浏览器中的 Pi Durable
 
@@ -601,7 +599,7 @@ await session.close();
 
 同一个浏览器 Harness 上的多个观察会话可同时订阅一个对话。后加入的客户端能从 Pi Durable 当前状态读取正在执行的工具及其参数、已有输出。根工具的最终结果可包含文字、图片等内容，嵌套工具按原生摘要报告成功或失败。`subscribeEvents(cursor)` 可从同一控制器已确认的事件位置续收；重新 `open` 会创建新的观察流。已在 Chromium 和 IndexedDB 上用真实 Harness 验证中途加入、嵌套工具失败和断线补收。
 
-浏览器集成测试需要 Node 24、上述三个宿主依赖、`esbuild@0.28.2` 和 `playwright-chromium@1.58.1`。构建 Wasm 后，安装该版本 Playwright 对应的 Chromium 并运行 `node tests/browser/live.mjs`。依赖在单独目录时，将 `OAR_BROWSER_DEPS` 指向它的 `node_modules`。测试只访问回环地址上的模拟模型。
+浏览器集成测试需要 Node 24、上述三个宿主依赖、`esbuild@0.28.2` 和 `playwright-chromium@1.58.1`。构建 Wasm 后，安装该版本 Playwright 对应的 Chromium 并运行 `node tests/browser/live.mjs`。测试默认从项目的 `node_modules` 加载依赖。自定义路径见[浏览器测试入口](tests/browser/live.mjs)。测试只访问回环地址上的模拟模型。
 
 ### Mister Morph 本地会话
 
@@ -611,13 +609,13 @@ await session.close();
 
 工具卡片显示 Morph 上报的调用参数、运行中输出和最终结果。`bash` 和 `powershell` 返回完整原生输出格式时，卡片也显示退出码。已在 Morph 0.3.128 上通过本机模型请求执行 `printf`，核对了命令、结果和退出码。
 
-适配器优先连接状态目录中已运行的 Console；需要时启动本机进程，在最后一个持有它的会话关闭时停止该进程。任务通过 HTTP 提交和取消，WebSocket 推送的累积快照会去重，并在终态使用原生任务结果补齐缺失文本。Rust 宿主默认拒绝待审批操作；使用 `ApprovalMode::Host` 时，调用 `session.respond(id, json!({"decision":"approve"}))` 或提交 `"deny"`。已在 macOS arm64 上用官方 Morph 0.3.128、隔离状态目录和本机模型服务器验证双会话共享、消息、关闭及恢复。[Morph 协议说明](https://github.com/botiverse/oar/blob/3edc3cbfcb1789b3163ba3dd3299b749e44bce51/docs/runtimes/morph.md)
+适配器优先连接状态目录中已运行的 Console；需要时启动本机进程，在最后一个持有它的会话关闭时停止该进程。任务通过 HTTP 提交和取消，WebSocket 推送的累积快照会去重，并在终态使用原生任务结果补齐缺失文本。Rust 宿主默认拒绝待审批操作；使用 `ApprovalMode::Host` 时，调用 `session.respond(id, json!({"decision":"approve"}))` 或提交 `"deny"`。已在 macOS arm64 上用官方 Morph 0.3.128、隔离状态目录和本机模型服务器验证双会话共享、消息、关闭及恢复。
 
 ### Cybion 远端会话
 
-SDK 可通过 `kar::community::Cybion::new(base_url, api_key)?.open(options).await?` 获取同一个 `Session` 类型。CLI 从环境变量 `OAR_CYBION_BASE_URL` 和 `OAR_CYBION_API_KEY` 读取部署地址和密钥，支持 `kar open cybion` 和 `kar run cybion '任务' --resume <thread-id>`。新建时可通过 SDK 的 `open_thread` 指定标题和推理强度。
+SDK 可通过 `kar::community::Cybion::new(base_url, api_key)?.open(options).await?` 获取同一个 `Session` 类型。CLI 从[连接配置](src/community/cybion.rs)读取部署地址和密钥，支持 `kar open cybion` 和 `kar run cybion '任务' --resume <thread-id>`。新建时可通过 SDK 的 `open_thread` 指定标题和推理强度。
 
-工作目录和工具由远端 Worker 管理。文本、图片和运行中追加的输入均提交到 Thread；队列留在宿主进程，远端状态和新增历史通过轮询读取。函数调用和自定义工具调用均保留输入，非文本工具结果会完整保留原始值。追加输入仍在等待执行时，后续排队消息会等待当前回合结束。恢复后只记录这次连接观察到的新历史。`abort()` 会向远端请求取消，`close()` 只释放本地连接。回环测试覆盖这两种行为以及原生 HTTP 拒绝响应、请求鉴权、图像、队列撤回和 CLI 恢复。尚未在真实 Cybion 部署上联调。[上游协议说明](https://github.com/botiverse/oar/blob/3edc3cbfcb1789b3163ba3dd3299b749e44bce51/docs/runtimes/cybion.md)
+工作目录和工具由远端 Worker 管理。文本、图片和运行中追加的输入均提交到 Thread；队列留在宿主进程，远端状态和新增历史通过轮询读取。函数调用和自定义工具调用均保留输入，非文本工具结果会完整保留原始值。追加输入仍在等待执行时，后续排队消息会等待当前回合结束。恢复后只记录这次连接观察到的新历史。`abort()` 会向远端请求取消，`close()` 只释放本地连接。回环测试覆盖这两种行为以及原生 HTTP 拒绝响应、请求鉴权、图像、队列撤回和 CLI 恢复。尚未在真实 Cybion 部署上联调。
 
 ## 验证
 
@@ -627,7 +625,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-协议测试使用 Rust 子进程模拟五种供应商接入方式，覆盖多轮控制、审批、排队、撤回、取消、错误、会话恢复、事件回放以及 CLI 和 MCP 的正常入口。真实 CLI 测试需要对应的可执行文件，测试创建独立的配置目录。可单独选择已安装的运行时：
+协议测试使用 Rust 子进程模拟五种供应商接入方式，覆盖多轮控制、审批、排队、撤回、取消、错误、会话恢复、事件回放以及 CLI 和 MCP 的正常入口。真实 CLI 测试需要对应的可执行文件，测试创建独立的配置目录。可单独选择已安装的运行时。实机测试使用的程序路径和环境变量见 [tests](tests) 下对应的测试文件。
 
 ```sh
 cargo test --locked --test native_live actual_codex_turn_and_resume -- --ignored
@@ -636,15 +634,15 @@ cargo test --locked --test native_live actual_claude_turn_and_resume -- --ignore
 cargo test --locked --test native_live actual_opencode_turn_and_resume -- --ignored
 cargo test --locked --test native_live actual_pi_turn_and_resume -- --ignored
 cargo test --locked --test native_live actual_claude_waits_for_host_approval -- --ignored
-OAR_CLAUDE_BIN=/path/to/claude cargo test --locked --test claude_request_live -- --ignored
+cargo test --locked --test claude_request_live -- --ignored
 cargo test --locked --test qwen_live -- --ignored
 cargo test --locked --test morph_live -- --ignored
-OAR_KIMI_BIN=/path/to/kap/kimi cargo test --locked --test kimi_live kap_tool -- --ignored
-OAR_KIMI_ACP_BIN=/path/to/official/kimi cargo test --locked --test kimi_live official_cli -- --ignored
-OAR_GROK_BIN=/path/to/grok cargo test --locked --test grok_live -- --ignored
-OAR_FACTORY_BIN=/path/to/droid cargo test --locked --test factory_live -- --ignored
-OAR_DSH_BIN=/path/to/dsh cargo test --locked --test dsh_live native_ -- --ignored
-OAR_DSH_ACP_BIN=/path/to/older/dsh cargo test --locked --test dsh_live legacy_ -- --ignored
-OAR_PI_BIN=/path/to/npm/bin/pi cargo test --locked --test skill_inventory_live pi_registered_tools -- --ignored
+cargo test --locked --test kimi_live kap_tool -- --ignored
+cargo test --locked --test kimi_live official_cli -- --ignored
+cargo test --locked --test grok_live -- --ignored
+cargo test --locked --test factory_live -- --ignored
+cargo test --locked --test dsh_live native_ -- --ignored
+cargo test --locked --test dsh_live legacy_ -- --ignored
+cargo test --locked --test skill_inventory_live pi_registered_tools -- --ignored
 ```
 
