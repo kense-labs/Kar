@@ -1,5 +1,6 @@
 //! Issue creation and conversations for the repository-scoped REST drivers.
 use super::*;
+pub(in crate::workbench::forge) mod update;
 
 pub(in crate::workbench::forge) fn validate(op: &Operation) -> Result<(), ForgeError> {
     let valid = match op {
@@ -20,6 +21,7 @@ pub(in crate::workbench::forge) fn validate(op: &Operation) -> Result<(), ForgeE
                     .chain(assignees)
                     .all(|s| !s.is_empty() && s.trim() == s)
         }
+        Operation::UpdateIssue { number, fields } => *number > 0 && fields.valid(),
         Operation::CommentIssue { number, body } => {
             *number > 0 && !body.trim().is_empty() && body.encode_utf16().count() <= 65_536
         }
@@ -307,6 +309,7 @@ pub(in crate::workbench::forge) async fn execute(
             labels,
             assignees,
         } => create(c, repo, title, body, labels, assignees).await,
+        Operation::UpdateIssue { number, fields } => update::apply(c, repo, *number, fields).await,
         Operation::IssueComments { number: n, .. } | Operation::CommentIssue { number: n, .. } => {
             let target = child(repo, &["issues", &n.to_string()]);
             let issue = get(c, target.clone()).await?;

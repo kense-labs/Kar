@@ -90,6 +90,11 @@ pub(crate) enum Operation {
     Issue {
         number: u64,
     },
+    UpdateIssue {
+        number: u64,
+        #[serde(flatten)]
+        fields: providers::issue::update::Fields,
+    },
     CreateIssue {
         title: String,
         #[serde(default)]
@@ -121,6 +126,7 @@ impl Operation {
                 | Self::SubmitReview { .. }
                 | Self::ReplyToThread { .. }
                 | Self::SetThreadResolution { .. }
+                | Self::UpdateIssue { .. }
                 | Self::SetIssueState { .. }
                 | Self::CreateIssue { .. }
                 | Self::CommentIssue { .. }
@@ -454,6 +460,7 @@ impl Context {
             op,
             Operation::Issues
                 | Operation::Issue { .. }
+                | Operation::UpdateIssue { .. }
                 | Operation::SetIssueState { .. }
                 | Operation::CreateIssue { .. }
                 | Operation::CommentIssue { .. }

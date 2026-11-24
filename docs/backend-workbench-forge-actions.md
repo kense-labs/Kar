@@ -63,3 +63,10 @@ Kar 将已授权的应用会话保存在工作台私有状态目录下的用户�
 `cargo test --locked --test workbench_forge` 的本地设备协议场景覆盖取消、拒绝、过期、pending、slow_down、授权账号、安装范围、重启使用、401 后刷新。已做 macOS 编译检查，尚待统一实跑。实际授权需要启用设备流程的 Kar GitHub App 和交互式用户批准。
 
 克隆的普通入口和项目克隆任务共用同一传输。SSH 认证或主机密钥被拒时可自动尝试 HTTPS，显式 ssh 请求保留原错误。每次尝试写临时目录，完整后才安装到目标。直接 HTTPS 地址中的用户名、密码与查询只留在当前主机进程；HTTP 快照、项目目录记录及克隆配置中的 origin 使用脱敏 URL。若携带临时凭据的任务在进程重启后仍需认证，可用 Git 凭据助手重试或对同目标重新提供认证地址。
+
+
+## Editing an issue
+
+Send `update_issue` to the ordinary scoped operation endpoint with a stable operation ID, chat ID, issue number and at least one of `title`, `body`, `labels` or `assignees`. An omitted property keeps its current remote value. Empty body and empty metadata arrays clear those fields. Kar verifies issue ownership before sending writes. GitHub metadata requires the returned label and assignee sets to match. Forgejo resolves every label before its first write. Azure uses a revision test and the item's native description or repro field. Reconciliation reads the remote issue and certifies only a matching field set. Partial multi-request edits and missing native receipts remain visible.
+
+`cargo test --locked --test workbench_forge` includes updating and reusing an operation ID and a GitHub peer that silently drops labels. The fixture and installed-provider scenarios await unified execution.

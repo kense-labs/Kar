@@ -141,8 +141,19 @@ impl<'a> Location<'a> {
             ));
         }
         let n = number(&v["id"])?;
+        let present = |key: &str| fields[key].as_str().is_some_and(|s| !s.trim().is_empty());
+        let body_field = if !present("System.Description")
+            && (fields["System.WorkItemType"]
+                .as_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case("Bug"))
+                || present("Microsoft.VSTS.TCM.ReproSteps"))
+        {
+            "Microsoft.VSTS.TCM.ReproSteps"
+        } else {
+            "System.Description"
+        };
         Ok(
-            json!({"number":n,"state":fields["System.State"],"title":fields["System.Title"],"body":fields["System.Description"],
+            json!({"number":n,"body_field":body_field,"state":fields["System.State"],"title":fields["System.Title"],"body":fields[body_field],
             "updated_at":fields["System.ChangedDate"],"url":v.pointer("/_links/html/href"),"work_item_type":fields["System.WorkItemType"],"revision":v["rev"]}),
         )
     }
@@ -235,7 +246,8 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         | Operation::SetThreadResolution { .. }
         | Operation::ReviewThreads { .. }
         | Operation::ThreadComments { .. }) => super::reviews::execute(c, op).await,
-        op @ (Operation::CreateIssue { .. }
+        op @ (Operation::UpdateIssue { .. }
+        | Operation::CreateIssue { .. }
         | Operation::CommentIssue { .. }
         | Operation::IssueComments { .. }) => issue_actions::execute(c, op).await,
         Operation::Identity => {
@@ -436,4 +448,31 @@ pub(super) async fn create_repository(c: &Context, private: bool) -> Result<Valu
         ForgeError::uncertain("Azure did not confirm the requested repository identity")
     })?;
     Ok(raw)
+}
+
+pub(in crate::workbench::forge::providers) async fn issue_fields(
+    c: &Context,
+    n: u64,
+) -> Result<Value, ForgeError> {
+    let l = Location::from(c)?;
+    let raw = get(c, l.url(c, true, "wit", &["workitems", &n.to_string()])?).await?;
+    let mut item = verify(l.issue(&raw)?, n)?;
+    let fields = &raw["fields"];
+    item["labels"] = json!(
+        fields["System.Tags"]
+            .as_str()
+            .into_iter()
+            .flat_map(|s| s.split(';'))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+    );
+    item["assignees"] = json!(
+        fields
+            .get("System.AssignedTo")
+            .filter(|v| !v.is_null() && v.as_str() != Some(""))
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    Ok(item)
 }

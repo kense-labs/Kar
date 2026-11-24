@@ -26,6 +26,30 @@ pub(super) async fn post_comment(State(mock): State<Mock>, Json(input): Json<Val
 }
 pub(super) async fn issue(client: &reqwest::Client, forge: &str, chat: Uuid) {
     let operations = format!("{forge}/operations");
+    let edit = json!({"id":Uuid::new_v4(),"chat":chat,"op":"update_issue","number":7,"body":"","labels":[],"assignees":["fixture-bot"]});
+    for _ in 0..2 {
+        assert_eq!(ok(client.post(&operations).json(&edit)).await["number"], 7);
+    }
+    let mut denied_edit = edit.clone();
+    denied_edit["id"] = json!(Uuid::new_v4());
+    denied_edit["labels"] = json!(["triage-required"]);
+    let refused = client
+        .post(&operations)
+        .json(&denied_edit)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    let reconcile = client
+        .post(format!(
+            "{operations}/{}/reconcile",
+            denied_edit["id"].as_str().unwrap()
+        ))
+        .json(&json!({"number":7}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reconcile.status(), StatusCode::CONFLICT);
     let create = json!({"id":Uuid::new_v4(),"chat":chat,"op":"create_issue","title":"New issue","body":"  original markdown","labels":["bug"],"assignees":["kar-test"]});
     let created = ok(client.post(&operations).json(&create)).await;
     assert_eq!(created["number"], 8);

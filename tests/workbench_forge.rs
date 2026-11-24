@@ -122,7 +122,12 @@ async fn get_issue(State(mock): State<Mock>, Param(n): Param<u64>) -> Response {
 }
 async fn patch_issue(State(mock): State<Mock>, Json(body): Json<Value>) -> Json<Value> {
     let mut db = mock.lock().unwrap();
-    db.issue["state"] = body["state"].clone();
+    if let Some(value)=body.get("state"){db.issue["state"]=value.clone();}
+    for field in ["title","body","labels","assignees"]{
+        if let Some(value)=body.get(field) && !(field=="labels" && value[0]=="triage-required"){
+            db.issue[field]=value.clone();
+        }
+    }
     Json(db.issue.clone())
 }
 fn git(cwd: &Path, args: &[&str]) -> String {

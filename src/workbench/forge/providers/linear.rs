@@ -194,7 +194,8 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         | Operation::SetThreadResolution { .. }
         | Operation::ReviewThreads { .. }
         | Operation::ThreadComments { .. }) => super::reviews::execute(c, op).await,
-        op @ (Operation::CreateIssue { .. }
+        op @ (Operation::UpdateIssue { .. }
+        | Operation::CreateIssue { .. }
         | Operation::CommentIssue { .. }
         | Operation::IssueComments { .. }) => issue_actions::execute(c, op).await,
         Operation::Identity => {
@@ -275,3 +276,22 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
 }
 
 mod issue_actions;
+
+pub(in crate::workbench::forge::providers) async fn issue_fields(
+    c: &Context,
+    n: u64,
+) -> Result<Value, ForgeError> {
+    let (_, key) = c
+        .repository
+        .split_once('/')
+        .ok_or_else(|| invalid("Linear team"))?;
+    let data=gql(c,"query KarEditReceipt($id:String!){issue(id:$id){number team{key} title description assignee{id email displayName name} labels(first:250){nodes{name} pageInfo{hasNextPage}}}}",json!({"id":format!("{key}-{n}")}),false).await?;
+    let row = &data["issue"];
+    if row["team"]["key"] != key || row["number"] != n {
+        return Err(ForgeError::remote(404, "issue is outside the bound team"));
+    }
+    Ok(
+        json!({"title":row["title"],"body":row["description"],"labels":row["labels"]["nodes"],"_labels_truncated":row["labels"]["pageInfo"]["hasNextPage"],
+        "assignees":row.get("assignee").filter(|v|!v.is_null()).into_iter().collect::<Vec<_>>() }),
+    )
+}

@@ -68,7 +68,8 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
                 | Operation::ReplyToThread { number, .. }
                 | Operation::SetThreadResolution { number, .. } => (Some(number), "pull"),
                 Operation::CreateIssue { .. } => (v["number"].as_u64(), "issue"),
-                Operation::SetIssueState { number, .. }
+                Operation::UpdateIssue { number, .. }
+                | Operation::SetIssueState { number, .. }
                 | Operation::CommentIssue { number, .. } => (Some(number), "issue"),
                 _ => unreachable!(),
             };
@@ -290,6 +291,9 @@ async fn reconcile(
                 ));
             }
             v
+        }
+        Operation::UpdateIssue { number, ref fields } if number == input.number => {
+            providers::issue::update::confirm(&c, number, fields).await?
         }
         Operation::SetIssueState { number, state } if number == input.number => {
             let v = c.execute(&Operation::Issue { number }).await?;

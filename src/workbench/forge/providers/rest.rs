@@ -214,7 +214,8 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         | Operation::SetThreadResolution { .. }
         | Operation::ReviewThreads { .. }
         | Operation::ThreadComments { .. }) => super::reviews::execute(c, op).await,
-        op @ (Operation::CreateIssue { .. }
+        op @ (Operation::UpdateIssue { .. }
+        | Operation::CreateIssue { .. }
         | Operation::CommentIssue { .. }
         | Operation::IssueComments { .. }) => super::issue::execute(c, op).await,
         Operation::Identity => {

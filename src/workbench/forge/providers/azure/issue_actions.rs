@@ -3,6 +3,47 @@ use super::*;
 pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeError> {
     let location = Location::from(c)?;
     match op {
+        Operation::UpdateIssue { number: n, fields } => {
+            if fields.assignees.as_ref().is_some_and(|v| v.len() > 1) {
+                return Err(ForgeError::bad("Azure work items have one assignee"));
+            }
+            let item = location.detail(c, *n).await?;
+            let body_key = item["body_field"]
+                .as_str()
+                .ok_or_else(|| invalid("Azure body field"))?;
+            let rev = item["revision"]
+                .as_u64()
+                .ok_or_else(|| invalid("Azure work item revision"))?;
+            let mut patch = vec![json!({"op":"test","path":"/rev","value":rev})];
+            for (key, value) in [
+                ("System.Title", fields.title.clone()),
+                (body_key, fields.body.clone()),
+                ("System.Tags", fields.labels.as_ref().map(|v| v.join("; "))),
+                (
+                    "System.AssignedTo",
+                    fields
+                        .assignees
+                        .as_ref()
+                        .map(|v| v.first().cloned().unwrap_or_default()),
+                ),
+            ] {
+                if let Some(value) = value {
+                    patch.push(json!({"op":"add","path":format!("/fields/{key}"),"value":value}))
+                }
+            }
+            let saved = send(
+                c,
+                Method::PATCH,
+                location.url(c, true, "wit", &["workitems", &n.to_string()])?,
+                Some(json!(patch)),
+                true,
+            )
+            .await?;
+            location
+                .issue(&saved)
+                .and_then(|v| verify(v, *n))
+                .map_err(|_| ForgeError::uncertain("Azure did not confirm the edited work item"))
+        }
         Operation::CreateIssue {
             title,
             body,
