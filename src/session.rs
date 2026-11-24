@@ -1345,6 +1345,9 @@ impl Session {
     pub fn id(&self) -> &str {
         &self.id
     }
+    pub(crate) fn is_closed(&self) -> bool {
+        self.journal.is_closed()
+    }
     pub fn stream_id(&self) -> Uuid {
         self.journal.id()
     }

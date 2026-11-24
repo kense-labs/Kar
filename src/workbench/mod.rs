@@ -1,5 +1,6 @@
 //! A local workbench that shares Kar's saved chats, their native sessions and event cursors.
 mod access;
+mod chat_controls;
 mod documents;
 mod files;
 mod forge;
@@ -54,6 +55,7 @@ struct Inner {
     roots: Vec<Root>,
     catalog: Mutex<Catalog>,
     state: PathBuf,
+    pump: chat_controls::QueuePump,
     access: access::AccessStore,
     documents: documents::Documents,
     terminal_preview: terminal_preview::TerminalPreview,
@@ -123,6 +125,7 @@ impl Workbench {
             chats,
             roots: allowed,
             catalog: Mutex::new(catalog),
+            pump: Default::default(),
             access: access::AccessStore::open(&state)?,
             state,
             documents: Default::default(),
@@ -308,16 +311,7 @@ impl Workbench {
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }
-            if owner.is_none() {
-                *owner = Some(
-                    app.0
-                        .chats
-                        .resume_with(chat, |opts| {
-                            opts.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
-                        })
-                        .await?,
-                );
-            }
+            app.attach(chat, &mut owner).await?;
             owner
                 .as_ref()
                 .expect("open session")

@@ -1921,12 +1921,18 @@ mod cursor_children;
 mod cursor_interactions;
 #[path = "support/workbench_projects.rs"]
 mod workbench_projects;
+#[path = "support/workbench_queue.rs"]
+mod workbench_queue;
 #[path = "support/workbench_server.rs"]
 mod workbench_server;
 
 #[path = "support/worktree_chats.rs"]
 mod worktree_chats;
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("workbench-queue") {
+        workbench_queue::run();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("workbench-projects") {
         workbench_projects::run();
         return;

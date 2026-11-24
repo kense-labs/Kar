@@ -42,3 +42,8 @@ macOS 的原生文档入口已接入 Codex app-server。统一验收命令为 `c
 
 * `cargo test --locked --test workbench_forge` 使用真实本地 Git 裸库、回环 GitHub REST 替身、两个 Kar 进程，涵盖推送、PR/Issue 聊天绑定、差异、持久已审文件、较旧远端结果、限流及写入后丢回执。该场景是本地协议场景。
 * `cargo test --locked --test workbench_forge -- hosted-github` 使用 `KAR_FORGE_TEST_REPO=owner/repository` 指定的可写测试库、`GH_TOKEN` 和已配置的 Git 凭据。通过工作台创建独立分支并推送，然后创建 PR、标记文件、按原请求 ID 重试，最后关闭此次创建的 PR 并输出远端地址。GitHub 会留下测试分支及已关闭 PR。该场景须在获准的专用仓库执行，尚未登记真实远端通过。
+
+
+## macOS 工作台队列恢复（待统一验收）
+
+`cargo test --locked --test chat_restart -- workbench-queue` 使用正常工作台进程和本机 Codex 协议替身。先在 HTTP 队列投递并观察第一轮完成，再停止服务，用现有聊天存储加入两个待发输入和一个已撤回输入。重启后只读取队列与快照，期望原会话自动送出两条待发消息。检查原生输入次数、次序、工作区、原生会话 ID，随后重试同一输入 UUID。该测试仅编译，供应商实机另按第一阶段清单执行。

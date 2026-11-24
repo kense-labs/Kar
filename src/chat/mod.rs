@@ -541,6 +541,9 @@ impl ChatSession {
             worker,
         })
     }
+    pub(crate) fn is_closed(&self) -> bool {
+        self.sender.session.is_closed()
+    }
     pub fn info(&self) -> &ChatInfo {
         &self.sender.info
     }

@@ -60,7 +60,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         return Err(Error::Refused("empty workbench token".into()));
     }
     let lazy_start = if tokio::runtime::Handle::try_current().is_ok() {
-        app.start_workflows()?;
+        app.start_services()?;
         None
     } else {
         Some(app.clone())
@@ -79,6 +79,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
             get(handoffs).post(handoff),
         )
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
+        .merge(super::chat_controls::routes())
         .merge(super::workflows::routes())
         .merge(super::documents::routes())
         .merge(super::forge::routes())
@@ -99,7 +100,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
             move |req: axum::extract::Request, next: middleware::Next| {
                 let app = app.clone();
                 async move {
-                    if let Err(e) = app.start_workflows() {
+                    if let Err(e) = app.start_services() {
                         return ApiError(e).into_response();
                     }
                     next.run(req).await

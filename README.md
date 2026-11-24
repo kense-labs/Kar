@@ -397,6 +397,8 @@ kar workbench --root "$PWD"
 | 新建或列出聊天 | `POST /projects/{p}/chats` 接受 `runtime`、可选的 `model` 和用于重试的聊天 UUID `id`。`GET /projects/{p}/chats?include_archived=true` 可包含已归档的聊天。 |
 | 发送消息 | `POST /projects/{p}/chats/{c}/messages` 接受输入 UUID `id` 与 `text`。重启后发送会恢复原生会话。 |
 | 时间线与续收 | `GET /projects/{p}/chats/{c}/snapshot` 和 `/events` 使用 Kar 的聊天快照与 SSE，支持 `Last-Event-ID`。 |
+| 队列和恢复投递 | 对聊天路径下的 `/queue` 使用 `POST {"id":"输入UUID","text":"消息"}` 持久入队，`GET` 读取状态及最近的接管错误，`DELETE /queue/{id}` 撤回。工作台重启后会扫描已注册项目的队列并恢复原生会话，继续按入队顺序处理。 |
+| 逐回合文件与工作区回滚 | `GET /checkpoints` 列出该聊天每个回合的检查点和文件。`POST /rollback` 接收 `turn`、可选 `before` 和 `dry_run`。 |
 | 归档或重新打开 | `PUT /projects/{p}/chats/{c}/archive` 接受 `{"archived":true}` 或 `false`。 |
 | 读取或保存普通文本文件 | `GET` 或 `PUT /projects/{p}/file?path=relative/path`，正文使用 `{"text":"…"}`。 |
 | 搜索 | `GET /projects/{p}/search?q=关键词&kind=paths`，也可选 `content` 或 `messages`。跨可见项目查聊天用 `GET /search/chats?q=关键词`。 |
