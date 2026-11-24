@@ -132,14 +132,20 @@ pub(super) fn cases() -> Vec<Case> {
     );
     cloud.libtest = true;
     cases.push(cloud);
-    let mut usage = scenario(
-        "lib",
-        "kar_usage_is_scoped_by_open_child_and_handoff",
-        &["--lib", "kar_usage_is_scoped_by_open_child_and_handoff"],
-        "Kar usage from parent, child and handed-off controller streams",
-    );
-    usage.libtest = true;
-    cases.push(usage);
+    for (test, conditions) in [
+        (
+            "kar_usage_is_scoped_by_open_child_and_handoff",
+            "Kar usage from parent, child and handed-off controller streams",
+        ),
+        (
+            "cursor_account_usage_counts_paid_occurrences_across_overlapping_pages",
+            "local Cursor Dashboard protocol peer with overlapping billing pages",
+        ),
+    ] {
+        let mut usage = scenario("lib", test, &["--lib", test], conditions);
+        usage.libtest = true;
+        cases.push(usage);
+    }
     for (test, env, conditions) in [
         (
             "workbench-simlock-live",
