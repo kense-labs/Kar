@@ -91,8 +91,40 @@ pub enum Delivery {
     Queued { input_id: Uuid, turn: Turn },
 }
 
+/// Visibility of native subagents through the selected protocol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttributionTier {
+    None,
+    Opaque,
+    Attributed,
+    Nested,
+}
+
+impl AttributionTier {
+    fn native(protocol: Protocol, runtime: &str, opencode_v2: bool) -> Option<Self> {
+        Some(match protocol {
+            Protocol::Cybion | Protocol::Pi => Self::None,
+            Protocol::Codex | Protocol::Dsh => Self::Nested,
+            Protocol::Claude | Protocol::KimiKap | Protocol::Qoder | Protocol::Qwen => Self::Attributed,
+            Protocol::Factory | Protocol::Morph => Self::Opaque,
+            Protocol::Acp => match runtime {
+                "grok" => Self::Nested,
+                "opencode" if opencode_v2 => Self::Nested,
+                "cursor" => Self::Attributed,
+                "kimi" | "opencode" | "antigravity" | "codebuddy" | "devin" => Self::Opaque,
+                _ => return None,
+            },
+            // An external profile or a different native transport needs its own verified declaration.
+            Protocol::Muse => return None,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct Capabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<AttributionTier>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_memory: Option<crate::NativeMemory>,
     pub protocol: Protocol,
@@ -120,6 +152,7 @@ pub struct Capabilities {
 
 #[derive(Clone)]
 pub struct Session {
+    attribution: Option<AttributionTier>,
     mcp: McpSupport,
     native_memory: Option<crate::NativeMemory>,
     cwd: std::path::PathBuf,
@@ -157,6 +190,7 @@ impl Session {
     ) -> Self {
         let preflight_secrets = Arc::new(crate::options::session_secrets(&options));
         Self {
+            attribution: AttributionTier::native(protocol, "", false),
             mcp: McpSupport::new(protocol, "", None),
             native_memory: None,
             cwd: options.cwd,
@@ -711,6 +745,7 @@ impl Session {
             secrets,
         );
         let mut session = Self {
+            attribution: AttributionTier::native(runtime.protocol, &runtime.id, !opencode_v1),
             preflight_secrets,
             mcp,
             native_memory,
@@ -1567,6 +1602,7 @@ impl Session {
     }
     pub fn capabilities(&self) -> Capabilities {
         Capabilities {
+            attribution: self.attribution,
             native_memory: self.native_memory,
             protocol: self.protocol,
             image_input: self.image_input,
@@ -2498,4 +2534,20 @@ fn required_id(v: &Value, path: &str) -> Result<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .ok_or_else(|| Error::Protocol(format!("missing native identity at {path}")))
+}
+
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::{AttributionTier, Protocol};
+    #[test]
+    fn native_attribution_uses_the_selected_transport_and_release() {
+        use AttributionTier::*;
+        assert_eq!(AttributionTier::native(Protocol::KimiKap, "kimi", false), Some(Attributed));
+        assert_eq!(AttributionTier::native(Protocol::Acp, "kimi", false), Some(Opaque));
+        assert_eq!(AttributionTier::native(Protocol::Acp, "opencode", false), Some(Opaque));
+        assert_eq!(AttributionTier::native(Protocol::Acp, "opencode", true), Some(Nested));
+        assert_eq!(AttributionTier::native(Protocol::Acp, "acp:custom", true), Option::None);
+        assert_eq!(AttributionTier::native(Protocol::Pi, "pi", false), Some(None));
+    }
 }

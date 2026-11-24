@@ -135,7 +135,7 @@ pub use runtime::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use session::{
-    Capabilities, Delivery, DeliverWhen, DeliverOptions, DeliverReceipt, DeliverLanded, MergeInput, MergedInput, InputOptions, PromptDecision, PromptInterrupt, PromptRun,
+    AttributionTier, Capabilities, Delivery, DeliverWhen, DeliverOptions, DeliverReceipt, DeliverLanded, MergeInput, MergedInput, InputOptions, PromptDecision, PromptInterrupt, PromptRun,
     PromptRunOptions, Session, Turn, TurnReport,
 };
 #[cfg(not(target_arch = "wasm32"))]
