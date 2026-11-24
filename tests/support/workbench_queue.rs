@@ -105,5 +105,75 @@ async fn scenario() {
     assert!(calls.iter().all(|c| c["id"] == native_id
         && c["cwd"].as_str().map(std::path::Path::new)
             == Some(work.canonicalize().unwrap().as_path())));
+    let endpoint = format!("{url}{path}/queue");
+    let commands = format!("{endpoint}/commands");
+    let hold = json!({"command_id":Uuid::new_v4(),"action":"hold"});
+    assert_eq!(ok(client.post(&commands).json(&hold)).await["held"], true);
+    let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    for (id, text) in [(a, "original A"), (b, "B"), (c, "C")] {
+        assert_eq!(
+            ok(client.post(&endpoint).json(&json!({"id":id,"text":text}))).await["status"],
+            "pending"
+        );
+    }
+    let edited = json!({"command_id":Uuid::new_v4(),"action":"edit","input":a,"text":"edited A"});
+    let moved = json!({"command_id":Uuid::new_v4(),"action":"reorder","input":c,"before":a});
+    let receipt = ok(client.post(&commands).json(&edited)).await;
+    ok(client.post(&commands).json(&moved)).await;
+    server.kill().await.unwrap();
+    let (mut server, url) = serve(&state, &work, &native).await;
+    let endpoint = format!("{url}{path}/queue");
+    let commands = format!("{endpoint}/commands");
+    let list = ok(client.get(&endpoint)).await;
+    assert_eq!(list["held"], true);
+    let pending: Vec<_> = list["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["status"] == "pending")
+        .map(|i| i["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(pending, ["C", "edited A", "B"]);
+    assert_eq!(ok(client.post(&commands).json(&edited)).await, receipt);
+    let changed = json!({"command_id":edited["command_id"],"action":"edit","input":a,"text":"duplicate mutation"});
+    assert!(
+        !client
+            .post(&commands)
+            .json(&changed)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let first = json!({"command_id":Uuid::new_v4(),"action":"start","input":b});
+    assert_eq!(
+        ok(client.post(&commands).json(&first)).await["next"],
+        b.to_string()
+    );
+    wait(url.clone(), client.clone(), 4).await;
+    ok(client
+        .post(&commands)
+        .json(&json!({"command_id":Uuid::new_v4(),"action":"resume"})))
+    .await;
+    wait(url.clone(), client.clone(), 6).await;
+    let duplicate = ok(client
+        .post(&endpoint)
+        .json(&json!({"id":a,"text":"original A"})))
+    .await;
+    assert_eq!(duplicate["status"], "sent");
+    assert_eq!(duplicate["text"], "edited A");
+    assert_eq!(ok(client.post(&commands).json(&edited)).await, receipt);
+    let calls = fs::read_to_string(native.join("calls"))
+        .unwrap()
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<Value>(l).unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(&calls[3..], ["B", "C", "edited A"]);
     server.kill().await.unwrap();
 }

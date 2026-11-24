@@ -18,7 +18,7 @@ mod log;
 pub(crate) use log::pi::recover as recover_pi;
 mod queue;
 pub(crate) use queue::Admission;
-pub use queue::{InputStatus, QueuedInput};
+pub use queue::{InputStatus, QueueAction, QueueReceipt, QueuedInput};
 mod timeline;
 pub(crate) use log::Sink;
 pub use timeline::{ChatTurn, Item, RetryStatus, Role, TimelineItem, TurnStatus};

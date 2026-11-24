@@ -1,7 +1,9 @@
 //! Producers can add inputs while another process owns the native session. The queue
 //! stores admission order. The chat journal is authoritative about dispatch attempts.
+mod commands;
 use super::{ChatInfo, ChatSession, ChatStore, ChatTurn, Sender, Sink, TurnStatus};
 use crate::{Error, Result};
+pub use commands::{QueueAction, QueueReceipt};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
@@ -43,6 +45,8 @@ pub struct QueuedInput {
 
 #[derive(Serialize, Deserialize)]
 struct Entry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    initial_text: Option<String>,
     id: Uuid,
     text: String,
     withdrawn: bool,
@@ -93,6 +97,12 @@ struct Inbox {
     chat: Uuid,
     native_id: String,
     entries: Vec<Entry>,
+    #[serde(default)]
+    held: bool,
+    #[serde(default)]
+    released: Option<Uuid>,
+    #[serde(default)]
+    commands: std::collections::BTreeMap<Uuid, commands::SavedCommand>,
 }
 impl ChatStore {
     fn inbox_path(&self, id: Uuid) -> std::path::PathBuf {
@@ -106,6 +116,9 @@ impl ChatStore {
                     chat: chat.id,
                     native_id: self.initial_info(chat.id)?.native_id,
                     entries: vec![],
+                    held: false,
+                    released: None,
+                    commands: Default::default(),
                 });
             }
             Err(e) => return Err(e.into()),
@@ -181,14 +194,14 @@ impl ChatStore {
             if turn.is_none() {
                 state.check_new_prompt_id(id)?;
             }
-            if turn.is_some_and(|t| t.prompt() != Some(text.as_str())) {
-                return Err(different_prompt());
-            }
             if let Some(entry) = inbox.entries.iter().find(|e| e.id == id) {
-                if entry.text != text {
+                if entry.text != text && entry.initial_text.as_ref() != Some(&text) {
                     return Err(different_prompt());
                 }
                 return Ok(entry.receipt(&state.info, turn));
+            }
+            if turn.is_some_and(|t| t.prompt() != Some(text.as_str())) {
+                return Err(different_prompt());
             }
             if turn.is_none() {
                 if state.pending_handoff().is_some() {
@@ -197,6 +210,7 @@ impl ChatStore {
                 crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
             }
             let entry = Entry {
+                initial_text: None,
                 id,
                 text,
                 withdrawn: false,
@@ -273,10 +287,13 @@ impl Admission {
                 return Err(Error::Refused("input was withdrawn".into()));
             }
         }
-        if let Some(head) = inbox
-            .entries
-            .iter()
-            .find(|e| e.status(&log.state.info, log.state.find(e.id)) == InputStatus::Pending)
+        if inbox.held
+            && inbox.entries.iter().any(|e| e.id == self.id)
+            && inbox.released != Some(self.id)
+        {
+            return Err(Error::Busy);
+        }
+        if let Some(head) = inbox.next(&log.state)
             && head.id != self.id
         {
             return Err(Error::Busy);
@@ -311,15 +328,12 @@ impl Sender {
         let next = {
             let log = self.sink.0.lock().unwrap();
             log.healthy()?;
-            inbox
-                .entries
-                .into_iter()
-                .find(|e| e.status(&log.state.info, log.state.find(e.id)) == InputStatus::Pending)
+            inbox.next(&log.state).map(|e| (e.id, e.text.clone()))
         };
-        let Some(entry) = next else {
+        let Some((id, text)) = next else {
             return Ok(false);
         };
-        match self.run_turn(entry.id, entry.text).await {
+        match self.run_turn(id, text.clone()).await {
             Ok(_) => Ok(true),
             Err(error) => {
                 if self
@@ -328,7 +342,7 @@ impl Sender {
                     .lock()
                     .unwrap()
                     .state
-                    .find(entry.id)
+                    .find(id)
                     .is_some_and(|turn| {
                         turn.native_input_receipt == Some(crate::InputReceipt::Refused)
                     })
@@ -341,7 +355,7 @@ impl Sender {
                     .read_inbox(&self.info)?
                     .entries
                     .iter()
-                    .any(|e| e.id == entry.id && e.withdrawn)
+                    .any(|e| e.id == id && (e.withdrawn || e.text != text))
                 {
                     Ok(true)
                 } else {

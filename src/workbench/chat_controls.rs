@@ -169,6 +169,7 @@ impl Workbench {
 
 #[derive(Serialize)]
 struct Queue {
+    held: bool,
     inputs: Vec<QueuedInput>,
     delivery_error: Option<String>,
 }
@@ -178,7 +179,7 @@ async fn list(
 ) -> std::result::Result<Json<Queue>, ApiError> {
     blocking(move || {
         app.binding(p, c)?;
-        let inputs = app.0.chats.queued_inputs(c)?;
+        let (held, inputs) = app.0.chats.queue_view(c)?;
         let delivery_error = app
             .0
             .pump
@@ -188,9 +189,36 @@ async fn list(
             .get(&c)
             .map(|v| v.1.clone());
         Ok(Queue {
+            held,
             inputs,
             delivery_error,
         })
+    })
+    .await
+}
+#[derive(Deserialize)]
+struct QueueCommand {
+    command_id: Uuid,
+    #[serde(flatten)]
+    action: crate::chat::QueueAction,
+}
+async fn control_queue(
+    State(app): State<Workbench>,
+    Path((p, c)): Path<(Uuid, Uuid)>,
+    Json(request): Json<QueueCommand>,
+) -> std::result::Result<Json<crate::chat::QueueReceipt>, ApiError> {
+    blocking(move || {
+        app.binding(p, c)?;
+        if app.archived(c) {
+            return Err(Error::Refused("chat is archived".into()));
+        }
+        let receipt = app
+            .0
+            .chats
+            .queue_control(c, request.command_id, request.action)?;
+        app.0.pump.errors.lock().unwrap().remove(&c);
+        app.wake_queue();
+        Ok(receipt)
     })
     .await
 }
@@ -408,6 +436,10 @@ pub(super) fn routes() -> Router<Workbench> {
         .route(
             "/projects/{project}/chats/{chat}/queue",
             get(list).post(enqueue),
+        )
+        .route(
+            "/projects/{project}/chats/{chat}/queue/commands",
+            post(control_queue),
         )
         .route(
             "/projects/{project}/chats/{chat}/queue/{id}",
