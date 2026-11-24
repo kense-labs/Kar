@@ -417,8 +417,8 @@ impl super::ChatStore {
         }
         let id = h.request.id;
         let old = log.state.info.native_id.clone();
-        let runtime = log.state.info.launch_runtime(opts).await?;
         let mut fresh = opts.before_chat_attach()?;
+        let runtime = log.state.info.launch_runtime(self, &mut fresh).await?;
         fresh.resume = None;
         let new = runtime.open_selected(fresh).await?;
         if !new.capabilities().resume {
@@ -439,6 +439,7 @@ impl super::ChatStore {
         destination: Option<crate::provider_instance::HistoryInstance>,
         configure: impl FnOnce(&mut crate::SessionOptions),
     ) -> Result<(Handoff, Option<super::ChatSession>)> {
+        let _registry_pin = crate::workbench::acp_registry::pin(self, &request.runtime)?;
         let mut log = self.open_controller(id).await?;
         if log
             .state
@@ -549,9 +550,9 @@ impl super::ChatStore {
             let (runtime, version) = if let Some(target) = &h.target {
                 let mut saved = log.state.info.clone();
                 target.activate(&mut saved);
-                (saved.launch_runtime(&opts).await?, None)
+                (saved.launch_runtime(self, &mut opts).await?, None)
             } else {
-                let mut runtime = crate::runtime(&h.request.runtime)?;
+                let mut runtime = self.resolve_runtime(&h.request.runtime, &mut opts)?;
                 if let Some(program) = h
                     .destination_instance
                     .as_ref()

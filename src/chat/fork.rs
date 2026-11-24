@@ -182,8 +182,9 @@ struct CutPlan {
 
 impl CutPlan {
     async fn prepare(
+        store: &ChatStore,
         parent: &ChatInfo,
-        opts: &SessionOptions,
+        opts: &mut SessionOptions,
         cut: &mut super::ChatTurn,
         native_route: bool,
         policy: ForkPolicy,
@@ -199,7 +200,7 @@ impl CutPlan {
                     .await
                     .map_err(|e| Error::Closed(e.to_string()))??;
         }
-        let rt = parent.launch_runtime(&opts).await?;
+        let rt = parent.launch_runtime(store, opts).await?;
         let opencode = parent.protocol == Protocol::Acp && parent.runtime == "opencode";
         let mut native = native_route && (cut.fork_anchor.is_some() || opencode);
         let mut version = None;
@@ -272,9 +273,10 @@ impl CutPlan {
 }
 
 pub(super) async fn open_context_cut(
+    store: &ChatStore,
     info: &ChatInfo,
     cut: &mut super::ChatTurn,
-    opts: &SessionOptions,
+    opts: &mut SessionOptions,
     allow_native: bool,
     policy: ForkPolicy,
 ) -> Result<(crate::Session, ForkMode)> {
@@ -283,7 +285,7 @@ pub(super) async fn open_context_cut(
             info.protocol,
             Protocol::Codex | Protocol::Claude | Protocol::Pi | Protocol::Dsh
         ) || info.runtime == "opencode");
-    let (session, anchor) = CutPlan::prepare(info, opts, cut, allowed, policy)
+    let (session, anchor) = CutPlan::prepare(store, info, opts, cut, allowed, policy)
         .await?
         .open(&info.native_id, opts, cut, false)
         .await?;
@@ -466,12 +468,13 @@ impl ChatStore {
         .map_err(|e| Error::Closed(e.to_string()))?
     }
     pub(super) async fn open_saved(
+        &self,
         state: &log::State,
         mut opts: SessionOptions,
     ) -> Result<Session> {
         let info = &state.info;
         opts.cwd = info.workspace.clone();
-        let rt = info.launch_runtime(&opts).await?;
+        let rt = info.launch_runtime(self, &mut opts).await?;
         // Claude persists the fork transcript on its first new prompt. Until then the
         // durable identity is the source, inclusive anchor and the preassigned child UUID.
         if rt.protocol == Protocol::Claude
@@ -786,7 +789,7 @@ impl ChatStore {
                 self.fork_restore(&source, target, true).await?;
                 None
             };
-            let plan = CutPlan::prepare(&parent, &opts, cut, native_route, policy).await?;
+            let plan = CutPlan::prepare(self, &parent, &mut opts, cut, native_route, policy).await?;
             if let Some(r) = &request {
                 r.begin(parent.id, turn, destination.as_deref())?;
             }
@@ -913,7 +916,7 @@ impl ChatStore {
             return Err(error);
         }
         // Launch in the restored checkout so workspace-derived instructions are loaded there.
-        let session = match Self::open_saved(&log.state, opts.before_chat_attach()?).await {
+        let session = match self.open_saved(&log.state, opts.before_chat_attach()?).await {
             Ok(s) => s,
             Err(e) => self.renew_empty_target(&mut log, &opts, e).await?,
         };

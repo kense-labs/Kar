@@ -1,5 +1,6 @@
 //! A local workbench that shares Kar's saved chats, their native sessions and event cursors.
 mod access;
+pub(crate) mod acp_registry;
 mod agent_sessions;
 mod assets;
 mod background;
@@ -110,6 +111,7 @@ impl Controller {
 }
 
 struct Inner {
+    acp_registry: acp_registry::Catalog,
     mcp: mcp::Registry,
     shell: shell::Service,
     suggestions: crate::PromptSuggestions,
@@ -209,6 +211,7 @@ impl Workbench {
             }));
             let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
             Inner {
+                acp_registry: Default::default(),
                 mcp: Default::default(),
                 shell,
                 suggestions: crate::PromptSuggestions::new(catalog.prompt_suggestions),

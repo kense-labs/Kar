@@ -317,6 +317,7 @@ fn consistent(local: &ChatTurn, root: &str, edits: &[ChatEdit]) -> bool {
 }
 
 pub(crate) async fn recover(
+    store: &crate::chat::ChatStore,
     info: &ChatInfo,
     session: &Session,
     opts: &SessionOptions,
@@ -334,7 +335,7 @@ pub(crate) async fn recover(
     }) {
         return Ok(None);
     }
-    let rt = info.launch_runtime(opts).await?;
+    let rt = info.launch_runtime(store, &mut opts.clone()).await?;
     let major = crate::account::release(&rt.launch_version(opts).await?).map(|v| v.0);
     if !matches!(major, Some(1 | 2)) {
         return Ok(None);

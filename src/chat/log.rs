@@ -1517,6 +1517,7 @@ impl Log {
                 }
             } else if self.state.info.runtime == "opencode" && session.protocol() == Protocol::Acp {
                 crate::providers::opencode_recovery::recover(
+                    store,
                     &self.state.info,
                     session,
                     options,

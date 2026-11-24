@@ -88,6 +88,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
         .merge(super::mcp::permission_routes())
         .merge(super::agent_sessions::routes())
+        .merge(super::acp_registry::routes())
         .merge(super::chat_controls::routes())
         .merge(super::background::routes())
         .merge(super::thread_find::routes())
@@ -195,9 +196,9 @@ async fn models(
 ) -> Reply<crate::forms::ModelListing> {
     let project = app.project(project)?;
     app.workspace(&project)?;
-    let rt = crate::runtime(&runtime)?;
     let mut opts = crate::SessionOptions::new(project.root);
     opts.remove_env("KAR_WORKBENCH_TOKEN")?;
+    let rt = app.0.chats.resolve_runtime(&runtime, &mut opts)?;
     Ok(Json(rt.form_model_listing(&opts, Vec::new()).await))
 }
 

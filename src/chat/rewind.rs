@@ -245,9 +245,10 @@ impl ChatStore {
             let mut cut: ChatTurn = state.turns[index].clone();
             let native_owner = if same_provider { &source } else { current };
             let (session, mode) = fork::open_context_cut(
+                self,
                 native_owner,
                 &mut cut,
-                &opts,
+                &mut opts,
                 same_provider,
                 request.policy,
             )

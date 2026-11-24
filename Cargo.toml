@@ -71,6 +71,10 @@ json_comments = "0.2"
 cap-std = "3"
 cap-fs-ext = "3"
 ruzstd = "0.9.1"
+tar = { version = "0.4", default-features = false }
+bzip2 = "0.6"
+flate2 = "1"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 sqlite-core = "0.12.0"
 struson = "0.7.2"
 
@@ -179,4 +183,9 @@ harness = false
 [[test]]
 name = "workbench_provider_chat"
 path = "tests/workbench_provider_chat.rs"
+harness = false
+
+[[test]]
+name = "workbench_acp_registry"
+path = "tests/workbench_acp_registry.rs"
 harness = false

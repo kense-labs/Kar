@@ -45,12 +45,19 @@ pub(super) fn cases() -> Vec<Case> {
             "--test",
             "workbench_agent_sessions",
             "--test",
+            "workbench_acp_registry",
+            "--test",
             "workbench_acceptance",
         ],
         "macOS, actual Kar, local Git repositories, PTY and Kantor files; provider and hosting protocol fixtures",
     );
     local.switches.insert("KAR_HANDOFF_LIVE".into(), "0".into());
     cases.push(local);
+    let mut acp = scenario("workbench_acp_registry", "official-registry-chat",
+        &["--test", "workbench_acp_registry", "--", "official"],
+        "official ACP catalog, existing provider account and two native model turns; optional KAR_ACP_LIVE_DISTRIBUTION");
+    acp.environment.push("KAR_ACP_LIVE_AGENT".into());
+    cases.push(acp);
     for (mode, requires) in [
         ("workbench-background", "Claude protocol task roster, dual clients, controller restart and native task ID reuse"),
         ("workbench-editors", "macOS editor discovery and literal path/position, Rust launcher fixture"),

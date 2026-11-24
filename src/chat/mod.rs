@@ -137,16 +137,16 @@ impl ChatInfo {
         opts.approvals = self.approvals;
         opts
     }
-    pub(crate) async fn launch_runtime(&self, opts: &SessionOptions) -> Result<crate::Runtime> {
-        let rt = self.runtime()?;
+    pub(crate) async fn launch_runtime(&self, store: &ChatStore, opts: &mut SessionOptions) -> Result<crate::Runtime> {
+        let rt = self.runtime(store, opts)?;
         if rt.program.is_absolute() {
             Ok(rt)
         } else {
             rt.selected(opts).await
         }
     }
-    fn runtime(&self) -> Result<crate::Runtime> {
-        let mut rt = runtime(&self.runtime)?;
+    fn runtime(&self, store: &ChatStore, opts: &mut SessionOptions) -> Result<crate::Runtime> {
+        let mut rt = store.resolve_runtime(&self.runtime, opts)?;
         // Chats created through the former ACP adapter keep their native transport.
         if self.runtime == "dsh" && self.protocol == Protocol::Acp {
             rt.protocol = Protocol::Acp;
@@ -168,6 +168,9 @@ impl ChatInfo {
             return Err(Error::Unsupported(
                 "saved provider protocol has changed".into(),
             ));
+        }
+        if self.runtime.starts_with("acp:") && rt.program != self.program {
+            return Err(Error::Refused("prepared ACP executable differs from saved chat".into()));
         }
         rt.program = self.program.clone();
         Ok(rt)
@@ -274,6 +277,13 @@ impl ChatStore {
             .ok_or_else(|| Error::Protocol("set KAR_CHAT_DIR to a writable directory".into()))?;
         Self::open(state.join("kar/chats"))
     }
+    pub(crate) fn resolve_runtime(&self, id: &str, opts: &mut SessionOptions) -> Result<crate::Runtime> {
+        if id.starts_with("acp:") {
+            crate::workbench::acp_registry::resolve(self, id, opts)
+        } else {
+            runtime(id)
+        }
+    }
     pub(crate) fn directory(&self) -> &Path {
         &self.dir
     }
@@ -318,8 +328,11 @@ impl ChatStore {
         options.system_prompt = info.settings.system_prompt.clone();
         options.append_system_prompt = info.settings.append_system_prompt.clone();
         options.exclude_user_configuration = info.settings.exclude_user_configuration.clone();
-        info.runtime()?
-            .side_question(&info.native_id, question, &options)
+        let mut launch = SessionOptions::new(&info.workspace);
+        launch.unset_env.clone_from(&info.unset_env);
+        let rt = info.runtime(self, &mut launch)?;
+        options.env = launch.env;
+        rt.side_question(&info.native_id, question, &options)
             .await
     }
     /// Most recently used chats first. Reading history never changes this order.
@@ -485,7 +498,11 @@ impl ChatStore {
         }
         opts.cwd = opts.cwd.canonicalize()?;
         let worktree = crate::workbench_git::pin_checkout(&opts.cwd)?;
-        let mut rt = runtime(runtime_id)?;
+        let _registry_pin = crate::workbench::acp_registry::pin(self, runtime_id)?;
+        let mut rt = self.resolve_runtime(runtime_id, &mut opts)?;
+        if runtime_id.starts_with("acp:") && program.is_some() {
+            return Err(Error::Refused("a prepared ACP instance owns its executable".into()));
+        }
         if let Some(bin) = program {
             rt.program = bin.to_owned();
         }
@@ -582,7 +599,7 @@ impl ChatStore {
             profile.configure(&mut opts)?;
         }
         opts.cwd = info.workspace.clone();
-        let session = match Self::open_saved(&log.state, opts.before_chat_attach()?).await {
+        let session = match self.open_saved(&log.state, opts.before_chat_attach()?).await {
             Ok(session) => session,
             Err(error) => self.renew_empty_target(&mut log, &opts, error).await?,
         };

@@ -506,6 +506,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "776dfebd015e2d8732c684a2c71003674ccb49457b539b9e82151ba38e96dd7c"
 
 [[package]]
+name = "bzip2"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
+dependencies = [
+ "libbz2-rs-sys",
+]
+
+[[package]]
 name = "calamine"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2775,11 +2784,13 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "bzip2",
  "cap-fs-ext",
  "cap-std",
  "clap",
  "docs_engine",
  "eventsource-stream",
+ "flate2",
  "futures-util",
  "getrandom 0.3.4",
  "gix",
@@ -2817,6 +2828,7 @@ dependencies = [
  "struson",
  "subtle",
  "sysinfo",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -2833,6 +2845,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "zeroize",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -2879,6 +2892,12 @@ name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
+
+[[package]]
+name = "libbz2-rs-sys"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5314d1d545fce0307c770d791adf20d997e0b63b64e1ffeed8a920e290eabe4"
 
 [[package]]
 name = "libc"
@@ -4377,6 +4396,16 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-io-kit",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]
