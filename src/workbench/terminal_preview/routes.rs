@@ -1,4 +1,5 @@
 use super::{InputReceipt, Meta, Page, Port, Status, Workbench, preview::Preview, process};
+use crate::workbench::access::DeviceLease;
 use crate::{Error, Result, workbench::http::ApiError};
 use axum::{
     Json, Router,
@@ -189,6 +190,7 @@ struct Target {
 async fn open_preview(
     State(app): State<Workbench>,
     Path(p): Path<Uuid>,
+    device: Option<axum::Extension<DeviceLease>>,
     Json(q): Json<Target>,
 ) -> Reply<Preview> {
     app.project(p)?;
@@ -196,28 +198,43 @@ async fn open_preview(
     Ok(Json(
         state
             .grants
-            .open(p, state.find(p, q.terminal)?, q.target)
+            .open(p, state.find(p, q.terminal)?, q.target, device.map(|d| d.0))
             .await?,
     ))
 }
-async fn previews(State(app): State<Workbench>, Path(p): Path<Uuid>) -> Reply<Vec<Preview>> {
+async fn previews(
+    State(app): State<Workbench>,
+    Path(p): Path<Uuid>,
+    device: Option<axum::Extension<DeviceLease>>,
+) -> Reply<Vec<Preview>> {
     app.project(p)?;
-    Ok(Json(app.0.terminal_preview.grants.list(p)))
+    Ok(Json(
+        app.0.terminal_preview.grants.list(p, device.map(|d| d.id)),
+    ))
 }
 async fn close_preview(
     State(app): State<Workbench>,
     Path((p, id)): Path<(Uuid, Uuid)>,
+    device: Option<axum::Extension<DeviceLease>>,
 ) -> Reply<()> {
     app.project(p)?;
-    app.0.terminal_preview.grants.close(p, id)?;
+    app.0
+        .terminal_preview
+        .grants
+        .close(p, id, device.map(|d| d.id))?;
     Ok(Json(()))
 }
 async fn tunnel(
     State(app): State<Workbench>,
     Path((p, id)): Path<(Uuid, Uuid)>,
+    device: Option<axum::Extension<DeviceLease>>,
     upgrade: WebSocketUpgrade,
 ) -> std::result::Result<Response, ApiError> {
     app.project(p)?;
-    let grant = app.0.terminal_preview.grants.get(p, id)?;
+    let grant = app
+        .0
+        .terminal_preview
+        .grants
+        .get(p, id, device.map(|d| d.id))?;
     Ok(upgrade.on_upgrade(move |socket| grant.websocket(socket)))
 }

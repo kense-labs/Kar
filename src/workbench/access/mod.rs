@@ -180,7 +180,7 @@ async fn owner(State(auth): State<Auth>, req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-pub(super) async fn authorize(State(auth): State<Auth>, req: Request, next: Next) -> Response {
+pub(super) async fn authorize(State(auth): State<Auth>, mut req: Request, next: Next) -> Response {
     let key = bearer(req.headers());
     if auth.owner(key) {
         return next.run(req).await;
@@ -192,18 +192,35 @@ pub(super) async fn authorize(State(auth): State<Auth>, req: Request, next: Next
         return AccessError::Invalid.into_response();
     };
     let hash = digest(secret);
-    let mut updates = auth.app.0.access.changed.subscribe();
-    if !auth.app.0.access.device_active(id, &hash) {
+    let device = DeviceLease {
+        app: std::sync::Arc::downgrade(&auth.app.0),
+        id,
+        hash,
+        changed: auth.app.0.access.changed.subscribe(),
+    };
+    if !device.active() {
         return AccessError::Invalid.into_response();
     }
-    let revoked = async move {
-        loop {
-            if !auth.app.0.access.device_active(id, &hash) || updates.changed().await.is_err() {
-                return;
-            }
-        }
-    };
-    restrict(req, next, revoked).await
+    req.extensions_mut().insert(device.clone());
+    restrict(req, next, device.revoked()).await
+}
+
+#[derive(Clone)]
+pub(super) struct DeviceLease {
+    app: std::sync::Weak<super::Inner>,
+    pub(super) id: Uuid,
+    hash: String,
+    changed: watch::Receiver<()>,
+}
+impl DeviceLease {
+    pub(super) fn active(&self) -> bool {
+        self.app
+            .upgrade()
+            .is_some_and(|app| app.access.device_active(self.id, &self.hash))
+    }
+    pub(super) async fn revoked(mut self) {
+        while self.active() && self.changed.changed().await.is_ok() {}
+    }
 }
 
 async fn restrict(

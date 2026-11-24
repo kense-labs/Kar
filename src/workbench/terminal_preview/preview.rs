@@ -1,5 +1,5 @@
 use super::{Port, ProcessId, Status, Terminal, process};
-use crate::{Error, Result};
+use crate::{Error, Result, workbench::access::DeviceLease};
 use axum::{
     Router,
     body::Body,
@@ -38,6 +38,7 @@ pub(super) struct Preview {
 
 pub(super) struct Grant {
     pub info: Preview,
+    device: Option<DeviceLease>,
     terminal: Weak<Terminal>,
     root: ProcessId,
     authority: String,
@@ -55,7 +56,11 @@ impl Grant {
         self.stop.send_replace(true);
     }
     fn active(&self) -> bool {
-        !*self.stop.borrow()
+        !*self.stop.borrow() && self.device.as_ref().is_none_or(DeviceLease::active)
+    }
+    fn belongs_to(&self, project: Uuid, device: Option<Uuid>) -> bool {
+        self.info.project == project
+            && device.is_none_or(|id| self.device.as_ref().is_some_and(|d| d.id == id))
     }
     async fn visible(&self) -> Result<bool> {
         if !self.active()
@@ -139,7 +144,13 @@ impl Grant {
 #[derive(Default)]
 pub(super) struct Grants(Mutex<HashMap<Uuid, Arc<Grant>>>);
 impl Grants {
-    pub async fn open(&self, project: Uuid, term: Arc<Terminal>, target: Port) -> Result<Preview> {
+    pub async fn open(
+        &self,
+        project: Uuid,
+        term: Arc<Terminal>,
+        target: Port,
+        device: Option<DeviceLease>,
+    ) -> Result<Preview> {
         let m = term.snapshot();
         let root = m
             .process
@@ -171,6 +182,7 @@ impl Grants {
         };
         let grant = Arc::new(Grant {
             info: info.clone(),
+            device: device.clone(),
             terminal: Arc::downgrade(&term),
             root,
             authority,
@@ -196,31 +208,37 @@ impl Grants {
                     }
                 }
             };
-            tokio::select! {_=polling=>{},_=stopped(stop)=>{}}
+            let revoked = async {
+                match device {
+                    Some(device) => device.revoked().await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            tokio::select! {_=polling=>{},_=stopped(stop)=>{},_=revoked=>grant.revoke()}
         });
         Ok(info)
     }
-    pub fn get(&self, project: Uuid, id: Uuid) -> Result<Arc<Grant>> {
+    pub fn get(&self, project: Uuid, id: Uuid, device: Option<Uuid>) -> Result<Arc<Grant>> {
         self.0
             .lock()
             .unwrap()
             .get(&id)
-            .filter(|g| g.info.project == project && g.active())
+            .filter(|g| g.belongs_to(project, device) && g.active())
             .cloned()
             .ok_or_else(super::missing)
     }
-    pub fn list(&self, project: Uuid) -> Vec<Preview> {
+    pub fn list(&self, project: Uuid, device: Option<Uuid>) -> Vec<Preview> {
         self.0
             .lock()
             .unwrap()
             .values()
-            .filter(|g| g.info.project == project && g.active())
+            .filter(|g| g.belongs_to(project, device) && g.active())
             .map(|g| g.info.clone())
             .collect()
     }
-    pub fn close(&self, project: Uuid, id: Uuid) -> Result<()> {
+    pub fn close(&self, project: Uuid, id: Uuid, device: Option<Uuid>) -> Result<()> {
         let mut all = self.0.lock().unwrap();
-        if all.get(&id).is_none_or(|g| g.info.project != project) {
+        if all.get(&id).is_none_or(|g| !g.belongs_to(project, device)) {
             return Err(super::missing());
         }
         all.remove(&id).unwrap().revoke();
