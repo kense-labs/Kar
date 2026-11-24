@@ -1,4 +1,6 @@
 //! Claude's live roster is process-owned. Wait marks change the Working view, never the native result.
+mod antigravity;
+
 use super::{Actor, Direction, Event, Protocol, RecordKind, Value};
 use crate::{
     BackgroundKind, BackgroundWaitReceipt, BackgroundWaitRequest, BackgroundWork, Error,
@@ -11,6 +13,7 @@ pub(super) const WAIT: &str = "kar/background/wait";
 
 #[derive(Default)]
 pub(super) struct ClaudeBackground {
+    antigravity: Option<antigravity::Commands>,
     tools: VecDeque<Launch>,
     seen: VecDeque<Uuid>,
 }
@@ -22,6 +25,9 @@ struct Launch {
 }
 
 impl ClaudeBackground {
+    pub(super) fn for_runtime(protocol: Protocol, id: &str) -> Self {
+        Self { antigravity: (protocol == Protocol::Acp && id == "antigravity").then(Default::default), ..Default::default() }
+    }
     fn tools(&mut self, events: &[Event], turn: Option<Uuid>, secrets: &[String]) -> bool {
         let mut changed = false;
         for event in events {
@@ -118,6 +124,10 @@ fn mark(id: &str, work: BackgroundWork) -> Event {
 }
 impl Actor {
     pub(super) fn background_frame(&mut self, v: &Value, events: &mut Vec<Event>) {
+        if let Some(commands) = &mut self.background.antigravity {
+            commands.frame(v, self.turn.as_ref().and_then(|t| t.chat_input), self.turn.is_some(), events);
+            return;
+        }
         if self.protocol != Protocol::Claude {
             return;
         }
@@ -279,6 +289,10 @@ impl Actor {
         &self,
         req: BackgroundWaitRequest,
     ) -> Result<BackgroundWaitReceipt> {
+        let held_commands = self.background.antigravity.is_some();
+        if self.protocol != Protocol::Claude && !held_commands {
+            return Err(Error::Unsupported("background waits on this runtime".into()));
+        }
         let snapshot = self.journal.snapshot();
         let mut done = HashSet::new();
         let mut matched = vec![];
@@ -298,7 +312,10 @@ impl Actor {
             .map(|r| (r.id.as_str(), r))
             .collect();
         for id in &req.task_ids {
-            let selected = candidates.get(id.as_str()).filter(|row| {
+            // The Antigravity adapter holds the turn itself. Its surfaced tool may have no shell ID.
+            let selected = if held_commands {
+                candidates.values().find(|row| req.started_at.get(id).is_none_or(|at| row.started_at.as_ref() == Some(at)))
+            } else { candidates.get(id.as_str()) }.filter(|row| {
                 req.started_at
                     .get(id)
                     .is_none_or(|at| row.started_at.as_ref() == Some(at))
@@ -312,7 +329,7 @@ impl Actor {
             }
             matched.push(id.clone());
             let mut work = row.background_work.clone().unwrap();
-            if work.awaited != req.waiting {
+            if !held_commands && work.awaited != req.waiting {
                 work.awaited = req.waiting;
                 changes.push(mark(id, work));
             }

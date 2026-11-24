@@ -407,7 +407,7 @@ impl Actor {
         }
         let actor = Self {
             muse: (runtime.protocol == Protocol::Muse).then(|| muse::Projection::new(options)),
-            background: Default::default(),
+            background: background::ClaudeBackground::for_runtime(runtime.protocol, &runtime.id),
             close_ack: None,
             protocol: runtime.protocol,
             usage: wire::usage::Projection::new(

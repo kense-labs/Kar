@@ -78,13 +78,6 @@ pub(in crate::workbench) struct Receipt {
     digest: String,
     result: Option<Value>,
 }
-pub(in crate::workbench) fn launched_by(
-    db: &crate::workbench::Catalog,
-    caller: Uuid,
-    target: Uuid,
-) -> bool {
-    launched_project(db, caller, target).is_some()
-}
 pub(in crate::workbench) fn launched_project(
     db: &crate::workbench::Catalog,
     caller: Uuid,

@@ -1896,7 +1896,7 @@ impl Session {
         &self,
         req: crate::BackgroundWaitRequest,
     ) -> Result<crate::BackgroundWaitReceipt> {
-        if self.protocol != Protocol::Claude {
+        if !matches!(self.protocol, Protocol::Claude | Protocol::Acp) {
             return Err(Error::Unsupported("background waits on this runtime".into()));
         }
         req.validate()?;
