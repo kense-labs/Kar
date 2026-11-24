@@ -1,5 +1,6 @@
 //! REST and native CLI drivers for non-GitHub hosts in the fixed workbench contract.
 mod azure;
+mod credentials;
 mod hosted;
 pub(super) mod linear;
 mod rest;
@@ -114,6 +115,16 @@ fn account(v: &Value, field: &str) -> Result<Value, ForgeError> {
         .ok_or_else(|| invalid("authenticated account"))
 }
 pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeError> {
+    let alternate;
+    let c = if let Some(token) = credentials::resolve(c).await? {
+        alternate = Context {
+            token: Some(token),
+            ..c.clone()
+        };
+        &alternate
+    } else {
+        c
+    };
     match c.kind.as_str() {
         "gitcafe" | "cursor-origin" | "tanstack-source" => hosted::execute(c, op).await,
         "azure-devops" => azure::execute(c, op).await,

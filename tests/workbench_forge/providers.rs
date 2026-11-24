@@ -163,6 +163,8 @@ async fn peer(
         "user" | "auth/principal" | "namespaces" | "org/_apis/connectionData"
     ) {
         json!({"username":"viewer","login":"viewer","nickname":"viewer","handle":"viewer","namespaces":[{"namespace":{"type":"user","slug":"viewer"}}],"authenticatedUser":{"providerDisplayName":"viewer"}})
+    } else if path.ends_with("/pullrequests/2/iterations") {
+        json!({"value":[{"id":2,"sourceRefCommit":{"commitId":HEAD},"commonRefCommit":{"commitId":BASE}},{"id":1,"sourceRefCommit":{"commitId":"stale"},"commonRefCommit":{"commitId":"older"}}]})
     } else if path.ends_with("workitemtypes/Task/states") {
         json!({"value":[{"name":"New","category":"Proposed"},{"name":"Done","category":"Completed"}]})
     } else if path.ends_with("/wiql") {

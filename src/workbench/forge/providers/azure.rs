@@ -90,6 +90,45 @@ impl<'a> Location<'a> {
             "head_ref":branch(&r["sourceRefName"])?,"base_ref":branch(&r["targetRefName"])?,"base_sha":r.pointer("/lastMergeTargetCommit/commitId"),"head_sha":r.pointer("/lastMergeSourceCommit/commitId")}),
         )
     }
+    async fn confirmed_pull(&self, c: &Context, n: u64) -> Result<Value, ForgeError> {
+        let id = n.to_string();
+        let raw = get(c, self.git(c, &["pullrequests", &id])?).await?;
+        let mut pull = verify(self.pull(&raw)?, n)?;
+        // The PR's lastMergeSourceCommit is a trial merge and can lag a push.
+        // Azure ties the actual source and comparison base to a numbered iteration.
+        let iteration = if raw["supportsIterations"] == false {
+            None
+        } else {
+            let v = get(c, self.git(c, &["pullrequests", &id, "iterations"])?).await?;
+            v["value"]
+                .as_array()
+                .ok_or_else(|| invalid("Azure pull iterations"))?
+                .iter()
+                .filter(|it| it["id"].as_u64().is_some())
+                .max_by_key(|it| it["id"].as_u64())
+                .cloned()
+        };
+        pull["head_sha"] = iteration
+            .as_ref()
+            .and_then(|it| it.pointer("/sourceRefCommit/commitId"))
+            .cloned()
+            .unwrap_or_default();
+        pull["base_sha"] = iteration
+            .as_ref()
+            .and_then(|it| it.pointer("/commonRefCommit/commitId"))
+            .cloned()
+            .unwrap_or_default();
+        if let Some(updated) = iteration.as_ref().and_then(|it| it["updatedDate"].as_str())
+            && let Ok(time) = updated.parse::<jiff::Timestamp>()
+            && pull["updated_at"]
+                .as_str()
+                .and_then(|s| s.parse::<jiff::Timestamp>().ok())
+                .is_none_or(|previous| previous < time)
+        {
+            pull["updated_at"] = json!(updated);
+        }
+        Ok(pull)
+    }
     fn issue(&self, v: &Value) -> Result<Value, ForgeError> {
         let fields = &v["fields"];
         if !fields["System.TeamProject"]
@@ -214,10 +253,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
                 json!({"host":c.host,"repository":c.repository,"repository_id":r["id"],"project_id":r["project"]["id"],"account":account,"default_branch":r["defaultBranch"].as_str().and_then(|s|s.strip_prefix("refs/heads/")),"permissions":null}),
             )
         }
-        Operation::Pull { number: n } => verify(
-            l.pull(&get(c, l.git(c, &["pullrequests", &n.to_string()])?).await?)?,
-            *n,
-        ),
+        Operation::Pull { number: n } => l.confirmed_pull(c, *n).await,
         Operation::Pulls => {
             let mut out = vec![];
             let mut seen = std::collections::HashSet::new();

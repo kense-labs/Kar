@@ -282,7 +282,23 @@ fn remote_identity(remote: &str) -> Result<(String, String), ForgeError> {
             Some(port) if !(url.scheme() == "ssh" && port == 22) => format!("{host}:{port}"),
             _ => host.into(),
         };
-        (authority, url.path().trim_matches('/').to_owned())
+        let components = url
+            .path()
+            .trim_matches('/')
+            .split('/')
+            .map(|s| {
+                let decoded = percent_encoding::percent_decode_str(s)
+                    .decode_utf8()
+                    .map_err(|_| ForgeError::bad("origin path is not UTF-8"))?;
+                if decoded.contains('/') {
+                    return Err(ForgeError::bad(
+                        "encoded slash changes the repository identity",
+                    ));
+                }
+                Ok(decoded)
+            })
+            .collect::<Result<Vec<_>, ForgeError>>()?;
+        (authority, components.join("/"))
     } else {
         let (authority, path) = remote
             .split_once(':')
