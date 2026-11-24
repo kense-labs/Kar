@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::workbench::forge::checked_number;
 use super::*;
 mod ci;
+mod host;
 mod update;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -48,10 +49,7 @@ pub(in crate::workbench::forge) async fn execute(
         return Err(ForgeError::bad("a positive pull number is required"));
     }
     if c.kind != "github" {
-        return Err(ForgeError::unsupported(format!(
-            "{} has no configured Kar adapter for this pull action",
-            c.kind
-        )));
+        return host::execute(c, n, action).await;
     }
     let url = rest::project(c)?;
     let pull = issue::child(url.clone(), &["pulls", &n.to_string()]);

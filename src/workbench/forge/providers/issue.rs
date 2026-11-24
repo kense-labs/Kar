@@ -70,7 +70,7 @@ fn page_number(cursor: Option<&str>, initial: u64) -> Result<u64, ForgeError> {
     }
 }
 
-async fn labels(c: &Context, repo: &Url, names: &[String]) -> Result<Vec<u64>, ForgeError> {
+pub(super) async fn labels(c: &Context, repo: &Url, names: &[String]) -> Result<Vec<u64>, ForgeError> {
     let mut found = std::collections::HashMap::new();
     for page in 1..=100 {
         if names.iter().all(|n| found.contains_key(n)) {
@@ -104,7 +104,7 @@ async fn labels(c: &Context, repo: &Url, names: &[String]) -> Result<Vec<u64>, F
         .collect()
 }
 
-async fn gitlab_users(c: &Context, names: &[String]) -> Result<Vec<u64>, ForgeError> {
+pub(super) async fn gitlab_users(c: &Context, names: &[String]) -> Result<Vec<u64>, ForgeError> {
     let mut ids = Vec::new();
     for name in names {
         if let Ok(id) = name.parse::<u64>()

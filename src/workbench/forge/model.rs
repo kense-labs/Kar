@@ -189,7 +189,7 @@ pub(in crate::workbench) async fn pull(
     authorize: impl Fn(&Catalog, &str) -> crate::Result<()>,
 ) -> Result<Value, ForgeError> {
     if let Operation::PullCommand {
-        number,
+        number: _,
         command: action,
     } = &op
     {
@@ -211,7 +211,7 @@ pub(in crate::workbench) async fn pull(
         let c = Context::open(app.clone(), p).await?;
         let repo = c.identity();
         authorize(&app.0.catalog.lock().unwrap(), &repo)?;
-        let result = providers::pull_tools::execute(&c, *number, action).await?;
+        let result = c.execute(&op).await?;
         authorize(&app.0.catalog.lock().unwrap(), &repo)?;
         return Ok(result);
     }

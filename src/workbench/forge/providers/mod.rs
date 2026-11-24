@@ -87,8 +87,8 @@ async fn response(
     accept: Option<&str>,
 ) -> Result<reqwest::Response, ForgeError> {
     let azure_patch = c.kind == "azure-devops"
-        && (method == Method::PATCH
-            || method == Method::POST && body.as_ref().is_some_and(Value::is_array));
+        && matches!(method, Method::PATCH | Method::POST)
+        && body.as_ref().is_some_and(Value::is_array);
     let mut req = c.client.request(method, url);
     if azure_patch {
         req = req.header("Content-Type", "application/json-patch+json");

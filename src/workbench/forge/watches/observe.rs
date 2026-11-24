@@ -147,6 +147,30 @@ pub(super) async fn poll(c: &Context, n: u64) -> Result<Baseline, ForgeError> {
     }
     if c.kind == "github" {
         b.remarks = github_remarks(c, n).await.ok();
+    } else if let Ok(page) = c
+        .execute(&Operation::ReviewThreads {
+            number: n,
+            cursor: None,
+        })
+        .await
+        && let Some(threads) = page["threads"].as_array()
+    {
+        let mut remarks = BTreeMap::new();
+        for thread in threads {
+            for row in thread["comments"].as_array().into_iter().flatten() {
+                if let Some(id) = row["id"].as_str() {
+                    let author = row["author"].as_str().unwrap_or("unknown");
+                    let body = row["body"]
+                        .as_str()
+                        .unwrap_or("")
+                        .chars()
+                        .take(200)
+                        .collect::<String>();
+                    remarks.insert(format!("review/{id}"), format!("{author}: {body}"));
+                }
+            }
+        }
+        b.remarks = Some(remarks);
     }
     Ok(b)
 }

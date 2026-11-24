@@ -592,3 +592,11 @@ pub(super) fn repository_for_issue_scope(c: &Context, scope: &str) -> Result<Str
     }
     Err(ForgeError::bad("invalid Azure work item project scope"))
 }
+
+pub(super) fn check_pull_repository(c:&Context,raw:&Value)->Result<(),ForgeError>{
+    Location::from(c)?.check_repo(&raw["repository"])
+}
+
+pub(super) fn policy_evaluations(c:&Context)->Result<Url,ForgeError>{
+    Location::from(c)?.url(c,true,"policy",&["evaluations"])
+}

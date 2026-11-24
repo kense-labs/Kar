@@ -195,6 +195,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         Operation::Pull { .. }
             | Operation::CreatePull { .. }
             | Operation::Pulls
+            | Operation::PullCommand { .. }
             | Operation::SubmitReview { .. }
             | Operation::ReviewThreads { .. }
             | Operation::ThreadComments { .. }
