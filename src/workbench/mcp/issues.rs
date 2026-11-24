@@ -23,6 +23,8 @@ pub(in crate::workbench) struct Policy {
     workflow_reads: bool,
     #[serde(default)]
     workflow_writes: bool,
+    #[serde(default)]
+    worktree_directory: Option<std::path::PathBuf>,
     issue_scope: Option<String>,
     repository: Option<String>,
 }
@@ -39,6 +41,8 @@ struct Configure {
     workflow_reads: bool,
     #[serde(default)]
     workflow_writes: bool,
+    #[serde(default)]
+    worktree_directory: Option<std::path::PathBuf>,
     issue_scope: Option<String>,
 }
 
@@ -51,6 +55,9 @@ impl Policy {
             return None;
         }
         Self::get(db, project, chat)
+    }
+    pub(super) fn worktree_directory(&self) -> Option<&std::path::Path> {
+        self.worktree_directory.as_deref().filter(|_| self.mode == Mode::Execute)
     }
     pub(super) fn reads_workflows(&self) -> bool {
         self.workflow_reads || self.writes_workflows()
@@ -93,7 +100,12 @@ async fn configure(
     } else {
         None
     };
+    let worktree_directory = if let Some(path) = cfg.worktree_directory {
+        let dir=app.workspace_at(&path)?;
+        Some(dir.root)
+    } else {None};
     let policy = Policy {
+        worktree_directory,
         mode: cfg.mode,
         issue_reads: cfg.issue_reads,
         issue_writes: cfg.issue_writes,
@@ -103,7 +115,7 @@ async fn configure(
         repository,
     };
     app.update(|db| {
-        if (policy.reads_issues() || policy.reads_workflows())
+        if (policy.reads_issues() || policy.reads_workflows() || policy.worktree_directory().is_some())
             && (db.archived.contains(&c)
                 || db
                     .projects

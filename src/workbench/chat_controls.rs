@@ -150,6 +150,7 @@ impl Workbench {
                 loop{
                     let Some(inner)=weak.upgrade() else{return};
                     let app=Workbench(inner);
+                    super::mcp::worktree::recover(&app);
                     let scan=app.clone();
                     match tokio::task::spawn_blocking(move||{ super::access::reconcile_guest_inputs(&scan); scan.queued_chats() }).await {
                         Ok(Ok(pending))=>for(project,chat)in pending{
@@ -177,6 +178,12 @@ impl Workbench {
         project: Uuid,
         id: Uuid,
         owner: &mut MutexGuard<'_, Option<ChatSession>>,
+    ) -> Result<()> {
+        if super::mcp::worktree::pending(self, id) { return Err(Error::Busy); }
+        self.attach_bound(project,id,owner).await
+    }
+    pub(super) async fn attach_bound(
+        &self, project: Uuid, id: Uuid, owner: &mut MutexGuard<'_, Option<ChatSession>>,
     ) -> Result<()> {
         let _dispatch = self.0.chats.stop_fence(id, false)?;
         if owner.as_ref().is_some_and(ChatSession::is_closed)

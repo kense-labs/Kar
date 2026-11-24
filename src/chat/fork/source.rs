@@ -162,6 +162,10 @@ impl Launch {
                     selected_route = Some(&handoff.from);
                 }
             }
+            if let Some(workspace) = current.handoffs.iter().filter(|h| h.through_turn > index).find_map(|h| h.source_workspace.as_ref()) {
+                owner.workspace = workspace.clone();
+                owner.worktree_id = None;
+            }
             if let Some(route) = selected_route {
                 route.activate(&mut owner);
             }

@@ -4,6 +4,7 @@ pub(super) use issues::{Policy, permission_routes};
 mod registry;
 mod toolkit;
 mod workflow;
+pub(in crate::workbench) mod worktree;
 use super::{Workbench, access};
 use axum::{
     Json, Router,

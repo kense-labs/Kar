@@ -1,4 +1,4 @@
-//! Project catalog transactions. A chat's physical directory is immutable even when its project moves.
+//! Project ownership and durable checkout bindings for chats.
 mod managed;
 mod mutation;
 use super::{
@@ -31,6 +31,8 @@ pub struct Metadata {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Binding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task: Option<Uuid>,
     project: Uuid,
     cwd: PathBuf,
     #[serde(default)]
@@ -50,6 +52,19 @@ impl State {
     pub(in crate::workbench) fn ownership_snapshot(&self) -> Self {
         Self { owners: self.owners.clone(), ..Self::default() }
     }
+    pub(in crate::workbench) fn handoff_workspace(&self, chat:Uuid) -> Option<&Path> {
+        let binding = self.owners.get(&chat)?;
+        binding.task.map(|_| binding.cwd.as_path())
+    }
+    pub(in crate::workbench) fn move_checkout(&mut self, project:Uuid, chat:Uuid, task:Uuid, from:&Path, to:&Path) -> Result<()> {
+        if let Some(b)=self.owners.get(&chat) {
+            if b.project != project || b.cwd != from && b.cwd != to {return Err(denied());}
+        }
+        let binding = self.owners.entry(chat).or_insert_with(|| Binding {project,cwd:to.into(),fork:None,task:None});
+        binding.cwd = to.into();
+        binding.task = Some(task);
+        Ok(())
+    }
     pub(super) fn can_bind_import(&self, project: Uuid, chat: Uuid, cwd: &Path) -> bool {
         self.owners
             .get(&chat)
@@ -57,6 +72,7 @@ impl State {
     }
     pub(super) fn bind_import(&mut self, project: Uuid, chat: Uuid, cwd: PathBuf) {
         self.owners.entry(chat).or_insert(Binding {
+            task:None,
             project,
             cwd,
             fork: None,
@@ -85,11 +101,7 @@ impl Workbench {
             if b.project != p.id || b.cwd != info.workspace {
                 return Ok(false);
             }
-            if let Some(task) = self.0.task_folders.workspace(p.id, info.id)?
-                && task != b.cwd
-            {
-                return Err(denied());
-            }
+            self.check_bound_task(b, info.id)?;
             return Ok(true);
         }
         // CLI chats and catalogs predating durable ownership are adopted on the next mutation.
@@ -111,12 +123,21 @@ impl Workbench {
         }
     }
 
+    fn check_bound_task(&self, binding:&Binding, chat:Uuid) -> Result<()> {
+        let path = self.0.task_folders.workspace(binding.project, binding.task.unwrap_or(chat))?;
+        if path.as_ref().is_some_and(|cwd|cwd != &binding.cwd) || binding.task.is_some() && path.is_none() {
+            return Err(denied());
+        }
+        Ok(())
+    }
+
     fn remember_chats(&self, c: &mut Catalog, p: &Project) -> Result<()> {
         for info in self.0.chats.list()? {
             if !c.lifecycle.owners.contains_key(&info.id) && self.owns_chat(c, p, &info)? {
                 c.lifecycle.owners.insert(
                     info.id,
                     Binding {
+                        task:None,
                         project: p.id,
                         fork: info.forked_from.as_ref().map(|f| (f.chat, f.turn)),
                         cwd: info.workspace,
@@ -138,11 +159,7 @@ impl Workbench {
                     return Err(missing());
                 }
                 self.workspace_at(&b.cwd)?;
-                if let Some(task) = self.0.task_folders.workspace(project, id)?
-                    && task != b.cwd
-                {
-                    return Err(denied());
-                }
+                self.check_bound_task(b, id)?;
                 return Ok(b.cwd.clone());
             }
             let cwd = match self.0.chats.initial_info(id) {
@@ -169,6 +186,7 @@ impl Workbench {
             c.lifecycle.owners.insert(
                 id,
                 Binding {
+                    task:None,
                     project,
                     cwd: cwd.clone(),
                     fork: None,
@@ -223,6 +241,7 @@ impl Workbench {
             c.lifecycle.owners.insert(
                 child,
                 Binding {
+                    task:None,
                     project: target,
                     cwd: cwd.into(),
                     fork: Some((parent, turn)),

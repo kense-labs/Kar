@@ -83,6 +83,9 @@ pub enum HandoffStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Handoff {
+    /// Workspace of the native session before moving this chat to a managed checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_workspace: Option<PathBuf>,
     pub request: HandoffRequest,
     /// Pin the selected namespace before native launch so retry cannot switch accounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,7 +119,7 @@ impl Handoff {
             instance_id: instance.as_ref().map(|i| i.id.clone()), budget_bytes: default_budget(),
         }, instance, child, turns, &[])
     }
-    fn prepare(
+    pub(super) fn prepare(
         request: HandoffRequest,
         destination_instance: Option<crate::provider_instance::HistoryInstance>,
         info: &ChatInfo,
@@ -128,6 +131,8 @@ impl Handoff {
                 "handoff budget must be between 512 and 1048576 UTF-8 bytes".into(),
             ));
         }
+        // Native sessions from before a workspace move cannot be resumed in the new checkout.
+        let history = history.iter().rposition(|h| h.source_workspace.is_some()).map_or(history, |last| &history[last+1..]);
         let previous = history.iter().rev().find(|h| {
             h.status == HandoffStatus::Ready
                 && h.from.runtime == request.runtime
@@ -244,6 +249,7 @@ impl Handoff {
             )
         };
         Ok(Self {
+            source_workspace: None,
             request,
             destination_instance,
             status: HandoffStatus::Prepared,

@@ -179,20 +179,25 @@ async fn refs(
     super::http::blocking(move || {
         let project = app.project(project)?;
         let ws = app.workspace(&project)?;
+        app.chat_worktree_refs(&ws.root,&query)
+    })
+    .await
+}
+impl Workbench {
+    pub(super) fn chat_worktree_refs(&self, cwd:&FsPath,query:&BranchQuery)->Result<BranchPage>{
         let mut page =
-            Repository::branches_in_if(&ws.root, &query, |root| app.allowed(root).map(|_| ()))?;
+            Repository::branches_in_if(cwd, query, |root| self.allowed(root).map(|_| ()))?;
         for branch in &mut page.refs {
             if branch
                 .worktree_path
                 .as_ref()
-                .is_some_and(|p| app.allowed(p).is_err())
+                .is_some_and(|p| self.allowed(p).is_err())
             {
                 branch.worktree_path = None;
             }
         }
         Ok(page)
-    })
-    .await
+    }
 }
 async fn watch(
     State(app): State<Workbench>,

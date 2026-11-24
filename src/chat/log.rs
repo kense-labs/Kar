@@ -31,6 +31,10 @@ pub enum ChatUpdate {
         rewind: Box<super::ContextRewind>,
         binding: Option<Box<super::Handoff>>,
     },
+    WorkspaceHandoff {
+        workspace: std::path::PathBuf, worktree_id: Option<Uuid>,
+        handoff: Box<super::Handoff>, target: Box<super::ProviderSession>,
+    },
     HandoffPrepared {
         handoff: Box<super::Handoff>,
     },
@@ -478,6 +482,17 @@ impl State {
             ChatUpdate::ContextRewound { rewind, binding } => {
                 self.apply_rewind(*rewind, binding.map(|h| *h))?;
                 self.ids.retain(|_, index| *index < self.turns.len());
+            }
+            ChatUpdate::WorkspaceHandoff { workspace, worktree_id, handoff, target } => {
+                if handoff.source_workspace.as_ref() != Some(&self.info.workspace) {
+                    return Err(Error::Protocol("workspace handoff source has changed".into()));
+                }
+                let id = handoff.request.id;
+                self.info.workspace = workspace;
+                self.info.worktree_id = worktree_id;
+                self.position = None;
+                self.apply(ChatUpdate::HandoffPrepared { handoff })?;
+                self.apply(ChatUpdate::HandoffReady { id, target })?;
             }
             ChatUpdate::HandoffPrepared { handoff } => self.handoffs.push(*handoff),
             ChatUpdate::HandoffReady { id, target } => {
@@ -1183,6 +1198,7 @@ pub(super) fn visit_info_changes(
         ContextRewound {
             binding: Option<Box<super::Handoff>>,
         },
+        WorkspaceHandoff { workspace: std::path::PathBuf, worktree_id: Option<Uuid>, target: Box<super::ProviderSession> },
         Opened {
             #[serde(default)]
             antigravity_profile: Option<super::AntigravityProfile>,
@@ -1212,6 +1228,11 @@ pub(super) fn visit_info_changes(
                     .target
                     .ok_or_else(|| Error::Protocol("rewind has no provider binding".into()))?
                     .activate(info);
+            }
+            Change::WorkspaceHandoff { workspace, worktree_id, target } => {
+                info.workspace = workspace;
+                info.worktree_id = worktree_id;
+                target.activate(info);
             }
             Change::HandoffReady { target } => target.activate(info),
             Change::HandoffTargetReopened { native_id } => info.native_id = native_id,

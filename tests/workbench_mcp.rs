@@ -1,6 +1,8 @@
 //! Exercise the authenticated Kar listener and the credential handed to a native Codex protocol peer.
 #[path = "workbench_mcp/issues.rs"]
 mod issues;
+#[path = "workbench_mcp/worktree.rs"]
+mod worktree;
 #[path = "workbench_mcp/workflow.rs"]
 mod workflow;
 #[allow(dead_code)]
@@ -67,11 +69,13 @@ async fn open(c: &Client, url: &str, auth: &str) -> String {
 }
 async fn scenario() {
     let t = tempfile::tempdir().unwrap();
-    let root = t.path().join("work");
+    let authorized = t.path().canonicalize().unwrap().join("projects");
+    let root = authorized.join("work");
+    let checkouts = authorized.join("checkouts");
     let state = t.path().join("state");
     let db = t.path().join("provider");
-    for dir in [&root, &db] {
-        fs::create_dir(dir).unwrap();
+    for dir in [&root, &db, &checkouts] {
+        fs::create_dir_all(dir).unwrap();
     }
     let config = t.path().join("forge.toml");
     let writes = issues::fixture(&root, &config).await;
@@ -81,7 +85,7 @@ async fn scenario() {
     let address = observer.local_addr().unwrap().to_string();
     let (mut kar, url) = server::serve_with_env(
         &state,
-        &root,
+        &authorized,
         &db,
         &[
             ("KAR_TEST_MCP_OBSERVER", address.as_ref()),
@@ -257,8 +261,9 @@ async fn scenario() {
             .windows(provider.len())
             .any(|w| w == provider.as_bytes())
     );
+    let moved=worktree::exercise(&url,&a,&observer,p,&checkouts,&db).await;
     kar.kill().await.unwrap();
-    let (mut restarted, url) = server::serve(&state, &root, &db).await;
+    let (mut restarted, url) = server::serve_with_env(&state,&authorized,&db,&[("KAR_TEST_MCP_OBSERVER",address.as_ref())]).await;
     let policy = server::json(a.get(format!(
         "{url}/projects/{p}/chats/{chat}/model-tools/permissions"
     )))
@@ -269,5 +274,6 @@ async fn scenario() {
         server::json(a.get(format!("{url}/projects/{p}/forge/operations/{comment}"))).await;
     assert_eq!(receipt["result"]["Ok"]["comment_id"], 31);
     assert_eq!(writes.lock().unwrap().len(), 4);
+    moved.check(&a,&url,p).await;
     restarted.kill().await.unwrap();
 }

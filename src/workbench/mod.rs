@@ -66,6 +66,8 @@ struct Catalog {
     prompt_suggestions: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     model_tool_permissions: BTreeMap<Uuid, BTreeMap<Uuid, mcp::Policy>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    model_worktree_moves: BTreeMap<Uuid, mcp::worktree::Move>,
     #[serde(default)]
     assets: assets::Registry,
     #[serde(default)]
@@ -437,7 +439,7 @@ impl Workbench {
         match self.0.chats.initial_info(id) {
             Ok(info)
                 if info.forked_from.is_none()
-                    && info.workspace == cwd
+                    && self.0.chats.saved_info(id)?.workspace == cwd
                     && info.runtime == runtime
                     && info.approvals == approvals
                     && info.settings == settings
@@ -506,11 +508,11 @@ impl Workbench {
                 return Err(Error::Refused("chat is archived".into()));
             }
             app.attach(project, chat, &mut owner).await?;
-            owner
-                .as_ref()
-                .expect("open session")
-                .send_attached(input, text, attachments)
-                .await
+            let result = owner.as_ref().expect("open session")
+                .send_attached(input, text, attachments).await;
+            drop(owner);
+            if mcp::worktree::pending(&app,chat) {app.wake_queue();}
+            result
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))?

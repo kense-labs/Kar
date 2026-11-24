@@ -37,6 +37,8 @@ pub(super) struct Member {
     pub name: String,
     pub repository_path: PathBuf,
     pub worktree_path: PathBuf,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    base_commit: Option<String>,
     worktree_id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     selected_branch: Option<String>,
@@ -273,6 +275,7 @@ fn member(task: &Task, path: &Path, name: String) -> Result<Member> {
         Error::Refused("repository lies outside the task's original common directory".into())
     })?;
     Ok(Member {
+        base_commit: None,
         name,
         repository_path: path.into(),
         worktree_path: task.root.join(rel),
@@ -282,7 +285,7 @@ fn member(task: &Task, path: &Path, name: String) -> Result<Member> {
         ready: false,
     })
 }
-fn plan(app: &Workbench, id: Uuid, project: Project, q: Create) -> Result<Record> {
+fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, handoff: bool) -> Result<Record> {
     if !q.single_checkout && app.0.chats.saved_info(id).is_ok() {
         return Err(Error::Refused("a chat already owns this ID".into()));
     }
@@ -305,6 +308,7 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create) -> Result<Record
             project_path: dir.clone(),
             project_is_worktree: true,
             repositories: vec![Member {
+                base_commit: None,
                 name: project.name,
                 repository_path: project.root,
                 worktree_path: dir.clone(),
@@ -327,7 +331,7 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create) -> Result<Record
     }
     let tracked = folders::list(app, &project)?;
     let repos: Vec<_> = tracked.iter().filter(|f| f.state == "git").collect();
-    if repos.is_empty() {
+    if repos.is_empty() && !(handoff && project.root.join(".git").exists()) {
         return Err(Error::Refused(
             "the project has no tracked Git folders for a multi-repository task".into(),
         ));
@@ -412,6 +416,14 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create) -> Result<Record
             {
                 taken.push(other.progress.branch.clone());
             }
+        }
+    }
+    if handoff {
+        if taken.iter().any(|s|collides(s,&q.branch)) {
+            return Err(Error::Refused("requested branch conflicts with an existing or pending branch".into()));
+        }
+        for member in &mut task.repositories {
+            member.base_commit=Some(Repository::open(&member.repository_path)?.resolve(&q.base)?);
         }
     }
     let actual = if project_collision {
@@ -547,7 +559,9 @@ fn checkout(
         .trim_start_matches("origin/");
     let local = format!("refs/heads/{from}");
     let remote = format!("refs/remotes/origin/{from}");
-    let start = if q.single_checkout {
+    let start = if let Some(commit)=entry.base_commit.as_deref() {
+        commit
+    } else if q.single_checkout {
         q.base.as_str()
     } else if from == "HEAD" {
         "HEAD"
@@ -652,6 +666,9 @@ fn rollback(app: &Workbench, r: &Record) -> Result<()> {
     Ok(())
 }
 pub(super) fn create(app: &Workbench, p: Uuid, id: Uuid, q: Create) -> Result<Task> {
+    create_managed(app,p,id,q,false)
+}
+fn create_managed(app: &Workbench, p: Uuid, id: Uuid, q: Create, handoff: bool) -> Result<Task> {
     let store = &app.0.task_folders;
     let life = store.lifecycle(p, id)?;
     let cancel = life.begin()?;
@@ -670,7 +687,7 @@ pub(super) fn create(app: &Workbench, p: Uuid, id: Uuid, q: Create) -> Result<Ta
                 return Err(Error::Refused("cancelled task ID is retired".into()));
             }
             Some(r) => r,
-            None => plan(app, id, app.project(p)?, q)?,
+            None => plan(app, id, app.project(p)?, q, handoff)?,
         };
         if r.progress.phase != "running" {
             r.progress = Snapshot::new(
@@ -856,4 +873,8 @@ pub(in super::super) fn single(
     // detects a replaced directory, and refuses reuse of a retired request.
     app.repository(p)?
         .create_worktree(id, &task.project_path, &branch, &start)
+}
+
+pub(in super::super) fn handoff_task(app:&Workbench, project:Uuid, command:Uuid, directory:PathBuf, branch:String, base:String)->Result<Task>{
+    create_managed(app,project,command,Create { directory, branch, base, repositories:None, single_checkout:false },true)
 }

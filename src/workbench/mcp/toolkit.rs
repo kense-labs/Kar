@@ -100,6 +100,14 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             required: &["command_id", "number", "body"],
         });
     }
+    if caller.grant.is_some() {
+        tools.push(Tool{name:"kar_worktree_list",description:"List the local and remote Git refs visible from this chat's checkout, including checkout paths.",properties:json!({"project_id":id,"thread_id":id,"query":{"type":"string"},"kind":{"enum":["all","local","remote"]},"include_matching_remote_refs":{"type":"boolean"},"cursor":cursor,"limit":limit}),required:&[]});
+        tools.push(Tool{name:"kar_worktree_status",description:"Read this chat's current workspace attachment and its last managed handoff.",properties:json!({"project_id":id,"thread_id":id}),required:&[]});
+        if !caller.plan && caller.policy.as_ref().and_then(Policy::worktree_directory).is_some(){
+            tools.push(Tool{name:"kar_worktree_handoff",description:"Move this chat to a new branch in its granted worktree directory after its current turn. Reuse command_id on retries. A continuation is admitted once in the new workspace.",
+                properties:json!({"project_id":id,"thread_id":id,"command_id":id,"branch":{"type":"string"},"base_ref":{"type":"string"},"continuation_prompt":{"type":"string"}}),required:&["command_id","branch"]});
+        }
+    }
     if let Some(policy) = caller.policy.as_ref().filter(|p| p.reads_workflows()) {
         let mut actions = vec!["definitions","list","read","questions","hooks"];
         if !caller.plan && policy.writes_workflows() { actions.extend(["start","resume","cancel","signal","reconcile"]); }
@@ -224,7 +232,7 @@ pub(super) fn target(app: &Workbench, c: &Caller, p: Option<Uuid>, t: Option<Uui
     let project = match project_scope(c, p)? {
         Some(p) => p,
         None => {
-            let info = app.0.chats.initial_info(thread)?;
+            let info = app.0.chats.saved_info(thread)?;
             let db = app.0.catalog.lock().unwrap();
             let mut project = None;
             for p in db
@@ -252,6 +260,7 @@ pub(super) async fn call(
     if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
         return issues::call(app, caller, name, input).await;
     }
+    if name.starts_with("kar_worktree_") {return super::worktree::call(app,caller,name,input).await;}
     if name == "kar_background_wait" {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -340,7 +349,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
             Ok(
                 json!({"server":"Kar","tools":tools(c).iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
                 "provider_session":c.grant.as_ref().map(|g|json!({"id":g.id,"project_id":g.project,"thread_id":g.chat,"runtime":g.runtime})),
-                "write_access":!c.plan && (c.grant.is_none() || c.policy.as_ref().is_some_and(|p| p.writes_issues() || p.writes_workflows())),"issue_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.policy.as_ref().is_some_and(Policy::reads_issues), "workflow_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_workflows)}),
+                "write_access":!c.plan && (c.grant.is_none() || c.policy.as_ref().is_some_and(|p| p.writes_issues() || p.writes_workflows() || p.worktree_directory().is_some())),"issue_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.policy.as_ref().is_some_and(Policy::reads_issues), "workflow_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_workflows)}),
             )
         }
         "kar_project_list" => {

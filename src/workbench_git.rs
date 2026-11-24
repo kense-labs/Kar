@@ -298,7 +298,7 @@ impl Repository {
         self.resolve("HEAD")
     }
 
-    fn resolve(&self, rev: &str) -> Result<String> {
+    pub(crate) fn resolve(&self, rev: &str) -> Result<String> {
         let value = git(
             &self.root,
             &[

@@ -11,6 +11,7 @@ pub(crate) mod feed;
 mod handoff;
 mod rewind;
 pub use rewind::{ContextRewind, RewindRequest};
+mod workspace_handoff;
 mod http_feed;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
 pub use handoff::{Handoff, HandoffRequest, HandoffStatus, ProviderSession};

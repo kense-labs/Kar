@@ -15,7 +15,7 @@ use axum::{
 pub(super) use folders::{Tracked, normalize};
 use serde::Deserialize;
 use std::path::PathBuf;
-pub(super) use task::{Store, single};
+pub(super) use task::{Store, handoff_task, single};
 use uuid::Uuid;
 
 pub(super) fn routes() -> Router<Workbench> {
