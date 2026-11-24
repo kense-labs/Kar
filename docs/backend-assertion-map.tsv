@@ -66,11 +66,11 @@ sea-trial/vendor/pi-preflight.vendor.test.ts#L7	15	e8d223c	pi	原生程序与回
 sea-trial/vendor/pi-preflight.vendor.test.ts#L7	16	e8d223c	pi	原生程序与回环模型	tests/native_live/pi_history.rs	"fn admission_holds_while_a_second_input_queues_and_both_are_refused() >> r.native[""code""] == ""no_active_turn"""	空闲中止得到有请求关联的 no_active_turn 拒绝。
 sea-trial/vendor/pi-preflight.vendor.test.ts#L7	18	e8d223c	pi	原生程序与回环模型	tests/native_live/pi_history.rs	fn admission_holds_while_a_second_input_queues_and_both_are_refused() >> assert_eq!(recovered, kar::Outcome::Completed)	重新输入可以完成。
 sea-trial/vendor/pi-preflight.vendor.test.ts#L7	19	e8d223c	pi	原生程序与回环模型	tests/native_live/pi_history.rs	fn admission_holds_while_a_second_input_queues_and_both_are_refused() >> assert_eq!(f.calls.lock().unwrap().len(), 1)	恢复后的模型请求总数为一。
-sea-trial/vendor/abort-fallback.vendor.test.ts#L55	69	d8e1dd1	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	"admission.response.native[""type""]"	确认提示有 accepted 回执。
-sea-trial/vendor/abort-fallback.vendor.test.ts#L55	70	d8e1dd1	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	Duration::from_secs(45), seen.notified()	等待真实程序向回环模型发出请求。
-sea-trial/vendor/abort-fallback.vendor.test.ts#L55	75	d8e1dd1	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	assert_eq!(turn.wait().await.unwrap(), Outcome::Aborted)	中止未获响应时限时结束原回合。
-sea-trial/vendor/abort-fallback.vendor.test.ts#L55	80	d8e1dd1	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	"r.native[""method""] == ""turn/interrupt"""	核对发往供应商的中止恰好一次。
-sea-trial/vendor/abort-fallback.vendor.test.ts#L55	81,86	d8e1dd1	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	"assert_eq!(decisions[0].native[""type""], ""accepted"")"	按本次中止请求 ID 核对唯一 accepted。
-sea-trial/vendor/abort-fallback.vendor.test.ts#L55	88,89	d8e1dd1	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	assert_eq!(ends, vec![Outcome::Aborted])	连续两次重放均仅有一个 aborted 与一个 exited。
-sea-trial/cases/session-withdraw.ts#L27	45,55	408b686	pi,factory,qwen	已编译，待统一验收	tests/support/adapter_queue.rs	withdrawn input must leave the session idle	撤回项未启动新回合；宿主关闭后重试，核对已关联的 disposed 或 runtime_exited 拒绝。
-sea-trial/vendor/pi-durable.vendor.test.ts#L66	74	408b686	pi-durable	已编译，待统一验收	tests/browser/host.mjs	Number.isSafeInteger(conversationId) && conversationId > 0	固定源码第 74 行检查原生会话 ID 为正整数；实际浏览器复验待安排。
+sea-trial/vendor/abort-fallback.vendor.test.ts#L55	69	f876d7a	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	"admission.response.native[""type""]"	确认提示有 accepted 回执。
+sea-trial/vendor/abort-fallback.vendor.test.ts#L55	70	f876d7a	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	Duration::from_secs(45), seen.notified()	等待真实程序向回环模型发出请求。
+sea-trial/vendor/abort-fallback.vendor.test.ts#L55	75	f876d7a	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	assert_eq!(turn.wait().await.unwrap(), Outcome::Aborted)	中止未获响应时限时结束原回合。
+sea-trial/vendor/abort-fallback.vendor.test.ts#L55	80	f876d7a	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	"r.native[""method""] == ""turn/interrupt"""	核对发往供应商的中止恰好一次。
+sea-trial/vendor/abort-fallback.vendor.test.ts#L55	81,86	f876d7a	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	"assert_eq!(decisions[0].native[""type""], ""accepted"")"	按本次中止请求 ID 核对唯一 accepted。
+sea-trial/vendor/abort-fallback.vendor.test.ts#L55	88,89	f876d7a	codex,claude	已编译，待统一验收	tests/abort_fallback_live.rs	assert_eq!(ends, vec![Outcome::Aborted])	连续两次重放均仅有一个 aborted 与一个 exited。
+sea-trial/cases/session-withdraw.ts#L27	45,55	924463c	pi,factory,qwen	已编译，待统一验收	tests/support/adapter_queue.rs	withdrawn input must leave the session idle	撤回项未启动新回合；宿主关闭后重试，核对已关联的 disposed 或 runtime_exited 拒绝。
+sea-trial/vendor/pi-durable.vendor.test.ts#L66	74	924463c	pi-durable	已编译，待统一验收	tests/browser/host.mjs	Number.isSafeInteger(conversationId) && conversationId > 0	固定源码第 74 行检查原生会话 ID 为正整数；实际浏览器复验待安排。
