@@ -1651,7 +1651,7 @@ public-case	sea-trial/cases/session-withdraw.ts#L27	session.withdraw-before-disp
 public-case	sea-trial/cases/session.ts#L28	session.query-readbacks-carry-stream-seq	34,37,38,41,42,43,45,46,52,53,54,55	见 backend-evidence.tsv 同址记录
 public-case	sea-trial/cases/session.ts#L64	session.framing-and-attribution	68,75,77,79,81,82,84,86,87,89,91	待逐项核销
 public-case	sea-trial/cases/session.ts#L96	session.single-active-turn	101,103,105	见 backend-evidence.tsv 同址记录
-public-case	sea-trial/cases/session.ts#L118	session.abort-settles-and-is-idempotent	123,125,127,129,131,132,133	待逐项核销
+public-case	sea-trial/cases/session.ts#L118	session.abort-settles-and-is-idempotent	123,125,127,129,131,132,133	见 backend-evidence.tsv 同址记录
 public-case	sea-trial/cases/session.ts#L138	session.steer-after-end	145	见 backend-evidence.tsv 同址记录
 public-case	sea-trial/cases/session.ts#L150	session.observer-isolation	162,163	见 backend-evidence.tsv 同址记录
 public-case	sea-trial/cases/session.ts#L168	session.multi-turn-conversation	176,180,181,184,187	见 backend-evidence.tsv 同址记录
@@ -1966,11 +1966,11 @@ vendor-test	sea-trial/vendor/pi-durable-watch.vendor.test.ts#L67	locally running
 vendor-test	sea-trial/vendor/pi-durable-watch.vendor.test.ts#L90	a native host close records watch provenance and ends the controller	94,96,97,98,100	待逐项核销
 vendor-test	sea-trial/vendor/pi-durable-watch.vendor.test.ts#L104	a native storage failure closes the watch with a JSON-safe cause	110,112,117	待逐项核销
 vendor-test	sea-trial/vendor/pi-durable-watch.vendor.test.ts#L123	unexpected observer end $kind rejects later controls	127,129,131,133,135,139	待逐项核销
-vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L24	prompt, busy rejection, queue, withdraw and native abort	28,30,33,35,37,38,43	待逐项核销
-vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L47	a completed requestId is acknowledged without a second run	54,55,60,61,62	待逐项核销
-vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L66	dispose detaches and a new observer adopts the active run before output	72,74,76,78	待逐项核销
-vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L82	retrying a completed input cannot end another active run	90,91,92,93	待逐项核销
-vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L97	adopting a run refuses changed settings atomically	102,104	待逐项核销
+vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L24	prompt, busy rejection, queue, withdraw and native abort	28,30,33,35,37,38,43	见 backend-evidence.tsv 同址记录
+vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L47	a completed requestId is acknowledged without a second run	54,55,60,61,62	见 backend-evidence.tsv 同址记录
+vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L66	dispose detaches and a new observer adopts the active run before output	72,74,76,78	见 backend-evidence.tsv 同址记录
+vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L82	retrying a completed input cannot end another active run	90,91,92,93	见 backend-evidence.tsv 同址记录
+vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L97	adopting a run refuses changed settings atomically	102,104	见 backend-evidence.tsv 同址记录
 vendor-test	sea-trial/vendor/pi-durable.vendor.test.ts#L109	append provided=%s agrees with the runtime resume declaration	117,121,126,130,132,133,137,138	待逐项核销
 vendor-test	sea-trial/vendor/pi-empty-system-prompt.vendor.test.ts#L29	rejects an empty replacement instead of silently sending the native default	39,41,42,43,44	待逐项核销
 vendor-test	sea-trial/vendor/pi-empty-system-prompt.vendor.test.ts#L51	a whitespace-only replacement still removes the native base prompt	56,58,61,62	待逐项核销
