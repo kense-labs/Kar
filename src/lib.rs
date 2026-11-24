@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 #[cfg(not(target_arch = "wasm32"))]
 pub mod account;
+pub mod brands;
 mod compaction;
 pub mod credentials;
 pub mod forms;
@@ -11,6 +12,8 @@ pub mod host_tools;
 pub use host_tools::serve_mcp_tools;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod inventory;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod orientation;
 #[cfg(not(target_arch = "wasm32"))]
 mod private_dir;
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,9 +38,9 @@ pub use open_error::{
 mod opening;
 pub use context::{ContextBreakdown, ContextCategory, ContextItem, ContextKind, ContextUsage};
 #[cfg(not(target_arch = "wasm32"))]
-mod cursor_models;
-#[cfg(not(target_arch = "wasm32"))]
 mod acp_models;
+#[cfg(not(target_arch = "wasm32"))]
+mod cursor_models;
 mod failure;
 mod goal;
 #[cfg(not(target_arch = "wasm32"))]

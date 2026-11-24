@@ -320,6 +320,17 @@ impl AuthStatus {
     }
 }
 impl Runtime {
+    /// Whether this adapter declares a native account status reader.
+    pub fn has_auth_status(&self) -> bool {
+        Reader::from_id(&self.id).is_some()
+    }
+
+    /// Kar's Qwen reader inspects only user/system credential metadata.
+    /// Cursor's native CLI status is not the upstream SDK's local file reader.
+    pub fn auth_status_local_only(&self) -> bool {
+        Reader::from_id(&self.id) == Some(Reader::Qwen)
+    }
+
     /// Qwen only inspects local configuration. Other providers may contact their auth service.
     pub async fn auth_status(&self, options: &AuthStatusOptions) -> Result<AuthStatus> {
         let reader = Reader::from_id(&self.id)

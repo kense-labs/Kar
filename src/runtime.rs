@@ -52,6 +52,28 @@ pub enum McpToolsListChanged {
 }
 
 impl Runtime {
+    pub fn brand(&self) -> crate::brands::RuntimeBrand {
+        crate::brands::runtime_brands()
+            .get(&self.id)
+            .cloned()
+            .unwrap_or_else(|| crate::brands::RuntimeBrand {
+                name: self.id.clone(),
+                icon: None,
+                icons: None,
+            })
+    }
+
+    /// Numeric minimum for an adapter with a single declared version floor.
+    pub fn min_version(&self) -> Option<&'static str> {
+        match self.id.as_str() {
+            "qoder" => Some("1.1.78"),
+            "pi" => Some("1.4.0"),
+            "antigravity" => Some("1.5.0"),
+            "dsh" => Some("0.2.1-rc.5"),
+            _ => None,
+        }
+    }
+
     /// Returns the runtime's declared refresh behavior, when known.
     pub fn mcp_tools_list_changed(&self) -> Option<McpToolsListChanged> {
         use McpToolsListChanged::*;

@@ -7,10 +7,10 @@ use std::{
 use tempfile::TempDir;
 #[path = "protocol/account.rs"]
 mod account;
-#[path = "protocol/acp_model_list.rs"]
-mod acp_model_list;
 #[path = "protocol/acp_failures.rs"]
 mod acp_failures;
+#[path = "protocol/acp_model_list.rs"]
+mod acp_model_list;
 #[path = "protocol/antigravity_model_list.rs"]
 mod antigravity_model_list;
 #[path = "protocol/antigravity_steering.rs"]
@@ -47,6 +47,8 @@ mod opencode_models;
 mod opencode_steering;
 #[path = "protocol/opening.rs"]
 mod opening;
+#[path = "protocol/orientation.rs"]
+mod orientation;
 #[path = "protocol/pi_registry.rs"]
 mod pi_registry;
 #[path = "support/private_inputs.rs"]
@@ -1645,6 +1647,7 @@ async fn main() {
         .unwrap()
         .unwrap();
     println!("CLI recording, cursor replay and MCP delegation passed");
+    orientation::exercise();
     inventory_batch::exercise();
     crew_options::exercise();
     open_instruction_policies().await.unwrap();

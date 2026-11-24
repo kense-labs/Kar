@@ -48,6 +48,21 @@ enum Action {
         #[arg(long, requires = "runtime")]
         bin: Option<PathBuf>,
     },
+    /// Read installed runtime capabilities and optionally account, model and customization facts.
+    Orient {
+        /// Runtime IDs in the order to inspect. Omit to inspect the Kar registry.
+        #[arg(value_delimiter = ',')]
+        runtimes: Vec<String>,
+        #[arg(long, value_enum, default_value = "local")]
+        depth: kar::orientation::Depth,
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Inspect user customization from native catalogs in an empty directory.
+        #[arg(long)]
+        customization: bool,
+        #[arg(long)]
+        timeout_ms: Option<std::num::NonZeroU64>,
+    },
     /// Install an absent vendor CLI or print its installation plan.
     Install {
         runtime: String,
@@ -539,6 +554,31 @@ async fn execute(command: Action) -> Result<()> {
                     "one or more update operations failed".into(),
                 ));
             }
+        }
+        Action::Orient {
+            runtimes: ids,
+            depth,
+            cwd,
+            customization,
+            timeout_ms,
+        } => {
+            let registry: Vec<_> = runtimes()
+                .into_iter()
+                .chain([runtime("morph")?, runtime("cybion")?])
+                .collect();
+            let opts = kar::orientation::OrientOptions {
+                installation: kar::InstallationOptions {
+                    cwd,
+                    ..Default::default()
+                },
+                runtimes: (!ids.is_empty()).then_some(ids),
+                depth,
+                customization,
+                timeout: timeout_ms.map(|n| Duration::from_millis(n.get())),
+                ..Default::default()
+            };
+            let result = kar::orientation::orient(&registry, &opts).await?;
+            json_line(&result, std::io::stdout().lock())?;
         }
         Action::List {
             runtime: id,
