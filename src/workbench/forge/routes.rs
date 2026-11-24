@@ -77,6 +77,9 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
             let number = number.ok_or_else(|| {
                 Error::Refused("provider did not identify the new change request".into())
             })?;
+            db.forge
+                .link_activity
+                .insert(m.chat, jiff::Timestamp::now().as_millisecond() as u64);
             db.forge.bindings.insert(
                 id,
                 Binding {
@@ -399,6 +402,11 @@ fn save_binding(app: &Workbench, id: Uuid, binding: Binding) -> Reply<Binding> {
                 "binding ID already belongs to an operation".into(),
             ));
         }
+        if !db.forge.bindings.values().any(|b| b == &binding) {
+            db.forge
+                .link_activity
+                .insert(binding.chat, jiff::Timestamp::now().as_millisecond() as u64);
+        }
         db.forge.bindings.insert(id, binding.clone());
         Ok(binding)
     })?))
@@ -556,6 +564,7 @@ pub(super) fn routes() -> Router<Workbench> {
         .merge(clone_jobs::routes())
         .merge(providers::issue_directory::routes())
         .route("/forge/drivers", get(drivers))
+        .route("/forge/linked-chats", get(linked_chats::read))
         .route(
             "/projects/{project}/forge/issue-tracker",
             get(issue_tracker),

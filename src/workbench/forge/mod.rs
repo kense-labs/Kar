@@ -2,6 +2,7 @@
 mod actions;
 pub(super) mod clone_jobs;
 mod github;
+mod linked_chats;
 mod providers;
 mod publish;
 mod repository;
@@ -217,6 +218,8 @@ pub(super) struct ForgeState {
     clone_seq: u64,
     operations: BTreeMap<Uuid, Mutation>,
     bindings: BTreeMap<Uuid, Binding>,
+    #[serde(default)]
+    link_activity: BTreeMap<Uuid, u64>,
     reviews: BTreeMap<String, Review>,
 }
 #[derive(Clone, Serialize, Deserialize)]

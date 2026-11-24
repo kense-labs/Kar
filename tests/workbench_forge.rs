@@ -374,10 +374,13 @@ async fn scenario() {
         .await
         .unwrap();
     assert_eq!(result.status(), StatusCode::CONFLICT);
+    let second = actions::link_second_project(&a, &url, &root).await;
+    let linked = actions::linked(&a, &url, second, p).await;
     let later = publication::first(&a, &url, &root, &mock).await;
     process.kill().await.unwrap();
     let (mut process, url) = server::serve_with_env(&state, &root, &native, &env).await;
     publication::after_restart(&a, &url, &mock, later).await;
+    assert_eq!(actions::linked(&a, &url, second, p).await, linked);
     let forge = format!("{url}/projects/{p}/forge");
     assert_eq!(
         ok(a.post(format!("{forge}/operations")).json(&input)).await,

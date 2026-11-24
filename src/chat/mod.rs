@@ -325,6 +325,11 @@ impl ChatStore {
         list.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| y.id.cmp(&x.id)));
         Ok(list.into_iter().map(|(_, info)| info).collect())
     }
+    /// Use the same journal modification time as the chat list. Reads do not advance it.
+    pub(crate) fn activity_ms(&self, id: Uuid) -> Result<u64> {
+        let time = std::fs::metadata(self.path(id))?.modified()?;
+        Ok(time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64)
+    }
     pub fn latest(&self) -> Result<Uuid> {
         self.list()?
             .first()

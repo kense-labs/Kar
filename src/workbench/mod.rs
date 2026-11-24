@@ -476,10 +476,16 @@ impl Workbench {
             session.close().await?;
         }
         self.update(|catalog| {
-            if archived {
-                catalog.archived.insert(chat);
+            let changed = if archived {
+                catalog.archived.insert(chat)
             } else {
-                catalog.archived.remove(&chat);
+                catalog.archived.remove(&chat)
+            };
+            if changed {
+                let now = jiff::Timestamp::now().as_millisecond() as u64;
+                let meta = catalog.thread_state.rows.entry(chat).or_default();
+                meta.archived_ms = archived.then_some(now);
+                meta.updated_ms = now;
             }
             Ok(())
         })?;

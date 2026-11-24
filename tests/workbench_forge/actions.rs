@@ -321,3 +321,90 @@ pub(super) async fn repository(c: &reqwest::Client, base: &str, bare: &Path, roo
         StatusCode::BAD_REQUEST
     );
 }
+
+pub(super) async fn link_second_project(
+    c: &reqwest::Client,
+    base: &str,
+    root: &Path,
+) -> (Uuid, Uuid) {
+    let dir = root.join("second-forge-project");
+    fs::create_dir(&dir).unwrap();
+    git(&dir, &["init", "-b", "main"]);
+    git(
+        &dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://review.example/team/repo.git",
+        ],
+    );
+    let project = ok(c
+        .post(format!("{base}/projects"))
+        .json(&json!({"name":"second","root":dir})))
+    .await;
+    let p: Uuid = serde_json::from_value(project["id"].clone()).unwrap();
+    let chat = Uuid::new_v4();
+    let url = format!("{base}/projects/{p}");
+    ok(c.post(format!("{url}/chats"))
+        .json(&json!({"runtime":"codex","id":chat})))
+    .await;
+    for _ in 0..2 {
+        ok(c.post(format!("{url}/forge/links"))
+            .json(&json!({"id":Uuid::new_v4(),"chat":chat,"kind":"issue","number":7})))
+        .await;
+    }
+    let meta = format!("{url}/chats/{chat}/metadata");
+    ok(c.post(&meta)
+        .json(&json!({"command_id":Uuid::new_v4(),"action":"rename","title":"Second copy"})))
+    .await;
+    ok(c.post(&meta)
+        .json(&json!({"command_id":Uuid::new_v4(),"action":"settle"})))
+    .await;
+    ok(c.put(format!("{url}/chats/{chat}/archive"))
+        .json(&json!({"archived":true})))
+    .await;
+    (p, chat)
+}
+
+pub(super) async fn linked(
+    c: &reqwest::Client,
+    base: &str,
+    second: (Uuid, Uuid),
+    primary: &str,
+) -> Value {
+    let endpoint = format!("{base}/forge/linked-chats");
+    let query = |kind, repository| {
+        c.get(&endpoint)
+            .query(&[("kind", kind), ("repository", repository), ("number", "7")])
+    };
+    let rows = ok(query("issue", "github://Review.Example/TEAM/repo")).await;
+    let chats = rows["threads"].as_array().unwrap();
+    assert!(chats.iter().any(|r| r["projectId"] == primary));
+    assert_eq!(
+        chats
+            .iter()
+            .filter(|r| r["id"] == second.1.to_string())
+            .count(),
+        1
+    );
+    let newest = &chats[0];
+    assert_eq!(newest["projectId"], second.0.to_string());
+    assert_eq!(newest["title"], "Second copy");
+    assert_eq!(newest["settled"], true);
+    assert_eq!(newest["archived"], true);
+    assert!(
+        newest["archivedAt"]
+            .as_str()
+            .unwrap()
+            .parse::<jiff::Timestamp>()
+            .is_ok()
+    );
+    for (kind, repository) in [
+        ("pull", "github://review.example/team/repo"),
+        ("issue", "github://other.example/team/repo"),
+    ] {
+        assert_eq!(ok(query(kind, repository)).await["threads"], json!([]));
+    }
+    rows
+}

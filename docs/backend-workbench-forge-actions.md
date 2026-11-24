@@ -76,3 +76,9 @@ Send `update_issue` to the ordinary scoped operation endpoint with a stable oper
 Send `set_issue_reaction` to the project's forge operations endpoint with a stable UUID, `chat`, `number`, optional `subject_id`, `content` (e.g. `thumbs-up`, `heart`) and `reacted`. An absent subject selects the issue. The operation reads the authenticated viewer's state before acting. GitHub and Linear prove global comment membership against the selected issue. GitLab and Azure Boards scope comment lookup by issue. Forgejo verifies comment IDs in the selected issue's comment pages before accessing the repository-wide comment reaction endpoint. Linear uses the bound account/team. Azure Boards supports six reactions on comments. TanStack Source, Bitbucket, GitCafe and Cursor Origin expose no issue reaction operation at the fixed revision.
 
 A missing write receipt can be reconciled by reading the same viewer, issue, subject and reaction. If the current state differs, the operation stays uncertain. The local GitHub protocol scenario in `cargo test --locked --test workbench_forge` covers foreign comments, duplicate request UUIDs and repeated desired state under a fresh UUID. The five native drivers and this scenario await the unified run.
+
+### 跨项目的关联聊天
+
+`GET /forge/linked-chats?kind=issue&number=7&repository=github%3A%2F%2Fgithub.com%2Fteam%2Frepo` 使用绑定返回的仓库标识；PR 传 `kind=pull`。读取已登记且属于工作台授权目录的项目，按聊天去重，最近活动在先、同一毫秒按聊天 ID 排序；数据都来自本地持久化目录。聊天标题复用列表的重命名和首条用户消息规则。返回 `archivedAt`、`archived` 和 `settled`。旧版 Kar 仅记录归档布尔值，因此旧归档保留 `archived=true` 和 `archivedAt=null`。
+
+`cargo test --locked --test workbench_forge` 新增两项目关联同一 Issue、重复链接、相邻类型和另一 host 隔离、归档时间以及重启后顺序稳定的 HTTP 场景。待集中运行。

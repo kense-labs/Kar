@@ -21,6 +21,8 @@ use uuid::Uuid;
 #[serde(default)]
 pub struct Metadata {
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived_ms: Option<u64>,
     pub pinned_ms: Option<u64>,
     pub pin_order: Option<String>,
     pub active_order: Option<String>,

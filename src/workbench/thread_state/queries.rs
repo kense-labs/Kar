@@ -59,7 +59,7 @@ impl Workbench {
             rows,
         })
     }
-    fn display_title(&self, row: &ProjectChat) -> Result<String> {
+    pub(in crate::workbench) fn display_title(&self, row: &ProjectChat) -> Result<String> {
         if let Some(title) = &row.metadata.title {
             return Ok(title.clone());
         }
