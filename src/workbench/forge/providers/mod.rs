@@ -1,4 +1,5 @@
 //! REST and native CLI drivers for non-GitHub hosts in the fixed workbench contract.
+mod hosted;
 mod rest;
 use super::{Context, ForgeError, Operation};
 use reqwest::Method;
@@ -103,6 +104,7 @@ fn account(v: &Value, field: &str) -> Result<Value, ForgeError> {
 }
 pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeError> {
     match c.kind.as_str() {
+        "gitcafe" | "cursor-origin" | "tanstack-source" => hosted::execute(c, op).await,
         "gitlab" | "bitbucket" | "forgejo" => rest::execute(c, op).await,
         _ => Err(ForgeError::unsupported(format!(
             "{} driver is unavailable",

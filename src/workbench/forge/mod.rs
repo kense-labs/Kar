@@ -240,9 +240,12 @@ fn default_host(host: &str) -> Option<(&'static str, String)> {
         "gitlab.com" => ("gitlab", "https://gitlab.com/api/v4".into()),
         "codeberg.org" => ("forgejo", "https://codeberg.org/api/v1".into()),
         "bitbucket.org" => ("bitbucket", "https://api.bitbucket.org/2.0".into()),
-        "git.cafe" => ("gitcafe", "https://git.cafe".into()),
-        "origin.cursor.com" => ("cursor-origin", "https://origin.cursor.com".into()),
-        "source.tanstack.com" => ("tanstack-source", "https://source.tanstack.com".into()),
+        "git.cafe" | "staging.git.cafe" => ("gitcafe", format!("https://{host}/api")),
+        "origin.cursor.com" => ("cursor-origin", "https://api.cursor.com/v1/origin".into()),
+        "source.tanstack.com" => (
+            "tanstack-source",
+            "https://source.tanstack.com/api/v1".into(),
+        ),
         "dev.azure.com" | "ssh.dev.azure.com" => ("azure-devops", "https://dev.azure.com".into()),
         s if s.ends_with(".ghe.com") => ("github", format!("https://{s}/api/v3")),
         s if s.ends_with(".visualstudio.com") => ("azure-devops", format!("https://{s}")),
@@ -323,6 +326,14 @@ impl Context {
                 let key = match host.as_str() {
                     "github.com" => Some("GH_TOKEN".to_owned()),
                     "gitlab.com" => Some("GITLAB_TOKEN".to_owned()),
+                    "git.cafe" => Some("CAFE_TOKEN".to_owned()),
+                    "source.tanstack.com" => Some("SRC_TOKEN".to_owned()),
+                    "origin.cursor.com" => Some("KAR_CURSOR_ORIGIN_TOKEN".to_owned()),
+                    "bitbucket.org" => Some("KAR_BITBUCKET_TOKEN".to_owned()),
+                    "codeberg.org" => Some("KAR_FORGEJO_TOKEN".to_owned()),
+                    "dev.azure.com" | "ssh.dev.azure.com" => {
+                        Some("AZURE_DEVOPS_EXT_PAT".to_owned())
+                    }
                     _ => None,
                 };
                 (kind.into(), base, key)
