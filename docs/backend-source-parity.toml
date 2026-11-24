@@ -1,0 +1,204 @@
+# Kar 两阶段后端源码差异清单
+version = 1
+runtime_commit = "2b15859a13dcc50e8b66cbaee5a007832aa00e08"
+workbench_commit = "2808e878de91aacc7fb82887f18414976be7ae34"
+initial_kar_comparison = "deb7091eaccefacef2221a0489d7b73499cfe24e"
+runtime_inventory = "backend-source-index.tsv"
+workbench_rpc_inventory = "backend-workbench-source-index.tsv"
+path_convention = "upstream 路径相对相应固定提交的仓库根；sdk: 相对运行时发布包根目录，由导出 ./agents 且含 src/contracts 的包定位。kar 路径相对 Kar 仓库根。"
+
+[process]
+scope = "覆盖两个固定提交公开、可调用的后端能力。保留第一阶段原 12 项、第二阶段原 8 项，以及 Kar 自有的 Kantor 人机双写要求。GPUI 绘制在本轮范围之外，供界面调用的后端仍须核对。"
+audit = "逐行检查运行时索引中的 CLI、包导出、契约、公共用例与供应商断言；工作台按 RPC 索引逐行沿服务端注册追到真实实现、权限、持久化和版本对应的驱动。继续展开复合入口的子命令，以及独立的 HTTP、MCP、订阅、后台任务、服务与原生驱动入口。新发现的公开操作、不同语义或仅有部分实现的操作立即追加为清单项，写明出处、Kar 入口及独立可观察的验收条件。"
+implementation = "先检查当前主线及在途改动，复用已等价的 Kar 入口。参照固定源码中的分支、参数、默认值、返回、错误和副作用，用纯 Rust 补齐 Kar 自有逻辑；沿用供应商原生协议和系统程序。Kar 命名及已明确取消旧格式兼容的要求继续生效。"
+tracking = "每个源码入口登记 Kar 的等价入口或待补条目。对部分实现，列出具体缺失的子操作；对只属前端绘制或其他不适用项写明依据。对应条目的实现提交、实际测试名、复验命令及证据需可回溯。源索引行数只表示盘点范围。"
+validation = "开发时写好测试入口，只做必要的 macOS 编译和接口检查。全部可实现功能合入后，在同一 macOS 候选提交统一执行两阶段适用用例、跨模块场景及全量回归。运行时、工作台和第三方远端分别记录真实观察。缺账号、设备、部署与供应商确实不支持的行为分开列；Linux 后移，Windows 实机按原清单排除。"
+closure = "所有适用的公开后端入口及其子操作均有去向，所有查实缺口已有 Kar 实现和复验入口，最终报告逐项引用同一候选提交的实测或明确的外部限制。按功能、驱动和版本核销。验收发现 Kar 自身缺口时重新打开对应项，修复并对最终候选重验。"
+
+# 定向命令是集中验收时的用例归属。开发者需在相应目标中补入具名用例并登记，运行时检查命中数。
+# 以下是已定位到源码的工作项。status 表示开发处置，验收结果单独登记。
+
+[[gap]]
+id = "agent-followup"
+phase = 1
+name = "子任务默认追加指令"
+upstream = ["sdk:src/agents/subagent.ts","packages/cli/src/mcp-tools.ts"]
+kar = ["src/agents.rs","src/mcp.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test protocol"
+accept = "用同一个子任务分别处于空闲、忙碌可插话、忙碌只可排队时调用默认 send；比较原生请求、落点和次数。再令会话在状态读取后变忙，核对回退与拒绝原因。显式 steer、queue 的语义按源码分别验证。"
+
+[[gap]]
+id = "agent-capacity"
+phase = 1
+name = "按正在运行的子任务限制并发"
+upstream = ["sdk:src/agents/crew.ts","sdk:src/agents/subagent.ts","sdk:src/agents/types.ts"]
+kar = ["src/agents.rs"]
+status = "已集成活动回合限额，待统一验收"
+implementation_ref = "739d0b3"
+test_target = "cargo test --locked --test protocol"
+accept = "设上限为 1。A 忙时启动 B 应被拒绝；A 结束但保留会话后，B 能启动。B 忙时重新向空闲 A 发起新回合，检查限额与回执；B 结束后 A 可在原会话继续。"
+
+[[gap]]
+id = "agent-options"
+phase = 1
+name = "在 MCP 的 run 和 spawn 中按子任务配置启动参数"
+upstream = ["packages/cli/src/mcp-tools.ts","sdk:src/agents/types.ts"]
+kar = ["src/mcp.rs","src/agents.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test protocol"
+accept = "给两个子任务指定不同工作目录、模型、推理强度及服务档位，同时检查省略参数的默认值。从供应商握手、实际请求或原生读回确认归属，核对无效参数的拒绝，不将一方设置传给另一方。"
+
+[[gap]]
+id = "agent-depth"
+phase = 1
+name = "子任务嵌套深度和可用运行时选择"
+upstream = ["packages/cli/src/mcp-command.ts","packages/cli/src/mcp-tools.ts","sdk:src/agents/crew.ts"]
+kar = ["src/main.rs","src/mcp.rs"]
+status = "嵌套深度已集成，运行时允许列表及默认值待对照"
+implementation_ref = "739d0b3"
+test_target = "cargo test --locked --test protocol"
+accept = "分别使用默认深度和显式深度 2 逐层委派，最后一层返回规定的拒绝。对默认运行时集合及显式允许列表分别查询和启动，核对实际可派生的运行时及拒绝原因。"
+
+[[gap]]
+id = "agent-records"
+phase = 1
+name = "MCP 子任务按会话保存记录"
+upstream = ["packages/cli/src/mcp-command.ts","sdk:src/agents/crew.ts","sdk:src/agents/subagent.ts"]
+kar = ["src/mcp.rs","src/agents.rs","src/voyage.rs"]
+status = "子任务记录已集成，待统一验收"
+implementation_ref = "739d0b3"
+test_target = "cargo test --locked --test protocol"
+accept = "配置独立日志目录，并行运行两个子任务。服务退出后用 Kar 原生记录读取器复查会话、回合与终态，校验文件归属；再检查未配置目录时的行为。采用 Kar 当前记录格式。"
+
+[[gap]]
+id = "models-all"
+phase = 1
+name = "从 CLI 聚合已安装运行时的模型、指定工作区及单运行时超时"
+upstream = ["packages/cli/src/index.ts","packages/cli/src/models.ts","packages/cli/src/each-runtime.ts"]
+kar = ["src/main.rs","src/inventory/mod.rs"]
+status = "批量查询与超时已有实现，显式 all、输出和失败退出语义待对照"
+implementation_ref = "98f4895"
+test_target = "cargo test --locked --test setup_cli"
+accept = "分别省略运行时、选择全部、指定单一运行时；设置项目目录、不同原生模型目录和单运行时超时，混入缺程序、查询超时和查询成功的情形。比较逐项结果、错误归属、输出模式和进程退出码。先核对主线已有模型查询改动。"
+
+[[gap]]
+id = "inventory-all"
+phase = 1
+name = "在同一 CLI 查询中按工作区汇总各运行时原生清单"
+upstream = ["packages/cli/src/index.ts","packages/cli/src/each-runtime.ts"]
+kar = ["src/main.rs","src/inventory/mod.rs"]
+status = "四种批量清单入口已有实现，逐项输出和失败退出语义待对照"
+implementation_ref = "f4a54ae"
+test_target = "cargo test --locked --test setup_cli"
+accept = "分别查询技能、命令、MCP 服务器和工具。用两个可区分的运行时及一个缺失的程序，覆盖单个与全部查询、项目目录和超时，核对每行安装状态、清单归属及失败退出语义。"
+
+[[gap]]
+id = "git-init"
+phase = 2
+name = "在已有授权目录内初始化仓库"
+upstream = ["packages/contracts/src/git.ts","apps/server/src/git/GitWorkflowService.ts","apps/server/src/ws.ts"]
+kar = ["src/workbench/git.rs","src/workbench_git.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_git"
+accept = "对普通目录执行初始化，从独立 Git 进程检查仓库和既有文件；再核对已有仓库、不可写目录和越过授权根时的处理。"
+
+[[gap]]
+id = "git-list-refs"
+phase = 2
+name = "搜索、过滤及分页列出本地和远端分支"
+upstream = ["packages/contracts/src/git.ts","apps/server/src/git/GitWorkflowService.ts"]
+kar = ["src/workbench/git.rs","src/workbench_git.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_git"
+accept = "创建多个本地分支和远端跟踪分支，用查询、分支类别、远端匹配选项、刷新和小页大小遍历；对照固定源码和 git 引用核对命中、顺序、游标及下一页。"
+
+[[gap]]
+id = "git-ref-actions"
+phase = 2
+name = "不创建新工作树即可建分支或切换现有分支"
+upstream = ["packages/contracts/src/git.ts","apps/server/src/git/GitWorkflowService.ts","apps/server/src/ws.ts"]
+kar = ["src/workbench/git.rs","src/workbench_git.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_git"
+accept = "依次建分支但留在当前分支、建分支并切换、切回已有分支。由另一客户端读取分支状态；覆盖活动聊天及切换会覆盖本地修改的情况，核对拒绝和原文件。"
+
+[[gap]]
+id = "git-stacked"
+phase = 2
+name = "组合提交、推送、创建 PR 并订阅各阶段进度"
+upstream = ["packages/contracts/src/git.ts","apps/server/src/git/GitWorkflowService.ts","apps/server/src/git/GitManager.ts"]
+kar = ["src/workbench/git.rs","src/workbench/forge/routes.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_forge"
+accept = "覆盖 commit、push、create_pr、commit_push、commit_push_pr；带入选定文件和可选新分支。订阅带操作 ID 的阶段、钩子输出与终态；分别核对无变化、已推送、已有 PR 和推送被拒时的远端提交、PR 数量及步骤结果。"
+
+[[gap]]
+id = "task-folders"
+phase = 2
+name = "扫描项目中的仓库并为一个任务关联多个仓库"
+upstream = ["packages/contracts/src/workspaceFolders.ts","apps/server/src/workspace/TaskFolders.ts","apps/server/src/workspace/TaskFolderStore.ts"]
+kar = ["src/workbench/mod.rs","src/workbench/git.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "用含两个仓库及工作区描述文件的项目，核对列举、扫描、跟踪目录和来源。为同一任务建立工作目录并追加另一个已跟踪仓库，从任务子目录及重启后读回映射；分别检查重复加入、非跟踪仓库和目标目录已有文件的处理及数据保留。"
+
+[[gap]]
+id = "terminal-clear"
+phase = 2
+name = "清空指定终端的历史并通知客户端"
+upstream = ["packages/contracts/src/terminal.ts","apps/server/src/terminal/Manager.ts"]
+kar = ["src/workbench/terminal_preview/routes.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_terminal_preview"
+accept = "两个客户端订阅同一终端。写入可识别输出后清空，核对 cleared 事件、顺序和持久历史，再继续在同一 PTY 输出新内容；另一终端的历史保留。"
+
+[[gap]]
+id = "preview-controls"
+phase = 2
+name = "管理预览视口、显示设置与独立浏览器配置"
+upstream = ["packages/contracts/src/preview.ts","apps/server/src/preview/ServerBrowser.ts","apps/server/src/ws.ts"]
+kar = ["src/workbench/terminal_preview/routes.rs","src/workbench/terminal_preview/preview.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_terminal_preview"
+accept = "对指定预览标签调整视口、缩放和配色，核对硬刷新、清指定 cookies 或缓存。用两个浏览器配置设置不同数据，清一个后核实另一个的内容；核对固定后端支持的状态和访问限制。"
+
+[[gap]]
+id = "preview-stop"
+phase = 2
+name = "按发现的进程和端口停止指定开发服务"
+upstream = ["packages/contracts/src/preview.ts","apps/server/src/preview/PortScanner.ts","apps/server/src/ws.ts"]
+kar = ["src/workbench/terminal_preview/routes.rs","src/workbench/terminal_preview/preview.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_terminal_preview"
+accept = "运行两个本地服务，按真实 PID 和端口停止其中一个，独立访问两端确认效果。用已退出进程以及不匹配或无权操作的目标复验固定实现的拒绝条件。"
+
+[[gap]]
+id = "review-actions"
+phase = 2
+name = "托管平台上的 PR 审阅、线程回复及解决状态"
+upstream = ["packages/contracts/src/rpc.ts","apps/server/src/ws.ts"]
+kar = ["src/workbench/forge/routes.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_forge"
+accept = "按上游注册驱动分别核对支持的动作。对同一测试 PR 提交审阅、回复审阅线程、解决及重新打开线程，从远端重新查询作者、内容、对象 ID 和解决状态；记录只读凭据和驱动不支持时的结果。"
+
+[[gap]]
+id = "issue-actions"
+phase = 2
+name = "创建 Issue、查询评论及发表评论"
+upstream = ["packages/contracts/src/rpc.ts","apps/server/src/ws.ts"]
+kar = ["src/workbench/forge/routes.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_forge"
+accept = "在支持操作的测试仓库或团队创建 Issue，发一条有唯一标记的评论，再从远端读取 Issue 和评论列表核对对象、作者和正文。按驱动分别核对错误、权限和实际副作用。"
+
+[[gap]]
+id = "webhook-management"
+phase = 2
+name = "轮换定时任务的 Webhook 凭证、列举并读取投递记录"
+upstream = ["packages/contracts/src/rpc.ts","apps/server/src/ws.ts"]
+kar = ["src/workbench/workflows/routes.rs","src/workbench/workflows/mod.rs"]
+status = "待补齐或对照现有实现核销"
+test_target = "cargo test --locked --test workbench_workflows"
+accept = "经公共接口轮换令牌，用旧、新令牌分别投递；按上游语义核对接纳结果、记录列表、单条详情及实际触发次数。对另一任务核对可见范围。"

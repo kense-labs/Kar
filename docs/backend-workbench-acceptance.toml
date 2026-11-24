@@ -1,6 +1,8 @@
 # Kar 工作台后端 · 第二阶段验收清单
 phase = 2
 runtime_checklist = "backend-acceptance.toml"
+source_parity_checklist = "backend-source-parity.toml"
+rpc_inventory = "backend-workbench-source-index.tsv"
 start_when = "两个阶段并行开发。独立模块直接按固定契约实现，涉及共享接口的模块在接口稳定后集成。两阶段功能集成后统一执行验收场景。"
 baseline_commit = "2808e878de91aacc7fb82887f18414976be7ae34"
 scope = "前七项以固定提交中的服务行为为对照。第八项覆盖文本与 Markdown 双写，以及通过 Kantor 文档引擎进行的 Word 段落、Excel 单元格和 PPT 对象双写。GPUI 前端另期安排。"
@@ -170,6 +172,7 @@ accept = [
 ]
 
 [final_acceptance]
+source_parity = "原八组场景与源码差异清单一并核销。逐项追踪公开后端入口、其子操作和实际处理函数，将新发现的差异追加到清单；全部可实现功能先用纯 Rust 补齐并集成，随后统一验收。"
 scenario = "在隔离测试仓库从 Issue 或 PR 建独立工作树，两个客户端打开同一聊天，由两个供应商接力。通过 PTY 运行服务，经预览确认输出，推送提交并核对 PR；用 Webhook 启动工作流，访客提议由主人接纳。在服务重启后检查各对象身份、权限、历史、执行次数及对远端的实际影响。"
 regression = ["cargo fmt --all -- --check", "cargo clippy --locked --all-targets -- -D warnings", "cargo test --locked"]
 coediting_scenario = "在上述工作树中由人和 AI 并发修改同一份 Markdown。将双方兼容的改动提交到 PR，核对远端文件内容。再制造冲突并重启 Kar，核对待处理提议可取回，未经解决的提议未写入工作区或提交。"
