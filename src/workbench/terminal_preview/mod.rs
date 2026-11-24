@@ -5,6 +5,7 @@ mod events;
 mod automation;
 pub(super) use automation::call as automation;
 mod history;
+mod scripts;
 mod preview;
 mod process;
 mod routes;
@@ -50,6 +51,8 @@ struct Meta {
     project: Uuid,
     cwd: PathBuf,
     shell: PathBuf,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    setup_digest: Option<String>,
     cols: u16,
     rows: u16,
     process: Option<ProcessId>,
@@ -163,13 +166,18 @@ impl Terminal {
         }
         m
     }
-    fn start(self: &Arc<Self>, cwd: std::fs::File, worktree_pin: Option<File>) -> Result<()> {
+    fn start(self: &Arc<Self>, cwd: std::fs::File, worktree_pin: Option<File>, script: Option<&str>) -> Result<()> {
         let m = self.snapshot();
         let pair = native_pty_system()
             .openpty(size(m.cols, m.rows)?)
             .map_err(pty_error)?;
         let mut command = CommandBuilder::new(&m.shell);
-        command.arg("-i");
+        if let Some(script) = script {
+            command.arg("-c");
+            command.arg(script);
+        } else {
+            command.arg("-i");
+        }
         command.env("TERM", "xterm-256color");
         command.env("PWD", &m.cwd);
         command.env_remove("KAR_WORKBENCH_TOKEN");
@@ -482,13 +490,17 @@ impl Workbench {
     }
 
     fn terminal_at(&self,project:Uuid,id:Uuid,cwd:PathBuf,cols:u16,rows:u16)->Result<Meta>{
+        self.terminal_command(project,id,cwd,cols,rows,None)
+    }
+    fn terminal_command(&self,project:Uuid,id:Uuid,cwd:PathBuf,cols:u16,rows:u16,script:Option<&str>)->Result<Meta>{
+        let setup_digest=script.map(|cmd| format!("{:x}", Sha256::digest(cmd.as_bytes())));
         let workspace = self.workspace_at(&cwd)?;
         let worktree_pin = crate::workbench_git::pin_checkout(&cwd)?.map(|(_, f)| f);
         let state = &self.0.terminal_preview;
         let mut known = state.terminals.lock().unwrap();
         if let Some(s) = known.get(&id) {
             let m = s.snapshot();
-            if m.project != project || m.cwd != cwd {
+            if m.project != project || m.cwd != cwd || m.setup_digest != setup_digest {
                 return Err(missing());
             }
             return Ok(m);
@@ -502,6 +514,7 @@ impl Workbench {
             project,
             cwd,
             shell,
+            setup_digest,
             cols,
             rows,
             status: Status::Starting,
@@ -511,7 +524,7 @@ impl Workbench {
         term.update(|_| {})?;
         let handle = workspace.root_handle()?;
         known.insert(id, term.clone());
-        if let Err(e) = term.start(handle, worktree_pin) {
+        if let Err(e) = term.start(handle, worktree_pin, script) {
             term.update(|m| {
                 m.status = Status::Error {
                     reason: e.to_string(),

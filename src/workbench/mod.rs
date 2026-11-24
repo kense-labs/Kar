@@ -29,6 +29,7 @@ mod http;
 mod interactions;
 mod mcp_apps;
 mod provider_controls;
+mod prepared_runs;
 mod suggestions;
 mod project_lifecycle;
 mod public_web;
@@ -71,6 +72,8 @@ pub struct Project {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
+    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
+    prepared_runs: BTreeMap<Uuid,prepared_runs::Job>,
     #[serde(default)]
     desktop_jobs: BTreeMap<Uuid,configuration::desktop::Job>,
     #[serde(default)]
@@ -138,6 +141,8 @@ impl Controller {
 }
 
 struct Inner {
+    run_workers: Mutex<BTreeSet<Uuid>>,
+    run_events: tokio::sync::watch::Sender<u64>,
     desktop_updates:configuration::desktop::Service,
     family_gate: AsyncMutex<()>,
     managed_providers:managed_providers::Manager,
@@ -249,6 +254,8 @@ impl Workbench {
             }));
             let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
             Inner {
+                run_workers:Default::default(),
+                run_events:Default::default(),
                 family_gate: Default::default(),
                 relay: Default::default(),
                 managed_providers:Default::default(),
@@ -481,7 +488,7 @@ impl Workbench {
         approvals: crate::ApprovalMode,
         settings: crate::SessionSettings,
     ) -> Result<ProjectChat> {
-        self.create_chat_as(project, id, runtime, model, approvals, settings, None).await
+        self.create_chat_as(project, id, runtime, model, approvals, settings, None, None).await
     }
 
     async fn create_chat_as(
@@ -493,11 +500,17 @@ impl Workbench {
         approvals: crate::ApprovalMode,
         mut settings: crate::SessionSettings,
         launching_chat: Option<Uuid>,
+        prepared_run: Option<Uuid>,
     ) -> Result<ProjectChat> {
         forge::clone_jobs::ready(self, project)?;
         let slot = self.controller(id);
         let mut owner = slot.owner.lock().await;
-        if mcp::pending_launch(&self.0.catalog.lock().unwrap(), id) != launching_chat {
+        let reserved = {
+            let catalog=self.0.catalog.lock().unwrap();
+            prepared_runs::reservation(&catalog,id) != prepared_run ||
+                (prepared_run.is_none() && mcp::pending_launch(&catalog,id) != launching_chat)
+        };
+        if reserved {
             return Err(Error::Refused("chat ID is reserved for another launch".into()));
         }
         let cwd = self.reserve_chat_directory(project, id)?;

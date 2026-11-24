@@ -254,7 +254,7 @@ impl Workbench {
                     "a side chat requires a main chat in the same project".into(),
                 ));
             }
-            if super::mcp::pending_launch(c, child).is_some() {
+            if super::mcp::pending_launch(c, child).is_some() || super::prepared_runs::reservation(c,child).is_some() {
                 return Err(Error::Refused(
                     "chat ID is reserved for a model launch".into(),
                 ));

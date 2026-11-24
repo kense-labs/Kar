@@ -1,5 +1,5 @@
 use super::*;
-use crate::workbench::{task_folders, thread_state};
+use crate::workbench::prepared_runs::{self, Input, Launch, Workspace};
 
 pub(super) async fn run(
     app: &Workbench,
@@ -122,7 +122,7 @@ pub(super) async fn run(
         .map(|_| string(input, "workspace"))
         .transpose()?
         .unwrap_or("root");
-    match strategy {
+    let workspace = match strategy {
         "root" => {
             if ["base_ref", "branch", "directory", "start_from_origin"]
                 .iter()
@@ -130,6 +130,7 @@ pub(super) async fn run(
             {
                 return Err(refused("worktree options require a worktree launch"));
             }
+            Workspace::Root
         }
         "existing_worktree" => {
             if ["base_ref", "branch", "start_from_origin"]
@@ -140,16 +141,9 @@ pub(super) async fn run(
                     "an existing checkout does not take a base or a new branch",
                 ));
             }
-            let path = Path::new(string(input, "directory")?).canonicalize()?;
-            app.workspace_at(&path)?;
-            let repo = gix::open(&p.root).map_err(|e| refused(&e.to_string()))?;
-            let work = gix::open(&path).map_err(|e| refused(&e.to_string()))?;
-            if work.workdir().and_then(|d| d.canonicalize().ok()).as_ref() != Some(&path)
-                || repo.common_dir().canonicalize()? != work.common_dir().canonicalize()?
-            {
-                return Err(refused("existing checkout does not belong to the project"));
+            Workspace::Existing {
+                directory: PathBuf::from(string(input, "directory")?),
             }
-            app.bind_model_checkout(project, chat, &path)?;
         }
         "worktree" => {
             let dest = match input.get("directory") {
@@ -186,16 +180,15 @@ pub(super) async fn run(
                         .and_then(Value::as_bool)
                         .unwrap_or(true),
                 );
-            let host = app.clone();
-            tokio::task::spawn_blocking(move || {
-                task_folders::handoff_task(&host, project, chat, dest, branch, base, origin)
-                    .map(|_| ())
-            })
-            .await
-            .map_err(|e| Error::Closed(e.to_string()))??;
+            Workspace::Worktree {
+                directory: dest,
+                branch,
+                base,
+                from_origin: origin,
+            }
         }
         _ => return Err(refused("unsupported launch workspace")),
-    }
+    };
     if !grant.active()
         || !super::super::issues::authorized(app, grant)
             .is_some_and(|p| p.executes() && &p.project_access == access)
@@ -229,48 +222,30 @@ pub(super) async fn run(
         end_turn_processes_on_abort: parent.settings.end_turn_processes_on_abort,
         ..Default::default()
     };
-    let child = app
-        .create_chat_as(
-            project,
-            chat,
-            &runtime,
+    let run = crate::chat::stable_id([chat.as_bytes().as_slice(), b"model-launch-message"]);
+    let input = Input {
+        launch: Some(Launch {
+            runtime,
             model,
             approvals,
             settings,
-            Some(grant.chat),
-        )
-        .await?;
-    let title_id = crate::chat::stable_id([chat.as_bytes().as_slice(), b"model-launch-title"]);
-    thread_state::model_rename(app.clone(), project, chat, title_id, title).await?;
-    let mut result = json!({"chat":child,"project_id":project,"thread_id":chat,"link":format!("kar://projects/{project}/chats/{chat}")});
-    if message.is_some() || !attachments.is_empty() {
-        let input_id =
-            crate::chat::stable_id([chat.as_bytes().as_slice(), b"model-launch-message"]);
-        if let Some(schema) = input.get("requested_output_schema") {
-            app.register_run_schema(project, chat, input_id, schema.clone())?;
-        }
-        let copied = attachments
-            .iter()
-            .map(|a| {
-                let id = crate::chat::stable_id([
-                    chat.as_bytes().as_slice(),
-                    a.id.as_bytes().as_slice(),
-                    b"launch-attachment",
-                ]);
-                let bytes = app.0.chats.verified_bytes(a)?;
-                app.0
-                    .chats
-                    .persist_attachment(chat, id, &a.name, &a.mime, a.kind, &bytes)
-                    .map(|saved| saved.id)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        result["input"] = serde_json::to_value(app.0.chats.enqueue_attached(
-            chat,
-            input_id,
-            message.unwrap_or_default(),
-            &copied,
-        )?)?;
-        app.wake_queue();
-    }
-    Ok(result)
+        }),
+        title: Some(title),
+        workspace,
+        message: message.map(str::to_owned),
+        attachments: attachments.into_iter().map(|a| a.id).collect(),
+        requested_output_schema: input.get("requested_output_schema").cloned(),
+        defer_release: input
+            .get("defer_release")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or(false),
+    };
+    let caller = prepared_runs::Caller {
+        project: grant.project,
+        chat: grant.chat,
+        access: access.clone(),
+    };
+    prepared_runs::model_launch(app, project, chat, run, input, caller).await
 }

@@ -42,7 +42,10 @@ use uuid::Uuid;
 mod provider_controls;
 #[path="workbench_mcp/apps.rs"]
 mod apps;
+#[path="workbench_mcp/preparation.rs"]
+mod preparation;
 fn main() {
+    if std::env::args().nth(1).as_deref()==Some("prepared-runs"){tokio::runtime::Runtime::new().unwrap().block_on(preparation::scenario());return;}
     if std::env::args().next().as_deref().is_some_and(|s|s.ends_with("claude-control-fixture")) {provider_controls::claude_peer();return;}
     if std::env::args().nth(1).as_deref()==Some("provider-controls"){tokio::runtime::Runtime::new().unwrap().block_on(provider_controls::scenario());return;}
     if std::env::args().nth(1).as_deref()==Some("apps"){tokio::runtime::Runtime::new().unwrap().block_on(apps::scenario());return;}
