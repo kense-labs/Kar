@@ -4,7 +4,7 @@
 
 ## 当前操作复核
 
-本次重新查询 GitHub 的 `refs/heads/main` 得到 `d02239d9234abb382d0a35c084d25dacc557738c`。下表核对本地候选 `3ab6da6`。运行时源码通过 `git show 2b15859:<文件>` 读取，工作台源码通过 `git show 2808e87:<文件>` 读取。以下判断限于用户或宿主实际调用的后端入口。
+本次重新查询 GitHub 的 `refs/heads/main` 得到 `d02239d9234abb382d0a35c084d25dacc557738c`。首表核对本地候选 `3ab6da6`，完整模型工具组核对到 `cbd3c93`。运行时源码通过 `git show 2b15859:<文件>` 读取，工作台源码通过 `git show 2808e87:<文件>` 读取。以下判断限于用户或宿主实际调用的后端入口。
 
 | 操作 | 本地候选和上游的实际差别 | 独立复验 |
 | --- | --- | --- |
@@ -27,6 +27,8 @@
 | 搜索机制已接入（1） | 工具搜索 | 查询已注册工具、按会话加载和通知工具列表变化均有处理。能找到的功能取决于 Kar 实际注册的目录。 |
 | 部分接入（6） | Issue、工作流、工作树、项目、编排、线程管理 | 示例包括 Issue 的 5 个已接入操作、工作流运行控制、工作树交接、项目与聊天读取、Claude 后台等待，以及队列编辑和撤销。项目创建/克隆、工作台委派、跨聊天控制、待处理请求等尚有模型侧缺口。 |
 | 未找到对应工作台模型入口（10） | 预览操作、预览列表/关闭、PR、附件、设备、环境设置、反馈、HTML、向用户发消息、主题 | 涵盖 PR 的 18 个工具声明、预览操作的 12 个声明。例如普通客户端能打开预览或查看 PR，模型不能据此在当前工作台 MCP 会话调用这些操作。 |
+
+作为参照，GitHub `d02239d` 的同一注册函数只声明 8 个工具名称：能力查询、列项目、读项目、列聊天、读聊天、队列、工具搜索以及 Claude 后台等待。各项还受运行时、租约和工具搜索模式限制。该远端版本没有候选中新增的模型 Issue、工作流和工作树操作。[GitHub main 对应提交的注册表](https://github.com/kense-labs/Kar/blob/d02239d9234abb382d0a35c084d25dacc557738c/src/workbench/mcp/toolkit.rs)
 
 汇总范围仅为模型的 MCP 工具。Kar 的 HTTP 服务将 `tools/list` 和 `tools/call` 分派到同一个受权限约束的工具注册表；另一个 stdio MCP 服务管理自己的子代理，未转发这些工作台调用。可先在具备相应权限的 Codex/Claude 会话中查询工具，再直接调用，并核对实际服务回执。[T3 注册清单](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/McpHttpServer.ts#L1434) · [95 个工具声明的逐项定位](backend-workbench-mcp-map.tsv) · [Kar 工作台 MCP 分派](../src/workbench/mcp/mod.rs) · [Kar 独立子代理 MCP](../src/mcp.rs)
 
