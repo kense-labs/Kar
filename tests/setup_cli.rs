@@ -65,10 +65,10 @@ fn installation(runtime: &str) -> serde_json::Value {
     assert!(result.status.success());
     let row: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(
-        plan["installation"]["kind"], "available",
+        row["installation"]["kind"], "available",
         "selected native installation"
     );
-    plan["installation"].clone()
+    row["installation"].clone()
 }
 
 fn native_check(runtime: &str) {
@@ -80,8 +80,8 @@ fn native_check(runtime: &str) {
         String::from_utf8_lossy(&result.stderr)
     );
     let row: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    let check = &plan["check"];
-    assert_eq!(plan["id"], runtime);
+    let check = &row["check"];
+    assert_eq!(row["id"], runtime);
     assert_eq!(
         check["kind"], "ok",
         "requires a vendor-managed copy and access to the native release source: {check}"
@@ -149,7 +149,7 @@ fn account_batch_keeps_each_provider_identity_and_requires_a_target_for_changes(
         assert_eq!(ids.len(), rows.len());
         for name in ["codex", "claude", "grok", "pi"] {
             let row = rows.iter().find(|r| r["id"] == name).unwrap();
-            assert_eq!(plan["installation"]["kind"], "missing");
+            assert_eq!(row["installation"]["kind"], "missing");
         }
     }
     for operation in ["login", "logout"] {
