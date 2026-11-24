@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 mod azure;
+pub(in crate::workbench::forge) mod details;
 mod git_hosts;
 mod standalone;
 

@@ -14,7 +14,7 @@ pub(super) fn actor(v: &Value, login: &str) -> Option<Value> {
 pub(super) fn labels(v: &Value) -> Vec<Value> {
     v.as_array().into_iter().flatten().filter_map(|l|Some(json!({"name":l.as_str().or_else(||l["name"].as_str())?,"color":l["color"],"description":l["description"]}))).collect()
 }
-fn summary(r: &Value, kind: &str) -> Option<Value> {
+pub(super) fn summary(r: &Value, kind: &str) -> Option<Value> {
     let github = kind == "github";
     let gl = kind == "gitlab";
     let n = r[if gl { "iid" } else { "number" }].as_u64()?.to_string();

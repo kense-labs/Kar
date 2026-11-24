@@ -568,3 +568,17 @@ pub(super) fn issue_scope(c: &Context) -> Result<String, ForgeError> {
 pub(super) fn wit_endpoint(c: &Context, parts: &[&str]) -> Result<Url, ForgeError> {
     Location::from(c)?.url(c, true, "wit", parts)
 }
+
+pub(super) fn repository_for_issue_scope(c: &Context, scope: &str) -> Result<String, ForgeError> {
+    let l = Location::from(c)?;
+    if l.legacy && !scope.contains('/') {
+        return Ok(format!("{scope}/_git/{}", l.repo));
+    }
+    if !l.legacy
+        && let Some((org, p)) = scope.split_once('/')
+        && !p.contains('/')
+    {
+        return Ok(format!("{org}/{p}/_git/{}", l.repo));
+    }
+    Err(ForgeError::bad("invalid Azure work item project scope"))
+}

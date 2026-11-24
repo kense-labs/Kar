@@ -97,3 +97,7 @@ A missing write receipt can be reconciled by reading the same viewer, issue, sub
 | Linear | 原生 IssueFilter 和命名账号的 team 绑定，支持参与人、每个标签、文字和原生 ENG-7 式编号。续页限定账号及团队。 |
 
 集中复验使用 `cargo test --locked --test workbench_forge --test workbench_issue_accounts`，覆盖六种协议、同范围多个项目和同账号多个团队。当前为 macOS 编译证据，上述场景及真实托管账号尚待执行。
+
+### GitHub Issue 详情与评论
+
+`GET /projects/{project}/forge/issues/{n}/detail` 与 `GET /projects/{project}/forge/issues/{n}/comments?cursor=...` 返回富文本数据所需的 Markdown 正文、结构化作者、反应及权限。项目内选定已登记的 tracker、host 和 scope 才可标为可写，同一 host 的其他 repository 显示为只读。GitHub 驱动读完标签、受理人、关闭引用的所有后续页，再合并时间线里的引用。同一个 PR 同时引用并关闭 Issue 时保留关闭关系。评论游标向较早的记录翻页，反应计数包括自己，展示的用户列表剔除自己。复验入口为 `cargo test --locked --test workbench_forge`，当前仅完成 macOS 编译。

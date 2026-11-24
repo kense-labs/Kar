@@ -148,6 +148,18 @@ pub(super) async fn review_control(
             json!([{"path":"CHANGELOG.md","additions":1,"deletions":3},{"path":"requirements-dev.txt","additions":6,"deletions":4}])
         };
         json!({"repository":{"pullRequest":{"files":{"nodes":nodes,"pageInfo":{"hasNextPage":v["number"]==9||page==0,"endCursor":(page+1).to_string()}}}}})
+    } else if q.starts_with("query KarFullIssue") {
+        let pull = json!({"__typename":"PullRequest","repository":{"nameWithOwner":"team/repo"},"number":11,"title":"Fix","state":"OPEN","url":"https://review.example/team/repo/pull/11","isDraft":false});
+        json!({"viewer":{"login":"kar-test"},"repository":{"viewerPermission":"TRIAGE","issue":{"id":"issue-7","number":7,"title":"Detail","url":"https://review.example/team/repo/issues/7","state":"OPEN","body":"Body",
+            "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-02-01T00:00:00Z","viewerCanUpdate":false,"viewerCanClose":true,"viewerCanReopen":false,
+            "labels":{"nodes":[{"name":"one"}],"pageInfo":{"hasNextPage":true,"endCursor":"labels-next"}},"assignees":{"nodes":[]},"comments":{"nodes":[],"totalCount":21,"pageInfo":{"hasPreviousPage":true,"startCursor":"older"}},
+            "closedByPullRequestsReferences":{"nodes":[pull]},"timelineItems":{"nodes":[{"id":"x","createdAt":"2026-02-01T00:00:00Z","__typename":"CrossReferencedEvent","source":pull}]}}}})
+    } else if q.starts_with("query KarIssueCollection") {
+        assert_eq!(v["after"], "labels-next");
+        json!({"repository":{"issue":{"id":"issue-7","labels":{"nodes":[{"name":"two"}],"pageInfo":{"hasNextPage":false}}}}})
+    } else if q.starts_with("query KarIssueCommentPage") {
+        assert_eq!(v["before"], "older");
+        json!({"viewer":{"login":"kar-test"},"repository":{"issue":{"number":7,"comments":{"pageInfo":{"hasPreviousPage":false},"nodes":[{"id":"first","body":"Earlier","createdAt":"2026-01-01T00:00:00Z","author":{"login":"kar-test"},"reactionGroups":[{"content":"HEART","viewerHasReacted":true,"reactors":{"totalCount":4,"nodes":[{"login":"kar-test"},{"login":"second"}]}}]}]}}}})
     } else if q.starts_with("query KarIssueSearch") {
         let search = v["q"].as_str().unwrap();
         assert!(search.contains("is:closed"));
@@ -425,6 +437,30 @@ pub(super) async fn linked(
 }
 
 pub(super) async fn issue_pages(c: &reqwest::Client, base: &str, projects: [&str; 2]) {
+    let detail_url = format!("{base}/projects/{}/forge/issues/7/detail", projects[0]);
+    let detail = ok(c.get(&detail_url)).await;
+    assert_eq!(
+        detail["viewerPermissions"],
+        json!({"comment":true,"setState":true,"edit":false,"labels":true,"assignees":true})
+    );
+    assert_eq!(detail["labels"].as_array().unwrap().len(), 2);
+    assert_eq!(detail["linkedPullRequests"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["linkedPullRequests"][0]["closesIssue"], true);
+    assert_eq!(detail["events"][0]["reference"]["kind"], "pull-request");
+    let foreign = ok(c.get(&detail_url).query(&[("scope", "foreign/repo")])).await;
+    assert_eq!(foreign["writable"], false);
+    let older = ok(c
+        .get(format!(
+            "{base}/projects/{}/forge/issues/7/comments",
+            projects[0]
+        ))
+        .query(&[("cursor", detail["commentsCursor"].as_str().unwrap())]))
+    .await;
+    assert_eq!(older["comments"][0]["author"]["login"], "kar-test");
+    assert_eq!(
+        older["comments"][0]["reactions"][0],
+        json!({"count":4,"content":"heart","viewerHasReacted":true,"actors":["second"]})
+    );
     let endpoint = format!("{base}/forge/issues/list");
     let mut input = json!({"state":"closed","involvement":"mentioned","sort":"created","limit":1,"labels":["release bug"],"query":"repo:foreign/repo"});
     let first = ok(c.post(&endpoint).json(&input)).await;
