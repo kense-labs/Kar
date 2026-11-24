@@ -168,26 +168,36 @@ impl Workbench {
         chat: Uuid,
         reference: Uuid,
     ) -> Result<String> {
+        self.with_model_secret(project, chat, reference, |secret| Ok(secret.to_owned()))
+    }
+
+    pub(in crate::workbench) fn with_model_secret<T>(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        reference: Uuid,
+        commit: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<T> {
         self.binding(project, chat)?;
         let parent = dir(&self.0.state, project, chat);
         let path = parent.join(format!("{reference}.ref"));
-        let trash = tempfile::tempdir_in(&parent)?;
-        let claimed = trash.path().join("value");
-        fs::rename(path, &claimed)
+        let mut f = fs::File::open(&path)
             .map_err(|_| bad("private input reference is expired, used, or outside this chat"))?;
-        let f = fs::File::open(claimed)?;
-        if f.metadata()?
-            .modified()?
-            .elapsed()
-            .map_or(true, |a| a >= DAY)
-        {
-            return Err(bad("private input expired"));
+        f.try_lock().map_err(|err| match err {
+            fs::TryLockError::WouldBlock => crate::Error::Busy,
+            fs::TryLockError::Error(err) => err.into(),
+        })?;
+        // An earlier holder may have committed and unlinked after we opened the file.
+        if !path.try_exists()? || f.metadata()?.modified()?.elapsed().map_or(true, |a| a >= DAY) {
+            return Err(bad("private input expired or already consumed"));
         }
-        let mut s = String::new();
-        f.take(65537).read_to_string(&mut s)?;
-        if s.len() > 65536 {
-            return Err(bad("private input exceeded limit"));
-        }
-        Ok(s)
+        let mut value = Zeroizing::new(String::new());
+        Read::by_ref(&mut f).take(65537).read_to_string(&mut value)?;
+        if value.len() > 65536 { return Err(bad("private input exceeded limit")); }
+        let result = commit(&value)?;
+        fs::remove_file(path)?;
+        #[cfg(unix)]
+        fs::File::open(parent)?.sync_all()?;
+        Ok(result)
     }
 }
