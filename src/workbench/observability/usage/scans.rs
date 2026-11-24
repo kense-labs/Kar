@@ -114,7 +114,7 @@ fn home_dir(var: &str, default: PathBuf) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or(default)
 }
-fn roots(chat: PathBuf) -> Result<Vec<(&'static str, PathBuf)>> {
+fn roots(chat: PathBuf, muse: Option<PathBuf>) -> Result<Vec<(&'static str, PathBuf)>> {
     let mut dirs = vec![("kar", chat)];
     if let Some(home) = std::env::home_dir() {
         let codex = home_dir("CODEX_HOME", home.join(".codex"));
@@ -134,8 +134,8 @@ fn roots(chat: PathBuf) -> Result<Vec<(&'static str, PathBuf)>> {
                 home_dir("GROK_HOME", home.join(".grok")).join("sessions"),
             ),
         ]);
-        if let Some(home) = std::env::var_os("MUSE_HOME") {
-            dirs.push(("muse", PathBuf::from(home).join("sessions")));
+        if let Some(home) = muse {
+            dirs.push(("muse", home.join("sessions")));
         }
     }
     if let Some(home) = std::env::home_dir() {
@@ -506,6 +506,7 @@ pub(super) fn read(
     file: &Path,
     previous: Option<Arc<Snapshot>>,
     chat: PathBuf,
+    muse: Option<PathBuf>,
     settings: &settings::Store,
 ) -> Result<Snapshot> {
     let start = Instant::now();
@@ -522,7 +523,7 @@ pub(super) fn read(
     });
     let mut sources = vec![];
     let original_count = files.len();
-    let roots: BTreeSet<_> = roots(chat)?
+    let roots: BTreeSet<_> = roots(chat, muse)?
         .into_iter()
         .map(|(f, p)| (f, fs::canonicalize(&p).unwrap_or(p)))
         .collect();

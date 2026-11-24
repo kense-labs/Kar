@@ -2042,6 +2042,10 @@ fn main() {
         workbench_cloud_live::run(mode.as_deref() == Some("workbench-expo-live"));
         return;
     }
+    if mode.as_deref()==Some("serve") && std::env::var_os("KAR_TEST_MUSE_HOME").is_some(){
+        workbench_usage::muse_peer();
+        return;
+    }
     if mode.as_deref()==Some("workbench-usage-live"){
         workbench_usage::live();
         return;

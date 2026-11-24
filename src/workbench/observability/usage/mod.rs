@@ -2,6 +2,7 @@
 mod aggregation;
 mod cursor;
 mod databases;
+mod muse;
 mod pricing;
 mod records;
 mod scans;
@@ -86,6 +87,7 @@ struct Entry {
 pub(super) struct Service {
     rates: pricing::Cache,
     cursor: cursor::Cache,
+    muse: muse::Discovery,
     settings: Arc<settings::Store>,
     index_file: PathBuf,
     latest: Mutex<Option<Arc<scans::Snapshot>>>,
@@ -96,6 +98,7 @@ impl Service {
         Self {
             rates: pricing::Cache::new(dir),
             cursor: cursor::Cache::new(dir),
+            muse: Default::default(),
             settings: Arc::new(settings::Store::new(dir)),
             index_file: dir.join("usage-index-v1.json"),
             latest: Default::default(),
@@ -106,9 +109,10 @@ impl Service {
         let _g = self.gate.lock().await;
         let previous = self.latest.lock().unwrap().clone();
         let file = self.index_file.clone();
+        let muse = self.muse.home().await;
         let captured_settings = self.settings.clone();
         let next = tokio::task::spawn_blocking(move || {
-            scans::read(&file, previous, chat_dir, &captured_settings)
+            scans::read(&file, previous, chat_dir, muse, &captured_settings)
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;

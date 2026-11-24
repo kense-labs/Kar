@@ -59,7 +59,11 @@ pub(super) async fn run() {
         ruzstd::encoding::CompressionLevel::Fastest,
     );
     fs::write(archived.join("copy.jsonl.zst"), compressed).unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let muse = home.join("actual-muse");
     let env = [
+        ("KAR_MUSE_BIN", exe.as_os_str()),
+        ("KAR_TEST_MUSE_HOME", muse.as_os_str()),
         ("CURSOR_API_KEY", "".as_ref()),
         ("OPENCODE_DATA_DIR", opencode.as_os_str()),
         ("ANTIGRAVITY_DATA_DIR", antigravity.as_os_str()),
@@ -71,7 +75,7 @@ pub(super) async fn run() {
         ("CODEX_HOME", codex_home.as_os_str()),
         ("PI_CODING_AGENT_DIR", pi_home.as_os_str()),
         ("GROK_HOME", home.as_os_str()),
-        ("MUSE_HOME", home.as_os_str()),
+        ("MUSE_HOME", "".as_ref()),
     ];
     let request = json!({"since_day":"2025-11-02","until_day":"2025-11-02","time_zone":"America/New_York","resolution":"hour","since_time":"2025-11-02T05:00:00Z","until_time":"2025-11-02T07:00:00Z","await_refresh":true});
     let (mut server, url) = serve_with_env(&state, &work, &home, &env).await;
@@ -147,8 +151,23 @@ pub(super) async fn run() {
         1
     );
     native_databases(&opencode, &antigravity);
+    let muse_sessions = muse.join("sessions/s");
+    fs::create_dir_all(&muse_sessions).unwrap();
+    let at = "2025-11-02T05:23:00Z"
+        .parse::<jiff::Timestamp>()
+        .unwrap()
+        .as_microsecond();
+    append(
+        &muse_sessions.join("session.jsonl"),
+        &[
+            json!({"schema_version":1,"record_type":"event","payload_type":"runtime.session","payload_schema_version":3,"id":"ms","recorded_at":at,"stream":{"kind":"session","id":"native-muse"},"payload":{"event":{"kind":"automated_review_completed","model":{"model_id":"metered"},"usage":{"input_tokens":12,"cached_tokens":3,"output_tokens":6,"reasoning_tokens":2}}}}),
+        ],
+    );
     let with_db = json(http.post(format!("{url}/usage/summary")).json(&request)).await;
     let buckets = with_db["buckets"].as_array().unwrap();
+    assert!(buckets.iter().any(|r| r["provider"] == "muse"
+        && r["totals"]["uncached_input"] == 9
+        && r["totals"]["reasoning"] == 2));
     let row = buckets
         .iter()
         .find(|r| r["provider"] == "opencode")
@@ -428,4 +447,34 @@ pub(super) async fn live() {
     );
     server.kill().await.unwrap();
     server.wait().await.unwrap();
+}
+
+pub(super) fn muse_peer() {
+    use std::io::BufRead;
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    assert_eq!(
+        args,
+        [
+            "serve",
+            "--disable-shell",
+            "--disable-write",
+            "--no-session-log"
+        ]
+    );
+    assert!(std::env::var_os("KAR_WORKBENCH_TOKEN").is_none());
+    assert_eq!(std::env::var("MUSE_NO_AUTO_UPDATE").unwrap(), "1");
+    let mut lines = std::io::stdin().lock().lines();
+    let req: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(req["method"], "initialize");
+    assert_eq!(
+        req["params"]["capabilities"]["requestedCapabilities"],
+        json!([])
+    );
+    let home = std::env::var("KAR_TEST_MUSE_HOME").unwrap();
+    println!(
+        "{}",
+        json!({"jsonrpc":"2.0","id":req["id"],"result":{"schema":{"version":1,"fingerprint":"fixture"},"museHome":home}})
+    );
+    let done: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(done["method"], "initialized");
 }

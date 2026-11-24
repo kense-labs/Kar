@@ -7,7 +7,7 @@
 | server.getUsageSummary | `POST /usage/summary` | JSON 必填 since_day、until_day 与 time_zone。resolution=hour 另传含偏移的 since_time 和 until_time，采用左闭右开区间，最长 24 小时。响应含逐来源状态与物理指纹、逐源去重会话数、模型与时段、未定价记录与 token 数。支持 model_filter.include/exclude、provisional、await_refresh。 |
 | server.refreshUsageRates | `POST /usage/rates/refresh` | 使用 LiteLLM 模型费率表，24 小时缓存与一分钟刷新下限。下载失败保留已存表，无表时显示 unavailable。主机通过 KAR_USAGE_RATES_URL 指定镜像。推理已含在输出计数，缓存写入按 5 分钟与 1 小时分列计算。供应商申报金额优先，金额分类按比例折算。 |
 
-本地来源包括 Kar 聊天逐流增量（含子会话、供应商交接）、Claude projects、Codex sessions 与 archived_sessions、Pi sessions、Grok updates.jsonl 和显式 MUSE_HOME 下的 session.jsonl。相同原生会话有 transcript 计量时，采用原生记录。Claude 重复内容块按请求和消息 ID 取各计数最大值，Codex 以 response_id 或可对账的上下文快照计量，忽略分叉复制段。Grok 按模型分配剩余申报费用。新增 Kar 用量更新包含原始事件毫秒；老日志使用最近带时间的更新，未包含模型的旧会话展示 unknown。
+本地来源包括 Kar 聊天逐流增量（含子会话、供应商交接）、Claude projects、Codex sessions 与 archived_sessions、Pi sessions、Grok updates.jsonl 和Muse 原生目录下的 session.jsonl。相同原生会话有 transcript 计量时，采用原生记录。Claude 重复内容块按请求和消息 ID 取各计数最大值，Codex 以 response_id 或可对账的上下文快照计量，忽略分叉复制段。Grok 按模型分配剩余申报费用。新增 Kar 用量更新包含原始事件毫秒；老日志使用最近带时间的更新，未包含模型的旧会话展示 unknown。
 
 工作台将规范化计量结果和解析进度写入 `workbench/usage-index-v1.json`。已解析的正文、工具内容和提示词不会进入索引。重复读取可命中缓存；追加时校验已消费前缀的 SHA-256，原生来源末行可解析时即时计量，下次从已提交偏移重读并替换尾段；Kar 聊天只取写完换行的更新。当前来源下删除的文件仍可从索引恢复已观察的历史。费率源只接收一个 GET 请求。下载表的确定性离线覆盖使用测试自己的本地 HTTP peer。
 
@@ -31,3 +31,6 @@ Claude、Codex 和 Pi 的压缩记录同样支持 .jsonl.zst，复用现有纯 R
 原生 transcript 按字段投影解析，长提示词、图像或工具输出仅流式跳过。Codex 缺失原生计费档位时，只在 model_provider=openai 且 Kar 的会话 ID、原生 turn ID、模型三者匹配时复原档位；原生设置事件优先。额外复验命令为 `cargo test --locked --lib codex_tiers_require_the_same_model_session_and_native_turn` 与 `cargo test --locked --lib usage_skips_large_prompt_and_keeps_an_unterminated_complete_row`。
 
 可选实机入口为 `KAR_USAGE_LIVE_PROVIDER=codex KAR_USAGE_LIVE_SINCE_DAY=YYYY-MM-DD cargo test --locked --test chat_restart -- workbench-usage-live`。日期取已有供应商计量数据的 UTC 日期，也可设置 KAR_USAGE_LIVE_UNTIL_DAY 与已知对账数 KAR_USAGE_LIVE_EXPECT_TOKENS。Cursor 实机另需当前账号的 CURSOR_API_KEY。该入口只读取本机或选定账号的现有计量，并输出供应商、平台、时间区间、来源状态、记录数、token 数和金额。使用隔离的新工作台状态目录；未运行实机，不能据此确认真实账单金额。
+
+
+Muse 没有显式 MUSE_HOME 时，Kar 复用进程组回收机制启动只读 `muse serve --disable-shell --disable-write --no-session-log`，以五秒上限发送 MSP initialize，仅接受 envelope v1、schema fingerprint 和绝对路径 museHome，随后发送 initialized 并关闭。该路径来自固定工作台依赖 `@muse-code/sdk@1.4.6` 的 connection/spawn.js 与 connection/connection.js；已核对发行包 SHA-512 与固定 pnpm-lock.yaml。可用 KAR_MUSE_BIN 指定安装程序。
