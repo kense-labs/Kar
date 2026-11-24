@@ -73,6 +73,11 @@ name = "chat_restart"
 path = "tests/chat_restart.rs"
 harness = false
 
+[[test]]
+name = "workbench_git"
+path = "tests/workbench_git.rs"
+harness = false
+
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["signal", "process", "feature", "fs", "user"] }
 

@@ -39,7 +39,7 @@ pub struct FileChange {
     pub kind: ChangeKind,
 }
 // Normal paths remain JSON strings. Unix Git paths need not be UTF-8.
-mod git_path {
+pub(crate) mod git_path {
     use super::*;
     use base64::{Engine, engine::general_purpose::STANDARD};
     #[derive(Serialize, Deserialize)]
@@ -162,10 +162,9 @@ impl ChatStore {
         self.dir.join(format!("{chat}.git"))
     }
     pub(super) fn workspace_lease(&self, work: &Path) -> Result<WorkspaceLease> {
-        self.workspace_lease_for(work, None)
+        Self::workspace_lease_for(work, None)
     }
-    pub(super) fn workspace_lease_for(
-        &self,
+    pub(crate) fn workspace_lease_for(
         work: &Path,
         recovering: Option<&Path>,
     ) -> Result<WorkspaceLease> {
@@ -405,7 +404,7 @@ impl ChatStore {
 
 /// A process lock serializes live writers. The reservation also survives a host crash,
 /// so a different chat sharing this checkout cannot send a turn on a half-restored tree.
-pub(super) struct WorkspaceLease {
+pub(crate) struct WorkspaceLease {
     _lock: File,
     marker: PathBuf,
 }

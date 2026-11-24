@@ -2396,7 +2396,7 @@ async fn actual_claude_waits_for_host_approval() {
     session.close().await.unwrap();
 }
 
-async fn durable_cli_roundtrip(provider: &str) {
+async fn durable_cli_roundtrip(provider: &str, managed_checkout: bool) {
     use tokio::process::Command;
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().canonicalize().unwrap();
@@ -2404,9 +2404,43 @@ async fn durable_cli_roundtrip(provider: &str) {
     let other = base.join("elsewhere");
     let home = base.join("home");
     let cli_home = base.join("config");
-    for path in [&workspace, &other, &home, &cli_home] {
+    for path in [&other, &home, &cli_home] {
         std::fs::create_dir(path).unwrap();
     }
+    let tree = if managed_checkout {
+        let primary = base.join("primary");
+        gix::init(&primary).unwrap();
+        let output = std::process::Command::new("git")
+            .current_dir(&primary)
+            .args([
+                "-c",
+                "user.name=Kar Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Some(
+            kar::workbench_git::Repository::open(&primary)
+                .unwrap()
+                .create_worktree(uuid::Uuid::new_v4(), &workspace, "chat", "HEAD")
+                .unwrap(),
+        )
+    } else {
+        std::fs::create_dir(&workspace).unwrap();
+        None
+    };
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2482,7 +2516,9 @@ wire_api = "responses"
     );
     let history = kar::chat::ChatStore::open(base.join("store")).unwrap();
     let id = history.latest().unwrap();
-    let native = history.history(id).unwrap().chat.native_id;
+    let saved = history.history(id).unwrap().chat;
+    assert_eq!(saved.worktree_id, tree.as_ref().map(|t| t.id));
+    let native = saved.native_id;
     if provider == "codex" {
         let goal = async |args: &[&str]| {
             let output = tokio::time::timeout(
@@ -3079,12 +3115,17 @@ wire_api = "responses"
 #[tokio::test]
 #[ignore = "installed Codex CLI, isolated home and loopback model"]
 async fn actual_codex_durable_chat_across_processes() {
-    durable_cli_roundtrip("codex").await;
+    durable_cli_roundtrip("codex", false).await;
+}
+#[tokio::test]
+#[ignore = "installed Codex CLI, local Git, isolated home and loopback model"]
+async fn actual_codex_managed_worktree_across_processes() {
+    durable_cli_roundtrip("codex", true).await;
 }
 #[tokio::test]
 #[ignore = "Claude Code 2.1.326+ for the side-question part, isolated home and loopback model"]
 async fn actual_claude_durable_chat_across_processes() {
-    durable_cli_roundtrip("claude").await;
+    durable_cli_roundtrip("claude", false).await;
 }
 
 #[tokio::test]

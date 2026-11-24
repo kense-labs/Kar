@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod chat_cli;
+mod git_cli;
 mod mcp;
 mod providers_cli;
 use clap::{Args, Parser, Subcommand};
@@ -60,6 +61,8 @@ enum Action {
         #[arg(long, default_value_t = 0)]
         port: u16,
     },
+    /// Manage repositories and independent chat worktrees.
+    Git(git_cli::Git),
     /// Report installed executables, versions and pre-open session capabilities.
     List {
         /// Only inspect this runtime.
@@ -406,6 +409,7 @@ async fn execute(command: Action) -> Result<()> {
                 })
                 .await?;
         }
+        Action::Git(git) => git.run()?,
         Action::Mcp {
             cwd,
             runtimes: ids,

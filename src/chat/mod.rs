@@ -1,5 +1,5 @@
 //! Persistent native chats. A per-chat file lock gives one process ownership of the provider session.
-mod checkpoint;
+pub(crate) mod checkpoint;
 pub(crate) mod feed;
 mod http_feed;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
@@ -37,6 +37,9 @@ use uuid::Uuid;
 pub struct ChatInfo {
     pub id: Uuid,
     pub workspace: PathBuf,
+    /// Stable checkout identity for Kar-managed worktrees, including chats in a subdirectory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<Uuid>,
     pub runtime: String,
     pub protocol: Protocol,
     pub native_id: String,
@@ -53,6 +56,9 @@ pub struct ChatInfo {
     pub forked_from: Option<ForkOrigin>,
 }
 impl ChatInfo {
+    fn pin_worktree(&self) -> Result<Option<File>> {
+        crate::workbench_git::pin_saved_checkout(&self.workspace, self.worktree_id)
+    }
     fn tracks_steering_receipts(&self) -> bool {
         matches!(self.protocol, Protocol::Claude | Protocol::Pi)
             || (self.protocol == Protocol::Acp
@@ -221,6 +227,7 @@ impl ChatStore {
     /// Ask in a disposable native fork of a saved conversation.
     pub async fn side_question(&self, id: Uuid, question: &str) -> Result<String> {
         let info = log::info(File::open(self.path(id))?, id)?;
+        let _pin = info.pin_worktree()?;
         if info.workspace.canonicalize()? != info.workspace {
             return Err(Error::Refused(
                 "saved workspace resolves to a different path".into(),
@@ -345,6 +352,7 @@ impl ChatStore {
         mut opts: SessionOptions,
     ) -> Result<ChatSession> {
         opts.cwd = opts.cwd.canonicalize()?;
+        let worktree = crate::workbench_git::pin_checkout(&opts.cwd)?;
         let mut rt = runtime(runtime_id)?;
         if let Some(bin) = program {
             rt.program = bin.to_owned();
@@ -369,6 +377,7 @@ impl ChatStore {
         let info = ChatInfo {
             id,
             workspace: opts.cwd.clone(),
+            worktree_id: worktree.as_ref().map(|(id, _)| *id),
             runtime: rt.id,
             protocol: session.protocol(),
             program: rt.program,
@@ -413,6 +422,7 @@ impl ChatStore {
             ));
         }
         let info = &log.state.info;
+        let _pin = info.pin_worktree()?;
         if info.workspace.canonicalize()? != info.workspace {
             return Err(Error::Refused(
                 "saved workspace now resolves to a different path".into(),
@@ -469,6 +479,7 @@ pub struct ChatSession {
     worker: queue::QueueWorker,
 }
 struct Sender {
+    _worktree: Option<File>,
     store: ChatStore,
     session: Session,
     sink: Sink,
@@ -491,9 +502,11 @@ impl ChatSession {
             log.native_store = Some(store.clone());
         }
         let info = log.state.info.clone();
+        let worktree = info.pin_worktree()?;
         let sink = Sink(Arc::new(Mutex::new(log)));
         session.attach_chat(sink.clone(), launch.retained_bytes)?;
         let sender = Arc::new(Sender {
+            _worktree: worktree,
             store,
             session,
             sink,

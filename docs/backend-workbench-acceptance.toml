@@ -37,7 +37,7 @@ id = "git"
 name = "Git 仓库与独立工作树"
 hours = [40, 80]
 reference = ["packages/contracts/src/git.ts", "apps/server/src/git/GitWorkflowService.ts", "apps/server/src/vcs/VcsProvisioningService.ts", "apps/server/src/orchestration-v2/WorktreeBranchSync.ts"]
-test_command = "cargo test --locked --test workbench_git"
+test_command = "cargo test --locked --test workbench_git --test chat_restart"
 accept = [
   "用本地裸仓库充当远端，经服务克隆、查看状态、建分支并创建两个工作树。两个聊天同时改同一路径，逐个读取文件、分支和暂存区，确认各自变更互不覆盖。",
   "经正常接口提交并推送，独立克隆核对远端提交 ID、树和内容；从另一副本产生新提交再拉取，核对状态广播及结果。模拟非快进推送、拉取冲突和有本地修改的工作树清理，检查错误及保留下来的数据。",

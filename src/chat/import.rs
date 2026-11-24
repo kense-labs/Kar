@@ -42,7 +42,9 @@ impl ChatStore {
         if rt.program.is_relative() && rt.program.components().count() > 1 {
             rt.program = rt.program.canonicalize()?;
         }
+        let worktree = crate::workbench_git::pin_checkout(&workspace)?;
         let info = ChatInfo {
+            worktree_id: worktree.as_ref().map(|(id, _)| *id),
             forked_from: None,
             id,
             workspace,

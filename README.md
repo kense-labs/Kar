@@ -314,6 +314,35 @@ Claude 可以在输入排队期间或两轮对话之间处理后台通知。这�
 
 Rust 后端可调用 `ChatStore::enqueue(chat_id, request_id, text)`、`queued_inputs(chat_id)` 和 `withdraw(chat_id, request_id)`。持有 `ChatSession` 时可直接调用 `enqueue(request_id, text)`，需要等待队列处理完毕时调用 `drain_queue().await`。
 
+### 给两个聊天分配独立的 Git 工作树
+
+先准备一个有提交的仓库。在已有目录下为每个聊天指定一个新目录、一个新分支和一个请求 UUID，再把工作树路径交给 `kar chat new`。
+
+```sh
+kar git clone <仓库地址> ./project
+kar git --repo ./project worktree-add 98b63c61-108b-4488-8150-4831cf380662 ./chat-a chat/a
+kar git --repo ./project worktree-add 7d2f8714-b2ef-40a3-ba3a-622241c63470 ./chat-b chat/b
+kar chat new codex --cwd ./chat-a
+kar chat new codex --cwd ./chat-b
+kar chat resume --chat <聊天UUID> '继续上一轮'
+```
+
+两个聊天各有自己的工作文件、分支和暂存区。Kar 保存工作树 UUID，重启后会核对它。即使原路径被另一个工作树复用，旧聊天也会提示目录已被替换。
+
+```sh
+kar git --repo ./chat-a status
+kar git --repo ./chat-a watch
+kar git --repo ./chat-a stage src/lib.rs
+kar git --repo ./chat-a commit -m '更新入口'
+kar git --repo ./chat-a push
+kar git --repo ./chat-a pull
+kar git --repo ./project worktree-remove 98b63c61-108b-4488-8150-4831cf380662
+```
+
+`watch` 输出初始状态和之后观测到的状态变化，每行一条 JSON。`push` 将当前分支推到 `origin` 的同名分支并设置上游。`pull` 从配置的上游快进，有分歧或本地文件会被覆盖时返回错误。Rust SDK 的入口是 `kar::workbench_git::Repository`，这些阻塞方法调用系统 Git。
+
+重试创建时沿用原 UUID、路径、分支和起点，重试清理时沿用原 UUID。清理会保留分支和提交。已连接的聊天、未提交改动、未跟踪文件、忽略文件，或可能隐藏改动的索引标记都会阻止清理。如果底层 Git 写入中断，且目录内容与登记无法核对，Kar 会保留现场并报告错误。
+
 ### 按回合查看文件和回滚工作区
 
 `kar chat` 会在提交提示词前和运行结束后分别保存 Git 树。两棵树之间的差异就是该回合的文件清单，包含新增、修改、删除。没有文件变更的回合也可作为恢复点。先从 `history` 取得回合 UUID，以下命令可从任意目录执行。省略 `--chat` 时选择最近的聊天。
