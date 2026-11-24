@@ -2,7 +2,21 @@
 
 复核对象为 GitHub `main` 的 `d02239d9234a`、上游运行时 `v0.130.1`（`2b15859a13dc`）及 T3 Code `2808e878de91`。以下结论来自固定提交的实际处理逻辑。列出的操作供独立验收复现，当前候选的统一实测仍待执行。
 
-## 本次结论
+## 当前操作复核
+
+本次重新查询 GitHub 的 `refs/heads/main` 得到 `d02239d9234abb382d0a35c084d25dacc557738c`。下表核对本地候选 `3ab6da6`。运行时源码通过 `git show 2b15859:<文件>` 读取，工作台源码通过 `git show 2808e87:<文件>` 读取。以下判断限于用户或宿主实际调用的后端入口。
+
+| 操作 | 本地候选和上游的实际差别 | 独立复验 |
+| --- | --- | --- |
+| 原聊天同时回退模型和文件 | Kar 有保留聊天 ID 和文件的 `rewinds`，有只恢复文件的 `rollback`，也能用 `forks` 恢复文件和选定的模型历史并创建子聊天。T3 对可恢复的独立工作树在同一个聊天回滚请求中处理模型回退和文件恢复。Kar 的三个入口均未提供这个组合。 | 在独立工作树完成三轮不同写入，从第二轮恢复。核对原聊天 ID、模型实际看到的轮次、磁盘字节，以及恢复失败时的回执。 [T3 回滚执行](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/orchestration-v2/CheckpointRollbackService.ts#L415) · [Kar 工作台处理](../src/workbench/chat_controls.rs) |
+| 用授权模型管理 PR、CI 和聊天关联的 Issue | Kar 的托管 HTTP 接口与模型的 MCP 入口分别路由。候选已给模型提供 Issue 列表、详情、创建、评论、关闭和重开。模型工具没有 T3 的 PR 审查、合并、读取及重跑 CI，也没有绑定、解绑、列出当前聊天关联 Issue 的工具。 | 用项目授权模型搜索相应工具，再调用同一 MCP 会话的 `tools/call`。独立检查普通工作台接口，防止混淆两个调用方。 [T3 PR 和 CI](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/pullRequests/handlers.ts#L1181) · [T3 Issue 关联](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/issues/handlers.ts#L269) · [Kar 工具注册和分派](../src/workbench/mcp/toolkit.rs) · [Kar 托管接口](../src/workbench/forge/routes.rs) |
+| 模型操作预览及工作流键值存储 | T3 提供模型可调用的预览导航、快照和录制控制。其工作流工具还能按键前缀读取持久值、写入和删除。Kar 工作台有预览服务，候选模型的工作流工具也能启停和恢复运行，但这些预览工具及工作流存储操作未在 MCP 注册。 | 在授权会话中发现并调用预览操作。写入一个唯一工作流键，重启后按前缀读回，再删除。 [T3 预览](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/preview/handlers.ts#L215) · [T3 工作流](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/workflow/handlers.ts#L25) · [Kar 工作流工具](../src/workbench/mcp/workflow.rs) |
+| 订阅并按原生消息分组合并增量文本 | 上游运行时可选择合并连续正文或可读推理，按会话、代理、消息和原生文本阶段切分，静默超时可触发刷新。Kar 的公开事件订阅按游标逐事件返回；正文增量只包含 text，缺少相应消息 ID 和阶段。原始协议帧仍可读取。 | 让 Codex 同一轮输出两条不同消息和阶段，中间暂停，核对公共订阅返回的边界、最后游标和实际刷新时机。 [上游增量合并](https://github.com/botiverse/oar/blob/2b15859a13dcc50e8b66cbaee5a007832aa00e08/packages/oar/src/observe/events.ts#L133) · [上游 Codex 消息](https://github.com/botiverse/oar/blob/2b15859a13dcc50e8b66cbaee5a007832aa00e08/packages/oar/src/runtimes/codex/messages.ts#L15) · [Kar 事件和订阅](../src/stream.rs) |
+| 区分宿主依赖不满足与原生程序版本不支持 | 上游安装契约区分缺少依赖、宿主或 Node 不受支持等状态。Pi 的探测实际会在依赖缺失时返回 dependency_missing。Kar 的安装错误枚举提供程序未就绪、无法识别和版本不支持三种分类。其 Rust 启动方式及依赖不同；有影响的是宿主程序可以读到的诊断。 | 在隔离环境为对应的启动模式移除必需依赖，核对安装快照的机器可读原因以及能否向用户呈现修复动作。 [上游安装契约](https://github.com/botiverse/oar/blob/2b15859a13dcc50e8b66cbaee5a007832aa00e08/packages/oar/src/contracts/installation.ts#L65) · [上游 Pi 探测](https://github.com/botiverse/oar/blob/2b15859a13dcc50e8b66cbaee5a007832aa00e08/packages/oar/src/runtimes/pi/installation.ts#L77) · [Kar 安装快照](../src/installation.rs) |
+
+本地已接入同一聊天只回退模型上下文（`f5f1273`、`3ab6da6`）、模型 Issue 与工作流操作（`4553498`、`d9f0442`）、第三方 ACP 注册表（`2c53f5b`）、Muse 原生主动回合和父回合结束后的子代理审批（`a33f343`）。这个候选在 macOS arm64 上已通过 `cargo check --locked --offline --all-targets`。真实供应商已收件、Kar 尚未写回执时强杀 Kimi KAP/Codex 的证据仍须单独取得。统一实测由接手方执行。
+
+## 上一轮复核记录
 
 本地功能候选为 `7111a73`。首次报告的 16 个操作已有对应实现。第二次复核还发现原聊天仅回退模型上下文、第三方 ACP 注册表管理、模型工具的进一步操作以及 Muse 后台事件存在差异。输入投递历史已在本次复核期间补入候选。以下相对路径对应本地分支 `kar/functional-repairs`。
 
