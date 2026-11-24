@@ -41,6 +41,11 @@ pub enum InputStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueuedInput {
+    /// Kimi KAP and Codex hold later deliveries until this occurrence is resolved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_acknowledgement: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uncertainty_acknowledged: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<super::Attachment>,
     /// Also the id of the resulting chat turn.
@@ -53,8 +58,17 @@ pub struct QueuedInput {
     pub promotion: Option<QueuePromotion>,
 }
 
+impl QueuedInput {
+    pub(crate) fn outstanding(&self) -> bool {
+        matches!(self.status, InputStatus::Pending | InputStatus::Sending)
+            || (self.status == InputStatus::Uncertain && !self.uncertainty_acknowledged)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Entry {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    uncertainty_acknowledged: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     refusal: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -121,8 +135,36 @@ impl Entry {
             None => InputStatus::Pending,
         }
     }
+    fn blocks_delivery(&self, state: &super::log::State) -> bool {
+        matches!(
+            state.info.protocol,
+            crate::Protocol::KimiKap | crate::Protocol::Codex
+        ) && !self.uncertainty_acknowledged
+            && self.status(state) == InputStatus::Uncertain
+            && state
+                .find(
+                    self.promotion
+                        .as_ref()
+                        .filter(|p| !p.returned_to_queue)
+                        .map_or(self.id, |p| p.target.turn),
+                )
+                .and_then(|turn| turn.items.first())
+                .is_some_and(|i| {
+                    i.source.path.is_empty()
+                        && i.source.session_id.as_deref() == Some(&state.info.native_id)
+                })
+    }
+    fn outstanding(&self, state: &super::log::State) -> bool {
+        match self.status(state) {
+            InputStatus::Pending | InputStatus::Sending => true,
+            InputStatus::Uncertain => !self.uncertainty_acknowledged,
+            _ => false,
+        }
+    }
     fn receipt(&self, state: &super::log::State) -> QueuedInput {
         QueuedInput {
+            needs_acknowledgement: self.blocks_delivery(state),
+            uncertainty_acknowledged: self.uncertainty_acknowledged,
             attachments: self.attachments.clone(),
             id: self.id,
             text: self.text.clone(),
@@ -152,13 +194,7 @@ struct Inbox {
 }
 impl Inbox {
     fn allows_background(&self, state: &super::log::State) -> bool {
-        !self.held
-            && !self.entries.iter().any(|entry| {
-                matches!(
-                    entry.status(state),
-                    InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
-                )
-            })
+        !self.held && !self.entries.iter().any(|entry| entry.outstanding(state))
     }
 }
 impl ChatStore {
@@ -238,10 +274,9 @@ impl ChatStore {
         let _lock = self.inbox_lock(log.state.info.id)?;
         let inbox = self.read_inbox(&log.state.info)?;
         let rewinding = matches!(&update, super::ChatUpdate::ContextRewound { .. } | super::ChatUpdate::RewindPrepared { .. });
-        if inbox.entries.iter().any(|e| match e.status(&log.state) {
-            InputStatus::Pending | InputStatus::Sending => true,
-            InputStatus::Uncertain => rewinding,
-            _ => false,
+        if inbox.workspace_gate.is_some() || inbox.entries.iter().any(|e| {
+            (rewinding && e.outstanding(&log.state)) || e.blocks_delivery(&log.state)
+                || matches!(e.status(&log.state), InputStatus::Pending | InputStatus::Sending)
         }) {
             return Err(Error::Busy);
         }
@@ -322,6 +357,7 @@ impl ChatStore {
                 crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
             }
             let entry = Entry {
+                uncertainty_acknowledged: false,
                 refusal: None,
                 attachments,
                 initial_attachments: None,
@@ -368,20 +404,22 @@ impl ChatStore {
     ) -> Result<T> {
         let _lock = self.inbox_lock(id)?;
         let state = self.read_state(File::open(self.path(id))?, id)?;
-        let queued = self.read_inbox(&state.info)?.entries.iter().any(|e| {
-            matches!(
-                e.status(&state),
-                InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
-            )
-        });
+        let queued = self
+            .read_inbox(&state.info)?
+            .entries
+            .iter()
+            .any(|e| e.outstanding(&state));
         f(self.history_from_state(id, state)?, queued)
     }
     pub(crate) fn shell_queue_count(&self, replica: &super::ChatReplica) -> Result<usize> {
         let state = &replica.state;
         let _lock = self.inbox_lock(state.info.id)?;
-        Ok(self.read_inbox(&state.info)?.entries.iter().filter(|e| {
-            matches!(e.status(state), InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain)
-        }).count())
+        Ok(self
+            .read_inbox(&state.info)?
+            .entries
+            .iter()
+            .filter(|e| e.outstanding(state))
+            .count())
     }
     /// Read all queued inputs, including earlier delivery and withdrawal receipts.
     pub fn queued_inputs(&self, chat: Uuid) -> Result<Vec<QueuedInput>> {
@@ -456,6 +494,11 @@ impl Admission {
             && inbox.released != Some(self.id)
         {
             return Err(Error::Busy);
+        }
+        if let Some(input) = inbox.uncertain_head(&log.state) {
+            return Err(Error::Refused(format!(
+                "queue waiting for native evidence for input {input}; to continue without resending it, use kar chat acknowledge-uncertain {input}"
+            )));
         }
         if let Some(head) = inbox.next(&log.state)
             && head.id != self.id

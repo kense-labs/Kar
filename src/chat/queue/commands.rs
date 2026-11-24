@@ -10,6 +10,10 @@ use uuid::Uuid;
 pub enum QueueAction {
     Hold,
     Resume,
+    /// Advance after an ambiguous delivery without claiming success or resending the input.
+    AcknowledgeUncertain {
+        input: Uuid,
+    },
     Start {
         input: Uuid,
     },
@@ -33,6 +37,8 @@ pub struct QueueReceipt {
     pub command_id: Uuid,
     pub held: bool,
     pub next: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertain_head: Option<Uuid>,
 }
 #[derive(Serialize, Deserialize)]
 pub(super) struct SavedCommand {
@@ -41,8 +47,17 @@ pub(super) struct SavedCommand {
 }
 
 impl Inbox {
+    pub(super) fn uncertain_head(&self, state: &State) -> Option<Uuid> {
+        self.entries
+            .iter()
+            .find(|entry| entry.blocks_delivery(state))
+            .map(|e| e.id)
+    }
     pub(super) fn next<'a>(&'a self, state: &State) -> Option<&'a Entry> {
         if self.workspace_gate.is_some() {return None;}
+        if self.uncertain_head(state).is_some() {
+            return None;
+        }
         self.entries.iter().find(|entry| {
             (!self.held || self.released == Some(entry.id))
                 && entry.status(state) == InputStatus::Pending
@@ -88,6 +103,20 @@ impl ChatStore {
             };
         }
         match &action {
+            QueueAction::AcknowledgeUncertain { input } => {
+                let head = inbox.uncertain_head(&state);
+                let entry = inbox
+                    .entries
+                    .iter_mut()
+                    .find(|e| e.id == *input)
+                    .ok_or_else(|| Error::Refused("unknown queued input".into()))?;
+                if !entry.uncertainty_acknowledged && head != Some(*input) {
+                    return Err(Error::Refused(
+                        "input is not the uncertain queue head".into(),
+                    ));
+                }
+                entry.uncertainty_acknowledged = true;
+            }
             QueueAction::Hold => {
                 inbox.held = true;
                 inbox.released = None;
@@ -97,6 +126,11 @@ impl ChatStore {
                 inbox.released = None;
             }
             QueueAction::Start { input } => {
+                if let Some(head) = inbox.uncertain_head(&state) {
+                    return Err(Error::Refused(format!(
+                        "queue waiting for acknowledgement of input {head}"
+                    )));
+                }
                 if state.active().is_some() {
                     return Err(Error::Busy);
                 }
@@ -144,6 +178,7 @@ impl ChatStore {
             }
         }
         let receipt = QueueReceipt {
+            uncertain_head: inbox.uncertain_head(&state),
             command_id,
             held: inbox.held,
             next: inbox.next(&state).map(|e| e.id),

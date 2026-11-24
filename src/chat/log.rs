@@ -1087,12 +1087,12 @@ impl State {
                     }
                     _ => false,
                 };
-                let target = if self.info.protocol == Protocol::Codex {
+                let target = if matches!(self.info.protocol, Protocol::Codex | Protocol::KimiKap) {
                     if !frame.source.path.is_empty()
                         || frame.source.session_id.as_deref() != Some(&self.info.native_id)
                     {
                         return Err(Error::Protocol(
-                            "Codex reconciliation belongs to another native thread".into(),
+                            "reconciliation belongs to another native thread".into(),
                         ));
                     }
                     self.ids
@@ -1541,6 +1541,34 @@ impl Log {
             for (id, frame) in codex::recover(session, &recovery).await {
                 self.commit(ChatUpdate::Reconciled { id, frame })?;
             }
+        } else if session.protocol() == Protocol::KimiKap {
+            let records = session.records();
+            // An older uncertain attempt can acquire evidence after a manual
+            // FIFO release and a later turn. Preserve the original turn ID.
+            let mut claims = std::collections::HashMap::new();
+            for turn in recovery.iter() {
+                if let Some(native) = &turn.native_turn_id {
+                    claims
+                        .entry(native.clone())
+                        .and_modify(|owner| *owner = None)
+                        .or_insert(Some(turn.id));
+                }
+            }
+            let mut resolved = Vec::new();
+            for turn in recovery.iter() {
+                if matches!(turn.status, TurnStatus::Running | TurnStatus::Interrupted)
+                    && let Some(frame) = records
+                        .iter()
+                        .find_map(|r| Frame::kimi_recovery(turn, session.id(), r))
+                    && let Some(native) = frame.native_turn.as_ref()
+                    && claims.entry(native.clone()).or_insert(Some(turn.id)) == &Some(turn.id)
+                {
+                    resolved.push((turn.id, frame));
+                }
+            }
+            for (id, frame) in resolved {
+                self.commit(ChatUpdate::Reconciled { id, frame })?;
+            }
         } else if let Some(last) = recovery
             .last()
             .filter(|t| matches!(t.status, TurnStatus::Running | TurnStatus::Interrupted))
@@ -1597,7 +1625,6 @@ impl Log {
                     .records()
                     .iter()
                     .find_map(|r| match session.protocol() {
-                        Protocol::KimiKap => Frame::kimi_recovery(last, session.id(), r),
                         Protocol::Dsh => crate::dsh::recovery::frame(last, session.id(), r),
                         _ => None,
                     })

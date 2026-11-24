@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     Error, Result, SessionOptions,
-    chat::{ChatHistory, ChatSession, CheckpointPoint, InputStatus, QueuedInput, RollbackReport},
+    chat::{ChatHistory, ChatSession, CheckpointPoint, QueuedInput, RollbackReport},
     workbench_git::Repository,
 };
 use axum::{
@@ -110,14 +110,7 @@ impl Workbench {
                 continue;
             }
             match self.0.chats.queued_inputs(id) {
-                Ok(q)
-                    if q.iter().any(|e| {
-                        matches!(
-                            e.status,
-                            InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
-                        )
-                    }) =>
-                {
+                Ok(q) if q.iter().any(QueuedInput::outstanding) => {
                     found.insert((project.id, id));
                 }
                 Err(e) => self.queue_error(id, &e),
@@ -363,14 +356,7 @@ async fn rewind(
         {
             return Err(Error::Busy);
         }
-        if app.0.chats.queued_inputs(chat)?.iter().any(|i| {
-            matches!(
-                i.status,
-                crate::chat::InputStatus::Pending
-                    | crate::chat::InputStatus::Sending
-                    | crate::chat::InputStatus::Uncertain
-            )
-        }) {
+        if app.0.chats.queued_inputs(chat)?.iter().any(crate::chat::QueuedInput::outstanding) {
             return Err(Error::Busy);
         }
         if let Some(session) = owner.take() {

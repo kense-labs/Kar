@@ -858,6 +858,10 @@ impl Frame {
             return None;
         }
         let (turn, claimed) = crate::kimi::recovery_turn(&n["turns"], local)?;
+        let claimed = claimed && !record.elided && n["karConfirmedOpener"] != false;
+        if local.native_turn_id.is_none() && !claimed {
+            return None;
+        }
         let id = turn["turn_id"].as_str()?;
         let ended = turn["status"] == "ended";
         let mut edits = Vec::new();
@@ -1572,6 +1576,28 @@ mod tests {
                 Frame::kimi_recovery(&local, "root", &other).is_none(),
                 "{path}"
             );
+        }
+        let mut other = record.clone();
+        other.elided = true;
+        assert!(Frame::kimi_recovery(&local, "root", &other).is_none());
+        other = record.clone();
+        other.native["karConfirmedOpener"] = json!(false);
+        assert!(Frame::kimi_recovery(&local, "root", &other).is_none());
+        let steer = json!({"type":"user_message","placement":"steer","prompt_ids":[id]});
+        for same_turn in [false, true] {
+            let mut other = record.clone();
+            if same_turn {
+                other.native["turns"][0]["items"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(steer.clone());
+            } else {
+                other.native["turns"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"kind":"agent","turn_id":"older","items":[steer]}));
+            }
+            assert!(Frame::kimi_recovery(&local, "root", &other).is_none());
         }
         record.native["turns"].as_array_mut().unwrap().push(native);
         assert!(Frame::kimi_recovery(&local, "root", &record).is_none());

@@ -117,7 +117,7 @@ impl Actor {
     pub(super) fn capture_recovery(&self, snapshot: &Value, local: &crate::chat::ChatTurn) {
         if snapshot["type"] == "turns"
             && snapshot["agent_id"] == "main"
-            && let Some((turn, _)) = super::recovery_turn(&snapshot["turns"], local)
+            && let Some((turn, confirmed)) = super::recovery_turn(&snapshot["turns"], local)
         {
             // Retain only this host input's snapshot. Replaying an entire history
             // would publish old messages and token totals on the new stream.
@@ -135,7 +135,7 @@ impl Actor {
             self.record(
                 Direction::FromRuntime,
                 RecordKind::Frame,
-                json!({"type":"turns","session_id":self.id,"agent_id":"main","turns":[turn]}),
+                json!({"type":"turns","session_id":self.id,"agent_id":"main","turns":[turn],"karConfirmedOpener":confirmed}),
                 vec![],
             );
         }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::chat::{InputStatus, Item, Role, TurnStatus};
+use crate::chat::{Item, Role, TurnStatus};
 use crate::workbench_git::git;
 use serde::Serialize;
 use std::io;
@@ -256,12 +256,7 @@ impl Workbench {
                     || !h.pending_requests.is_empty()
                     || h.pending_rollback.is_some()
                     || h.pending_fork.is_some()
-                    || self.0.chats.queued_inputs(*id)?.iter().any(|q| {
-                        matches!(
-                            q.status,
-                            InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
-                        )
-                    })
+                    || self.0.chats.queued_inputs(*id)?.iter().any(|q| q.outstanding())
                 {
                     return Err(Error::Busy);
                 }

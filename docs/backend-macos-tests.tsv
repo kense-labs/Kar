@@ -35,6 +35,8 @@ codex	native_live	codex_queue::native_queue_receipt_idle_interruption_and_restar
 codex	native_live	codex_startup::per_server_startup_precedes_the_first_model_request	KAR_CODEX_BIN	requires held HTTP and failing stdio MCP services with real Codex and a loopback model
 codex	native_live	resume_prompts::codex_prompt_persistence	KAR_CODEX_BIN	requires Codex CLI with a loopback model
 codex	native_live	prompt_suggestions::codex_samples_the_completed_native_turn	KAR_CODEX_BIN	requires installed Codex app-server supporting thread/sample; isolated home, loopback Responses API
+codex	provider_queue_crash	codex_sigkill_after_native_acceptance	KAR_CODEX_BIN	real Codex app-server with isolated thread/resume and thread/read; SIGKILL Kar and its private native process group, loopback model, independent native opener and FIFO receipts
+codex	provider_queue_crash	codex_sigkill_before_native_acceptance	KAR_CODEX_BIN	real Codex app-server with isolated thread/resume and thread/read; SIGKILL Kar and its private native process group, loopback model, independent native opener and FIFO receipts
 codex	setup_cli	codex	KAR_CODEX_BIN	vendor-managed macOS Codex CLI with updates.status in doctor --json (0.158.0+); official version feed reachable; verifies read-only check and unchanged executable identity/version
 codex	skill_inventory_live	codex	KAR_CODEX_BIN	requires KAR_CODEX_BIN
 codex	skill_inventory_live	codex_mcp_and_tools	KAR_CODEX_BIN	requires KAR_CODEX_BIN; isolated profile and a local Rust stdio MCP server
@@ -113,6 +115,8 @@ kimi	account_live	kimi_empty_profile	KAR_KIMI_BIN	requires KAR_KIMI_BIN with nat
 kimi	account_quota_live	managed_kimi_quota_in_an_isolated_profile	KAR_KIMI_BIN	requires KAR_KIMI_BIN; managed Kimi provider with synthetic tokens and a loopback API
 kimi	kimi_live	kap_tool_turn_replay_and_native_resume	KAR_KIMI_BIN	requires Kimi KAP; uses an isolated home and a loopback model
 kimi	kimi_live	official_cli_falls_back_and_resumes_over_acp	KAR_KIMI_ACP_BIN	requires unpatched Kimi 2.7.2; uses the native ACP fallback and a loopback model
+kimi	provider_queue_crash	kimi_kap_sigkill_after_native_acceptance	KAR_KIMI_BIN	real Kimi Web with KAP main turns snapshot; SIGKILL Kar and its private native process group, loopback model, independent native opener and FIFO receipts
+kimi	provider_queue_crash	kimi_kap_sigkill_before_native_acceptance	KAR_KIMI_BIN	real Kimi Web with KAP main turns snapshot; SIGKILL Kar and its private native process group, loopback model, independent native opener and FIFO receipts
 kimi	setup_cli	kimi	KAR_KIMI_BIN	standalone macOS Kimi Code with mainland or global release pointer reachable; Homebrew-managed copies use the package manager; verifies read-only check and unchanged executable identity/version
 kimi	skill_inventory_live	kimi	KAR_KIMI_BIN	requires KAR_KIMI_BIN
 kimi-peer	kimi_controls	aborted_or_absent_followup_releases_held_input	KAR_UPSTREAM_SOURCE	requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer

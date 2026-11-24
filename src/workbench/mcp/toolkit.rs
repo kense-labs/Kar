@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     Error, Result,
-    chat::{InputStatus, Item, QueueAction},
+    chat::{Item, QueueAction},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Map;
@@ -476,12 +476,7 @@ fn queue(app: &Workbench, c: &Caller, q: Queue) -> Result<Value> {
     let (_, t) = target(app, c, q.project_id, q.thread_id)?;
     if matches!(q.action.as_str(), "list" | "read") {
         let (held, entries) = app.0.chats.queue_view(t)?;
-        let waiting = entries.into_iter().filter(|e| {
-            matches!(
-                e.status,
-                InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
-            )
-        });
+        let waiting = entries.into_iter().filter(|e| e.outstanding());
         if q.action == "read" {
             let entry = waiting
                 .into_iter()

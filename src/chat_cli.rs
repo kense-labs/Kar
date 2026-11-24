@@ -63,6 +63,14 @@ enum Action {
         #[arg(long)]
         chat: Option<Uuid>,
     },
+    /// Allow later inputs to proceed without resending an ambiguously delivered input.
+    AcknowledgeUncertain {
+        input: Uuid,
+        #[arg(long)]
+        chat: Option<Uuid>,
+        #[arg(long)]
+        command_id: Option<Uuid>,
+    },
     /// Withdraw a queued input before native dispatch starts.
     Withdraw {
         request_id: Uuid,
@@ -197,6 +205,12 @@ fn selected(store: &ChatStore, id: Option<Uuid>) -> Result<Uuid> {
 }
 fn display_input(input: &QueuedInput) {
     println!("{}  {:?}  {}", input.id, input.status, input.text);
+    if input.needs_acknowledgement {
+        println!(
+            "  To continue without resending, use kar chat acknowledge-uncertain {}",
+            input.id
+        );
+    }
 }
 fn display(turn: &ChatTurn) -> Result<()> {
     let mut out = std::io::stdout().lock();
@@ -488,6 +502,23 @@ impl Chat {
                     super::json_line(&receipt, std::io::stdout())?;
                 } else {
                     display_input(&receipt);
+                }
+                return Ok(());
+            }
+            Action::AcknowledgeUncertain {
+                chat,
+                input,
+                command_id,
+            } => {
+                let receipt = store.queue_control(
+                    selected(&store, chat)?,
+                    command_id.unwrap_or_else(Uuid::new_v4),
+                    kar::chat::QueueAction::AcknowledgeUncertain { input },
+                )?;
+                if self.json {
+                    super::json_line(&receipt, std::io::stdout())?;
+                } else {
+                    println!("Continuing after {input} without resending this input.");
                 }
                 return Ok(());
             }

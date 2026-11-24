@@ -91,6 +91,7 @@ impl ChatStore {
             ));
         }
         let workspace_pending=inbox.workspace_gate.is_some();
+        let uncertain_head = inbox.uncertain_head(&state);
         let entry = inbox
             .entries
             .iter_mut()
@@ -117,6 +118,11 @@ impl ChatStore {
             return Ok(Claim::Prior(entry.receipt(&state)));
         }
         if workspace_pending {return Err(Error::Busy);}
+        if let Some(head) = uncertain_head {
+            return Err(Error::Refused(format!(
+                "queue waiting for acknowledgement of input {head}"
+            )));
+        }
         if !online || state.active() != Some(target.turn) {
             return Err(crate::transport::AbortRequest::stale());
         }

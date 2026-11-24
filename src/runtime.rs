@@ -168,7 +168,7 @@ impl Runtime {
                 .await;
         }
         if self.protocol == Protocol::KimiKap {
-            return crate::kimi::open(self, options, true, None).await;
+            return crate::kimi::open(self, options, true, &[]).await;
         }
         if self.protocol == Protocol::Morph {
             return crate::community::Morph::from_env(&self.program)?

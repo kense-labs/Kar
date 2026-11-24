@@ -27,12 +27,25 @@ pub(crate) fn recovery_turn<'a>(
     local: &crate::chat::ChatTurn,
 ) -> Option<(&'a Value, bool)> {
     let key = local.id.to_string();
-    let mut candidates = turns.as_array()?.iter().filter_map(|turn| {
+    let turns = turns.as_array()?;
+    // A UUID repeated in another item (including steer) or two native turns
+    // cannot identify the opening occurrence of this durable host input.
+    let unique_input = turns
+        .iter()
+        .flat_map(|t| t["items"].as_array().into_iter().flatten())
+        .filter(|item| item["type"] == "user_message")
+        .flat_map(|item| item["prompt_ids"].as_array().into_iter().flatten())
+        .filter(|id| id.as_str() == Some(key.as_str()))
+        .take(2)
+        .count()
+        == 1;
+    let mut candidates = turns.iter().filter_map(|turn| {
         let native = turn["turn_id"].as_str().filter(|id| !id.is_empty())?;
         if turn["kind"] == "system" {
             return None;
         }
-        let claimed = !local.native_continuation
+        let claimed = unique_input
+            && !local.native_continuation
             && turn["kind"] == "agent"
             && turn["items"].as_array().is_some_and(|items| {
                 items.iter().any(|item| {
@@ -51,7 +64,14 @@ pub(crate) fn recovery_turn<'a>(
         matches.then_some((turn, claimed))
     });
     let (turn, claimed) = candidates.next()?;
-    if candidates.next().is_some() {
+    if candidates.next().is_some()
+        || turns
+            .iter()
+            .filter(|t| t["turn_id"] == turn["turn_id"])
+            .take(2)
+            .count()
+            != 1
+    {
         return None;
     }
     let needs_receipt = !local.input_sent || local.native_turn_id.is_none();
@@ -62,7 +82,7 @@ pub(crate) async fn open(
     rt: &Runtime,
     mut opts: SessionOptions,
     allow_acp: bool,
-    recover_turn: Option<&crate::chat::ChatTurn>,
+    recover_turns: &[crate::chat::ChatTurn],
 ) -> Result<Session> {
     crate::options::launch_args::validate(rt, &opts, false)?;
     if opts
@@ -89,7 +109,15 @@ pub(crate) async fn open(
                 let process_root = web.process_root();
                 let mut actor = actor::Actor::new(web, socket, id.clone(), journal.clone(), &opts);
                 for frame in initial {
-                    if let Some(turn) = recover_turn {
+                    for turn in recover_turns.iter().filter(|t| {
+                        matches!(
+                            t.status,
+                            crate::chat::TurnStatus::Running | crate::chat::TurnStatus::Interrupted
+                        ) && t.items.first().is_some_and(|item| {
+                            item.source.path.is_empty()
+                                && item.source.session_id.as_deref() == Some(&id)
+                        })
+                    }) {
                         actor.capture_recovery(&frame, turn);
                     }
                     if let Err(e) = actor.frame(frame).await {

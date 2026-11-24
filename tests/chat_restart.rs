@@ -414,6 +414,11 @@ fn durable_inputs() {
         .collect();
     assert_eq!(pending.len(), 3);
 
+    run(&["resume","--chat",chat]);
+    assert_eq!(run(&["queue","--chat",chat])[0]["needs_acknowledgement"],true);
+    let decision=Uuid::new_v4().to_string();
+    let acknowledge=||run(&["acknowledge-uncertain",&held,"--chat",chat,"--command-id",&decision]);
+    assert_eq!(acknowledge(),acknowledge());
     run(&["resume", "after drain", "--chat", chat]);
     assert_eq!(args("hold without reply", &held)["status"], "uncertain");
     assert_eq!(args("same queue text", &shared)["status"], "sent");

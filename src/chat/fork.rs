@@ -515,7 +515,7 @@ impl ChatStore {
             }) {
             Session::open_with_replay(&rt, opts, None, None, true, None).await?
         } else if rt.protocol == Protocol::KimiKap {
-            crate::kimi::open(&rt, opts, false, state.unfinished_turn()).await?
+            crate::kimi::open(&rt, opts, false, &state.turns).await?
         } else if rt.protocol == Protocol::Dsh {
             crate::dsh::open(&rt, opts, None, state.unfinished_turn(), None).await?
         } else {
