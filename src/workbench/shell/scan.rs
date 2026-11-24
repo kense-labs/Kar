@@ -67,11 +67,11 @@ impl Sources {
                 })
                 .unwrap_or_default();
             let background = replica.tasks().iter().filter(|t| !t.status.is_terminal())
-                .map(|t| json!({"id":t.id,"source":t.source,"kind":t.task_type,"status":t.status,"started_at":t.started_at}))
+                .map(|t| json!({"id":t.id,"source":t.source,"kind":t.task_type,"status":t.status,"started_at":t.started_at,"background_work":t.background_work.as_ref().map(|w|json!({"kind":w.kind,"pending":w.pending,"awaited":w.awaited,"turn_id":w.turn_id}))}))
                 .collect::<Vec<_>>();
             let activity = json!({"turns":turns.len(),"latest_turn":last.map(|t|json!({"id":t.id,"status":t.status,"started_ms":t.started_ms,"finished_ms":t.finished_ms})),
                 "pending_requests":replica.pending_requests().iter().map(|r|json!({"id":r.id,"cursor":r.cursor,"kind":r.kind})).collect::<Vec<_>>(),
-                "background_tasks":background,"queued":store.shell_queue_count(&replica)?,"goal":replica.goal()});
+                "background_working":replica.tasks().iter().any(crate::NativeTask::blocking_background),"background_tasks":background,"queued":store.shell_queue_count(&replica)?,"goal":replica.goal()});
             let info = replica.chat().clone();
             let keep =
                 replica.needs_controller() || last.is_some_and(|t| t.status == TurnStatus::Running);

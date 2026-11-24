@@ -18,11 +18,11 @@ impl Tool {
             "additionalProperties":false,"properties":self.properties,"required":self.required}})
     }
 }
-fn tools() -> Vec<Tool> {
+fn tools(caller: &Caller) -> Vec<Tool> {
     let id = json!({"type":"string","format":"uuid"});
     let cursor = json!({"type":"integer","minimum":0});
     let limit = json!({"type":"integer","minimum":1,"maximum":100});
-    vec![
+    let mut tools = vec![
         Tool {
             name: "orchestrator_capabilities",
             description: "Show this caller's available Kar workbench tools and local project or chat scope.",
@@ -65,15 +65,24 @@ fn tools() -> Vec<Tool> {
             properties: json!({"query":{"type":"string"}}),
             required: &["query"],
         },
-    ]
+    ];
+    if caller.grant.as_ref().is_some_and(|g| g.runtime == "claude") {
+        tools.push(Tool {
+            name:"kar_background_wait",
+            description:"Keep this Claude chat working while selected background tasks run, or clear their waiting marks.",
+            properties:json!({"task_ids":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"string","minLength":1}},"waiting":{"type":"boolean"}}),
+            required:&["task_ids"],
+        });
+    }
+    tools
 }
 pub(super) fn enabled(name: &str, caller: &Caller, deferred: bool) -> bool {
-    tools().iter().any(|t| t.name == name)
+    tools(caller).iter().any(|t| t.name == name)
         && (name != "tool_search" || (caller.grant.is_some() && deferred))
 }
 pub(super) fn list(caller: &Caller, deferred: bool) -> Vec<Value> {
     let loaded = caller.grant.as_ref().map(|g| g.loaded.lock().unwrap());
-    tools()
+    tools(caller)
         .into_iter()
         .filter(|t| {
             if deferred {
@@ -196,6 +205,29 @@ pub(super) async fn call(
     name: &str,
     input: Value,
 ) -> Result<Value> {
+    if name == "kar_background_wait" {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Mark {
+            task_ids: Vec<String>,
+            waiting: Option<bool>,
+        }
+        let mark: Mark = args(input)?;
+        let grant = caller
+            .grant
+            .as_ref()
+            .filter(|g| g.runtime == "claude" && g.active())
+            .ok_or_else(|| bad("An active Claude caller is required"))?;
+        let request = crate::BackgroundWaitRequest {
+            task_ids: mark.task_ids,
+            waiting: mark.waiting.unwrap_or(true),
+            started_at: Default::default(),
+        };
+        return Ok(json!(
+            app.await_background_tasks(grant.project, grant.chat, request)
+                .await?
+        ));
+    }
     let name = name.to_owned();
     tokio::task::spawn_blocking(move || dispatch(&app, &caller, &name, input))
         .await
@@ -215,7 +247,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
                 .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
                 .filter(|s| !s.is_empty())
                 .collect();
-            let mut matches: Vec<_> = tools()
+            let mut matches: Vec<_> = tools(c)
                 .into_iter()
                 .filter(|t| t.name != "tool_search")
                 .filter_map(|t| {
@@ -259,7 +291,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
                 return Err(bad("This tool takes no arguments"));
             }
             Ok(
-                json!({"server":"Kar","tools":tools().iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
+                json!({"server":"Kar","tools":tools(c).iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
                 "provider_session":c.grant.as_ref().map(|g|json!({"id":g.id,"project_id":g.project,"thread_id":g.chat,"runtime":g.runtime})),
                 "write_access":!c.plan && c.grant.is_none()}),
             )

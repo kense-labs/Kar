@@ -182,7 +182,8 @@ impl Metadata {
     ) -> Result<()> {
         let latest = history.turns.last();
         let active = latest.is_some_and(|t| t.status == TurnStatus::Running)
-            || !history.pending_requests.is_empty();
+            || !history.pending_requests.is_empty()
+            || history.tasks.iter().any(crate::NativeTask::blocking_background);
         match action {
             Action::Rename { title } => self.title = Some(nonempty(title)?.to_owned()),
             Action::Tag { tag, tagged } => {
