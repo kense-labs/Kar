@@ -393,6 +393,7 @@ impl ChatTurn {
                     id: input,
                     text: text.clone(),
                     request_id: None,
+                    attachments: Vec::new(),
                     status: SteerStatus::Accepted,
                 })
             })
