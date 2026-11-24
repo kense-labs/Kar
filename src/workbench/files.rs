@@ -1,3 +1,6 @@
+mod inspection;
+pub(super) use inspection::routes;
+
 use super::{Project, Workbench, denied};
 use crate::{Error, Result};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};

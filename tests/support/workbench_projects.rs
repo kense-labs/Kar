@@ -104,6 +104,44 @@ async fn scenario() {
             assert_eq!(result.status(), StatusCode::FORBIDDEN);
             assert!(!native.join("new.txt").exists());
         }
+        std::fs::write(path.join(".gitignore"), "*.local\ncache/\n").unwrap();
+        std::fs::write(path.join("MiXeD.local"), b"123").unwrap();
+        std::fs::create_dir(path.join("cache")).unwrap();
+        std::fs::write(path.join("cache/deep.local"), "ignored directory").unwrap();
+        let direct = json(b.get(format!("{scope}/entries?directory="))).await;
+        let entries = direct["entries"].as_array().unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e["path"] == "MiXeD.local" && e["ignored"] == true)
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e["path"] == ".git" || e["path"] == "outside")
+        );
+        let ignored = json(b.get(format!("{scope}/ignored-files?query=LoCaL"))).await;
+        assert_eq!(
+            ignored["files"],
+            json!([{"path":"MiXeD.local","byte_length":3}])
+        );
+        let dirs = json(a.get(format!("{scope}/browse?partial_path=NO"))).await;
+        assert_eq!(dirs["entries"][0]["name"], "notes");
+        let magic = path.join("report");
+        std::fs::write(&magic, b"%PDF-1.7").unwrap();
+        let info = json(
+            a.post(format!("{base}/filesystem/metadata"))
+                .json(&json!({"paths":[&magic,&native,path.join("missing"),&magic,&path]})),
+        )
+        .await;
+        assert_eq!(
+            info["entries"][0],
+            json!({"kind":"file","byte_length":8,"mime_type":"application/pdf"})
+        );
+        assert_eq!(info["entries"][1], serde_json::Value::Null);
+        assert_eq!(info["entries"][2], serde_json::Value::Null);
+        assert_eq!(info["entries"][3], info["entries"][0]);
+        assert_eq!(info["entries"][4]["kind"], "directory");
         let picker = json(a.get(format!("{scope}/models/codex"))).await;
         assert_eq!(picker["status"], "live");
         assert_eq!(picker["models"][0]["id"], "demo");

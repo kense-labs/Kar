@@ -39,13 +39,22 @@ pub struct StatusEntry {
 }
 
 fn command(cwd: &Path) -> Command {
+    let mut cmd = base_command(cwd);
+    cmd.arg("--literal-pathspecs");
+    cmd
+}
+
+fn base_command(cwd: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(cwd)
-        .arg("--literal-pathspecs")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
     // A Kar process launched by a Git hook may inherit another checkout's index.
     for key in [
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_GLOB_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
         "GIT_DIR",
         "GIT_COMMON_DIR",
         "GIT_WORK_TREE",
@@ -77,6 +86,36 @@ fn checked(output: Output) -> Result<Vec<u8>> {
 }
 pub(crate) fn git<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Vec<u8>> {
     checked(command(cwd).args(args).output()?)
+}
+/// Git check-ignore forbids literal-pathspec mode. Prefix each individual filename
+/// with ./ and use NUL framing, including for names beginning with a colon.
+pub(crate) fn ignored_names<'a>(
+    cwd: &Path,
+    names: impl Iterator<Item = &'a OsStr>,
+) -> Result<Vec<u8>> {
+    use std::io::{Seek, Write};
+    let mut paths = tempfile::tempfile()?;
+    for name in names {
+        paths.write_all(b"./")?;
+        paths.write_all(name.as_encoded_bytes())?;
+        paths.write_all(&[0])?;
+    }
+    paths.rewind()?;
+    let out = base_command(cwd)
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "check-ignore",
+            "-z",
+            "--stdin",
+        ])
+        .stdin(Stdio::from(paths))
+        .output()?;
+    if out.status.code() == Some(1) {
+        Ok(Vec::new())
+    } else {
+        checked(out)
+    }
 }
 fn line(buf: &[u8]) -> &[u8] {
     buf.strip_suffix(b"\n").unwrap_or(buf)
