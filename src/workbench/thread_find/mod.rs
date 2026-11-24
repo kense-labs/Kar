@@ -67,12 +67,12 @@ impl Find {
 }
 
 #[derive(Serialize)]
-struct Row<'a> {
-    entry_id: String,
-    turn: Uuid,
-    item: &'a TimelineItem,
+pub(super) struct Row<'a> {
+    pub(super) entry_id: String,
+    pub(super) turn: Uuid,
+    pub(super) item: &'a TimelineItem,
 }
-fn items(turn: &ChatTurn) -> impl Iterator<Item = Row<'_>> {
+pub(super) fn items(turn: &ChatTurn) -> impl Iterator<Item = Row<'_>> {
     let mut occurrences = HashMap::new();
     turn.items.iter().map(move |item| {
         let (kind, native) = match &item.item {

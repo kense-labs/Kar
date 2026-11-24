@@ -412,13 +412,13 @@ impl super::ChatStore {
             )?;
             self.prepare_handoff(&mut log, h)?;
         }
-        self.finish_handoff(log, configure).await
+        self.finish_handoff(log, |opts| { configure(opts); Ok(()) }).await
     }
 
     pub(super) async fn finish_handoff(
         &self,
         mut log: super::log::Log,
-        configure: impl FnOnce(&mut crate::SessionOptions),
+        configure: impl FnOnce(&mut crate::SessionOptions) -> Result<()>,
     ) -> Result<(Handoff, Option<super::ChatSession>)> {
         let h = log
             .state
@@ -441,7 +441,7 @@ impl super::ChatStore {
             saved.configure_instance(&mut opts);
         }
         opts.model = h.request.model.clone();
-        configure(&mut opts);
+        configure(&mut opts)?;
         opts.remove_env("KAR_WORKBENCH_TOKEN")?;
         opts.cwd = log.state.info.workspace.clone();
         opts.resume = h.target.as_ref().map(|target| target.native_id.clone());

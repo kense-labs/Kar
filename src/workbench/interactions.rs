@@ -144,7 +144,7 @@ async fn attach(
         return Err(Error::Refused("chat is archived".into()).into());
     }
     app.workspace(&app.project(p)?)?;
-    app.attach(c, &mut owner).await?;
+    app.attach(p, c, &mut owner).await?;
     Ok(Json(
         owner
             .as_ref()

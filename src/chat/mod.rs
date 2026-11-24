@@ -523,9 +523,18 @@ impl ChatStore {
         id: Uuid,
         configure: impl FnOnce(&mut SessionOptions),
     ) -> Result<ChatSession> {
+        self.resume_configured(id, |_, opts| { configure(opts); Ok(()) }).await
+    }
+
+    pub(crate) async fn resume_configured(
+        &self,
+        id: Uuid,
+        configure: impl FnOnce(&str, &mut SessionOptions) -> Result<()>,
+    ) -> Result<ChatSession> {
         let mut log = self.open_controller(id).await?;
-        if log.state.pending_handoff().is_some() {
-            let (result, session) = self.finish_handoff(log, configure).await?;
+        if let Some(pending) = log.state.pending_handoff() {
+            let runtime = pending.request.runtime.clone();
+            let (result, session) = self.finish_handoff(log, |opts| configure(&runtime, opts)).await?;
             return session.ok_or_else(|| {
                 Error::Refused(result.error.unwrap_or_else(|| "handoff failed".into()))
             });
@@ -544,7 +553,7 @@ impl ChatStore {
             ));
         }
         let mut opts = info.options();
-        configure(&mut opts);
+        configure(&info.runtime, &mut opts)?;
         opts.cwd = info.workspace.clone();
         let session = match Self::open_saved(&log.state, opts.before_chat_attach()?).await {
             Ok(session) => session,
@@ -640,6 +649,10 @@ impl ChatSession {
     }
     pub(crate) fn is_closed(&self) -> bool {
         self.sender.session.is_closed()
+    }
+    pub(crate) fn forget_launch_server(&mut self, name: &str) {
+        // A native fork receives its own authority when its workbench controller attaches.
+        self.launch.mcp_servers.remove(name);
     }
     pub(crate) fn live_session(&self) -> std::sync::Weak<Session> {
         Arc::downgrade(&self.sender.session)

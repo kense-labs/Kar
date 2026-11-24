@@ -128,7 +128,7 @@ impl Workbench {
                                 let Ok(mut owner)=slot.owner.try_lock() else{return};
                                 if app.archived(chat) || app.binding(project,chat).is_err(){return}
                                 // Native history is reconciled by ChatStore before its FIFO worker starts.
-                                if let Err(e)=app.attach(chat,&mut owner).await {app.queue_error(chat,&e);}
+                                if let Err(e)=app.attach(project,chat,&mut owner).await {app.queue_error(chat,&e);}
                             });
                         },
                         Ok(Err(e))=>eprintln!("Kar queue scan: {e}"),
@@ -143,6 +143,7 @@ impl Workbench {
     }
     pub(super) async fn attach(
         &self,
+        project: Uuid,
         id: Uuid,
         owner: &mut MutexGuard<'_, Option<ChatSession>>,
     ) -> Result<()> {
@@ -155,17 +156,22 @@ impl Workbench {
         if owner.is_none() {
             let info = self.0.chats.saved_info(id)?;
             self.chat_directories(&info.workspace, &info.settings)?;
-            let session = self
+            let mut tools = None;
+            let mut session = self
                 .0
                 .chats
-                .resume_with(id, |opts| {
+                .resume_configured(id, |runtime, opts| {
+                    tools = self.0.mcp.issue(project, id, runtime)?;
+                    if let Some(lease) = &tools { lease.configure(opts); }
                     opts.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
                     opts.prompt_suggestions = self.suggestion_source(id);
+                    Ok(())
                 })
                 .await?;
-            self.controller(id).publish(&session);
+            self.controller(id).bind_model_tools(&mut session, tools);
             **owner = Some(session);
         }
+        if let Some(lease) = self.controller(id).model_tools.lock().unwrap().as_ref() {lease.touch();}
         self.0.pump.errors.lock().unwrap().remove(&id);
         Ok(())
     }

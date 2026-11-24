@@ -58,15 +58,17 @@ impl Workbench {
             if let Some(source) = owner.take() {
                 source.close().await?;
             }
-            let (receipt, next) = app
+            let tools = app.0.mcp.issue(project, chat, &request.runtime)?;
+            let (receipt, mut next) = app
                 .0
                 .chats
                 .handoff(chat, request, |opts| {
                     opts.prompt_suggestions = app.suggestion_source(chat);
+                    if let Some(lease) = &tools { lease.configure(opts); }
                 })
                 .await?;
-            if let Some(session) = &next {
-                controller.publish(session);
+            if let Some(session) = &mut next {
+                controller.bind_model_tools(session, tools);
             }
             *owner = next;
             Ok(receipt)

@@ -5,6 +5,7 @@ mod assets;
 mod chat_controls;
 mod devices;
 mod observability;
+mod mcp;
 mod documents;
 mod files;
 mod force_stop;
@@ -81,17 +82,24 @@ struct Root {
 #[derive(Default)]
 struct Controller {
     owner: AsyncMutex<Option<ChatSession>>,
+    model_tools: Mutex<Option<mcp::Lease>>,
     // Control requests must be able to answer a native prompt while send holds the owner.
     live: Mutex<std::sync::Weak<crate::Session>>,
 }
 
 impl Controller {
+    fn bind_model_tools(&self, session: &mut ChatSession, lease: Option<mcp::Lease>) {
+        if let Some(tools) = &lease { tools.attach(session); }
+        *self.model_tools.lock().unwrap() = lease;
+        self.publish(session);
+    }
     fn publish(&self, session: &ChatSession) {
         *self.live.lock().unwrap() = session.live_session();
     }
 }
 
 struct Inner {
+    mcp: mcp::Registry,
     shell: shell::Service,
     suggestions: crate::PromptSuggestions,
     observability: observability::Service,
@@ -184,6 +192,7 @@ impl Workbench {
                 task_folders::checkpoints::repositories(&Workbench(inner), chat)
             }));
             Inner {
+                mcp: Default::default(),
                 shell,
                 suggestions: crate::PromptSuggestions::new(catalog.prompt_suggestions),
                 observability: observability::Service::open(&state),
@@ -430,9 +439,11 @@ impl Workbench {
         opts.model = model;
         opts.approvals = approvals;
         opts.settings = settings;
-        let session = self.0.chats.create_with_id(id, runtime, None, opts).await?;
+        let tools = self.0.mcp.issue(project, id, runtime)?;
+        if let Some(lease) = &tools { lease.configure(&mut opts); }
+        let mut session = self.0.chats.create_with_id(id, runtime, None, opts).await?;
         let info = session.info().clone();
-        slot.publish(&session);
+        slot.bind_model_tools(&mut session, tools);
         *owner = Some(session);
         Ok(ProjectChat {
             project,
@@ -469,7 +480,7 @@ impl Workbench {
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }
-            app.attach(chat, &mut owner).await?;
+            app.attach(project, chat, &mut owner).await?;
             owner
                 .as_ref()
                 .expect("open session")
@@ -513,6 +524,12 @@ impl Workbench {
             info,
             archived,
         })
+    }
+
+    /// Publish the actual bound loopback listener to native processes with chat-scoped credentials.
+    pub fn router_at(&self, bearer: String, address: std::net::SocketAddr) -> Result<axum::Router> {
+        self.0.mcp.set_endpoint(address)?;
+        self.router(bearer)
     }
 
     pub fn router(&self, bearer: String) -> Result<axum::Router> {

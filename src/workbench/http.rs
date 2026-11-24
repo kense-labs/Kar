@@ -73,6 +73,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .with_state(app.clone());
     let auth = super::access::Auth::new(app.clone(), token);
     let access = super::access::routes(app.clone(), auth.clone());
+    let mcp = super::mcp::routes(app.clone(), auth.clone());
     let router = Router::new()
         .route("/projects", get(projects).post(register))
         .route("/projects/{project}/chats", get(chats).post(create_chat))
@@ -115,6 +116,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
             super::access::authorize,
         ))
         .merge(access)
+        .merge(mcp)
         .merge(hooks);
     if let Some(app) = lazy_start {
         return Ok(router.layer(middleware::from_fn(

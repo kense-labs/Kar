@@ -39,6 +39,8 @@ pub(super) fn cases() -> Vec<Case> {
             "--test",
             "workbench_issue_accounts",
             "--test",
+            "workbench_mcp",
+            "--test",
             "workbench_handoff",
             "--test",
             "workbench_agent_sessions",

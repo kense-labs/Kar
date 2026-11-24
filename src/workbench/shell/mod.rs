@@ -110,7 +110,7 @@ impl Service {
         });
     }
 }
-fn snapshot(app: &Workbench) -> Result<(Uuid, u64, Value)> {
+pub(super) fn snapshot(app: &Workbench) -> Result<(Uuid, u64, Value)> {
     app.0.shell.refresh(app)?;
     let journal = app.0.shell.journal.lock().unwrap();
     let rows = journal

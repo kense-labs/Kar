@@ -435,10 +435,10 @@ async fn execute(command: Action) -> Result<()> {
             let app = kar::workbench::Workbench::open(store, &roots)?;
             let token = std::env::var("KAR_WORKBENCH_TOKEN")
                 .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
-            let router = app.router(token.clone())?;
             let listener =
                 tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
             let address = listener.local_addr()?;
+            let router = app.router_at(token.clone(), address)?;
             json_line(
                 &json!({"url":format!("http://{address}"),"token":token}),
                 std::io::stdout().lock(),

@@ -1,0 +1,441 @@
+use super::*;
+use crate::{
+    Error, Result,
+    chat::{InputStatus, Item, QueueAction},
+};
+use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::Map;
+
+struct Tool {
+    name: &'static str,
+    description: &'static str,
+    properties: Value,
+    required: &'static [&'static str],
+}
+impl Tool {
+    fn public(&self) -> Value {
+        json!({"name":self.name,"description":self.description,"inputSchema":{"type":"object",
+            "additionalProperties":false,"properties":self.properties,"required":self.required}})
+    }
+}
+fn tools() -> Vec<Tool> {
+    let id = json!({"type":"string","format":"uuid"});
+    let cursor = json!({"type":"integer","minimum":0});
+    let limit = json!({"type":"integer","minimum":1,"maximum":100});
+    vec![
+        Tool {
+            name: "orchestrator_capabilities",
+            description: "Show this caller's available Kar workbench tools and local project or chat scope.",
+            properties: json!({}),
+            required: &[],
+        },
+        Tool {
+            name: "kar_project_list",
+            description: "List visible projects with their workspace settings, in pages.",
+            properties: json!({"cursor":cursor,"limit":limit}),
+            required: &[],
+        },
+        Tool {
+            name: "kar_project_read",
+            description: "Read a project's workspace and saved scripts.",
+            properties: json!({"project_id":id}),
+            required: &["project_id"],
+        },
+        Tool {
+            name: "kar_thread_list",
+            description: "List chats with titles, latest run, status and snooze state.",
+            properties: json!({"project_id":id,"title_contains":{"type":"string"},"settled":{"type":"boolean"},"snoozed":{"type":"boolean"},"include_archived":{"type":"boolean"},"cursor":cursor,"limit":limit}),
+            required: &[],
+        },
+        Tool {
+            name: "kar_thread_read",
+            description: "Read a chat's messages or timeline activities by stable item ID or position.",
+            properties: json!({"project_id":id,"thread_id":id,"view":{"enum":["messages","activity"]},"item_id":{"type":"string"},"after_position":{"type":"integer","minimum":-1},"before_position":cursor,"text_offset":cursor,"max_chars_per_item":{"type":"integer","minimum":1,"maximum":20000},"limit":limit}),
+            required: &[],
+        },
+        Tool {
+            name: "kar_queue",
+            description: "Read queued inputs in send order. Edit, cancel or reorder a pending input with a command ID.",
+            properties: json!({"project_id":id,"thread_id":id,"action":{"enum":["list","read","edit","cancel","reorder"]},"input_id":id,"command_id":id,"before":{"type":["string","null"],"format":"uuid"},"text":{"type":"string"},"cursor":cursor,"limit":limit}),
+            required: &["action"],
+        },
+        Tool {
+            name: "tool_search",
+            description: "Find workbench tools by name or description and load them into this provider session.",
+            properties: json!({"query":{"type":"string"}}),
+            required: &["query"],
+        },
+    ]
+}
+pub(super) fn enabled(name: &str, caller: &Caller, deferred: bool) -> bool {
+    tools().iter().any(|t| t.name == name)
+        && (name != "tool_search" || (caller.grant.is_some() && deferred))
+}
+pub(super) fn list(caller: &Caller, deferred: bool) -> Vec<Value> {
+    let loaded = caller.grant.as_ref().map(|g| g.loaded.lock().unwrap());
+    tools()
+        .into_iter()
+        .filter(|t| {
+            if deferred {
+                matches!(t.name, "tool_search" | "orchestrator_capabilities")
+                    || loaded.as_ref().is_some_and(|s| s.contains(t.name))
+            } else {
+                t.name != "tool_search"
+            }
+        })
+        .map(|t| t.public())
+        .collect()
+}
+fn bad(s: &str) -> Error {
+    Error::Refused(s.into())
+}
+fn args<T: DeserializeOwned>(value: Value) -> Result<T> {
+    serde_json::from_value(value).map_err(Error::from)
+}
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct Page {
+    cursor: usize,
+    limit: Option<usize>,
+}
+fn page(v: Vec<Value>, key: &str, start: usize, limit: Option<usize>) -> Result<Value> {
+    let n = limit.unwrap_or(20);
+    if n == 0 {
+        return Err(bad("limit must be positive"));
+    }
+    let total = v.len();
+    let end = start.saturating_add(n.min(100));
+    Ok(
+        json!({(key):v.into_iter().skip(start).take(n.min(100)).collect::<Vec<_>>(),"total":total,"next_cursor":(end<total).then_some(end)}),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectArgs {
+    project_id: Uuid,
+}
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct Threads {
+    project_id: Option<Uuid>,
+    title_contains: Option<String>,
+    settled: Option<bool>,
+    snoozed: Option<bool>,
+    include_archived: bool,
+    cursor: usize,
+    limit: Option<usize>,
+}
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct Read {
+    project_id: Option<Uuid>,
+    thread_id: Option<Uuid>,
+    view: Option<String>,
+    item_id: Option<String>,
+    after_position: Option<i64>,
+    before_position: Option<usize>,
+    text_offset: usize,
+    max_chars_per_item: Option<usize>,
+    limit: Option<usize>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Queue {
+    project_id: Option<Uuid>,
+    thread_id: Option<Uuid>,
+    action: String,
+    input_id: Option<Uuid>,
+    command_id: Option<Uuid>,
+    before: Option<Uuid>,
+    text: Option<String>,
+    #[serde(default)]
+    cursor: usize,
+    limit: Option<usize>,
+}
+fn project_scope(c: &Caller, asked: Option<Uuid>) -> Result<Option<Uuid>> {
+    if let Some(g) = &c.grant {
+        if asked.is_some_and(|p| p != g.project) {
+            return Err(bad("Project is outside this provider session"));
+        }
+        return Ok(Some(g.project));
+    }
+    Ok(asked)
+}
+fn target(app: &Workbench, c: &Caller, p: Option<Uuid>, t: Option<Uuid>) -> Result<(Uuid, Uuid)> {
+    let thread = t
+        .or_else(|| c.grant.as_ref().map(|g| g.chat))
+        .ok_or_else(|| bad("thread_id is required"))?;
+    if c.grant.as_ref().is_some_and(|g| g.chat != thread) {
+        return Err(bad("Chat is outside this provider session"));
+    }
+    let project = match project_scope(c, p)? {
+        Some(p) => p,
+        None => {
+            let info = app.0.chats.initial_info(thread)?;
+            let db = app.0.catalog.lock().unwrap();
+            let mut project = None;
+            for p in db
+                .projects
+                .values()
+                .filter(|p| !p.metadata.deleted && app.allowed(&p.root).is_ok())
+            {
+                if app.owns_chat(&db, p, &info)? {
+                    project = Some(p.id);
+                    break;
+                }
+            }
+            project.ok_or_else(super::super::missing)?
+        }
+    };
+    app.binding(project, thread)?;
+    Ok((project, thread))
+}
+pub(super) async fn call(
+    app: Workbench,
+    caller: Caller,
+    name: &str,
+    input: Value,
+) -> Result<Value> {
+    let name = name.to_owned();
+    tokio::task::spawn_blocking(move || dispatch(&app, &caller, &name, input))
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?
+}
+fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Value> {
+    match name {
+        "tool_search" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Search {
+                query: String,
+            }
+            let search: Search = args(input)?;
+            let query = search.query.to_ascii_lowercase();
+            let terms: Vec<_> = query
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .filter(|s| !s.is_empty())
+                .collect();
+            let mut matches: Vec<_> = tools()
+                .into_iter()
+                .filter(|t| t.name != "tool_search")
+                .filter_map(|t| {
+                    let description = t.description.to_ascii_lowercase();
+                    let score: usize = terms
+                        .iter()
+                        .map(|&term| {
+                            if t.name == term {
+                                100
+                            } else if t.name.contains(term) {
+                                3
+                            } else if description.contains(term) {
+                                1
+                            } else {
+                                0
+                            }
+                        })
+                        .sum();
+                    (score > 0).then_some((score, t))
+                })
+                .collect();
+            matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+            matches.truncate(10);
+            let g = c
+                .grant
+                .as_ref()
+                .ok_or_else(|| bad("Provider session required"))?;
+            if !matches.is_empty() {
+                g.loaded
+                    .lock()
+                    .unwrap()
+                    .extend(matches.iter().map(|(_, t)| t.name));
+                g.changes.send_modify(|n| *n += 1);
+            }
+            Ok(
+                json!({"tools":matches.iter().map(|(_,t)|json!({"name":t.name,"description":t.description})).collect::<Vec<_>>()}),
+            )
+        }
+        "orchestrator_capabilities" => {
+            if !input.as_object().is_some_and(Map::is_empty) {
+                return Err(bad("This tool takes no arguments"));
+            }
+            Ok(
+                json!({"server":"Kar","tools":tools().iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
+                "provider_session":c.grant.as_ref().map(|g|json!({"id":g.id,"project_id":g.project,"thread_id":g.chat,"runtime":g.runtime})),
+                "write_access":!c.plan && c.grant.is_none()}),
+            )
+        }
+        "kar_project_list" => {
+            let a: Page = args(input)?;
+            let scope = project_scope(c, None)?;
+            let rows = app
+                .projects()
+                .into_iter()
+                .filter(|p| !p.metadata.deleted && scope.is_none_or(|id| p.id == id))
+                .map(|p| json!(p))
+                .collect();
+            page(rows, "projects", a.cursor, a.limit)
+        }
+        "kar_project_read" => {
+            let a: ProjectArgs = args(input)?;
+            project_scope(c, Some(a.project_id))?;
+            let p = app.project(a.project_id)?;
+            if p.metadata.deleted {
+                return Err(super::super::missing());
+            }
+            Ok(json!(p))
+        }
+        "kar_thread_list" => {
+            let a: Threads = args(input)?;
+            let project = project_scope(c, a.project_id)?;
+            if let Some(p) = project {
+                app.project(p)?;
+            }
+            let shell = super::super::shell::snapshot(app)?.2;
+            let title = a.title_contains.map(|s| s.to_lowercase());
+            let rows = shell["rows"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|item| {
+                    let row = &item["row"];
+                    item["kind"] == "chat"
+                        && row["unavailable"] != true
+                        && project.is_none_or(|p| row["project"] == json!(p))
+                        && c.grant.as_ref().is_none_or(|g| item["id"] == json!(g.chat))
+                        && (a.include_archived || row["archived"] == false)
+                        && a.snoozed.is_none_or(|s| row["snoozed"] == s)
+                        && a.settled
+                            .is_none_or(|s| (row["metadata"]["settled_override"] == "settled") == s)
+                        && title.as_ref().is_none_or(|t| {
+                            row["title"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_lowercase()
+                                .contains(t)
+                        })
+                })
+                .map(|i| json!({"thread_id":i["id"],"summary":i["row"]}))
+                .collect();
+            page(rows, "threads", a.cursor, a.limit)
+        }
+        "kar_thread_read" => read(app, c, args(input)?),
+        "kar_queue" => queue(app, c, args(input)?),
+        _ => Err(bad("Unknown workbench tool")),
+    }
+}
+fn read(app: &Workbench, c: &Caller, a: Read) -> Result<Value> {
+    let (p, t) = target(app, c, a.project_id, a.thread_id)?;
+    let view = a.view.as_deref().unwrap_or("messages");
+    if !matches!(view, "messages" | "activity") || a.after_position.is_some_and(|n| n < -1) {
+        return Err(bad("Invalid view or position"));
+    }
+    let max = a.max_chars_per_item.unwrap_or(2000).min(20000);
+    let limit = a.limit.unwrap_or(20).min(100);
+    if max == 0 || limit == 0 {
+        return Err(bad("Text and page limits must be positive"));
+    }
+    let history = app.0.chats.history(t)?;
+    let mut out = vec![];
+    let mut has_more = false;
+    for (n, row) in history
+        .turns
+        .iter()
+        .flat_map(super::super::thread_find::items)
+        .enumerate()
+    {
+        if a.item_id.as_ref().is_some_and(|id| id != &row.entry_id)
+            || a.after_position.is_some_and(|pos| n as i64 <= pos)
+            || a.before_position.is_some_and(|pos| n >= pos)
+        {
+            continue;
+        }
+        let (kind, text) = match &row.item.item {
+            Item::Message { role, text, .. } => {
+                (json!(role), std::borrow::Cow::Borrowed(text.as_str()))
+            }
+            _ if view == "messages" && a.item_id.is_none() => continue,
+            other => (
+                json!("activity"),
+                std::borrow::Cow::Owned(serde_json::to_string(other)?),
+            ),
+        };
+        if out.len() == limit {
+            has_more = true;
+            break;
+        }
+        let (text, next) = window(&text, a.text_offset, max);
+        out.push(json!({"item_id":row.entry_id,"run_id":row.turn,"position":n,"kind":kind,"text":text,"next_text_offset":next}));
+    }
+    Ok(json!({"project_id":p,"thread_id":t,"items":out,"has_more":has_more}))
+}
+fn window(text: &str, offset: usize, max: usize) -> (String, Option<usize>) {
+    let mut end = 0usize;
+    let mut projected = String::new();
+    for ch in text.chars() {
+        let next = end + ch.len_utf16();
+        if next > offset {
+            if next > offset.saturating_add(max) && !projected.is_empty() {
+                return (projected, Some(end));
+            }
+            projected.push(ch);
+        }
+        end = next;
+    }
+    (projected, None)
+}
+fn queue(app: &Workbench, c: &Caller, q: Queue) -> Result<Value> {
+    let (_, t) = target(app, c, q.project_id, q.thread_id)?;
+    if matches!(q.action.as_str(), "list" | "read") {
+        let (held, entries) = app.0.chats.queue_view(t)?;
+        let waiting = entries.into_iter().filter(|e| {
+            matches!(
+                e.status,
+                InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
+            )
+        });
+        if q.action == "read" {
+            let entry = waiting
+                .into_iter()
+                .find(|e| Some(e.id) == q.input_id)
+                .ok_or_else(|| bad("Queued input not found"))?;
+            let (text, more) = window(&entry.text, 0, 16000);
+            return Ok(
+                json!({"id":entry.id,"status":entry.status,"text":text,"truncated":more.is_some(),"attachments":entry.attachments}),
+            );
+        }
+        let rows = waiting
+            .map(|e| json!({"id":e.id,"status":e.status,"preview":window(&e.text,0,200).0}))
+            .collect();
+        let mut result = page(rows, "inputs", q.cursor, q.limit)?;
+        result["held"] = held.into();
+        return Ok(result);
+    }
+    if c.plan || c.grant.is_some() {
+        return Err(bad("Queue writes require a writable workbench client"));
+    }
+    if app.archived(t) {
+        return Err(bad("Chat is archived"));
+    }
+    let id = q.input_id.ok_or_else(|| bad("input_id is required"))?;
+    let result = match q.action.as_str() {
+        "cancel" => json!(app.0.chats.withdraw(t, id)?),
+        "edit" | "reorder" => {
+            let cmd = q.command_id.ok_or_else(|| bad("command_id is required"))?;
+            let act = if q.action == "edit" {
+                QueueAction::Edit {
+                    input: id,
+                    text: q.text.ok_or_else(|| bad("text is required"))?,
+                }
+            } else {
+                QueueAction::Reorder {
+                    input: id,
+                    before: q.before,
+                }
+            };
+            json!(app.0.chats.queue_control(t, cmd, act)?)
+        }
+        _ => return Err(bad("Unsupported queue action")),
+    };
+    app.wake_queue();
+    Ok(result)
+}

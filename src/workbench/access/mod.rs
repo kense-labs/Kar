@@ -233,7 +233,7 @@ impl DeviceLease {
     }
 }
 
-async fn restrict(
+pub(super) async fn restrict(
     req: Request,
     next: Next,
     revoked: impl Future<Output = ()> + Send + 'static,

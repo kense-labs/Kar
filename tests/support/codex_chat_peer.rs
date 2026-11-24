@@ -14,6 +14,9 @@ pub(crate) fn emit(v: Value) {
     out.flush().unwrap();
 }
 pub(crate) fn agent() {
+    agent_with_observer(|_| {});
+}
+pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
     let cwd = std::env::current_dir().unwrap();
     let database = PathBuf::from(std::env::var_os("FIXTURE_NATIVE_DB").unwrap());
     let mut session = String::new();
@@ -26,6 +29,7 @@ pub(crate) fn agent() {
             break;
         }
         let v: Value = serde_json::from_str(&line).unwrap();
+        observe(&v);
         let reply = |data: Value| emit(json!({"id":v["id"],"result":data}));
         if let Some(file) = std::env::var_os("FIXTURE_ENV_AUDIT")
             && matches!(

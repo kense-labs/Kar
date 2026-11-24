@@ -85,6 +85,11 @@ path = "tests/chat_restart.rs"
 harness = false
 
 [[test]]
+name = "workbench_mcp"
+path = "tests/workbench_mcp.rs"
+harness = false
+
+[[test]]
 name = "workbench_acceptance"
 path = "tests/workbench_acceptance.rs"
 harness = false
