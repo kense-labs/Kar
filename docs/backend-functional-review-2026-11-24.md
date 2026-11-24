@@ -55,3 +55,15 @@
 ACP 条目对应 [T3 工作台处理函数](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/ws.ts#L2437)、[Kar 运行时目录](../src/runtime.rs) 和 [Kar 原生会话扫描与导入](../src/workbench/agent_sessions/mod.rs)。
 
 输入历史对应 [上游运行时会话投影](https://github.com/botiverse/oar/blob/2b15859a13dcc50e8b66cbaee5a007832aa00e08/packages/oar/src/observe/conversation.ts#L239)、[Kar 请求回执](../src/stream.rs)、[Kar 输入终态](../src/observe/turn_end/input.rs) 和 [Kar 会话视图](../src/observe.rs)。
+
+### 用模型会话实际可发现的工具复核
+
+在本地集成提交 `cec3da6`，获授权的模型已经可以创建 Issue、发表评论。进一步核对 T3 的工具声明和处理函数，还能确认以下入口差异。对照范围是模型在当前工作台会话内可发现和调用的工具。
+
+| 模型的操作 | T3 处理路径 | Kar 的当前表现与复验入口 |
+| --- | --- | --- |
+| 列出、读取、关闭或重新打开项目 Issue | `list_issues`、`read_issue`、`set_issue_state` | 普通托管服务覆盖 Issue 查询及更改。授权模型的工具列表中只新增了创建和评论。用同一模型租约查找上述三个操作，并检查写权限边界。 |
+| 查看工作树、把聊天移交到另一个工作树 | 工作树工具分别调用引用列表和交接服务 | Kar 有工作树命令和工作台交接，当前模型工具注册及分派缺少对应操作。用两个独立工作树查看列表，从当前会话调用交接并核对聊天归属。 |
+| 以工作台模型身份启动、恢复或取消持久工作流 | 工作流工具按操作分派到工作流服务 | Kar 有持久工作流服务，当前模型工具缺少这组调用。让已授权模型启动测试流程，读回 run ID，再分别验证恢复、取消和重连后的结果。 |
+
+对应 [T3 Issue 工具](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/issues/handlers.ts#L163)、[T3 工作树工具](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/worktree/handlers.ts#L13)、[T3 工作流工具](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/workflow/handlers.ts#L52) 及 [Kar 的模型工具注册和调用分派](../src/workbench/mcp/toolkit.rs)。这些是原清单 MCP 工具组内进一步核实的操作，与前文的 Issue 创建及评论共用同一功能组。
