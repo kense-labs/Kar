@@ -1,5 +1,7 @@
 mod image_input;
+mod prompt_run;
 mod qwen;
+pub use prompt_run::{PromptInterrupt, PromptRun, PromptRunOptions};
 pub(crate) mod reachability;
 
 use crate::options::mcp_capabilities::McpSupport;
@@ -1710,7 +1712,27 @@ impl Session {
             .map(|_| ())
     }
     pub async fn abort(&self) -> Result<()> {
-        self.call(Command::Abort).await.map(drop)
+        self.abort_prompt(None).await
+    }
+    /// Interrupt the active root prompt identified by its input UUID.
+    /// Providing its request UUID also distinguishes attempts that reuse the input UUID.
+    /// The actor rechecks the selected attempt immediately before issuing the native control.
+    pub async fn abort_turn(&self, input_id: Uuid, request_id: Option<Uuid>) -> Result<()> {
+        let observed = self.journal.active_prompt().filter(|(input, request)| {
+            input == &input_id.to_string() && request_id.is_none_or(|id| id.to_string() == *request)
+        });
+        let (_, request) = observed.ok_or_else(crate::transport::AbortRequest::stale)?;
+        self.abort_prompt(Some(request)).await
+    }
+    async fn abort_prompt(&self, target_request: Option<String>) -> Result<()> {
+        self.call(|reply| {
+            Command::Abort(crate::transport::AbortRequest {
+                target_request,
+                reply,
+            })
+        })
+        .await
+        .map(drop)
     }
     /// Answer a live request using its protocol-native response payload.
     pub async fn respond(&self, id: Value, result: Value) -> Result<()> {

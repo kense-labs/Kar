@@ -695,7 +695,10 @@ impl ThreadActor {
                 self.journal.control_result(request, &answer, &[]);
                 let _ = ack.send(answer);
             }
-            Command::Abort(ack) => {
+            Command::Abort(request) => {
+                let Some(ack) = request.for_current(&self.journal) else {
+                    return true;
+                };
                 let request = self.journal.request_abort();
                 let result = if self.turn.is_none() {
                     Err(Error::Refused("no active turn".into()))

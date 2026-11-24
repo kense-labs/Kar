@@ -104,6 +104,29 @@ impl HostAnswer {
         }
     }
 }
+/// An observer can interrupt only its own accepted prompt. The actor validates
+/// ownership at dispatch, including after another prompt reuses an input ID.
+pub(crate) struct AbortRequest {
+    pub target_request: Option<String>,
+    pub reply: Reply<Value>,
+}
+impl AbortRequest {
+    pub(crate) fn stale() -> Error {
+        Error::Refused("prompt no longer owns the active turn".into())
+    }
+
+    pub(crate) fn for_current(self, journal: &Journal) -> Option<Reply<Value>> {
+        if let Some(target) = self.target_request
+            && !journal
+                .active_prompt()
+                .is_some_and(|(_, request)| request == target)
+        {
+            let _ = self.reply.send(Err(Self::stale()));
+            return None;
+        }
+        Some(self.reply)
+    }
+}
 pub(crate) enum Command {
     Compact(Option<u64>, Reply<crate::ManualCompaction>),
     Rpc(
@@ -127,7 +150,7 @@ pub(crate) enum Command {
         Reply<crate::TurnReport>,
     ),
     Withdraw(uuid::Uuid, Reply<()>),
-    Abort(Reply<Value>),
+    Abort(AbortRequest),
     StopTask(String, Reply<Value>),
     Steer(uuid::Uuid, crate::input::Input, Reply<Value>),
     Respond(Value, HostAnswer, Reply<()>),
@@ -1135,7 +1158,13 @@ impl Actor {
                 self.journal.control_decision(request, None);
                 let _ = tx.send(Ok(()));
             }
-            Command::Abort(tx) => self.abort(tx).await?,
+            Command::Abort(request) => {
+                if request.target_request.is_some() && self.pi_independent.is_some() {
+                    let _ = request.reply.send(Err(AbortRequest::stale()));
+                } else if let Some(reply) = request.for_current(&self.journal) {
+                    self.abort(reply).await?;
+                }
+            }
             Command::Steer(input, message, tx) => self.steer(input, message, tx).await?,
         }
         Ok(true)

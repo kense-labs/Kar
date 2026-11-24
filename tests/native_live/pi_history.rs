@@ -771,19 +771,82 @@ async fn native_handled_prompt_settles_without_a_model_turn() {
             .any(|e| matches!(e, Event::TurnStarted | Event::TurnEnded { .. }))
     );
     assert!(f.calls.lock().unwrap().is_empty());
+    let before = s.records();
+    let mut view = kar::observe::SessionView::default();
+    let mut replay = kar::observe::SessionReducer::new(s.id());
+    for record in &before {
+        view.apply(record).unwrap();
+        replay.apply(record).unwrap();
+    }
+    let inputs = view
+        .agents
+        .values()
+        .map(|a| a.user_messages.len())
+        .sum::<usize>();
+    let signal = kar::host_tools::CancellationToken::new();
+    signal.cancel();
+    let result = s
+        .prompt_and_wait(
+            "ping",
+            kar::PromptRunOptions {
+                input_id: Some(id),
+                signal: Some(signal),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let kar::PromptRun::Handled {
+        receipt,
+        disposition,
+    } = result
+    else {
+        panic!("already cancelled caller must receive native handled result");
+    };
+    assert_eq!(
+        disposition.response_to.as_deref(),
+        receipt.request.control_request_id()
+    );
+    assert!(disposition.seq > receipt.request.seq);
+    let rows = s.records();
+    for record in &rows[before.len()..] {
+        replay.apply(record).unwrap();
+        view.apply(record).unwrap();
+        assert_ne!(record.native["type"], "abort");
+        assert!(
+            !record
+                .events
+                .iter()
+                .any(|e| matches!(e, Event::TurnStarted | Event::TurnEnded { .. }))
+        );
+    }
+    assert_eq!(
+        view.agents
+            .values()
+            .map(|a| a.user_messages.len())
+            .sum::<usize>(),
+        inputs + 1
+    );
+    assert!(view.agents.values().all(|a| a.messages.is_empty()));
+    assert!(f.calls.lock().unwrap().is_empty());
+    assert!(matches!(
+        s.status(),
+        kar::observe::AgentStatus::Idle {
+            last_outcome: None,
+            ..
+        }
+    ));
+    assert_eq!(
+        s.await_idle().await.unwrap().status,
+        replay.snapshot().status
+    );
     let held = s.prompt("kar-queue-held-at-model").await.unwrap();
     busy_prompt::check(&s, held.input_id()).await;
     std::fs::write(f.options.cwd.join("release"), "").unwrap();
     assert_eq!(held.wait().await.unwrap(), kar::Outcome::Completed);
     assert!(!s.status().is_running());
-    assert_eq!(
-        s.prompt("normal model turn")
-            .await
-            .unwrap()
-            .wait()
-            .await
-            .unwrap(),
-        kar::Outcome::Completed
+    assert!(
+        matches!(s.prompt_and_wait("normal model turn", Default::default()).await.unwrap(), kar::PromptRun::Ended { report, .. } if report.outcome == kar::Outcome::Completed)
     );
     s.close().await.unwrap();
     listener.await.unwrap();

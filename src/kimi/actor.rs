@@ -590,7 +590,10 @@ impl Actor {
                 self.journal.control_result(request, &res, &self.secrets);
                 Self::acknowledge_input(ack, res)?;
             }
-            Command::Abort(ack) => {
+            Command::Abort(request) => {
+                let Some(ack) = request.for_current(&self.journal) else {
+                    return Ok(());
+                };
                 let request = self.journal.request_abort();
                 let res = self.abort().await;
                 self.journal.control_result(request, &res, &self.secrets);

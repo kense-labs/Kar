@@ -428,7 +428,10 @@ impl Actor {
                 self.journal.control_result(request, &result, &[]);
                 let _ = ack.send(result);
             }
-            Command::Abort(ack) => {
+            Command::Abort(request) => {
+                let Some(ack) = request.for_current(&self.journal) else {
+                    return;
+                };
                 let request = self.journal.request_abort();
                 let result = match self.tasks.front() {
                     Some(t) => self.stop(&t.id).await,

@@ -723,7 +723,10 @@ impl Actor {
                 }
                 let _ = ack.send(r);
             }
-            Command::Abort(ack) => {
+            Command::Abort(request) => {
+                let Some(ack) = request.for_current(&self.journal) else {
+                    return Ok(());
+                };
                 let request = self.journal.request_abort();
                 let r = self.abort().await;
                 self.journal.control_result(request, &r, &self.secrets);

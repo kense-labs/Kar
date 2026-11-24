@@ -1125,6 +1125,27 @@ impl Journal {
     pub(crate) fn control_receipt(&self, request_id: &str) -> Option<ControlReceipt> {
         ControlReceipt::from_records(&self.state.lock().unwrap().records, request_id)
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn active_prompt(&self) -> Option<(String, String)> {
+        let state = self.state.lock().unwrap();
+        match &state.queries.as_ref()?.snapshot().status {
+            crate::observe::AgentStatus::Running {
+                input_id: Some(input),
+                request_id: Some(request),
+                ..
+            } => Some((input.clone(), request.clone())),
+            _ => None,
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handled_prompt(&self, request: &str, input: Uuid) -> Option<Arc<Record>> {
+        self.state.lock().unwrap().records.iter().rev()
+            .take_while(|r| r.control_request_id() != Some(request))
+            .find(|r| r.kind == RecordKind::Frame && r.agent_path.is_empty()
+                && r.response_to.as_deref() == Some(request)
+                && r.events.iter().any(|e| matches!(e, Event::NativeInput { input_id, receipt: InputReceipt::Handled } if *input_id == input)))
+            .cloned()
+    }
     pub fn records(&self) -> Vec<Arc<Record>> {
         self.state.lock().unwrap().records.clone()
     }

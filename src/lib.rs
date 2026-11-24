@@ -128,7 +128,10 @@ pub use runtime::{
     runtimes,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use session::{Capabilities, Delivery, PromptDecision, Session, Turn, TurnReport};
+pub use session::{
+    Capabilities, Delivery, PromptDecision, PromptInterrupt, PromptRun, PromptRunOptions, Session,
+    Turn, TurnReport,
+};
 pub use stream::{
     ControlReceipt, Cursor, Direction, Event, EventCursor, EventSubscription, ImageReference,
     ImageSubmission, InputReceipt, McpStartupStatus, ObservedEvent, Outcome, ProcessCleanupResult,
