@@ -138,6 +138,19 @@ macOS 同一公共用例通过 Pi 1.6.0、Claude 2.1.330、Qwen 0.28.4、Factory
 | DSH Web 0.2.2-rc.5，`fe7c6d0` | 设置 `KAR_DSH_BIN`，运行 `cargo test --locked --test dsh_live queue_crash:: -- --ignored --nocapture`。排队三个不同 UUID。锁住 Kar 日志，等待 DSH 原生日志出现第一条的 UUID 且模型已收到请求，分别在原生回复完成和模型仍等待时强杀控制器。 | 每个平台两项均通过。强杀前 Kar 日志字节保持相同，重开前队列为 uncertain、pending、pending。重开原工作区与原生会话后，第一条由 DSH 原生日志补回回执，后两条依序各发送一次。重复三个 UUID 并再次清空队列后，模型请求和原生输入均只含种子输入及最初的三个 UUID。DSH 对运行中被强杀的输入给出 interrupted 原因，Kar 保存为 RuntimeExited 的失败回合。 |
 | Kimi KAP 2.7.2-botiverse.1，`f3e4587` | 设置 `KAR_KIMI_BIN`，运行 `cargo test --locked --test kimi_live kap_tool_turn_replay -- --ignored --nocapture`。把 Kar 日志重建到 Begin，分别保留原 UUID 或换成新 UUID，两组使用相同文本和真实 KAP 会话历史。 | 每个平台的匹配组都恢复了原生回合 ID、已发送状态、完整回复和工具结果。异 UUID 组保留 interrupted 和未确认状态。两组均未新增模型请求。各平台两个 SSE 客户端分别从第 17 和第 5 条事件断线，最终都收到全部 32 条。此项采用日志前缀重建，未在此切点强杀 Kimi。 |
 
+## 关闭请求和回执
+
+提交 `a0bda94` 核对了 OAR 的 `session.dispose-is-recorded` 和 `session.dispose-mid-turn-settles`。修复前，ACP 协议回归在查找 dispose 请求时失败。修复后，显式关闭记录请求 UUID，观察到进程退出后记录同一 UUID 的回执及操作系统退出码。信号终止的退出码为 null。自发退出不会生成关闭请求。
+
+| 平台与程序 | 操作与实际证据 |
+| --- | --- |
+| macOS 27.2.1 arm64、Ubuntu 24.04.5 aarch64 | 七组供应商或传输各执行两种关闭。Pi RPC 在 macOS 为 1.6.0，Ubuntu 为 1.4.0。两端的 Claude Code 2.1.326、Qwen Code 0.27.4、Factory Droid 1.12.1、DSH Web 0.2.2-rc.5、DSH ACP 0.2.1-rc.5 和 Kimi KAP 2.7.2-botiverse.1 版本相同。慢提示提交后并发关闭，在 15 秒上限内两个调用都返回，按请求 UUID 只有一个退出回执。原会话拒绝新提示。Kimi 在模型已收到请求且仍在等待时执行关闭。逐版本命令见证据表。 |
+| Morph 0.3.128，两端 | 在已经运行的 Console 上断开外部连接及共享租约，回执均为 accepted。剩余客户端仍可调用工具。最后一个持有者关闭后，Kar 取得进程退出状态并给出 exited 回执，健康检查确认进程已停止。Ubuntu 使用官方 Linux arm64 发布程序并核验了校验和。 |
+| Pi Durable 1.6.0，macOS 上的 Chromium、IndexedDB 与 Kar Wasm | 慢回合中并发关闭两次，检查请求和唯一 accepted 回执及 released 事件。相同宿主重新挂接后，原任务仍成功完成。复验按 README 构建 Wasm 后运行 `node tests/browser/live.mjs`。 |
+| Cybion，macOS 与 Ubuntu 上的协议测试 | 在关闭宽限期内完成的原生回合，先记录终态再应答关闭。远端仍运行时，控制器在三秒后释放，期间排队的提示没有提交。四项协议测试通过。实际部署的 URL 和凭据待提供。 |
+
+macOS 的格式检查、全目标 Clippy 和默认 Rust 测试套件通过。Ubuntu 的原生 `protocol` 和 `cybion` 回归通过。Linux x86_64 和 Windows x86_64 的 release 检查通过编译。打开会话时的执行位置声明及前两条记录、普通输入接纳回执的完整关联仍待核销。
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。

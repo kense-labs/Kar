@@ -1643,7 +1643,7 @@ package-export	packages/oar/src/testing/index.ts#L8	./testing ScriptedTaskSpec		
 public-case	sea-trial/cases/account-usage.ts#L6	account-usage.snapshot	10,15,18	见 backend-evidence.tsv 同址记录
 public-case	sea-trial/cases/installation.ts#L6	installation.snapshot	10,12,15	见 backend-evidence.tsv 同址记录
 public-case	sea-trial/cases/session-capabilities.ts#L13	session.capabilities-match-declaration	17,19,21,26,29,32,36,39,43,45,49,51,54,70	待逐项核销
-public-case	sea-trial/cases/session-dispose.ts#L33	session.dispose-mid-turn-settles	38,39,42,44,46	待逐项核销
+public-case	sea-trial/cases/session-dispose.ts#L33	session.dispose-mid-turn-settles	38,39,42,44,46	见 backend-evidence.tsv 同址记录
 public-case	sea-trial/cases/session-effort.ts#L43	session.effort-never-substituted	49	待逐项核销
 public-case	sea-trial/cases/session-effort.ts#L57	session.effort-listed-levels-apply-across-resume	62,64,72,76,82,83	待逐项核销
 public-case	sea-trial/cases/session-images.ts#L17	session.images-travel-with-input	28,32,33,37,39,40,42,43,44,45,46	待逐项核销
@@ -1658,7 +1658,7 @@ public-case	sea-trial/cases/session.ts#L168	session.multi-turn-conversation	176,
 public-case	sea-trial/cases/session.ts#L198	session.steer-mid-turn	205,206,208	待逐项核销
 public-case	sea-trial/cases/session.ts#L213	session.queue-runs-after-turn	219,227,228	待逐项核销
 public-case	sea-trial/cases/session.ts#L236	session.cursor-replays-without-loss-or-duplication	248,251	见 backend-evidence.tsv 同址记录
-public-case	sea-trial/cases/session.ts#L258	session.dispose-is-recorded	266,268,270	待逐项核销
+public-case	sea-trial/cases/session.ts#L258	session.dispose-is-recorded	266,268,270	见 backend-evidence.tsv 同址记录
 public-case	sea-trial/cases/session.ts#L277	session.resume-or-loud-rejection	289,293,294,295	待逐项核销
 vendor-shared	sea-trial/vendor/additional-directories.vendor.test.ts#L58	shared assertions	58	待逐项核销
 vendor-shared	sea-trial/vendor/antigravity-settings.vendor.test.ts#L12	shared assertions	12	待逐项核销
