@@ -371,7 +371,7 @@ impl DocumentStore {
         comparison: Comparison,
     ) -> Result<Option<Vec<u8>>> {
         ensure!(
-            std::mem::discriminant(edits) == std::mem::discriminant(&self.empty_edits()?),
+            edits.extension() == self.empty_edits()?.extension(),
             "wrong edit type for document"
         );
         let before = self.blob(&m.revision(base)?.digest)?;

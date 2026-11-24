@@ -75,6 +75,28 @@ impl Object {
                 }
                 Ok(result)
             }
+            ObjectEdit::Fill(change) => {
+                ensure!(
+                    change.proposed.is_none_or(|c| c <= 0xff_ffff),
+                    "invalid RGB fill"
+                );
+                let value = shape.and_then(solid_fill);
+                let result = change.compare_at(value.as_ref(), &target, "fill", comparison)?;
+                if let (Outcome::Applied, Some(r)) = (result, indexes) {
+                    let paint = change
+                        .proposed
+                        .map(|c| {
+                            slides_engine::Paint::Rgb(slides_engine::Rgb([
+                                (c >> 16) as u8,
+                                (c >> 8) as u8,
+                                c as u8,
+                            ]))
+                        })
+                        .unwrap_or(slides_engine::Paint::None);
+                    deck.set_fill(r, paint)?;
+                }
+                Ok(result)
+            }
             ObjectEdit::X(change)
             | ObjectEdit::Y(change)
             | ObjectEdit::Width(change)
@@ -86,7 +108,7 @@ impl Object {
                     ObjectEdit::Y(_) => ("y", transform.map(|v| v.y)),
                     ObjectEdit::Width(_) => ("width", transform.map(|v| v.cx)),
                     ObjectEdit::Height(_) => ("height", transform.map(|v| v.cy)),
-                    ObjectEdit::Text(_) => unreachable!(),
+                    ObjectEdit::Text(_) | ObjectEdit::Fill(_) => unreachable!(),
                 };
                 let result = change.compare_at(current.as_ref(), &target, property, comparison)?;
                 if let (Outcome::Applied, Some(r), Some(mut v)) = (result, indexes, transform) {
@@ -95,7 +117,7 @@ impl Object {
                         ObjectEdit::Y(_) => v.y = change.proposed,
                         ObjectEdit::Width(_) => v.cx = change.proposed,
                         ObjectEdit::Height(_) => v.cy = change.proposed,
-                        ObjectEdit::Text(_) => unreachable!(),
+                        ObjectEdit::Text(_) | ObjectEdit::Fill(_) => unreachable!(),
                     }
                     ensure!(v.cx > 0 && v.cy > 0, "invalid shape dimensions");
                     deck.set_xfrm(r, v, false)?;
@@ -109,8 +131,25 @@ impl Object {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ObjectEdit {
     Text(Change<String>),
+    Fill(Change<Option<u32>>),
     X(Change<i64>),
     Y(Change<i64>),
     Width(Change<i64>),
     Height(Change<i64>),
+}
+
+pub(crate) fn solid_fill(shape: &slides_engine::Shape) -> Option<Option<u32>> {
+    use slides_engine::{Fill, Paint, Rgb};
+    let rgb = |Rgb([r, g, b])| u32::from_be_bytes([0, r, g, b]);
+    match &shape.paint.fill {
+        Some(Paint::Rgb(c)) => Some(Some(rgb(*c))),
+        Some(Paint::None) => Some(None),
+        Some(_) => None,
+        None => match &shape.look.fill_as_read {
+            Some(Fill::None) => Some(None),
+            Some(Fill::Solid(c, 255)) => Some(Some(rgb(*c))),
+            Some(_) => None,
+            None => Some(shape.look.fill.map(rgb)),
+        },
+    }
 }

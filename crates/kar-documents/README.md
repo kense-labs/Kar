@@ -57,3 +57,7 @@ A native editor writes its complete candidate to an isolated file and uploads th
 A current-revision `grid` command records each managed row/column insertion or deletion. Stale cell and formula edits replay this history before publication. Unknown external workbook structure remains a conflict.
 
 The macOS target check compiled the text/native-file scenarios in `native_files`. Execution is pending consolidated acceptance.
+
+`DocumentEdits::WordDocument` applies a batch of text and direct character-format changes. Bold, italic and underline preserve the distinction between an explicitly disabled attribute and inheriting it from the paragraph style. Character replacement preserves the selected run's properties. Selections that cross incompatible run formatting or protected inline objects need an explicit narrower edit. PowerPoint text, solid RGB fill, x/y and width/height compare independently. Unsupported gradients or pattern fills retain their original value and produce a conflict when a solid fill cannot be compared.
+
+The prepared `properties` tests cover a Word run boundary and edits to a slide's text and fill. The `http_clients` scenarios now include all three Office formats in human-first, AI-first and barrier-synchronized submission orders, with conflict hashes, reconnect, retry and explicit resolution. They are awaiting the consolidated scenario run.

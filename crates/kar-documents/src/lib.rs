@@ -39,11 +39,32 @@ pub fn replace_word_text(
         "a paragraph text edit cannot split the paragraph"
     );
     if expected != replacement {
+        let p = &document.paragraphs()[paragraph];
+        let mut runs = p
+            .run_ranges()
+            .filter(|(r, _)| r.start < range.end && range.start < r.end)
+            .map(|(_, r)| r);
+        let props = if let Some(first) = runs.next() {
+            ensure!(
+                first.object.is_none()
+                    && first.link.is_none()
+                    && first.rev.is_none()
+                    && runs.all(|r| r.object.is_none()
+                        && r.link.is_none()
+                        && r.rev.is_none()
+                        && r.props == first.props),
+                "replacement crosses distinct run formatting or a protected inline object"
+            );
+            Some(first.props.clone())
+        } else {
+            None
+        };
+        drop(runs);
         let selection = Selection {
             anchor: Position::new(paragraph, range.start),
             head: Position::new(paragraph, range.end),
         };
-        document.insert_text(selection, replacement, None);
+        document.insert_text(selection, replacement, props);
     }
     Ok(())
 }

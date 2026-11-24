@@ -17,8 +17,23 @@ use tempfile::tempdir;
 pub enum OfficeEdits {
     Text(Vec<crate::text::TextEdit>),
     Word(Vec<WordEdit>),
+    WordDocument {
+        text: Vec<WordEdit>,
+        formatting: Vec<crate::word::WordStyleEdit>,
+    },
     Excel(Vec<(Cell, CellEdit)>),
     Slides(Vec<(Object, ObjectEdit)>),
+}
+
+impl OfficeEdits {
+    pub(crate) fn extension(&self) -> &'static str {
+        match self {
+            Self::Text(_) => "txt",
+            Self::Word(_) | Self::WordDocument { .. } => "docx",
+            Self::Excel(_) => "xlsx",
+            Self::Slides(_) => "pptx",
+        }
+    }
 }
 
 /// Prepare a complete candidate file against immutable revision snapshots.
@@ -72,12 +87,7 @@ pub(crate) fn prepare_staged(
         return Ok((candidate != original).then(|| candidate.into_bytes()));
     }
     let dir = tempdir()?;
-    let ext = match edits {
-        OfficeEdits::Text(_) => unreachable!(),
-        OfficeEdits::Word(_) => "docx",
-        OfficeEdits::Excel(_) => "xlsx",
-        OfficeEdits::Slides(_) => "pptx",
-    };
+    let ext = edits.extension();
     let before = dir.path().join(format!("base.{ext}"));
     let candidate = dir.path().join(format!("current.{ext}"));
     fs::write(&before, base)?;
@@ -85,12 +95,18 @@ pub(crate) fn prepare_staged(
     let mut changed = false;
     match edits {
         OfficeEdits::Text(_) => unreachable!(),
-        OfficeEdits::Word(ops) => {
+        OfficeEdits::Word(ops) | OfficeEdits::WordDocument { text: ops, .. } => {
             let base = Document::open(&before)?;
             let mut model = Document::open(&candidate)?;
             for op in ops {
                 changed |= op.apply_at(&base, &mut model, comparison, paragraphs_stable)?
                     == Outcome::Applied;
+            }
+            if let OfficeEdits::WordDocument { formatting, .. } = edits {
+                for op in formatting {
+                    changed |= op.apply(&base, &mut model, comparison, paragraphs_stable)?
+                        == Outcome::Applied;
+                }
             }
             if changed {
                 model.save()?;

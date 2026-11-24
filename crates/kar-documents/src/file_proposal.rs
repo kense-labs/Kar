@@ -63,8 +63,36 @@ fn word(before: &Path, proposed: &Path) -> Result<OfficeEdits> {
         "paragraph structure changed"
     );
     let mut ops = Vec::new();
+    let mut formatting = Vec::new();
     for (i, (old, new)) in a.paragraphs().iter().zip(b.paragraphs()).enumerate() {
         if old.text == new.text {
+            let offsets: BTreeSet<_> = old
+                .run_ranges()
+                .chain(new.run_ranges())
+                .flat_map(|(r, _)| [r.start, r.end])
+                .collect();
+            let offsets: Vec<_> = offsets.into_iter().collect();
+            for pair in offsets.windows(2) {
+                let (a, b) = (old.props_at(pair[1]), new.props_at(pair[1]));
+                for property in [
+                    crate::word::WordStyle::Bold,
+                    crate::word::WordStyle::Italic,
+                    crate::word::WordStyle::Underline,
+                ] {
+                    let (from, to) = (property.read(&a), property.read(&b));
+                    if from != to {
+                        formatting.push(crate::word::WordStyleEdit {
+                            paragraph: i,
+                            range: pair[0]..pair[1],
+                            property,
+                            change: Change {
+                                base: from,
+                                proposed: to,
+                            },
+                        });
+                    }
+                }
+            }
             continue;
         }
         for e in TextEdit::between(&old.text, &new.text) {
@@ -75,7 +103,10 @@ fn word(before: &Path, proposed: &Path) -> Result<OfficeEdits> {
             });
         }
     }
-    Ok(OfficeEdits::Word(ops))
+    Ok(OfficeEdits::WordDocument {
+        text: ops,
+        formatting,
+    })
 }
 
 fn excel(before: &Path, proposed: &Path) -> Result<OfficeEdits> {
@@ -150,6 +181,18 @@ fn slides(before: &Path, proposed: &Path) -> Result<OfficeEdits> {
             .context("shape missing or ambiguous")?;
             let t = &b.slide(j).shapes[l];
             let target = Object::at(&a, i, k)?;
+            if let (Some(from), Some(to)) =
+                (crate::slides::solid_fill(s), crate::slides::solid_fill(t))
+                && from != to
+            {
+                ops.push((
+                    target.clone(),
+                    ObjectEdit::Fill(Change {
+                        base: from,
+                        proposed: to,
+                    }),
+                ));
+            }
             if let (Some(x), Some(y)) = (&s.text, &t.text)
                 && x.plain_text() != y.plain_text()
             {
@@ -200,7 +243,9 @@ pub(crate) fn extract(kind: &OfficeEdits, base: &[u8], proposal: &[u8]) -> Resul
     }
     let dir = tempfile::tempdir()?;
     let (ext, read) = match kind {
-        OfficeEdits::Word(_) => ("docx", word as fn(&Path, &Path) -> Result<OfficeEdits>),
+        OfficeEdits::Word(_) | OfficeEdits::WordDocument { .. } => {
+            ("docx", word as fn(&Path, &Path) -> Result<OfficeEdits>)
+        }
         OfficeEdits::Excel(_) => ("xlsx", excel as _),
         OfficeEdits::Slides(_) => ("pptx", slides as _),
         OfficeEdits::Text(_) => unreachable!(),
@@ -220,7 +265,7 @@ pub(crate) fn extract(kind: &OfficeEdits, base: &[u8], proposal: &[u8]) -> Resul
 
 pub(crate) fn validate(format: &OfficeEdits, bytes: &[u8]) -> Result<()> {
     let part = match format {
-        OfficeEdits::Word(_) => Some("word/document.xml"),
+        OfficeEdits::Word(_) | OfficeEdits::WordDocument { .. } => Some("word/document.xml"),
         OfficeEdits::Excel(_) => Some("xl/workbook.xml"),
         OfficeEdits::Slides(_) => Some("ppt/presentation.xml"),
         OfficeEdits::Text(_) => None,

@@ -197,3 +197,188 @@ fn independent_tcp_clients_subscribe_submit_retry_and_resolve_across_process_res
     );
     Ok(())
 }
+
+struct Fixture {
+    human: OfficeEdits,
+    ai: OfficeEdits,
+    alternative: OfficeEdits,
+}
+
+fn fixture(path: &Path, format: &str) -> Result<Fixture> {
+    use kar_documents::{
+        Change,
+        excel::{Cell, CellEdit},
+        slides::{Object, ObjectEdit},
+    };
+    let change = |a: &str, b: &str| Change {
+        base: a.to_owned(),
+        proposed: b.to_owned(),
+    };
+    match format {
+        "docx" => {
+            let mut d = Document::new();
+            d.insert_text(Selection::default(), "周一\n小李", None);
+            d.save_as(path)?;
+            let edit = |p, value: &str| {
+                OfficeEdits::Word(vec![WordEdit {
+                    paragraph: p,
+                    range: 0..6,
+                    replacement: value.into(),
+                }])
+            };
+            Ok(Fixture {
+                human: edit(0, "周三"),
+                ai: edit(1, "小林"),
+                alternative: edit(0, "周五"),
+            })
+        }
+        "xlsx" => {
+            let mut b = sheets_engine::Workbook::new_empty()?;
+            b.rename_sheet(0, "预算")?;
+            b.set_input(0, 2, 1, "10")?;
+            b.set_input(0, 2, 3, "=B3*2")?;
+            b.save_as(path)?;
+            let b3 = Cell::at(&b, 0, 2, 1)?;
+            let d3 = Cell::at(&b, 0, 2, 3)?;
+            let edit = |cell, a, b| OfficeEdits::Excel(vec![(cell, CellEdit::Input(change(a, b)))]);
+            Ok(Fixture {
+                human: edit(b3.clone(), "10", "12"),
+                ai: edit(d3, "=B3*2", "=B3*3"),
+                alternative: edit(b3, "10", "15"),
+            })
+        }
+        "pptx" => {
+            let mut d = slides_engine::Presentation::new();
+            let i = d.add_text_box(0)?;
+            d.set_shape_text((0, i), "初稿")?;
+            let obj = Object::at(&d, 0, i)?;
+            let x = d.slide(0).shapes[i].xfrm.unwrap().x;
+            d.save_as(path)?;
+            let text =
+                |v| OfficeEdits::Slides(vec![(obj.clone(), ObjectEdit::Text(change("初稿", v)))]);
+            Ok(Fixture {
+                human: text("二稿"),
+                ai: OfficeEdits::Slides(vec![(
+                    obj.clone(),
+                    ObjectEdit::X(Change {
+                        base: x,
+                        proposed: 121212,
+                    }),
+                )]),
+                alternative: text("终稿"),
+            })
+        }
+        _ => anyhow::bail!("unknown fixture"),
+    }
+}
+
+fn verify_file(path: &Path, format: &str, resolved: bool) -> Result<()> {
+    match format {
+        "docx" => {
+            let d = Document::open(path)?;
+            assert_eq!(
+                d.paragraphs()[0].text,
+                if resolved { "周五" } else { "周三" }
+            );
+            assert_eq!(d.paragraphs()[1].text, "小林");
+        }
+        "xlsx" => {
+            let b = sheets_engine::Workbook::open(path)?;
+            assert_eq!(b.input(0, 2, 1), if resolved { "15" } else { "12" });
+            assert_eq!(b.input(0, 2, 3), "=B3*3");
+            assert_eq!(b.display_value(0, 2, 3), if resolved { "45" } else { "36" });
+        }
+        "pptx" => {
+            let d = slides_engine::Presentation::open(path)?;
+            let shape = d
+                .slide(0)
+                .shapes
+                .iter()
+                .find(|s| s.xfrm.is_some_and(|v| v.x == 121212))
+                .context("moved shape")?;
+            assert_eq!(
+                shape.text.as_ref().unwrap().plain_text(),
+                if resolved { "终稿" } else { "二稿" }
+            );
+        }
+        _ => anyhow::bail!("unknown fixture"),
+    }
+    Ok(())
+}
+
+#[test]
+fn all_office_formats_support_both_orders_and_simultaneous_service_clients() -> Result<()> {
+    for format in ["docx", "xlsx", "pptx"] {
+        for order in ["human first", "AI first", "simultaneous"] {
+            let dir = tempdir()?;
+            let file = dir.path().join(format!("work.{format}"));
+            let state = dir.path().join("store");
+            let fixture = fixture(&file, format)?;
+            let (server, human) = start(&file, &state)?;
+            let ai = human.clone();
+            let command = |author: &str, id: &str, edits| Command {
+                author: author.into(),
+                operation_id: id.into(),
+                base_revision: 0,
+                action: Action::Edit { edits },
+            };
+            let h = command("human", "one", fixture.human);
+            let a = command("AI", "two", fixture.ai);
+            match order {
+                "human first" => {
+                    assert_eq!(human.submit(&h)?.0, 200);
+                    assert_eq!(ai.submit(&a)?.0, 200);
+                }
+                "AI first" => {
+                    assert_eq!(ai.submit(&a)?.0, 200);
+                    assert_eq!(human.submit(&h)?.0, 200);
+                }
+                _ => {
+                    let gate = Arc::new(Barrier::new(2));
+                    let thread_gate = gate.clone();
+                    let c = ai.clone();
+                    let worker = thread::spawn(move || {
+                        thread_gate.wait();
+                        c.submit(&a)
+                    });
+                    gate.wait();
+                    assert_eq!(human.submit(&h)?.0, 200);
+                    assert_eq!(worker.join().unwrap()?.0, 200);
+                }
+            }
+            verify_file(&file, format, false)?;
+            assert_eq!(
+                serde_json::to_value(human.events(0, 0)?)?,
+                serde_json::to_value(ai.events(0, 0)?)?
+            );
+            let before = fs::read(&file)?;
+            let disputed = command("AI", "three", fixture.alternative);
+            let (code, dispute) = ai.submit(&disputed)?;
+            assert_eq!(code, 409);
+            assert_eq!(dispute.revision, 2);
+            assert_eq!(fs::read(&file)?, before);
+            let both = human.events(2, 0)?;
+            assert_eq!(both[0].receipt.cursor, dispute.cursor);
+            drop(server);
+            let (_process, again) = start(&file, &state)?;
+            let (code, retry) = again.submit(&disputed)?;
+            assert_eq!(code, 409);
+            assert_eq!(retry.cursor, dispute.cursor);
+            assert_eq!(again.events(2, 0)?.len(), 1);
+            let resolve = Command {
+                author: "human".into(),
+                operation_id: "resolve".into(),
+                base_revision: 2,
+                action: Action::Resolve {
+                    conflict: dispute.cursor,
+                    decision: Decision::AdoptProposed,
+                },
+            };
+            let (code, done) = again.submit(&resolve)?;
+            assert_eq!(code, 200);
+            assert_eq!(done.revision, 3);
+            verify_file(&file, format, true)?;
+        }
+    }
+    Ok(())
+}

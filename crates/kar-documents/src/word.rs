@@ -173,3 +173,114 @@ fn map_range(base: &str, current: &str, range: Range<usize>) -> Option<Range<usi
     }
     None
 }
+
+/// Direct OOXML run formatting. A None value inherits from the style.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum WordStyle {
+    Bold,
+    Italic,
+    Underline,
+}
+
+impl WordStyle {
+    pub(crate) fn read(self, run: &docs_engine::RunProps) -> Option<bool> {
+        match self {
+            Self::Bold => run.bold,
+            Self::Italic => run.italic,
+            Self::Underline => run.underline,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Bold => "bold",
+            Self::Italic => "italic",
+            Self::Underline => "underline",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WordStyleEdit {
+    pub paragraph: usize,
+    pub range: Range<usize>,
+    pub property: WordStyle,
+    pub change: Change<Option<bool>>,
+}
+
+impl WordStyleEdit {
+    fn value(
+        &self,
+        paragraph: &docs_engine::Paragraph,
+        range: &Range<usize>,
+    ) -> Option<Option<bool>> {
+        let mut runs = paragraph
+            .run_ranges()
+            .filter(|(s, _)| s.start < range.end && range.start < s.end)
+            .map(|(_, run)| self.property.read(&run.props));
+        let first = runs.next()?;
+        runs.all(|next| next == first).then_some(first)
+    }
+
+    pub(crate) fn apply(
+        &self,
+        base: &Document,
+        current: &mut Document,
+        comparison: Comparison,
+        stable: bool,
+    ) -> Result<Outcome> {
+        let p = base
+            .paragraphs()
+            .get(self.paragraph)
+            .ok_or_else(|| anyhow::anyhow!("unknown base paragraph"))?;
+        ensure!(
+            !self.range.is_empty() && p.text.get(self.range.clone()).is_some(),
+            "invalid character formatting range"
+        );
+        let label = format!(
+            "paragraph {} / bytes {}..{}",
+            self.paragraph + 1,
+            self.range.start,
+            self.range.end
+        );
+        let name = self.property.name();
+        self.change.compare_at(
+            self.value(p, &self.range).as_ref(),
+            &label,
+            name,
+            Comparison::Base,
+        )?;
+        let i = if stable {
+            Some(self.paragraph)
+        } else {
+            map_paragraph(base, current, self.paragraph)
+        };
+        let (i, q) = i
+            .and_then(|i| current.paragraphs().get(i).map(|q| (i, q)))
+            .ok_or_else(|| {
+                self.change
+                    .conflict(None, &label, name, "paragraph deleted, split or ambiguous")
+            })?;
+        let range = map_range(&p.text, &q.text, self.range.clone())
+            .filter(|r| !r.is_empty())
+            .ok_or_else(|| {
+                self.change
+                    .conflict(None, &label, name, "formatted range missing or ambiguous")
+            })?;
+        let value = self.value(q, &range);
+        let result = self
+            .change
+            .compare_at(value.as_ref(), &label, name, comparison)?;
+        if result == Outcome::Applied {
+            let sel = docs_engine::Selection {
+                anchor: docs_engine::Position::new(i, range.start),
+                head: docs_engine::Position::new(i, range.end),
+            };
+            current.format(sel, |r| match self.property {
+                WordStyle::Bold => r.bold = self.change.proposed,
+                WordStyle::Italic => r.italic = self.change.proposed,
+                WordStyle::Underline => r.underline = self.change.proposed,
+            });
+        }
+        Ok(result)
+    }
+}
