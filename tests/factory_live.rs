@@ -852,3 +852,24 @@ async fn public_prompt_readbacks() {
         .await
         .unwrap();
 }
+
+#[path = "support/adapter_queue.rs"]
+mod adapter_queue;
+#[tokio::test]
+#[ignore = "requires real factory and a loopback model"]
+async fn public_adapter_queue_and_withdraw() {
+    let f = fixture().await;
+    f.model.tool_seen.send_replace(true);
+    let s = f.runtime.open(f.opts.clone()).await.unwrap();
+    adapter_queue::check(
+        &s,
+        "FACTORY_HOLD",
+        || {
+            f.model.release.send_replace(false);
+        },
+        || {
+            f.model.release.send_replace(true);
+        },
+    )
+    .await;
+}

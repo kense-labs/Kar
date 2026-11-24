@@ -35,10 +35,14 @@ async fn setup() -> (Fixture, kar::Runtime) {
                 if (compete) {{ compete = false; pi.sendUserMessage('{HELD}-EXT'); }}
             }});
             pi.on('input', async event => {{
+                if (event.text === 'HANDLE') return {{ action: 'handled' }};
                 if (event.text === '{HELD}-A') compete = true;
                 if (event.text === 'queued B') {{ appendFileSync({hooks}, 'B'); await delay(180); }}
                 return {{ action: 'continue' }};
             }});
+            pi.registerCommand('fail', {{ description: 'probe', handler: async () => {{
+                throw new Error('PROBE_HANDLER_FAILED');
+            }} }});
             pi.registerCommand('spawn', {{ description: 'probe', handler: async () => {{
                 pi.sendUserMessage('{HELD}');
             }} }});
@@ -489,4 +493,87 @@ async fn killed_controller_recovers_handled_input_and_interrupts_only_the_indepe
         (next, TurnStatus::Completed)
     );
     assert_eq!(f.calls.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+#[ignore = "requires real KAR_PI_BIN; extension handles the middle FIFO entry"]
+async fn handled_middle_entry_has_one_bubble_and_advances_the_queue() {
+    let (f, rt) = setup().await;
+    let s = rt.open(f.options.clone()).await.unwrap();
+    let a = s.prompt(HELD).await.unwrap();
+    wait_for(|| f.options.cwd.join("requested").is_file()).await;
+    let (middle, b) = s.queue("HANDLE").await.unwrap();
+    let (_, c) = s.queue(format!("{HELD}-EXT")).await.unwrap();
+    let rows = s.records();
+    let request = rows
+        .iter()
+        .find(|r| r.native["type"] == "queue" && r.native["inputId"] == middle.to_string())
+        .unwrap();
+    assert!(
+        rows.iter()
+            .any(|r| r.native["requestId"] == request.native["id"]
+                && r.native["type"] == "accepted"
+                && r.native["queued"] == "adapter")
+    );
+    fs::write(f.options.cwd.join("release"), "").unwrap();
+    assert_eq!(a.wait().await.unwrap(), Outcome::Completed);
+    handled(timeout(LIMIT, b.report()).await.unwrap().unwrap());
+    wait_for(|| f.options.cwd.join("extension-requested").is_file()).await;
+    let mut replay = kar::observe::SessionView::default();
+    for r in s.records() {
+        replay.apply(&r).unwrap();
+    }
+    let root = replay
+        .agents
+        .get(&kar::observe::Agent {
+            session_id: Some(s.id().into()),
+            path: vec![],
+        })
+        .unwrap();
+    assert_eq!(
+        root.user_messages,
+        [HELD.to_owned(), "HANDLE".into(), format!("{HELD}-EXT")]
+    );
+    assert_eq!(
+        root.input_receipts.get(&middle),
+        Some(&kar::InputReceipt::Handled)
+    );
+    assert_eq!(ends(&s), 1);
+    assert!(s.status().is_running());
+    assert_eq!(f.calls.lock().unwrap().len(), 2);
+    fs::write(f.options.cwd.join("extension-release"), "").unwrap();
+    assert_eq!(c.wait().await.unwrap(), Outcome::Completed);
+    assert!(!s.await_idle().await.unwrap().status.is_running());
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires real KAR_PI_BIN; native command handler raises its own error"]
+async fn handled_command_preserves_native_extension_error_without_a_model_turn() {
+    let (f, rt) = setup().await;
+    let s = rt.open(f.options.clone()).await.unwrap();
+    handled(
+        timeout(LIMIT, async { s.prompt("/fail").await?.report().await })
+            .await
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(ends(&s), 0);
+    assert!(f.calls.lock().unwrap().is_empty());
+    assert!(matches!(
+        s.status(),
+        AgentStatus::Idle {
+            last_outcome: None,
+            ..
+        }
+    ));
+    assert!(
+        s.records()
+            .iter()
+            .any(|r| r.direction == kar::Direction::FromRuntime
+                && r.kind == kar::RecordKind::Frame
+                && r.native["type"] == "extension_error"
+                && r.native.to_string().contains("PROBE_HANDLER_FAILED"))
+    );
+    s.close().await.unwrap();
 }

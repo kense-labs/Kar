@@ -1,3 +1,5 @@
+#[path = "../support/adapter_queue.rs"]
+mod adapter_queue;
 #[path = "../support/busy_prompt.rs"]
 mod busy_prompt;
 #[path = "pi_history/extension_runs.rs"]
@@ -1265,4 +1267,26 @@ async fn queued_inputs_and_two_http_clients_survive_controller_kill() {
         "Pi model received {markers:?} once each; both HTTP clients matched all {} durable events",
         canonical.len()
     );
+}
+
+#[tokio::test]
+#[ignore = "requires real KAR_PI_BIN to verify queue dispatch and withdrawal"]
+async fn public_adapter_queue_and_withdraw() {
+    let f = fixture(true).await;
+    let mut rt = kar::runtime("pi").unwrap();
+    rt.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
+    let s = rt.open(f.options.clone()).await.unwrap();
+    let release = f.options.cwd.join("release");
+    adapter_queue::check(
+        &s,
+        "kar-queue-held-at-model",
+        || {
+            if release.exists() {
+                fs::remove_file(&release).unwrap();
+            }
+        },
+        || fs::write(&release, "").unwrap(),
+    )
+    .await;
+    assert_eq!(f.calls.lock().unwrap().len(), 3);
 }

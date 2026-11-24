@@ -365,3 +365,13 @@ async fn public_prompt_readbacks() {
         .unwrap();
     f.http.abort();
 }
+
+#[path = "support/adapter_queue.rs"]
+mod adapter_queue;
+#[tokio::test]
+#[ignore = "requires real qwen and a loopback model"]
+async fn public_adapter_queue_and_withdraw() {
+    let f = fixture().await;
+    let s = runtime("qwen").unwrap().open(f.opts).await.unwrap();
+    adapter_queue::check(&s, "slow marker", || {}, || {}).await;
+}

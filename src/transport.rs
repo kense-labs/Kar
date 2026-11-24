@@ -1006,10 +1006,11 @@ impl Actor {
                 let _ = tx.send(Err(Error::Busy));
             }
             Command::Queue(input, text, tx, done) => {
+                let request = uuid::Uuid::new_v4();
                 self.record(
                     Direction::Host,
                     RecordKind::Request,
-                    json!({"type":"queue","inputId":input,"text":text}),
+                    json!({"type":"queue","id":request,"inputId":input,"text":text}),
                     vec![Event::InputQueued {
                         input_id: input.to_string(),
                     }],
@@ -1020,10 +1021,22 @@ impl Actor {
                     text,
                     done,
                 });
+                self.record(
+                    Direction::Host,
+                    RecordKind::Response,
+                    json!({"type":"accepted","queued":"adapter","requestId":request}),
+                    vec![],
+                    vec![],
+                );
                 let _ = tx.send(Ok(()));
             }
             Command::Withdraw(input, tx) => {
+                let request = self
+                    .journal
+                    .control_request(json!({"type":"withdraw","inputId":input}));
                 let Some(pos) = self.queue.iter().position(|e| e.id == input) else {
+                    self.journal
+                        .control_decision(request, Some(("not_queued", "input is not queued")));
                     let _ = tx.send(Err(Error::Refused("input is not queued".into())));
                     return Ok(true);
                 };
@@ -1044,6 +1057,7 @@ impl Actor {
                     }],
                     vec![],
                 );
+                self.journal.control_decision(request, None);
                 let _ = tx.send(Ok(()));
             }
             Command::Steer(_, tx) if self.manual_compaction.is_some() => {
