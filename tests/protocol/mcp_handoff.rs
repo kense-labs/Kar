@@ -212,6 +212,64 @@ fn check_args(session: &Session, tokens: &[String]) {
     assert!(!std::path::Path::new(path).parent().unwrap().exists());
 }
 
+#[cfg(unix)]
+async fn claude_arrives_before_writer(
+    runtime: &Runtime,
+    mut options: SessionOptions,
+    state: &Peer,
+    token: &str,
+) {
+    use nix::{sys::stat::Mode, unistd::mkfifo};
+    use tokio::{io::AsyncWriteExt, net::unix::pipe};
+    let private = tempfile::tempdir().unwrap();
+    let path = private.path().join("mcp.json");
+    mkfifo(&path, Mode::from_bits_truncate(0o600)).unwrap();
+    let mut runtime = runtime.clone();
+    runtime
+        .args
+        .extend(["--mcp-config".into(), path.as_os_str().into()]);
+    options.mcp_servers.clear();
+    let opening = runtime.open(options);
+    tokio::pin!(opening);
+    let writer = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match pipe::OpenOptions::new().open_sender(&path) {
+                Ok(writer) => break writer,
+                Err(error) if error.raw_os_error() == Some(nix::libc::ENXIO) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                Err(error) => panic!("waiting for native Claude FIFO reader: {error}"),
+            }
+        }
+    });
+    let mut writer = tokio::select! {
+        w = writer => w.unwrap(),
+        _ = &mut opening => panic!("Claude initialized before opening the config"),
+    };
+    tokio::select! {
+        () = tokio::time::sleep(Duration::from_secs(1)) => {},
+        _ = &mut opening => panic!("Claude initialized before reading the config"),
+    }
+    let payload = json!({"mcpServers":{"local":{"type":"stdio","command":std::env::current_exe().unwrap(),
+        "args":["stdio-echo-once"],"env":{"KAR_TEST_ECHO_TOKEN":token}}}});
+    writer
+        .write_all(payload.to_string().as_bytes())
+        .await
+        .unwrap();
+    drop(writer);
+    std::fs::remove_file(path).unwrap();
+    let session = opening.await.unwrap();
+    invoke(&session, state, "local", token).await;
+    assert!(
+        session.records().iter().any(|r| r.native["mcp_servers"]
+            .as_array()
+            .is_some_and(|rows| rows
+                .iter()
+                .any(|row| row["name"] == "local" && row["status"] == "connected")))
+    );
+    session.close().await.unwrap();
+}
+
 pub(super) async fn claude() {
     let runtime = Runtime::new(
         "claude",
@@ -251,6 +309,8 @@ pub(super) async fn claude() {
     ] {
         options.env.insert(name.into(), value.into());
     }
+    #[cfg(unix)]
+    let late = options.clone();
     let mut sibling = options.clone();
     let remote = |slot: usize| McpServer::Http {
         url: format!("{url}/mcp/{slot}"),
@@ -305,6 +365,8 @@ pub(super) async fn claude() {
             "credential in model traffic"
         );
     }
+    #[cfg(unix)]
+    claude_arrives_before_writer(&runtime, late, &state, &tokens[2]).await;
     super::private_inputs::verify_private_inputs(dir.path(), &tokens);
     server.abort();
     println!(
