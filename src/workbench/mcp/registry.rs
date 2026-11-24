@@ -151,7 +151,8 @@ impl Registry {
         let Some(addr) = self.endpoint.get() else {
             return Ok(None);
         };
-        if !crate::runtimes().iter().any(|r| r.id == runtime) {
+        let dynamic_acp = crate::workbench::acp_registry::dynamic(runtime);
+        if !dynamic_acp && !crate::runtimes().iter().any(|r| r.id == runtime) {
             return Ok(None);
         }
         let raw = access::credential()?;
@@ -179,7 +180,7 @@ impl Registry {
             ]),
         });
         #[cfg(target_os = "macos")]
-        if matches!(
+        if dynamic_acp || matches!(
             runtime,
             "dsh"
                 | "devin"

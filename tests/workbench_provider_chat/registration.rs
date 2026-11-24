@@ -195,7 +195,7 @@ pub(super) fn muse(req: &Value) {
 fn receipt(db: &Path, method: &str) -> Value {
     serde_json::from_slice(&fs::read(db.join(method)).unwrap()).unwrap()
 }
-async fn workbench(id: &str, mode: &str) {
+async fn workbench(id: &str, mode: &str, profile: bool) {
     let t = tempfile::tempdir().unwrap();
     let state = t.path().join("state");
     let root = t.path().join("root");
@@ -219,9 +219,16 @@ async fn workbench(id: &str, mode: &str) {
     .await["id"]
         .clone();
     let project = p.as_str().unwrap();
+    let runtime = if profile {
+        server::json(c.put(format!("{url}/acp-registry/profiles/model-tools")).json(&json!({
+            "name":"Model tools ACP","source":"local","command_path":executable,"command_args":["acp"]
+        }))).await["runtime"].as_str().unwrap().to_owned()
+    } else {
+        id.to_owned()
+    };
     server::json(
         c.post(format!("{url}/projects/{project}/chats"))
-            .json(&json!({"id":chat,"runtime":id})),
+            .json(&json!({"id":chat,"runtime":runtime})),
     )
     .await;
     let created = receipt(
@@ -264,7 +271,7 @@ async fn workbench(id: &str, mode: &str) {
         for r in [&created, &resumed] {
             assert_eq!(r["scope"]["project_id"], p);
             assert_eq!(r["scope"]["thread_id"], chat.to_string());
-            assert_eq!(r["scope"]["runtime"], id);
+            assert_eq!(r["scope"]["runtime"], runtime);
         }
         assert_ne!(created["scope"]["id"], resumed["scope"]["id"]);
     } else {
@@ -274,13 +281,18 @@ async fn workbench(id: &str, mode: &str) {
 }
 pub(super) async fn scenario() {
     for (id, m) in [("muse", "muse"), ("muse", "muse-old"), ("kiro", "in-band")] {
-        workbench(id, m).await;
+        workbench(id, m, false).await;
     }
     #[cfg(target_os = "macos")]
     for (id, m) in [("cursor", "bridge"), ("fx", "legacy")] {
-        workbench(id, m).await;
+        workbench(id, m, false).await;
     }
     let tmp = tempfile::tempdir().unwrap();
+    workbench("cursor", "in-band", true).await;
+    #[cfg(target_os = "macos")]
+    for mode in ["bridge", "legacy"] {
+        workbench("cursor", mode, true).await;
+    }
     let mut opts = kar::SessionOptions::new(tmp.path());
     opts.env
         .insert("KAR_CHAT_TEST_PROVIDER".into(), "fx".into());

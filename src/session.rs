@@ -968,6 +968,7 @@ impl Session {
                         "ACP server did not advertise HTTP MCP".into(),
                     ));
                 }
+                let dynamic_acp = crate::workbench::acp_registry::dynamic(&runtime.id);
                 let in_band = init.pointer("/agentCapabilities/mcpCapabilities/acp") == Some(&Value::Bool(true))
                     && runtime.id != "dsh" && options.workbench_registration.as_ref().is_some_and(|r|
                         r.acp.compare_exchange(1, 2, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire).is_ok());
@@ -980,9 +981,9 @@ impl Session {
                         &runtime.id,
                     )
                     .is_some();
-                    if http && !sensitive && !matches!(runtime.id.as_str(), "kiro" | "fx") {
+                    if http && !dynamic_acp && !sensitive && !matches!(runtime.id.as_str(), "kiro" | "fx") {
                         options.add_workbench_server(crate::McpTransport::Http);
-                    } else if http
+                    } else if http || dynamic_acp
                         || session
                             .mcp
                             .transports
@@ -1109,6 +1110,22 @@ impl Session {
                         result => break result?,
                     }
                 };
+                if dynamic_acp && options.workbench_registration.is_some() {
+                    let status = match (optional_acp, include_workbench) {
+                        (true, true) => "accepted_at_open",
+                        (true, false) => "native_refused",
+                        _ => "no_transport",
+                    };
+                    let transport = if in_band {Some("acp")} else {optional_acp.then_some("stdio")};
+                    session.journal.push(
+                        crate::Direction::Host,
+                        crate::RecordKind::Frame,
+                        session.info["sessionId"].as_str().map(str::to_owned).or_else(|| options.resume.clone()),
+                        vec![],
+                        json!({"type":"kar/workbench-mcp-registration","runtime":runtime.id,"method":method,"status":status,"transport":transport}),
+                        vec![],
+                    );
+                }
                 if let Some(resume) = &options.resume
                     && fork.is_none()
                 {
