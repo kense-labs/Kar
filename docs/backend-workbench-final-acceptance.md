@@ -4,7 +4,41 @@
 
 ## 两阶段候选交接
 
-功能代码基线为 `ad7e47868f0f54c250dcf4638093c9118b901994`。本地 `main` 的后续交接提交仅更新验收资料。开发检查使用 macOS 27.2.1 arm64、rustc 1.100.0，`cargo check --locked --offline --all-targets` 成功。已生成测试计划；本候选的协议测试、供应商实机及统一回归由接手方执行。
+本次复核的功能提交为 `61650ba7437510369ac2907f8ae268d1a2948564`。此前的 `ad7e47868f0f54c250dcf4638093c9118b901994` 是较早的交接点。后续文档提交与功能提交的源码树相同。源码复核发现的缺口见[功能对照报告](backend-functional-review-2026-11-24.md)和[逐项清单](backend-source-parity.toml)。
+
+macOS 27.2.1 arm64、rustc 1.100.0 上的 `cargo check --locked --offline --all-targets` 已完成。固定源码映射检查也已执行，核对 233 个上游来源文件、192 项断言映射及 50 项 CLI 映射。工作台清单收录 257 个 RPC，模型工具表有 95 个入口（含工具搜索）。各项实测判定见下述命令及供应商记录。 [静态检查复跑说明](backend-coverage.md)
+
+同一功能提交上，以下命令编译并链接了 16 个测试目标，耗时 1 分 11 秒，退出码为 0。macOS 链接器报告调试版主程序的 `__eh_frame` 超过 16 MB，部分展开信息无法压入 compact unwind 表。本命令仅生成可执行文件。
+
+```sh
+cargo test --locked --offline --no-run --lib \
+  --test chat_restart --test setup_cli --test cybion --test workbench_mcp \
+  --test workbench_handoff --test workbench_acp_registry --test workbench_provider_chat \
+  --test provider_queue_crash --test workbench_remote_access --test workbench_oauth \
+  --test workbench_terminal_preview --test workbench_configuration \
+  --test workbench_managed_providers --test workbench_acceptance --test workbench_forge
+```
+
+本次交接优先复验以下三种故障窗口，每项记录客户端游标、Kar 输入/回合 ID、供应商会话/回合 ID、实际收到次数以及磁盘状态。测试使用可丢弃项目、独立聊天存储及测试账号。
+
+| 场景 | 接手方的检查 |
+| --- | --- |
+| 两端实时聊天与断线续收 | 两客户端同时订阅同一回合，在第二端断线时继续生成和编辑。用旧游标重连，核对两端内容、顺序、无重复，且在线端在回合结束前已收到事件。 |
+| 原生输入跨重启 | 排两条不同消息，分别在供应商接收前、接收后而 Kar 尚未记账时终止 Kar。比较原生历史与 Kar 回复。恢复原队列顺序，证据不足时只将队首标记待确认。 |
+| 按回合恢复工作区和模型 | 在三个回合中分别改文件并告诉模型不同事实。选择第二回合，核对 Git 字节、原生模型绑定、下一轮能访问的事实；重启后重试相同 command ID。 |
+
+本轮新增的分场景复验命令如下。未配置真实供应商、宿主或账号的命令只能提供本地协议证据。
+
+```sh
+cargo test --locked --test chat_restart -- workbench-thread-family
+cargo test --locked --test workbench_mcp -- apps
+cargo test --locked --test workbench_mcp -- provider-controls
+cargo test --locked --test workbench_mcp
+cargo test --locked --test workbench_configuration
+cargo test --locked --test provider_queue_crash
+cargo test --locked --test workbench_handoff
+cargo test --locked --test workbench_acceptance
+```
 
 按 [运行时 12 项](backend-acceptance.toml) 和 [工作台 8 项](backend-workbench-acceptance.toml) 的用户操作判断结果。运行时另含表内 20 个公共用例及适用的供应商行为。先保存 `git rev-parse HEAD`。在仓库根目录用 `cargo run --locked --example backend_suite` 查看命令、用例和环境。可按供应商或测试名筛选，执行模式会把版本、命令、返回码和日志保存在新建的输出目录。
 

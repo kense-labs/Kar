@@ -448,9 +448,10 @@ id = "delegated-delivery"
 phase = 2
 name = "委派子任务的唤醒、交付确认、远端完成与合并回父聊天"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
-kar = ["src/agents.rs"]
-status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
-test_target = "cargo test --locked --test protocol"
+kar = ["src/workbench/mcp/orchestrator/tasks.rs", "src/workbench/mcp/collaboration_tools/environment"]
+implementation_commit = "194c43c"
+status = "已有本地和远端委派、授权范围、稳定任务 ID、停止、父聊天结果回传及重启对账。完成通知显式确认/丢弃、变更父级唤醒策略仍待逐操作核实。"
+test_target = "cargo test --locked --test workbench_mcp"
 accept = "并发启动两个委派任务，设置唤醒条件，停止或完成子任务，从子聊天合并回父聊天。重放完成通知和确认，检查代次、目标父回合以及不会重复投递。"
 
 [[gap]]
@@ -515,18 +516,18 @@ upstream = ["apps/server/src/mcpApps/McpAppRequests.ts"]
 kar = ["src/workbench/mcp_apps.rs", "src/workbench/mcp_apps"]
 implementation_commit = "96ee4e7"
 status = "源卡片与原生聊天绑定，工具 schema、调用、资源和模型上下文有操作入口。当前按原生驱动能力拒绝不可用操作，重启与分叉需复验。"
-test_target = "cargo test --locked --test workbench_mcp"
+test_target = "cargo test --locked --test workbench_mcp -- apps"
 accept = "固定会话和工具调用身份，分别读工具 schema、调用、读取资源和更新模型上下文；重试、过期授权和不同聊天请求核对返回和供应商交互。"
 
 [[gap]]
 id = "provider-account-flows"
 phase = 2
 name = "供应商与 MCP 登录、反馈、额度及凭据交接"
-upstream = ["apps/server/src/provider/ProviderAuthService.ts"]
-kar = ["src/workbench/interactions.rs"]
-implementation_commit = "ac76ef5"
-status = "内置供应商和动态 ACP 的状态、登录、交互、取消及可用额度走供应商原生入口，交互流可绑定发起客户端。共享凭据停机会话、账号导入/重新连接、供应商反馈及第三方 MCP 服务登录另核，见 backend-account-workbench.md。"
-test_target = "cargo test --locked --test workbench_acp_registry"
+upstream = ["apps/server/src/provider/ProviderAuthService.ts", "apps/server/src/provider/CodexChatGptAuth.ts", "apps/server/src/mcpApps/McpSignIn.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/acp_registry/auth/builtin.rs", "src/account/binding.rs", "src/workbench/provider_controls.rs", "src/account/quota"]
+implementation_commit = "61650ba"
+status = "本机内置账号变更会按有效凭据目录协调同一工作台的聊天。Codex/Claude 可在活动会话中完成第三方 MCP 登录；Codex 支持供应商诊断反馈。ChatGPT 档案导入、重连及交接订阅仍缺；额度重置有 CLI 和 SDK 接口，工作台 HTTP 尚缺同等操作。"
+test_target = "cargo test --locked --test workbench_mcp -- provider-controls"
 accept = "从两个客户端启动、响应、完成、取消、观察授权流；验证来源客户端绑定。检查凭据移除、退出、MCP 登录、账号导入/重连、反馈和额度结果。"
 
 [[gap]]

@@ -28,7 +28,7 @@
 
 **本轮已接入的其他操作**
 
- 侧聊天随父聊天归档、恢复及删除，保留独立分叉和既有手动归档（`ca1731c`）。MCP App 的工具与资源请求绑定到原生卡片，按回合保存模型上下文（`96ee4e7`）。外部 MCP 客户端可发现、轮询和续收 12 类里程碑，最近 1,000 条跨重启保存（`0676d3f`）。桌面更新任务支持准备、提交及重启后与宿主对账（`917bdf4`）；签名发布包在真实桌面宿主安装仍需实测。 [侧聊天生命周期](backend-workbench-thread-family.md) · [MCP App 卡片](backend-mcp-app-session.md) · [桌面宿主协议](backend-workbench-configuration.md)
+侧聊天随父聊天归档、恢复及删除，保留独立分叉和既有手动归档（`ca1731c`）。MCP App 的工具与资源请求绑定到原生卡片，按回合保存模型上下文（`96ee4e7`）。外部 MCP 客户端可发现、轮询和续收 12 类里程碑，最近 1,000 条跨重启保存（`0676d3f`）。Codex 和 Claude 的活动会话可完成单个 MCP 服务登录，Codex 可向供应商上传诊断并返回回执（`61650ba`）。桌面更新任务支持准备、提交及重启后与宿主对账（`917bdf4`）；签名发布包在真实桌面宿主安装仍需实测。 [侧聊天生命周期](backend-workbench-thread-family.md) · [MCP App 卡片](backend-mcp-app-session.md) · [原生会话控制](backend-provider-session-controls.md) · [桌面宿主协议](backend-workbench-configuration.md)
 
 **待逐项确认的边界**
 
