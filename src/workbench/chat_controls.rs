@@ -147,6 +147,7 @@ impl Workbench {
         self.0.devices.maintain(self);
         self.0.task_folders.recover(self);
         self.0.pump.started.call_once(||{
+            super::relay_client::tunnel::start(self);
             let cleaner=Arc::downgrade(&self.0);
             tokio::spawn(async move {
                 loop {

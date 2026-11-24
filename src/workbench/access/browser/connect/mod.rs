@@ -143,7 +143,8 @@ fn state(auth: &Auth, available: &BTreeSet<String>) -> Value {
     let db = auth.app.0.access.registry.lock().unwrap();
     let s = &db.environment.cloud;
     let l = s.link.as_ref();
-    json!({"linked":l.is_some(),"relayUrl":l.map(|l|&l.url),"relayIssuer":l.map(|l|&l.issuer),"cloudUserId":l.map(|l|&l.user),"publishAgentActivity":s.publish,"holdWebhooksWhileOffline":s.hold,"requireConnectDeviceApproval":s.require_approval.unwrap_or(true),"linkableHere":available.contains("relay:configure")&&available.contains("relay:write")})
+    let tunnel=auth.app.managed_tunnel_status();
+    json!({"managedTunnelActive":tunnel["connected"], "managedTunnel":tunnel, "linked":l.is_some(),"relayUrl":l.map(|l|&l.url),"relayIssuer":l.map(|l|&l.issuer),"cloudUserId":l.map(|l|&l.user),"publishAgentActivity":s.publish,"holdWebhooksWhileOffline":s.hold,"requireConnectDeviceApproval":s.require_approval.unwrap_or(true),"linkableHere":available.contains("relay:configure")&&available.contains("relay:write")})
 }
 async fn get_state(State(auth): State<Auth>, h: HeaderMap, uri: Uri) -> AccessResult<Json<Value>> {
     let scopes = permits(&auth, &h, &Method::GET, &uri, "relay:read")?;
@@ -328,6 +329,7 @@ async fn reachability(
     permits(&auth, &h, &Method::POST, &uri, "relay:read")?;
     let id = environment_id(&auth)?;
     let origin = oauth::origin(&auth.app);
+    let tunnel=auth.app.managed_tunnel_status();
     let check = async {
         link(&auth).ok()?;
         let u = origin.as_ref().filter(|u| u.starts_with("https://"))?;
@@ -356,9 +358,9 @@ async fn reachability(
     }
     .await;
     Ok(Json(if check.is_some() {
-        json!({"status":"reachable","checkedAt":date(now()),"readyConnections":null,"protocol":"https"})
+        json!({"status":"reachable","managedTunnel":tunnel,"checkedAt":date(now()),"readyConnections":null,"protocol":"https"})
     } else {
-        json!({"status":"unreachable","checkedAt":date(now()),"cause":"unexpected_response","reason":"Public endpoint did not confirm this environment ID","hint":null,"fix":"Verify the relay/tunnel and KAR_PUBLIC_ORIGIN"})
+        json!({"status":"unreachable","managedTunnel":tunnel,"checkedAt":date(now()),"cause":"unexpected_response","reason":"Public endpoint did not confirm this environment ID","hint":null,"fix":"Verify the relay/tunnel and KAR_PUBLIC_ORIGIN"})
     }))
 }
 async fn public_descriptor(State(auth): State<Auth>) -> AccessResult<Json<Value>> {

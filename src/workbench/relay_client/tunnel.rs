@@ -121,11 +121,8 @@ async fn launch(app: &Workbench, token: &str, digest: String, ledger: &Path) -> 
     })
 }
 
-pub(in crate::workbench) fn start(
-    app: &Workbench,
-    mut changes: tokio::sync::watch::Receiver<()>,
-    config: impl Fn(&Workbench) -> Option<String> + Send + 'static,
-) {
+pub(in crate::workbench) fn start(app: &Workbench) {
+    let mut changes = app.connect_changes();
     let weak = std::sync::Arc::downgrade(&app.0);
     let ledger = app.0.state.join("relay-process.json");
     tokio::spawn(async move {
@@ -155,7 +152,9 @@ pub(in crate::workbench) fn start(
                 let Some(inner) = Weak::upgrade(&weak) else {
                     return;
                 };
-                config(&Workbench(inner))
+                Workbench(inner)
+                    .managed_tunnel_config()
+                    .map(|cfg: super::super::access::ManagedTunnelConfig| cfg.connector_token)
             };
             let digest = token.as_deref().map(super::super::access::digest);
             if current.as_mut().is_some_and(|c| {
