@@ -28,13 +28,19 @@ fn item(c: &Context, v: &Value, pull: bool) -> Result<Value, ForgeError> {
     let origin = c.kind == "cursor-origin";
     let n = number(&v["number"])?;
     let (owner, repo) = repository(c)?;
-    let state = if v["merged"] == true {
+    let state = if v["merged"] == true
+        || (origin && v["mergedAt"].is_string())
+        || (cafe
+            && v.pointer("/providerMerge/mergedAt")
+                .is_some_and(Value::is_string))
+    {
         "merged"
     } else {
         match v["state"].as_str().map(str::to_ascii_lowercase).as_deref() {
             Some("open") => "open",
             Some("closed") => "closed",
             Some("merged") => "merged",
+            None if origin && pull => "open",
             _ => return Err(invalid("object state")),
         }
     };
@@ -54,6 +60,15 @@ fn item(c: &Context, v: &Value, pull: bool) -> Result<Value, ForgeError> {
     };
     let mut out = json!({"number":n,"title":v["title"].as_str().ok_or_else(||invalid("object title"))?,
         "state":state,"url":url,"updated_at":v.get("updatedAt"),"body":v[if cafe{"description"}else{"body"}]});
+    if c.kind == "tanstack-source" {
+        out["updated_at"] = ["updatedAt", "mergedAt", "createdAt"]
+            .into_iter()
+            .filter_map(|key| v[key].as_i64())
+            .max()
+            .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok())
+            .map(|time| json!(time.to_string()))
+            .unwrap_or_default();
+    }
     if pull {
         let (base, head, bsha, hsha) = if origin {
             (

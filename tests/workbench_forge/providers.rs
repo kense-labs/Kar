@@ -163,6 +163,10 @@ async fn peer(
         "user" | "auth/principal" | "namespaces" | "org/_apis/connectionData"
     ) {
         json!({"username":"viewer","login":"viewer","nickname":"viewer","handle":"viewer","namespaces":[{"namespace":{"type":"user","slug":"viewer"}}],"authenticatedUser":{"providerDisplayName":"viewer"}})
+    } else if kind == "bitbucket"
+        && path == format!("repositories/fork/repo/commit/{}", &HEAD[..12])
+    {
+        json!({"hash":HEAD})
     } else if path.ends_with("/pullrequests/2/iterations") {
         json!({"value":[{"id":2,"sourceRefCommit":{"commitId":HEAD},"commonRefCommit":{"commitId":BASE}},{"id":1,"sourceRefCommit":{"commitId":"stale"},"commonRefCommit":{"commitId":"older"}}]})
     } else if path.ends_with("workitemtypes/Task/states") {
@@ -212,13 +216,18 @@ async fn peer(
             _ => "pulls",
         };
         if path == format!("{repo}/{coll}/2") && method == Method::GET {
-            native_pull(
+            let mut v = native_pull(
                 kind,
                 db.markers
                     .get(kind)
                     .map(String::as_str)
                     .unwrap_or("original"),
-            )
+            );
+            if kind == "bitbucket" {
+                v["source"]["commit"]["hash"] = json!(&HEAD[..12]);
+                v["source"]["repository"] = json!({"full_name":"fork/repo"});
+            }
+            v
         } else if path == format!("{repo}/{coll}") && method == Method::POST {
             let body = b["body"].as_str().or(b["description"].as_str()).unwrap();
             assert!(body.contains("<!-- kar-operation:"));

@@ -222,14 +222,38 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
             )
         }
         Operation::Pulls | Operation::Issues => list(c, pull, coll).await,
-        Operation::Pull { number: n } | Operation::Issue { number: n } => verify(
-            item(
-                c,
-                &get(c, project_resource(c, coll, Some(*n))?).await?,
-                pull,
-            )?,
-            *n,
-        ),
+        Operation::Pull { number: n } | Operation::Issue { number: n } => {
+            let raw = get(c, project_resource(c, coll, Some(*n))?).await?;
+            let mut item = verify(item(c, &raw, pull)?, *n)?;
+            if bb && pull {
+                for (field, side) in [("head_sha", "source"), ("base_sha", "destination")] {
+                    let Some(short) = item[field].as_str().filter(|s| {
+                        (7..40).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
+                    }) else {
+                        continue;
+                    };
+                    let repository = raw[side]["repository"]["full_name"]
+                        .as_str()
+                        .unwrap_or(&c.repository);
+                    let (owner, repo) = repository
+                        .split_once('/')
+                        .filter(|(o, r)| !o.is_empty() && !r.is_empty() && !r.contains('/'))
+                        .ok_or_else(|| invalid("Bitbucket commit repository"))?;
+                    let commit =
+                        get(c, path(c, &["repositories", owner, repo, "commit", short])?).await?;
+                    let hash = commit["hash"]
+                        .as_str()
+                        .filter(|s| {
+                            matches!(s.len(), 40 | 64)
+                                && s.bytes().all(|b| b.is_ascii_hexdigit())
+                                && s.starts_with(short)
+                        })
+                        .ok_or_else(|| invalid("Bitbucket commit identity"))?;
+                    item[field] = json!(hash);
+                }
+            }
+            Ok(item)
+        }
         Operation::CreatePull {
             head,
             base,
@@ -269,12 +293,18 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
                 (Method::PATCH, json!({"state":state}))
             };
             let updated = send(c, method, u, Some(body), true).await?;
-            verify(
+            let confirmed = verify(
                 item(c, &updated, false)
                     .map_err(|_| ForgeError::uncertain("issue state response unconfirmed"))?,
                 *n,
             )
-            .map_err(|_| ForgeError::uncertain("updated issue identity unconfirmed"))
+            .map_err(|_| ForgeError::uncertain("updated issue identity unconfirmed"))?;
+            if confirmed["state"] != *state {
+                return Err(ForgeError::uncertain(
+                    "forge did not confirm the requested issue state",
+                ));
+            }
+            Ok(confirmed)
         }
     }
 }
