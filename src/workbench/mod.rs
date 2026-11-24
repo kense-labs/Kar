@@ -174,7 +174,7 @@ impl Workbench {
                 thread_updates: tokio::sync::watch::channel(catalog.thread_state.sequence()).0,
                 catalog: Mutex::new(catalog),
                 clones: Default::default(),
-                signin:Default::default(),
+                signin: Default::default(),
                 pump: Default::default(),
                 access,
                 state,
@@ -419,6 +419,17 @@ impl Workbench {
         input: Uuid,
         text: String,
     ) -> Result<ChatTurn> {
+        self.send_attached(project, chat, input, text, Vec::new())
+            .await
+    }
+    pub async fn send_attached(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        input: Uuid,
+        text: String,
+        attachments: Vec<Uuid>,
+    ) -> Result<ChatTurn> {
         self.binding(project, chat)?;
         let app = self.clone();
         tokio::spawn(async move {
@@ -432,7 +443,7 @@ impl Workbench {
             owner
                 .as_ref()
                 .expect("open session")
-                .send(input, text)
+                .send_attached(input, text, attachments)
                 .await
         })
         .await

@@ -64,6 +64,9 @@ pub struct InputImage {
     path: Option<PathBuf>,
 }
 impl InputImage {
+    pub fn mime_type(&self) -> &'static str {
+        self.mime
+    }
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
             "image/png"

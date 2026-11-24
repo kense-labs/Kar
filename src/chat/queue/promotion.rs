@@ -51,7 +51,7 @@ impl QueuePromotion {
     }
 }
 pub(crate) enum Claim {
-    Deliver(String),
+    Deliver(crate::input::Input),
     Prior(QueuedInput),
 }
 
@@ -96,6 +96,7 @@ impl ChatStore {
         {
             return Err(Error::Refused("only a pending input can be steered".into()));
         }
+        let payload = self.attached_input(chat, entry.text.clone(), &entry.attachments)?;
         entry.promotion = Some(QueuePromotion {
             command_id: cmd,
             target,
@@ -104,10 +105,9 @@ impl ChatStore {
             returned_to_queue: false,
             error: None,
         });
-        let text = entry.text.clone();
         inbox.promotions.insert(cmd, (input, target));
         self.save_inbox(&inbox)?;
-        Ok(Claim::Deliver(text))
+        Ok(Claim::Deliver(payload))
     }
 
     pub(crate) fn finish_queue_steer(

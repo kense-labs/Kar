@@ -78,6 +78,8 @@ pub struct TimelineItem {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatTurn {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<super::Attachment>,
     /// Stable across restarts; also the caller's idempotency key.
     pub id: Uuid,
     pub started_ms: u64,
@@ -300,6 +302,7 @@ impl ChatTurn {
             id,
             started_ms,
             finished_ms: None,
+            attachments: Vec::new(),
             status: TurnStatus::Running,
             native_input_receipt: None,
             process_cleanups: Vec::new(),

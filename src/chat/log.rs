@@ -77,6 +77,8 @@ pub enum ChatUpdate {
         open_tools: Vec<String>,
     },
     Begin {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<super::Attachment>,
         id: Uuid,
         at: u64,
         text: String,
@@ -648,6 +650,7 @@ impl State {
                 self.turns[index].input_sent = true;
             }
             ChatUpdate::Begin {
+                attachments,
                 id,
                 at,
                 text,
@@ -655,6 +658,7 @@ impl State {
                 repositories,
             } => {
                 self.begin_turn(id, at, Some(text), None, before_tree, repositories)?;
+                self.turns.last_mut().unwrap().attachments = attachments;
                 if let Some(h) = self
                     .handoffs
                     .iter_mut()
@@ -1368,10 +1372,15 @@ impl Log {
         }
         Ok(())
     }
-    pub fn existing(&self, id: Uuid, text: &str) -> Result<Option<ChatTurn>> {
+    pub fn existing(
+        &self,
+        id: Uuid,
+        text: &str,
+        attachments: &[super::Attachment],
+    ) -> Result<Option<ChatTurn>> {
         self.healthy()?;
         if let Some(prior) = self.state.find(id) {
-            if prior.prompt() != Some(text) {
+            if prior.prompt() != Some(text) || prior.attachments != attachments {
                 return Err(Error::Refused(
                     "request id already belongs to a different prompt".into(),
                 ));
@@ -1400,10 +1409,12 @@ impl Log {
         id: Uuid,
         text: &str,
         before: &super::checkpoint::Capture,
+        attachments: Vec<super::Attachment>,
     ) -> Result<()> {
         self.ids = MessageIds::default();
         self.dispatched = false;
         self.commit(ChatUpdate::Begin {
+            attachments,
             id,
             at: super::now(),
             text: text.into(),
@@ -1597,6 +1608,7 @@ impl Log {
         self.ids = MessageIds::default();
         self.dispatched = true;
         self.commit(ChatUpdate::Begin {
+            attachments: Vec::new(),
             id: input
                 .filter(|id| self.state.find(*id).is_none())
                 .unwrap_or_else(Uuid::new_v4),

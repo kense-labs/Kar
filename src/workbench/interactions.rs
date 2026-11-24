@@ -72,9 +72,9 @@ async fn promote(
             .await
             .map_err(|e| Error::Closed(e.to_string()))??
         };
-        let text = match claim {
+        let payload = match claim {
             crate::chat::SteerClaim::Prior(receipt) => return Ok::<_, Error>(receipt),
-            crate::chat::SteerClaim::Deliver(text) => text,
+            crate::chat::SteerClaim::Deliver(payload) => payload,
         };
         let session = session.expect("claim requires an active controller");
         // Codex turn/steer waits for the native JSON-RPC result. Fire-and-forget transports
@@ -86,8 +86,8 @@ async fn promote(
                     req.target.turn,
                     req.target.request_id,
                     input,
-                    text,
-                    Vec::new(),
+                    payload.text,
+                    payload.images,
                 )
                 .await
         } else {

@@ -10,9 +10,22 @@ use uuid::Uuid;
 pub enum QueueAction {
     Hold,
     Resume,
-    Start { input: Uuid },
-    Edit { input: Uuid, text: String },
-    Reorder { input: Uuid, before: Option<Uuid> },
+    Start {
+        input: Uuid,
+    },
+    Edit {
+        input: Uuid,
+        text: String,
+    },
+    Replace {
+        input: Uuid,
+        text: String,
+        attachments: Vec<Uuid>,
+    },
+    Reorder {
+        input: Uuid,
+        before: Option<Uuid>,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -99,10 +112,19 @@ impl ChatStore {
                 inbox.entries.insert(head, entry);
                 inbox.released = Some(*input);
             }
-            QueueAction::Edit { input, text } => {
+            QueueAction::Edit { input, text } | QueueAction::Replace { input, text, .. } => {
                 let index = inbox.position(&state, *input)?;
                 crate::input::check_text(text, crate::input::text_limit(&state.info.runtime))?;
                 let entry = &mut inbox.entries[index];
+                if let QueueAction::Replace { attachments, .. } = &action {
+                    let refs = self.attachments(chat, attachments)?;
+                    if refs != entry.attachments {
+                        entry
+                            .initial_attachments
+                            .get_or_insert_with(|| entry.attachments.clone());
+                        entry.attachments = refs;
+                    }
+                }
                 if entry.text != *text {
                     entry.initial_text.get_or_insert_with(|| entry.text.clone());
                     entry.text.clone_from(text);

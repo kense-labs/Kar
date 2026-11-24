@@ -40,6 +40,8 @@ pub enum InputStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueuedInput {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<super::Attachment>,
     /// Also the id of the resulting chat turn.
     pub id: Uuid,
     pub text: String,
@@ -50,6 +52,10 @@ pub struct QueuedInput {
 
 #[derive(Serialize, Deserialize)]
 struct Entry {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<super::Attachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    initial_attachments: Option<Vec<super::Attachment>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     promotion: Option<QueuePromotion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,6 +109,7 @@ impl Entry {
     }
     fn receipt(&self, state: &super::log::State) -> QueuedInput {
         QueuedInput {
+            attachments: self.attachments.clone(),
             id: self.id,
             text: self.text.clone(),
             status: self.status(state),
@@ -199,21 +206,43 @@ impl ChatStore {
     }
     /// Persist before returning. Multiple producers are ordered by admission under the file lock.
     pub fn enqueue(&self, chat: Uuid, id: Uuid, text: impl Into<String>) -> Result<QueuedInput> {
-        self.change_input(chat, id, Some(text.into()))
+        self.enqueue_attached(chat, id, text, &[])
+    }
+    pub fn enqueue_attached(
+        &self,
+        chat: Uuid,
+        id: Uuid,
+        text: impl Into<String>,
+        attachment_ids: &[Uuid],
+    ) -> Result<QueuedInput> {
+        let attachments = self.attachments(chat, attachment_ids)?;
+        self.change_input(chat, id, Some((text.into(), attachments)))
     }
     /// Withdraw a pending input. Repeated withdrawal returns its original receipt.
     pub fn withdraw(&self, chat: Uuid, id: Uuid) -> Result<QueuedInput> {
         self.change_input(chat, id, None)
     }
-    fn change_input(&self, chat: Uuid, id: Uuid, text: Option<String>) -> Result<QueuedInput> {
+    fn change_input(
+        &self,
+        chat: Uuid,
+        id: Uuid,
+        text: Option<(String, Vec<super::Attachment>)>,
+    ) -> Result<QueuedInput> {
         let file = File::open(self.path(chat))?;
         let _lock = self.inbox_lock(chat)?;
         let state = self.read_state(file, chat)?;
         let turn = state.find(id);
         let mut inbox = self.read_inbox(&state.info)?;
-        let receipt = if let Some(text) = text {
+        let receipt = if let Some((text, attachments)) = text {
             if let Some(entry) = inbox.entries.iter().find(|e| e.id == id) {
-                if entry.text != text && entry.initial_text.as_ref() != Some(&text) {
+                let same = entry.text == text && entry.attachments == attachments;
+                let original = entry.initial_text.as_ref().unwrap_or(&entry.text) == &text
+                    && entry
+                        .initial_attachments
+                        .as_ref()
+                        .unwrap_or(&entry.attachments)
+                        == &attachments;
+                if !same && !original {
                     return Err(different_prompt());
                 }
                 return Ok(entry.receipt(&state));
@@ -221,7 +250,9 @@ impl ChatStore {
             if turn.is_none() {
                 state.check_new_prompt_id(id)?;
             }
-            if turn.is_some_and(|t| t.prompt() != Some(text.as_str())) {
+            if turn
+                .is_some_and(|t| t.prompt() != Some(text.as_str()) || t.attachments != attachments)
+            {
                 return Err(different_prompt());
             }
             if turn.is_none() {
@@ -231,6 +262,8 @@ impl ChatStore {
                 crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
             }
             let entry = Entry {
+                attachments,
+                initial_attachments: None,
                 initial_text: None,
                 promotion: None,
                 id,
@@ -299,6 +332,7 @@ fn different_prompt() -> Error {
 /// Executed by the actor after its busy check and before its first native prompt write.
 /// A durable Begin consumes the input even if the process dies before a receipt arrives.
 pub(crate) struct Admission {
+    pub(super) attachments: Vec<super::Attachment>,
     pub(super) store: ChatStore,
     pub(super) sink: Sink,
     pub(super) id: Uuid,
@@ -318,12 +352,15 @@ impl Admission {
         let chat = self.sink.0.lock().unwrap().state.info.id;
         let _lock = self.store.inbox_lock(chat)?;
         let mut log = self.sink.0.lock().unwrap();
-        if log.existing(self.id, &self.text)?.is_some() {
+        if log
+            .existing(self.id, &self.text, &self.attachments)?
+            .is_some()
+        {
             return Err(Error::Refused("input dispatch has already started".into()));
         }
         let inbox = self.store.read_inbox(&log.state.info)?;
         if let Some(entry) = inbox.entries.iter().find(|e| e.id == self.id) {
-            if entry.text != self.text {
+            if entry.text != self.text || entry.attachments != self.attachments {
                 return Err(different_prompt());
             }
             if entry
@@ -348,7 +385,12 @@ impl Admission {
         {
             return Err(Error::Busy);
         }
-        log.begin(self.id, &self.text, &self.checkpoint.before)?;
+        log.begin(
+            self.id,
+            &self.text,
+            &self.checkpoint.before,
+            self.attachments,
+        )?;
         log.checkpoint = Some(self.checkpoint);
         Ok(())
     }
@@ -378,12 +420,14 @@ impl Sender {
         let next = {
             let log = self.sink.0.lock().unwrap();
             log.healthy()?;
-            inbox.next(&log.state).map(|e| (e.id, e.text.clone()))
+            inbox
+                .next(&log.state)
+                .map(|e| (e.id, e.text.clone(), e.attachments.clone()))
         };
-        let Some((id, text)) = next else {
+        let Some((id, text, attachments)) = next else {
             return Ok(false);
         };
-        match self.run_turn(id, text.clone()).await {
+        match self.run_turn(id, text.clone(), attachments.clone()).await {
             Ok(_) => Ok(true),
             Err(error) => {
                 if self
@@ -404,6 +448,7 @@ impl Sender {
                     e.id == id
                         && (e.withdrawn
                             || e.text != text
+                            || e.attachments != attachments
                             || e.promotion.as_ref().is_some_and(|p| !p.returned_to_queue))
                 }) {
                     Ok(true)

@@ -1,4 +1,6 @@
 //! Persistent native chats. A per-chat file lock gives one process ownership of the provider session.
+mod attachments;
+pub use attachments::{Attachment, AttachmentKind};
 pub(crate) mod checkpoint;
 pub(crate) mod feed;
 mod handoff;
@@ -732,12 +734,28 @@ impl ChatSession {
     }
     /// A reused id returns the recorded turn. Reusing an id for different text is an error.
     pub async fn send(&self, id: Uuid, text: impl Into<String>) -> Result<ChatTurn> {
+        self.send_attached(id, text, Vec::new()).await
+    }
+    pub async fn send_attached(
+        &self,
+        id: Uuid,
+        text: impl Into<String>,
+        attachment_ids: Vec<Uuid>,
+    ) -> Result<ChatTurn> {
         let sender = self.sender.clone();
         let text = text.into();
         // Dispatch and completion outlive a disconnected caller.
-        tokio::spawn(async move { sender.run_turn(id, text).await })
-            .await
-            .map_err(|e| Error::Closed(e.to_string()))?
+        tokio::spawn(async move {
+            let store = sender.store.clone();
+            let chat = sender.info.id;
+            let attachments =
+                tokio::task::spawn_blocking(move || store.attachments(chat, &attachment_ids))
+                    .await
+                    .map_err(|e| Error::Closed(e.to_string()))??;
+            sender.run_turn(id, text, attachments).await
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?
     }
     pub async fn close(self) -> Result<()> {
         self.worker.request_stop();
@@ -752,8 +770,19 @@ impl ChatSession {
     }
 }
 impl Sender {
-    async fn run_turn(&self, id: Uuid, text: String) -> Result<ChatTurn> {
-        if let Some(turn) = self.sink.0.lock().unwrap().existing(id, &text)? {
+    async fn run_turn(
+        &self,
+        id: Uuid,
+        text: String,
+        attachments: Vec<Attachment>,
+    ) -> Result<ChatTurn> {
+        if let Some(turn) = self
+            .sink
+            .0
+            .lock()
+            .unwrap()
+            .existing(id, &text, &attachments)?
+        {
             return Ok(turn);
         }
         crate::input::check_text(&text, crate::input::text_limit(&self.info.runtime))?;
@@ -777,7 +806,7 @@ impl Sender {
         .map_err(|e| Error::Closed(e.to_string()))??;
         let expected = {
             let log = self.sink.0.lock().unwrap();
-            if let Some(turn) = log.existing(id, &text)? {
+            if let Some(turn) = log.existing(id, &text, &attachments)? {
                 return Ok(turn);
             }
             info.forked_from.as_ref().and_then(|f| {
@@ -814,7 +843,21 @@ impl Sender {
         .map_err(|e| Error::Closed(e.to_string()))??;
         let wire_text = self.sink.0.lock().unwrap().state.dispatch_text(&text);
         crate::input::check_text(&wire_text, crate::input::text_limit(&self.info.runtime))?;
+        let store_for_input = store.clone();
+        let chat = self.info.id;
+        let refs = attachments.clone();
+        let input = tokio::task::spawn_blocking(move || {
+            store_for_input.attached_input(chat, wire_text, &refs)
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
+        if !input.images.is_empty() && !self.session.capabilities().image_input {
+            return Err(Error::Unsupported(
+                "this provider does not accept images".into(),
+            ));
+        }
         let admission = Admission {
+            attachments,
             store: store.clone(),
             sink: self.sink.clone(),
             id,
@@ -826,11 +869,7 @@ impl Sender {
                 _lease: lease,
             },
         };
-        let result = match self
-            .session
-            .start_prompt(id, crate::input::Input::text(wire_text), Some(admission))
-            .await
-        {
+        let result = match self.session.start_prompt(id, input, Some(admission)).await {
             Ok(turn) => {
                 let receipt = self.sink.0.lock().unwrap().input_sent(id);
                 let outcome = turn.wait().await;

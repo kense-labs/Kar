@@ -224,6 +224,8 @@ async fn control_queue(
 }
 #[derive(Deserialize)]
 struct Input {
+    #[serde(default)]
+    attachments: Vec<Uuid>,
     id: Uuid,
     text: String,
 }
@@ -237,7 +239,10 @@ async fn enqueue(
         if app.archived(c) {
             return Err(Error::Refused("chat is archived".into()));
         }
-        let receipt = app.0.chats.enqueue(c, m.id, m.text)?;
+        let receipt = app
+            .0
+            .chats
+            .enqueue_attached(c, m.id, m.text, &m.attachments)?;
         app.0.pump.errors.lock().unwrap().remove(&c);
         app.0.pump.wake.notify_one();
         Ok(receipt)

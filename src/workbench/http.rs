@@ -187,6 +187,8 @@ async fn models(
 
 #[derive(Deserialize)]
 struct Message {
+    #[serde(default)]
+    attachments: Vec<Uuid>,
     id: Uuid,
     text: String,
 }
@@ -195,7 +197,9 @@ async fn send(
     Path((p, c)): Path<(Uuid, Uuid)>,
     Json(m): Json<Message>,
 ) -> Reply<ChatTurn> {
-    Ok(Json(app.send(p, c, m.id, m.text).await?))
+    Ok(Json(
+        app.send_attached(p, c, m.id, m.text, m.attachments).await?,
+    ))
 }
 async fn handoffs(
     State(app): State<Workbench>,
