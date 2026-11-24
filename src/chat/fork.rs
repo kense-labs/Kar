@@ -110,7 +110,7 @@ impl LiveFork {
         turn: Uuid,
         child: Uuid,
         destination: PathBuf,
-        configure: impl FnOnce(&mut SessionOptions),
+        configure: impl FnOnce(&str, &mut SessionOptions) -> Result<()>,
     ) -> Result<super::ChatHistory> {
         let sender = self.sender.upgrade().ok_or(Error::Busy)?;
         if sender.session.is_closed() {
@@ -411,6 +411,22 @@ impl ChatStore {
         policy: ForkPolicy,
         configure: impl FnOnce(&mut SessionOptions),
     ) -> Result<super::ChatHistory> {
+        self.fork_request(source, turn, child_id, worktree, policy, None, |_, opts| {
+            configure(opts);
+            Ok(())
+        })
+        .await
+    }
+
+    pub(crate) async fn workbench_fork(
+        &self,
+        source: Uuid,
+        turn: Uuid,
+        child_id: Uuid,
+        worktree: Option<PathBuf>,
+        policy: ForkPolicy,
+        configure: impl FnOnce(&str, &mut SessionOptions) -> Result<()>,
+    ) -> Result<super::ChatHistory> {
         self.fork_request(source, turn, child_id, worktree, policy, None, configure)
             .await
     }
@@ -423,7 +439,7 @@ impl ChatStore {
         worktree: Option<PathBuf>,
         policy: ForkPolicy,
         live: Option<(Sink, SessionOptions)>,
-        configure: impl FnOnce(&mut SessionOptions),
+        configure: impl FnOnce(&str, &mut SessionOptions) -> Result<()>,
     ) -> Result<super::ChatHistory> {
         let path = worktree.as_deref();
         if source == child_id {
@@ -457,7 +473,7 @@ impl ChatStore {
         let mut launch = self
             .prepare_fork(&source, turn, opts, worktree.is_some())
             .await?;
-        configure(&mut launch.options);
+        configure(&launch.owner.runtime, &mut launch.options)?;
         crate::stream::retention::check_limit(launch.options.retained_bytes)?;
         let store = self.clone();
         // Closing the HTTP stream does not cancel native dispatch, publication, or release.
@@ -1016,6 +1032,20 @@ impl ChatSession {
         worktree: Option<PathBuf>,
         policy: ForkPolicy,
         configure: impl FnOnce(&mut SessionOptions),
+    ) -> Result<super::ChatHistory> {
+        self.workbench_fork(turn, child_id, worktree, policy, |_, opts| {
+            configure(opts);
+            Ok(())
+        })
+        .await
+    }
+    pub(crate) async fn workbench_fork(
+        &self,
+        turn: Uuid,
+        child_id: Uuid,
+        worktree: Option<PathBuf>,
+        policy: ForkPolicy,
+        configure: impl FnOnce(&str, &mut SessionOptions) -> Result<()>,
     ) -> Result<super::ChatHistory> {
         self.sender
             .store

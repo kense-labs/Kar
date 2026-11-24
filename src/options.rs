@@ -7,6 +7,8 @@ pub(crate) mod mcp_file;
 pub(crate) mod opencode;
 pub(crate) mod qwen_memory;
 pub(crate) mod user_configuration;
+mod workbench_registration;
+pub use workbench_registration::WorkbenchRegistration;
 use crate::{Error, Result, SessionOptions};
 pub use qwen_memory::{NativeMemory, NativeMemoryDefault};
 use serde::{Deserialize, Serialize};
@@ -366,7 +368,11 @@ pub(crate) fn session_secrets(opts: &SessionOptions) -> Vec<String> {
             }
         }
     }
-    for server in opts.mcp_servers.values() {
+    for server in opts
+        .mcp_servers
+        .values()
+        .chain(opts.workbench_registration.as_ref().map(|r| &r.http))
+    {
         values.extend(server.secret_values().filter(|s| s.len() >= 8).cloned());
         if let Some(headers) = server.headers() {
             for (k, v) in headers {

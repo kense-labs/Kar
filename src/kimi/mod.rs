@@ -100,8 +100,11 @@ pub(crate) async fn open(
         && let Some(mut web) = Web::start(rt, &opts).await?
     {
         let mut workspace = None;
-        match negotiate(&mut web, &opts, &mut workspace).await {
+        let mut kap_options = opts.clone();
+        kap_options.add_workbench_server(crate::McpTransport::Http);
+        match negotiate(&mut web, &kap_options, &mut workspace).await {
             Ok(Some((socket, id, initial))) => {
+                let opts = kap_options;
                 let journal = rt.session_journal(opts.retained_bytes)?;
                 journal.bind_root(&id);
                 let info = json!({"sessionId":id,"protocol":"kap"});

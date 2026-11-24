@@ -169,6 +169,7 @@ pub(crate) async fn fork(
     through: Option<&str>,
 ) -> Result<Session> {
     let mut parent = options.clone();
+    parent.workbench_registration = None;
     parent.resume = Some(source.to_owned());
     // Apply the requested child settings only when opening its confirmed ID.
     parent.model = None;

@@ -72,7 +72,7 @@ mod options;
 pub mod provider_instance;
 #[cfg(not(target_arch = "wasm32"))]
 pub use options::{
-    McpServer, NativeMemory, NativeMemoryDefault, SessionLogUpload, SessionSettings,
+    McpServer, WorkbenchRegistration, NativeMemory, NativeMemoryDefault, SessionLogUpload, SessionSettings,
     UserConfigurationCategory,
 };
 #[cfg(not(target_arch = "wasm32"))]

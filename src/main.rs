@@ -40,6 +40,9 @@ enum Action {
     },
     /// Control the single device a workbench chat granted to its agent.
     DeviceAgent(device_agent_cli::DeviceAgent),
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    WorkbenchMcpBridge { socket: PathBuf },
     /// Manage repositories and independent chat worktrees.
     Git(git_cli::Git),
     /// Report installed executables, versions and pre-open session capabilities.
@@ -434,6 +437,18 @@ fn json_line(value: &impl serde::Serialize, mut out: impl Write) -> Result<()> {
 async fn execute(command: Action) -> Result<()> {
     match command {
         Action::Chat(chat) => chat.run().await?,
+        #[cfg(target_os = "macos")]
+        Action::WorkbenchMcpBridge { socket } => {
+            use std::{io, net::Shutdown, os::unix::net::UnixStream};
+            let mut reader = UnixStream::connect(socket)?;
+            let mut writer = reader.try_clone()?;
+            // The workbench can revoke the socket while a vendor keeps stdin open.
+            std::thread::spawn(move || {
+                let _ = io::copy(&mut io::stdin().lock(), &mut writer);
+                let _ = writer.shutdown(Shutdown::Write);
+            });
+            io::copy(&mut reader, &mut io::stdout().lock())?;
+        }
         Action::Workbench { roots, state, port } => {
             let store = match state {
                 Some(path) => kar::chat::ChatStore::open(path)?,

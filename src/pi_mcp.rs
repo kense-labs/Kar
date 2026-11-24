@@ -10,6 +10,20 @@ const PLUGIN: Option<&[u8]> = Some(include_bytes!(concat!(env!("OUT_DIR"), "/pi-
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const PLUGIN: Option<&[u8]> = None;
 
+/// Only opt an ordinary Pi chat into the SDK path after its Node host loads our addon.
+pub(crate) async fn optional_sdk(
+    rt: &crate::Runtime,
+    opts: &SessionOptions,
+    version: Option<&str>,
+) -> Option<Launch> {
+    let sdk = Launch::resolve(rt, opts, version).await.ok()?;
+    let dir = tempfile::tempdir().ok()?;
+    let addon = dir.path().join("probe.node");
+    fs::write(&addon, PLUGIN?).ok()?;
+    sdk.check_plugin(&addon, opts).await.ok()?;
+    Some(sdk)
+}
+
 fn literal_values(
     values: &std::collections::BTreeMap<String, String>,
 ) -> serde_json::Map<String, Value> {

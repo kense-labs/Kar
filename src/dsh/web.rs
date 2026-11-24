@@ -64,6 +64,7 @@ impl Web {
             .stdout(Stdio::piped());
         let _startup = super::profile::session_lock(opts, "web").await?;
         let child = crate::process::OwnedProcess::spawn(cmd)?;
+        opts.bind_bridge_process(crate::resources::Root::new(child.id(), None).as_ref());
         let mut web = Self {
             child,
             timeout: opts.handshake_timeout,

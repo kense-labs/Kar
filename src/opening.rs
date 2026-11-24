@@ -34,6 +34,7 @@ pub(crate) fn qwen_missing_auth(result: &Value) -> Option<OpenError> {
 
 #[derive(Clone, Debug)]
 pub(crate) enum OpenStep {
+    Workbench(Box<OpenStep>),
     Open,
     Model,
     Target(String),
@@ -44,6 +45,12 @@ pub(crate) enum OpenStep {
 }
 
 impl OpenStep {
+    pub(crate) fn base(&self) -> &Self {
+        match self {
+            Self::Workbench(step) => step,
+            step => step,
+        }
+    }
     pub(crate) fn error(
         &self,
         protocol: Protocol,
@@ -64,6 +71,15 @@ impl OpenStep {
             code,
             cause: Some(cause()),
         };
+        if let Self::Workbench(step) = self {
+            if protocol == Protocol::Acp
+                && code == -32602
+                && native.to_string().to_ascii_lowercase().contains("mcp")
+            {
+                return Some(runtime(FailureClass::InvalidRequest, None));
+            }
+            return step.error(protocol, acp, method, native);
+        }
         if protocol == Protocol::Acp {
             if code == -32000 {
                 return Some(runtime(FailureClass::Auth, None));

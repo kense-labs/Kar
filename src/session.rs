@@ -190,7 +190,7 @@ impl Session {
     }
     pub(crate) async fn open_with_replay(
         runtime: &Runtime,
-        options: SessionOptions,
+        mut options: SessionOptions,
         fork: Option<(&str, Option<&str>)>,
         child: Option<Uuid>,
         replay: bool,
@@ -198,6 +198,38 @@ impl Session {
     ) -> Result<Self> {
         if runtime.protocol == Protocol::Muse && fork.is_some() {
             return Err(Error::Unsupported("native Muse fork is unavailable on this adapter".into()));
+        }
+        let explicit_mcp = !options.mcp_servers.is_empty();
+        let probed_version = if options.workbench_registration.is_some()
+            && version.is_none()
+            && matches!(
+                runtime.protocol,
+                Protocol::Factory | Protocol::Qwen | Protocol::Pi
+            ) {
+            runtime.launch_version(&options).await.ok()
+        } else {
+            None
+        };
+        let version = version.or(probed_version.as_deref());
+        if options.workbench_registration.is_some() {
+            match runtime.protocol {
+                Protocol::Codex | Protocol::Claude | Protocol::Qoder => {
+                    options.add_workbench_server(crate::McpTransport::Http)
+                }
+                Protocol::Factory | Protocol::Qwen => {
+                    let support = McpSupport::new(runtime.protocol, &runtime.id, version);
+                    if let Some(transports) = support.transports {
+                        let transport = if transports.contains(&crate::McpTransport::Http) {
+                            crate::McpTransport::Http
+                        } else {
+                            crate::McpTransport::Stdio
+                        };
+                        options.add_workbench_server(transport);
+                    }
+                }
+                Protocol::Acp if runtime.id == "dsh" => options.add_dsh_workbench(version),
+                _ => {}
+            }
         }
         let journal = runtime.session_journal(options.retained_bytes)?;
         crate::options::launch_args::validate(runtime, &options, fork.is_some())?;
@@ -238,13 +270,27 @@ impl Session {
                 options.handshake_timeout,
             ).await?;
         }
+        let optional_pi_sdk = if runtime.protocol == Protocol::Pi
+            && options.workbench_registration.is_some()
+            && crate::options::mcp_capabilities::release(version.unwrap_or(""))
+                .is_some_and(|v| v >= semver::Version::new(1, 4, 0))
+        {
+            crate::pi_mcp::optional_sdk(runtime, &options, version).await
+        } else {
+            None
+        };
+        if optional_pi_sdk.is_some() {
+            options.add_workbench_server(crate::McpTransport::Http);
+        }
         let pi_mcp_entries = if runtime.protocol == Protocol::Pi && !options.mcp_servers.is_empty()
         {
             Some(crate::pi_mcp::entries(&options)?)
         } else {
             None
         };
-        let pi_sdk = if runtime.protocol == Protocol::Pi
+        let pi_sdk = if optional_pi_sdk.is_some() {
+            optional_pi_sdk
+        } else if runtime.protocol == Protocol::Pi
             && (options.settings.model_requests.is_some() || pi_mcp_entries.is_some())
         {
             Some(crate::pi_sdk::Launch::resolve(runtime, &options, version).await?)
@@ -634,6 +680,7 @@ impl Session {
             config.spawned(pid);
         }
         let process_root = crate::resources::Root::new(child_process.id(), None);
+        options.bind_bridge_process(process_root.as_ref());
         let native_memory = memory.as_ref().and_then(|m| m.effective);
         let preflight_secrets = Arc::new(secrets.clone());
         let commands = Actor::start(
@@ -910,6 +957,30 @@ impl Session {
                         "ACP server did not advertise HTTP MCP".into(),
                     ));
                 }
+                let before = options.mcp_servers.len();
+                if runtime.id != "dsh" && options.workbench_registration.is_some() {
+                    let http = init.pointer("/agentCapabilities/mcpCapabilities/http")
+                        == Some(&Value::Bool(true));
+                    let sensitive = crate::options::availability::credential_refusal(
+                        runtime.protocol,
+                        &runtime.id,
+                    )
+                    .is_some();
+                    if http && !sensitive && !matches!(runtime.id.as_str(), "kiro" | "fx") {
+                        options.add_workbench_server(crate::McpTransport::Http);
+                    } else if http
+                        || session
+                            .mcp
+                            .transports
+                            .is_some_and(|s| s.contains(&crate::McpTransport::Stdio))
+                        || matches!(runtime.id.as_str(), "kiro" | "fx" | "cursor" | "devin")
+                    {
+                        // Standard ACP stdio carries no credentials. Some legacy versions
+                        // reject nonempty mcpServers explicitly during parameter validation.
+                        options.add_workbench_server(crate::McpTransport::Stdio);
+                    }
+                }
+                let optional_acp = options.mcp_servers.len() > before;
                 let servers: Vec<_> = options
                     .mcp_servers
                     .iter()
@@ -992,25 +1063,30 @@ impl Session {
                     ("session/new", OpenStep::Open)
                 };
                 let open_limit = options.acp_timeout(&runtime.id, method);
-                session.info = if crate::workbench::acp_registry::dynamic(&runtime.id) {
-                    let first = session
-                        .acp_rpc(method, params.clone(), Some(step.clone()), open_limit)
-                        .await;
-                    match first {
-                        Err(Error::Open(e)) if matches!(&*e, crate::OpenError::RuntimeFailure {
-                            cause: Some(c), .. } if c.native["code"] == -32000) => {
-                            let Some(id) = crate::workbench::acp_registry::auth::headless(
-                                &init, options.acp_auth_method.as_deref(),
-                            )? else {
-                                return Err(Error::Open(e));
+                let mut include_workbench = optional_acp;
+                let mut authenticated = false;
+                session.info = loop {
+                    let open_step = if include_workbench {
+                        OpenStep::Workbench(Box::new(step.clone()))
+                    } else { step.clone() };
+                    let opened = session.acp_rpc(method, params.clone(), Some(open_step), open_limit).await;
+                    match opened {
+                        Err(Error::Open(error)) if include_workbench && error.rejected_mcp_parameters(method) => {
+                            if let Some(entries) = params["mcpServers"].as_array_mut() {
+                                entries.retain(|e| e["name"] != crate::WorkbenchRegistration::NAME);
+                            }
+                            include_workbench = false;
+                        }
+                        Err(Error::Open(error)) if !authenticated && crate::workbench::acp_registry::dynamic(&runtime.id)
+                            && matches!(&*error, crate::OpenError::RuntimeFailure {cause: Some(c), ..} if c.native["code"] == -32000) => {
+                            let Some(id) = crate::workbench::acp_registry::auth::headless(&init, options.acp_auth_method.as_deref())? else {
+                                return Err(Error::Open(error));
                             };
                             session.open_rpc("authenticate", json!({"methodId":id}), OpenStep::Open).await?;
-                            session.acp_rpc(method, params, Some(step), open_limit).await?
+                            authenticated = true;
                         }
-                        opened => opened?,
+                        result => break result?,
                     }
-                } else {
-                    session.acp_rpc(method, params, Some(step), open_limit).await?
                 };
                 if let Some(resume) = &options.resume
                     && fork.is_none()
@@ -1226,13 +1302,14 @@ impl Session {
             Protocol::Pi => {
                 session.info = session.rpc("get_state", json!({})).await?;
                 if let Some(path) = pi_mcp_receipt {
-                    if !std::fs::read(path).is_ok_and(|v| v == b"registered") {
+                    if std::fs::read(path).is_ok_and(|v| v == b"registered") {
+                        session.mcp.transports = Some(crate::options::mcp_capabilities::BOTH);
+                    } else if explicit_mcp {
                         let _ = session.close().await;
                         return Err(Error::Refused(
                             "Pi did not register the requested MCP servers".into(),
                         ));
                     }
-                    session.mcp.transports = Some(crate::options::mcp_capabilities::BOTH);
                 }
                 session.native_fork = session.info["sessionFile"].is_string();
                 let model = &session.info["model"];

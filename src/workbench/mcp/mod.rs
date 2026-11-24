@@ -6,6 +6,8 @@ mod issues;
 pub(super) use issues::{Policy, permission_routes};
 mod registry;
 pub(in crate::workbench) mod collaboration_tools;
+#[cfg(target_os = "macos")]
+mod stdio_bridge;
 mod preview_tools;
 mod html;
 pub(in crate::workbench) use preview_tools::DevicePermission;

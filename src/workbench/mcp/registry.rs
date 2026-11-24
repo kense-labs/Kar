@@ -1,4 +1,5 @@
 use super::*;
+use crate::WorkbenchRegistration;
 use crate::{McpServer, SessionOptions};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -9,7 +10,6 @@ use std::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-pub(super) const SERVER: &str = "kar_workbench";
 const IDLE: Duration = Duration::from_secs(24 * 3600);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Identity {
@@ -65,14 +65,16 @@ impl Grant {
 }
 pub(in crate::workbench) struct Lease {
     grant: Arc<Grant>,
-    entry: McpServer,
+    registration: WorkbenchRegistration,
 }
 impl Lease {
     pub(in crate::workbench) fn configure(&self, opts: &mut SessionOptions) {
-        opts.mcp_servers.insert(SERVER.into(), self.entry.clone());
+        if !opts.mcp_servers.contains_key(WorkbenchRegistration::NAME) {
+            opts.workbench_registration = Some(self.registration.clone());
+        }
     }
     pub(in crate::workbench) fn attach(&self, chat: &mut crate::chat::ChatSession) {
-        chat.forget_launch_server(SERVER);
+        chat.forget_workbench_registration();
         let _ = self.grant.process.set(chat.live_session());
     }
     pub(super) fn tools_changed(&self) {
@@ -139,7 +141,7 @@ impl Registry {
         let Some(addr) = self.endpoint.get() else {
             return Ok(None);
         };
-        if !matches!(runtime, "codex" | "claude") {
+        if !crate::runtimes().iter().any(|r| r.id == runtime) {
             return Ok(None);
         }
         let raw = access::credential()?;
@@ -157,15 +159,36 @@ impl Registry {
         let mut grants = self.grants.lock().unwrap();
         grants.retain(|_, g| g.strong_count() > 0);
         grants.insert(access::digest(&raw), Arc::downgrade(&grant));
+        drop(grants);
+        #[allow(unused_mut)]
+        let mut registration = WorkbenchRegistration::new(McpServer::Http {
+            url: format!("http://{addr}/mcp"),
+            headers: BTreeMap::from([
+                ("Authorization".into(), format!("Bearer {raw}")),
+                ("Kar-Tool-Exposure".into(), "deferred".into()),
+            ]),
+        });
+        #[cfg(target_os = "macos")]
+        if matches!(
+            runtime,
+            "dsh"
+                | "devin"
+                | "cursor"
+                | "antigravity"
+                | "kiro"
+                | "fx"
+                | "opencode"
+                | "kimi"
+                | "codebuddy"
+                | "grok"
+                | "qwen"
+        ) {
+            registration.stdio =
+                super::stdio_bridge::listen(*addr, raw, &grant, &registration).ok();
+        }
         Ok(Some(Lease {
             grant,
-            entry: McpServer::HostedHttp {
-                url: format!("http://{addr}/mcp"),
-                headers: BTreeMap::from([
-                    ("Authorization".into(), format!("Bearer {raw}")),
-                    ("Kar-Tool-Exposure".into(), "deferred".into()),
-                ]),
-            },
+            registration,
         }))
     }
     pub(super) fn resolve(&self, key: &str) -> Option<Arc<Grant>> {

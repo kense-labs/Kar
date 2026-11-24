@@ -2199,7 +2199,10 @@ impl Actor {
             && v.get("error").is_none()
         {
             let reported = v["result"]["sessionId"].as_str().filter(|s| !s.is_empty());
-            let confirmed = match (p.method.as_str(), p.open.as_ref()) {
+            let confirmed = match (
+                p.method.as_str(),
+                p.open.as_ref().map(crate::opening::OpenStep::base),
+            ) {
                 ("session/new" | "session/fork", Some(_)) => reported,
                 ("session/load" | "session/resume", Some(crate::opening::OpenStep::Target(id)))
                     if reported.is_none_or(|s| s == id) =>

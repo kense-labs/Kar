@@ -55,12 +55,25 @@ impl Session {
             }
             ("session/start", OpenStep::Open)
         };
-        if !opts.mcp_servers.is_empty() {
+        let workbench = supports_mcp
+            .then_some(opts.workbench_registration.as_ref())
+            .flatten()
+            .filter(|_| {
+                !opts
+                    .mcp_servers
+                    .contains_key(crate::WorkbenchRegistration::NAME)
+            });
+        if !opts.mcp_servers.is_empty() || workbench.is_some() {
             if !supports_mcp {
                 return Err(Error::Unsupported("Muse did not grant sessionMcp".into()));
             }
             let mut servers = serde_json::Map::new();
-            for (key, server) in &opts.mcp_servers {
+            for (key, server, mode) in opts
+                .mcp_servers
+                .iter()
+                .map(|(k, s)| (k.as_str(), s, "required"))
+                .chain(workbench.map(|r| (crate::WorkbenchRegistration::NAME, &r.http, "optional")))
+            {
                 let (McpServer::Http { url, headers } | McpServer::HostedHttp { url, headers }) =
                     server
                 else {
@@ -68,7 +81,10 @@ impl Session {
                         "Muse session MCP needs a streamable HTTP server".into(),
                     ));
                 };
-                servers.insert(key.clone(),json!({"mode":"optional","transport":"streamableHttp","url":url,"headers":headers}));
+                servers.insert(
+                    key.into(),
+                    json!({"mode":mode,"transport":"streamableHttp","url":url,"headers":headers}),
+                );
             }
             params["config"] = json!({"mcpServers":servers});
         }

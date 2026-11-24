@@ -4,6 +4,9 @@ mod muse_continuation;
 #[allow(dead_code)]
 #[path = "support/workbench_server.rs"]
 mod workbench_server;
+use workbench_server as server;
+#[path = "workbench_provider_chat/registration.rs"]
+mod registration;
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, Write},
@@ -25,17 +28,22 @@ fn acp(id: &str, args: &[String]) {
     };
     assert_eq!(args, expected);
     let session = format!("native-{id}");
-    let mut configured = false;
+    let mut configured = id == "cursor";
+    let mut rejected = false;
     for line in std::io::stdin().lock().lines() {
         let request: Value = serde_json::from_str(&line.unwrap()).unwrap();
         let params = &request["params"];
         let value = match request["method"].as_str().unwrap() {
-            "initialize" => json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true}}),
+            "initialize" => json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true,
+                "mcpCapabilities":{"http":id=="cursor"}}}),
             "session/new" | "session/load" => {
                 assert_eq!(
                     params["cwd"].as_str(),
                     std::env::current_dir().unwrap().to_str()
                 );
+                if registration::acp(&request, &mut rejected) {
+                    continue;
+                }
                 if id == "fx" {
                     assert_eq!(params["_meta"]["fx"]["profileMcpServers"], true);
                 }
@@ -99,7 +107,7 @@ fn muse(args: &[String]) {
                     p["capabilities"]["requestedCapabilities"],
                     json!(["sessionMcp"])
                 );
-                json!({"schema":{"version":1,"fingerprint":"fixture"},"grantedCapabilities":[]})
+                json!({"schema":{"version":1,"fingerprint":"fixture"},"grantedCapabilities":if registration::mode().as_deref()==Some("muse") {json!(["sessionMcp"])} else {json!([])}})
             }
             "initialized" => {
                 initialized = true;
@@ -107,6 +115,7 @@ fn muse(args: &[String]) {
             }
             "session/start" | "session/resume" => {
                 assert!(initialized);
+                registration::muse(&req);
                 let id = p["sessionId"].as_str().unwrap();
                 assert_eq!(uuid::Uuid::parse_str(id).unwrap().get_version_num(), 7);
                 assert_eq!(p["permissionProfile"], ":ask-me");
@@ -302,7 +311,26 @@ fn main() {
         muse_continuation::run();
         return;
     }
+    if args.first().map(String::as_str) == Some("model-tools") {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                registration::scenario(),
+            )
+            .await
+            .unwrap();
+        });
+        return;
+    }
     for provider in ["kiro", "fx", "muse"] {
         exercise(provider);
     }
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            registration::scenario(),
+        )
+        .await
+        .unwrap();
+    });
 }

@@ -174,3 +174,11 @@ impl OpenError {
         self.into()
     }
 }
+
+impl OpenError {
+    pub(crate) fn rejected_mcp_parameters(&self, method: &str) -> bool {
+        matches!(self, Self::RuntimeFailure { cause:Some(c), .. }
+            if c.method == method && c.native["code"] == -32602
+            && c.native.to_string().to_ascii_lowercase().contains("mcp"))
+    }
+}

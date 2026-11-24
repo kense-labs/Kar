@@ -442,6 +442,9 @@ pub struct SessionOptions {
     pub settings: crate::SessionSettings,
     /// Optional volatile destination for next prompts from this controller's root user turns.
     pub prompt_suggestions: Option<crate::PromptSuggestionSource>,
+    /// Volatile registration supplied by the workbench that owns this controller.
+    #[doc(hidden)]
+    pub workbench_registration: Option<crate::WorkbenchRegistration>,
     pub mcp_servers: BTreeMap<String, crate::McpServer>,
     pub env: BTreeMap<OsString, OsString>,
     /// Names removed from the inherited environment. Explicit `env` values take precedence.
@@ -491,6 +494,7 @@ impl SessionOptions {
             launch_args: Vec::new(),
             settings: Default::default(),
             prompt_suggestions: None,
+            workbench_registration: None,
             mcp_servers: BTreeMap::new(),
             env: BTreeMap::new(),
             unset_env: Default::default(),

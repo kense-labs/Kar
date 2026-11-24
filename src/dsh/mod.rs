@@ -73,6 +73,13 @@ pub(crate) async fn open(
     recover: Option<&crate::chat::ChatTurn>,
     version: Option<&str>,
 ) -> Result<Session> {
+    if opts.workbench_registration.is_some() {
+        let release = release(rt, &opts, version)
+            .await
+            .ok()
+            .map(|v| v.to_string());
+        opts.add_dsh_workbench(release.as_deref());
+    }
     opts.cwd = opts.cwd.canonicalize()?;
     if opts.cwd.to_str().is_none() {
         return Err(Error::Unsupported(

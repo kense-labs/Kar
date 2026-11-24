@@ -516,6 +516,15 @@ async fn fork(
             .await?
     } else {
         tokio::spawn(async move {
+            let mut child_lease = None;
+            let configure = |runtime: &str, opts: &mut SessionOptions| -> Result<()> {
+                isolate_host_token(opts);
+                child_lease = app.0.mcp.issue(project, request.id, runtime)?;
+                if let Some(lease) = &child_lease {
+                    lease.configure(opts);
+                }
+                Ok(())
+            };
             let slot = app.controller(chat);
             app.binding(p, chat)?;
             if app.archived(chat) {
@@ -526,12 +535,20 @@ async fn fork(
                 Err(_) => {
                     let destination = destination.ok_or(Error::Busy)?;
                     let live = slot.fork.lock().unwrap().clone().ok_or(Error::Busy)?;
-                    return live.fork(request.turn, request.id, destination, isolate_host_token).await;
+                    return live
+                        .fork(request.turn, request.id, destination, configure)
+                        .await;
                 }
             };
             if let Some(source) = owner.as_ref().filter(|s| !s.is_closed()) {
                 source
-                    .fork_at_with_policy(request.turn, request.id, destination, request.policy, isolate_host_token)
+                    .workbench_fork(
+                        request.turn,
+                        request.id,
+                        destination,
+                        request.policy,
+                        configure,
+                    )
                     .await
             } else {
                 if let Some(closed) = owner.take() {
@@ -539,13 +556,13 @@ async fn fork(
                 }
                 app.0
                     .chats
-                    .fork_at_with_policy(
+                    .workbench_fork(
                         chat,
                         request.turn,
                         request.id,
                         destination,
                         request.policy,
-                        isolate_host_token,
+                        configure,
                     )
                     .await
             }

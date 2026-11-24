@@ -733,9 +733,9 @@ impl ChatSession {
     pub(crate) fn is_closed(&self) -> bool {
         self.sender.session.is_closed()
     }
-    pub(crate) fn forget_launch_server(&mut self, name: &str) {
+    pub(crate) fn forget_workbench_registration(&mut self) {
         // A native fork receives its own authority when its workbench controller attaches.
-        Arc::make_mut(&mut self.launch).mcp_servers.remove(name);
+        Arc::make_mut(&mut self.launch).workbench_registration = None;
     }
     pub(crate) fn live_session(&self) -> std::sync::Weak<Session> {
         Arc::downgrade(&self.sender.session)
