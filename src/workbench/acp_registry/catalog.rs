@@ -53,12 +53,14 @@ pub(super) struct Package {
     #[serde(flatten)]
     pub launch: Launch,
 }
-pub(super) enum Selected<'a> {
-    Binary(&'a Binary),
-    Npx(&'a Package),
-    Uvx(&'a Package),
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "target", rename_all = "lowercase")]
+pub(super) enum Selected {
+    Binary(Binary),
+    Npx(Package),
+    Uvx(Package),
 }
-impl Selected<'_> {
+impl Selected {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Binary(_) => "binary",
@@ -97,7 +99,7 @@ pub(super) fn platform() -> String {
     )
 }
 impl Agent {
-    pub fn select(&self, kind: &str) -> Option<Selected<'_>> {
+    pub fn select(&self, kind: &str) -> Option<Selected> {
         let os = platform();
         let binary = self.distribution.binary.get(&os).or_else(|| {
             (os == "windows-aarch64")
@@ -107,17 +109,17 @@ impl Agent {
         if matches!(kind, "auto" | "binary")
             && let Some(b) = binary
         {
-            return Some(Selected::Binary(b));
+            return Some(Selected::Binary(b.clone()));
         }
         if matches!(kind, "auto" | "npx")
             && let Some(p) = &self.distribution.npx
         {
-            return Some(Selected::Npx(p));
+            return Some(Selected::Npx(p.clone()));
         }
         if matches!(kind, "auto" | "uvx")
             && let Some(p) = &self.distribution.uvx
         {
-            return Some(Selected::Uvx(p));
+            return Some(Selected::Uvx(p.clone()));
         }
         None
     }

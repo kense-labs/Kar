@@ -34,7 +34,7 @@ pub(super) fn relative(raw: &str) -> Result<PathBuf> {
     }
     Ok(path)
 }
-pub(super) async fn install(root: &Path, source: &Url, b: &Binary) -> Result<PathBuf> {
+pub(super) async fn install(root: &Path, source: &Url, b: &Binary) -> Result<(PathBuf, String)> {
     let url = Url::parse(&b.archive).map_err(|_| bad("invalid archive URL"))?;
     let mut r = catalog::client(source)?
         .get(url.clone())
@@ -56,9 +56,10 @@ pub(super) async fn install(root: &Path, source: &Url, b: &Binary) -> Result<Pat
     }
     file.flush().await?;
     drop(file);
+    let digest = format!("{:x}", digest.finalize());
     if b.sha256
         .as_ref()
-        .is_some_and(|v| !v.eq_ignore_ascii_case(&format!("{:x}", digest.finalize())))
+        .is_some_and(|v| !v.eq_ignore_ascii_case(&digest))
     {
         return Err(bad("ACP archive SHA-256 mismatch"));
     }
@@ -89,7 +90,7 @@ pub(super) async fn install(root: &Path, source: &Url, b: &Binary) -> Result<Pat
             p.set_mode(p.mode() | 0o700);
             fs::set_permissions(exe, p)?;
         }
-        Ok(Path::new("payload").join(command))
+        Ok((Path::new("payload").join(command), digest))
     })
     .await
     .map_err(|e| bad(&e.to_string()))?

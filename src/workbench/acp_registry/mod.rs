@@ -56,31 +56,29 @@ impl<'a> Key<'a> {
         })
     }
     fn dir(&self, store: &ChatStore) -> PathBuf {
-        root(store)
-            .join("instances")
-            .join(self.agent)
-            .join(self.version)
-            .join(self.kind)
+        self.path_in(&root(store).join("instances"))
+    }
+    fn path_in(&self, base: &Path) -> PathBuf {
+        base.join(self.agent).join(self.version).join(self.kind)
     }
 }
 fn lock(store: &ChatStore, id: &str, exclusive: bool) -> Result<File> {
-    let dir = root(store).join("locks");
-    fs::create_dir_all(&dir)?;
+    lock_path(&root(store).join("locks").join(id), exclusive)
+}
+fn lock_path(path: &Path, exclusive: bool) -> Result<File> {
+    fs::create_dir_all(path.parent().unwrap())?;
     let f = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(dir.join(id))?;
+        .open(path)?;
     let locked = if exclusive {
         f.try_lock()
     } else {
         f.try_lock_shared()
     };
-    locked.map_err(|e| match e {
-        std::fs::TryLockError::WouldBlock => Error::Busy,
-        std::fs::TryLockError::Error(e) => e.into(),
-    })?;
+    locked.map_err(lock_error)?;
     Ok(f)
 }
 pub(crate) fn pin(store: &ChatStore, runtime: &str) -> Result<Option<File>> {
@@ -166,6 +164,10 @@ pub(super) fn routes() -> Router<Workbench> {
         .route("/acp-registry/search", get(search))
         .route("/acp-registry/prepare", post(prepare))
         .route("/acp-registry/instances", get(instances))
+        .route(
+            "/acp-registry/instances/{runtime}/reinstall",
+            post(reinstall),
+        )
         .route("/acp-registry/instances/{runtime}", delete(uninstall))
         .route(
             "/acp-registry/agents/{agent}/managed-binary",
@@ -217,53 +219,122 @@ async fn prepare(State(app): State<Workbench>, Json(input): Json<Prepare>) -> Re
     ))
 }
 async fn prepare_instance(app: &Workbench, input: Prepare) -> Result<Value> {
+    let release = latest(
+        app,
+        &input.agent_id,
+        input.distribution.as_deref().unwrap_or("auto"),
+    )
+    .await?;
+    install(app, &release.runtime, Some(&release)).await
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Release {
+    runtime: String,
+    name: String,
+    registry_url: String,
+    distribution: Selected,
+}
+async fn latest(app: &Workbench, agent: &str, kind: &str) -> Result<Release> {
     let (source, agents) = app.0.acp_registry.agents(true).await?;
     let a = agents
         .into_iter()
-        .find(|a| a.id == input.agent_id)
+        .find(|a| a.id == agent)
         .ok_or_else(|| bad("unknown ACP registry agent"))?;
-    let kind = input.distribution.as_deref().unwrap_or("auto");
-    let selected = a
+    let distribution = a
         .select(kind)
         .ok_or_else(|| bad("no compatible ACP distribution for this platform"))?;
-    let kind = selected.kind();
-    let runtime = format!("acp:{}:{}:{kind}", a.id, a.version);
-    let key = Key::parse(&runtime)?;
+    Ok(Release {
+        runtime: format!("acp:{}:{}:{}", a.id, a.version, distribution.kind()),
+        name: a.name,
+        registry_url: source.into(),
+        distribution,
+    })
+}
+fn record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let parent = path.parent().unwrap();
+    fs::create_dir_all(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    serde_json::to_writer(&mut tmp, value)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    #[cfg(unix)]
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+async fn reinstall(State(app): State<Workbench>, Param(runtime): Param<String>) -> Reply {
+    Ok(Json(
+        tokio::spawn(async move {
+            let key = Key::parse(&runtime)?;
+            let pinned = key.path_in(&root(&app.0.chats).join("releases"));
+            if pinned.try_exists()? {
+                return install(&app, &runtime, None).await;
+            }
+            // Earlier Kar receipts recorded the launch but did not retain its distribution.
+            let release = latest(&app, key.agent, key.kind).await?;
+            if release.runtime != runtime {
+                return Err(bad(
+                    "exact ACP release is absent from the saved metadata and current registry",
+                ));
+            }
+            install(&app, &runtime, Some(&release)).await
+        })
+        .await
+        .map_err(|e| bad(&e.to_string()))??,
+    ))
+}
+async fn install(app: &Workbench, runtime: &str, current: Option<&Release>) -> Result<Value> {
+    let key = Key::parse(runtime)?;
     let store = &app.0.chats;
-    let _lock = lock(store, &a.id, true)?;
+    let _lock = lock(store, key.agent, true)?;
+    let pinned = key.path_in(&root(store).join("releases"));
+    let release_exists = pinned.try_exists()?;
+    let mut release: Release = if release_exists {
+        serde_json::from_reader(File::open(&pinned)?)?
+    } else {
+        let Some(release) = current else {
+            return Err(bad("missing saved ACP release"));
+        };
+        release.clone()
+    };
+    if release.runtime != runtime || release.distribution.kind() != key.kind {
+        return Err(bad("ACP release metadata identifies another instance"));
+    }
     let dir = key.dir(store);
     if dir.join("launch.json").try_exists()? {
-        let r = Receipt::load(&key, store, &runtime)?;
+        let r = Receipt::load(&key, store, runtime)?;
         r.program(&dir)?;
+        if !release_exists {
+            record(&pinned, &release)?;
+        }
         return prepare_receipt(&r, &key, &dir);
     }
     fs::create_dir_all(&dir)?;
-    let settings = selected.launch().clone();
-    let program = match selected {
+    let settings = release.distribution.launch().clone();
+    let program = match &mut release.distribution {
         Selected::Binary(b) => {
+            let source = url::Url::parse(&release.registry_url)
+                .map_err(|_| bad("invalid saved ACP registry URL"))?;
             let payload = dir.join("payload");
             if payload.try_exists()? {
                 fs::remove_dir_all(&payload)?;
             }
-            archive::install(&dir, &source, b).await?
+            let (program, checksum) = archive::install(&dir, &source, b).await?;
+            b.sha256 = Some(checksum);
+            program
         }
         Selected::Npx(p) | Selected::Uvx(p) => {
-            packages::install(&dir, &a.id, kind, &p.package).await?
+            packages::install(&dir, key.agent, key.kind, &p.package).await?
         }
     };
     let receipt = Receipt {
-        runtime: runtime.clone(),
-        name: a.name,
+        runtime: runtime.to_owned(),
+        name: release.name.clone(),
         program,
         settings,
     };
     receipt.program(&dir)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
-    serde_json::to_writer(&mut tmp, &receipt)?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(dir.join("launch.json")).map_err(|e| e.error)?;
-    #[cfg(unix)]
-    File::open(&dir)?.sync_all()?;
+    record(&pinned, &release)?;
+    record(&dir.join("launch.json"), &receipt)?;
     prepare_receipt(&receipt, &key, &dir)
 }
 fn prepare_receipt(receipt: &Receipt, key: &Key, dir: &Path) -> Result<Value> {
@@ -321,27 +392,52 @@ fn prepared(store: &ChatStore) -> Result<Vec<Value>> {
 async fn instances(State(app): State<Workbench>) -> Reply {
     super::http::blocking(move || Ok(json!({"instances":prepared(&app.0.chats)?}))).await
 }
-fn in_use(store: &ChatStore, runtime: &str) -> Result<bool> {
-    for chat in store.list()? {
-        let mut used = false;
-        store.visit_native_bindings(chat.id, |info| {
-            used |= info.runtime == runtime;
-        })?;
-        if used {
-            return Ok(true);
-        }
-        let h = store.history(chat.id)?;
-        if h.handoffs.iter().any(|h| {
-            h.status == crate::chat::HandoffStatus::Prepared && h.request.runtime == runtime
-        }) {
-            return Ok(true);
-        }
+// A lasting chat identity never owns a binary. The file lock follows the native
+// process, including sessions opened from a second Kar process using this store.
+pub(crate) fn pin_process(runtime: &Runtime) -> Result<Option<File>> {
+    if !runtime.id.starts_with("acp:") {
+        return Ok(None);
     }
-    Ok(false)
+    let Some(registry_root) = runtime
+        .program
+        .ancestors()
+        .find(|p| p.ends_with("workbench/acp-registry"))
+    else {
+        // Runtime::new also accepts IDs chosen by SDK callers for external executables.
+        return Ok(None);
+    };
+    let key = Key::parse(&runtime.id)?;
+    if !runtime.program.starts_with(
+        key.path_in(&registry_root.join("instances"))
+            .join("payload"),
+    ) {
+        return Err(bad(
+            "prepared executable differs from the installation root",
+        ));
+    }
+    let guard = lock_path(&key.path_in(&registry_root.join("usage-locks")), false)?;
+    let dir = key.path_in(&registry_root.join("instances"));
+    let receipt: Receipt = serde_json::from_reader(File::open(dir.join("launch.json"))?)?;
+    if receipt.runtime != runtime.id || receipt.program(&dir)? != runtime.program {
+        return Err(bad("ACP launch receipt differs from the selected instance"));
+    }
+    // Resolving the prepared release consumes its short install-to-chat reservation.
+    match fs::remove_file(dir.join("prepared")) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    Ok(Some(guard))
 }
-fn remove(store: &ChatStore, key: &Key, runtime: &str) -> Result<bool> {
+fn lock_error(error: std::fs::TryLockError) -> Error {
+    match error {
+        std::fs::TryLockError::WouldBlock => Error::Busy,
+        std::fs::TryLockError::Error(e) => e.into(),
+    }
+}
+fn remove(store: &ChatStore, key: &Key) -> Result<bool> {
     let dir = key.dir(store);
-    if !dir.try_exists()? || in_use(store, runtime)? {
+    if !dir.try_exists()? {
         return Ok(false);
     }
     // A crash after the rename leaves the public handle fully uninstalled.
@@ -354,7 +450,11 @@ async fn uninstall(State(app): State<Workbench>, Param(runtime): Param<String>) 
     super::http::blocking(move || {
         let key = Key::parse(&runtime)?;
         let _lock = lock(&app.0.chats, key.agent, true)?;
-        Ok(json!({"runtime":runtime,"removed":remove(&app.0.chats,&key,&runtime)?}))
+        let _guard = match lock_path(&key.path_in(&root(&app.0.chats).join("usage-locks")), true) {
+            Err(Error::Busy) => return Ok(json!({"runtime":runtime,"removed":false})),
+            other => other?,
+        };
+        Ok(json!({"runtime":runtime,"removed":remove(&app.0.chats,&key)?}))
     })
     .await
 }
@@ -370,15 +470,19 @@ async fn uninstall_binary(State(app): State<Workbench>, Param(agent): Param<Stri
             if version.join("binary").is_dir() {
                 let v = version.file_name().unwrap().to_string_lossy();
                 let id = format!("acp:{agent}:{v}:binary");
-                if reserved(&version.join("binary"))? || in_use(store, &id)? {
+                if reserved(&version.join("binary"))? {
                     return Ok(json!({"agent_id":agent,"removed":false}));
                 }
-                handles.push(id);
+                let key = Key::parse(&id)?;
+                match lock_path(&key.path_in(&root(store).join("usage-locks")), true) {
+                    Err(Error::Busy) => return Ok(json!({"agent_id":agent,"removed":false})),
+                    other => handles.push((id, other?)),
+                }
             }
         }
         let mut removed = false;
-        for id in handles {
-            removed |= remove(store, &Key::parse(&id)?, &id)?;
+        for (id, _guard) in &handles {
+            removed |= remove(store, &Key::parse(id)?)?;
         }
         Ok(json!({"agent_id":agent,"removed":removed}))
     })

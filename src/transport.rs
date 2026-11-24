@@ -307,6 +307,7 @@ struct Pending {
 }
 
 pub(crate) struct Launch {
+    pub registry_installation: Option<std::fs::File>,
     pub opencode_v2: bool,
     pub pi_mcp: Option<crate::pi_mcp::Config>,
     pub dsh_patch: Option<crate::dsh::profile::Patch>,
@@ -3761,6 +3762,7 @@ impl Actor {
         self.files.qwen_defaults.take();
         self.files.dsh_patch.take();
         self.files.prompts.clear();
+        self.files.registry_installation.take();
         let reason = if self.protocol == Protocol::Qwen
             && !self.qwen_initialized
             && self.close_ack.is_none()

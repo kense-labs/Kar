@@ -193,7 +193,15 @@ async fn exercise() {
         app = app.route(&format!("/{name}"), get(move || async move { bytes }));
     }
     let catalog = json!({"version":"1.0.0","agents":agents});
-    let app = app.route("/index", get(move || async move { Json(catalog) }));
+    let published = std::sync::Arc::new(std::sync::Mutex::new(catalog));
+    let index = published.clone();
+    let app = app.route(
+        "/index",
+        get(move || {
+            let index = index.clone();
+            async move { Json(index.lock().unwrap().clone()) }
+        }),
+    );
     let peer = tokio::spawn(async move { axum::serve(socket, app).await.unwrap() });
     let options = [
         ("KAR_ACP_REGISTRY_URL", OsStr::new(&catalog_url)),
@@ -296,14 +304,78 @@ async fn exercise() {
             server::json(client.delete(format!("{base}/acp-registry/instances/{handle}"))).await["removed"],
             false
         );
-        endpoints.push(endpoint);
+        endpoints.push((endpoint, chat, handle.to_string(), kind));
+    }
+    // After a publisher advances the index, only the saved release identifies the original bytes.
+    let published_versions = published.lock().unwrap()["agents"]
+        .as_array()
+        .unwrap()
+        .clone();
+    published.lock().unwrap()["agents"] = published_versions
+        .into_iter()
+        .map(|mut a| {
+            if a["id"] == "demo" {
+                a["version"] = "2.0.0".into();
+            }
+            a
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let newer = invoke(&client, &base, "demo", "binary").await;
+    assert_eq!(newer["version"], "2.0.0");
+    let new_handle = newer["runtime"].as_str().unwrap();
+    assert_eq!(
+        server::json(client.delete(format!("{base}/acp-registry/instances/{new_handle}"))).await["removed"],
+        true
+    );
+    for (endpoint, chat, handle, kind) in &endpoints {
+        let prefix = format!("{base}/projects/{project}/chats/{chat}");
+        if *kind == "binary" {
+            server::json(client.post(format!("{prefix}/force-stop")).json(&json!({}))).await;
+        } else {
+            server::json(
+                client
+                    .put(format!("{prefix}/archive"))
+                    .json(&json!({"archived":true})),
+            )
+            .await;
+        }
+        let path = if *kind == "binary" {
+            format!("{base}/acp-registry/agents/demo/managed-binary")
+        } else {
+            format!("{base}/acp-registry/instances/{handle}")
+        };
+        assert_eq!(server::json(client.delete(path)).await["removed"], true);
+        let snapshot = server::json(client.get(format!("{prefix}/snapshot"))).await;
+        assert_eq!(snapshot["history"]["chat"]["id"], chat.to_string());
+        assert_eq!(snapshot["history"]["chat"]["native_id"], "prepared-session");
+        assert_eq!(snapshot["history"]["chat"]["runtime"], handle.as_str());
+        assert_eq!(snapshot["history"]["turns"].as_array().unwrap().len(), 1);
+        server::json(
+            client
+                .put(format!("{prefix}/archive"))
+                .json(&json!({"archived":false})),
+        )
+        .await;
+        let missing = client
+            .post(format!("{base}{endpoint}"))
+            .json(&json!({"id":Uuid::new_v4(),"text":"unavailable"}))
+            .send()
+            .await
+            .unwrap();
+        assert!(!missing.status().is_success());
+        let restored =
+            server::json(client.post(format!("{base}/acp-registry/instances/{handle}/reinstall")))
+                .await;
+        assert_eq!(restored["runtime"], handle.as_str());
+        assert_eq!(restored["version"], "1.2.3");
     }
     kar.kill().await.unwrap();
     kar.wait().await.unwrap();
     peer.abort();
     let _ = peer.await;
     let (mut kar, base) = server::serve_with_env(&state, &root, &db, &options).await;
-    for endpoint in endpoints {
+    for (endpoint, chat, handle, _) in endpoints {
         assert!(
             server::json(
                 client
@@ -314,6 +386,12 @@ async fn exercise() {
             .to_string()
             .contains("received second")
         );
+        let snapshot =
+            server::json(client.get(format!("{base}/projects/{project}/chats/{chat}/snapshot")))
+                .await;
+        assert_eq!(snapshot["history"]["chat"]["runtime"], handle);
+        assert_eq!(snapshot["history"]["chat"]["native_id"], "prepared-session");
+        assert_eq!(snapshot["history"]["turns"].as_array().unwrap().len(), 2);
     }
     assert_eq!(
         server::json(client.delete(format!("{base}/acp-registry/agents/demo/managed-binary")))

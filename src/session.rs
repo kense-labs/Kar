@@ -626,6 +626,7 @@ impl Session {
                 "HTTP MCP requires Qwen Code 0.26.0 or later".into(),
             ));
         }
+        let registry_installation = crate::workbench::acp_registry::pin_process(runtime)?;
         let child_process = crate::process::OwnedProcess::spawn(process)?;
         if let Some(config) = pi_mcp.as_mut()
             && let Some(pid) = child_process.id()
@@ -639,6 +640,7 @@ impl Session {
             runtime,
             &options,
             crate::transport::Launch {
+                registry_installation,
                 opencode_v2: runtime.id == "opencode" && !opencode_v1,
                 dsh_patch,
                 pi_mcp,
