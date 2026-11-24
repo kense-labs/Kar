@@ -3,6 +3,7 @@ mod issues;
 pub(super) use issues::{Policy, permission_routes};
 mod registry;
 mod toolkit;
+mod workflow;
 use super::{Workbench, access};
 use axum::{
     Json, Router,
@@ -31,7 +32,7 @@ struct Caller {
     identity: Identity,
     grant: Option<Arc<Grant>>,
     plan: bool,
-    issue_policy: Option<Policy>,
+    policy: Option<Policy>,
 }
 fn hdr<'a>(h: &'a HeaderMap, k: &str) -> Option<&'a str> {
     h.get(k)?.to_str().ok()
@@ -103,9 +104,9 @@ async fn scope(State(app): State<Workbench>, mut req: Request, next: Next) -> Re
     } else {
         false
     };
-    let issue_policy = grant.as_ref().and_then(|g| issues::authorized(&app, g));
+    let policy = grant.as_ref().and_then(|g| issues::authorized(&app, g));
     req.extensions_mut().insert(Caller {
-        issue_policy,
+        policy,
         identity,
         grant,
         plan,

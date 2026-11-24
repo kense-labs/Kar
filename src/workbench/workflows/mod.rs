@@ -490,9 +490,20 @@ impl Workbench {
         operation: Uuid,
         input: Value,
     ) -> Result<Run> {
+        self.trigger_workflow_checked(project, id, operation, input, || Ok(()))
+    }
+    pub(in crate::workbench) fn trigger_workflow_checked(
+        &self,
+        project: Uuid,
+        id: Uuid,
+        operation: Uuid,
+        input: Value,
+        authorize: impl FnOnce() -> Result<()>,
+    ) -> Result<Run> {
         self.project(project)?;
         let e = &self.0.workflows;
         e.update(|d| {
+            authorize()?;
             let w = d.workflows.get(&id).ok_or_else(missing)?.clone();
             same_project(project, w.project)?;
             if matches!(w.definition.schedule, Schedule::Webhook) {
@@ -508,10 +519,21 @@ impl Workbench {
         operation: Uuid,
         action: Action,
     ) -> Result<Run> {
+        self.workflow_action_checked(project, id, operation, action, || Ok(()))
+    }
+    pub(in crate::workbench) fn workflow_action_checked(
+        &self,
+        project: Uuid,
+        id: Uuid,
+        operation: Uuid,
+        action: Action,
+        authorize: impl FnOnce() -> Result<()>,
+    ) -> Result<Run> {
         self.project(project)?;
         let e = &self.0.workflows;
         let now = e.clock.now_ms();
         e.update(|d| {
+            authorize()?;
             let r = d.runs.get_mut(&id).ok_or_else(missing)?;
             same_project(project, r.project)?;
             if let Some((run, old)) = d.actions.get(&operation) {

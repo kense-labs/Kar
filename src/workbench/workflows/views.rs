@@ -52,6 +52,12 @@ fn snapshot(db: &Data, p: Uuid, only_schedule: bool) -> Value {
         .collect();
     json!({"revision":db.revision,"workflows":definitions,"runs":summaries,"questions":questions,"counts":counts(db,p)})
 }
+impl Workbench {
+    pub(in crate::workbench) fn workflow_index(&self, project: Uuid) -> crate::Result<Value> {
+        self.project(project)?;
+        Ok(snapshot(&self.0.workflows.db.lock().unwrap(), project, false))
+    }
+}
 type Reply = std::result::Result<Json<Value>, ApiError>;
 async fn count(State(app): State<Workbench>, Path(p): Path<Uuid>) -> Reply {
     blocking(move || {

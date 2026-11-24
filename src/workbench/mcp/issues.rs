@@ -19,6 +19,10 @@ pub(in crate::workbench) struct Policy {
     issue_reads: bool,
     #[serde(default)]
     issue_writes: bool,
+    #[serde(default)]
+    workflow_reads: bool,
+    #[serde(default)]
+    workflow_writes: bool,
     issue_scope: Option<String>,
     repository: Option<String>,
 }
@@ -31,6 +35,10 @@ struct Configure {
     issue_reads: bool,
     #[serde(default)]
     issue_writes: bool,
+    #[serde(default)]
+    workflow_reads: bool,
+    #[serde(default)]
+    workflow_writes: bool,
     issue_scope: Option<String>,
 }
 
@@ -38,11 +46,17 @@ impl Policy {
     fn get(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         db.model_tool_permissions.get(&project)?.get(&chat)
     }
-    fn current(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
+    pub(super) fn current(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         if db.archived.contains(&chat) || db.projects.get(&project)?.metadata.deleted {
             return None;
         }
         Self::get(db, project, chat)
+    }
+    pub(super) fn reads_workflows(&self) -> bool {
+        self.workflow_reads || self.writes_workflows()
+    }
+    pub(super) fn writes_workflows(&self) -> bool {
+        self.mode == Mode::Execute && self.workflow_writes
     }
     pub(super) fn reads_issues(&self) -> bool {
         (self.issue_reads || self.issue_writes) && self.repository.is_some()
@@ -83,11 +97,13 @@ async fn configure(
         mode: cfg.mode,
         issue_reads: cfg.issue_reads,
         issue_writes: cfg.issue_writes,
+        workflow_reads: cfg.workflow_reads,
+        workflow_writes: cfg.workflow_writes,
         issue_scope: cfg.issue_scope,
         repository,
     };
     app.update(|db| {
-        if policy.reads_issues()
+        if (policy.reads_issues() || policy.reads_workflows())
             && (db.archived.contains(&c)
                 || db
                     .projects
@@ -126,7 +142,7 @@ pub(super) async fn call(
             "model issue writes require an authorized execution session for this tracker".into(),
         )
     };
-    let policy = caller.issue_policy.ok_or_else(forbidden)?;
+    let policy = caller.policy.ok_or_else(forbidden)?;
     let grant = caller.grant.ok_or_else(forbidden)?;
     let obj = input
         .as_object_mut()

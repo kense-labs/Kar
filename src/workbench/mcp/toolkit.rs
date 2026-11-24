@@ -66,7 +66,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             required: &["query"],
         },
     ];
-    if caller.issue_policy.as_ref().is_some_and(Policy::reads_issues) {
+    if caller.policy.as_ref().is_some_and(Policy::reads_issues) {
         tools.push(Tool {
             name: "kar_list_issues",
             description: "Search one page of issues in this chat's authorized tracker. Pass the returned cursor for another page.",
@@ -79,7 +79,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             required: &["number"],
         });
     }
-    if !caller.plan && caller.issue_policy.as_ref().is_some_and(Policy::writes_issues) {
+    if !caller.plan && caller.policy.as_ref().is_some_and(Policy::writes_issues) {
         tools.push(Tool {
             name: "kar_set_issue_state", description: "Close or reopen an issue in this chat's authorized tracker. Reuse command_id on retries.",
             properties: json!({"command_id":id,"project_id":id,"thread_id":id,"number":{"type":"integer","minimum":1},"state":{"enum":["open","closed"]}}),
@@ -98,6 +98,16 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             description: "Post a comment on a numbered issue in this chat's authorized project tracker. Reuse command_id on retries.",
             properties: json!({"command_id":id,"project_id":id,"thread_id":id,"number":{"type":"integer","minimum":1},"body":text}),
             required: &["command_id", "number", "body"],
+        });
+    }
+    if let Some(policy) = caller.policy.as_ref().filter(|p| p.reads_workflows()) {
+        let mut actions = vec!["definitions","list","read","questions","hooks"];
+        if !caller.plan && policy.writes_workflows() { actions.extend(["start","resume","cancel","signal","reconcile"]); }
+        tools.push(Tool {
+            name:"kar_workflow",
+            description:"Inspect durable project workflows and runs. Start a saved workflow, retry a failed step, answer a question, reconcile an interrupted attempt or cancel. Reuse command_id on retries.",
+            properties:json!({"project_id":id,"thread_id":id,"action":{"enum":actions},"workflow_id":id,"run_id":id,"command_id":id,"attempt_id":id,"input":{},"value":{},"succeeded":{"type":"boolean"},"evidence":{"type":"string"},"status":{"enum":["ready","running","asking","waiting","reconcile","failed","cancelled","completed"]},"cursor":cursor,"limit":limit}),
+            required:&["action"],
         });
     }
     if caller.grant.as_ref().is_some_and(|g| g.runtime == "claude") {
@@ -141,7 +151,7 @@ struct Page {
     cursor: usize,
     limit: Option<usize>,
 }
-fn page(v: Vec<Value>, key: &str, start: usize, limit: Option<usize>) -> Result<Value> {
+pub(super) fn page(v: Vec<Value>, key: &str, start: usize, limit: Option<usize>) -> Result<Value> {
     let n = limit.unwrap_or(20);
     if n == 0 {
         return Err(bad("limit must be positive"));
@@ -204,7 +214,7 @@ fn project_scope(c: &Caller, asked: Option<Uuid>) -> Result<Option<Uuid>> {
     }
     Ok(asked)
 }
-fn target(app: &Workbench, c: &Caller, p: Option<Uuid>, t: Option<Uuid>) -> Result<(Uuid, Uuid)> {
+pub(super) fn target(app: &Workbench, c: &Caller, p: Option<Uuid>, t: Option<Uuid>) -> Result<(Uuid, Uuid)> {
     let thread = t
         .or_else(|| c.grant.as_ref().map(|g| g.chat))
         .ok_or_else(|| bad("thread_id is required"))?;
@@ -330,7 +340,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
             Ok(
                 json!({"server":"Kar","tools":tools(c).iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
                 "provider_session":c.grant.as_ref().map(|g|json!({"id":g.id,"project_id":g.project,"thread_id":g.chat,"runtime":g.runtime})),
-                "write_access":!c.plan && (c.grant.is_none() || c.issue_policy.as_ref().is_some_and(Policy::writes_issues)),"issue_write_access":!c.plan && c.issue_policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.issue_policy.as_ref().is_some_and(Policy::reads_issues)}),
+                "write_access":!c.plan && (c.grant.is_none() || c.policy.as_ref().is_some_and(|p| p.writes_issues() || p.writes_workflows())),"issue_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.policy.as_ref().is_some_and(Policy::reads_issues), "workflow_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_workflows)}),
             )
         }
         "kar_project_list" => {
@@ -387,6 +397,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
                 .collect();
             page(rows, "threads", a.cursor, a.limit)
         }
+        "kar_workflow" => super::workflow::call(app, c, input),
         "kar_thread_read" => read(app, c, args(input)?),
         "kar_queue" => queue(app, c, args(input)?),
         _ => Err(bad("Unknown workbench tool")),

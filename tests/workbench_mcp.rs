@@ -1,6 +1,8 @@
 //! Exercise the authenticated Kar listener and the credential handed to a native Codex protocol peer.
 #[path = "workbench_mcp/issues.rs"]
 mod issues;
+#[path = "workbench_mcp/workflow.rs"]
+mod workflow;
 #[allow(dead_code)]
 #[path = "support/codex_chat_peer.rs"]
 mod peer;
@@ -182,6 +184,7 @@ async fn scenario() {
     .await;
     assert_eq!(foreign["result"]["isError"], true);
     let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
+    workflow::exercise(&url, &a, p, chat, call).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")
             .header("mcp-protocol-version", "2026-07-28")
