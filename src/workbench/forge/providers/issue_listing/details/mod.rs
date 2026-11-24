@@ -1,6 +1,7 @@
 //! Expanded tracker reads. Foreign scopes can be inspected using the project's host account.
 use super::*;
 use axum::extract::{Path, Query};
+mod forgejo;
 mod github;
 mod linear;
 mod source;
@@ -92,6 +93,7 @@ pub(in crate::workbench::forge) async fn read(
     let (s, writable) = resolve(&app, p, &q).await?;
     let mut result = match s.ctx.kind.as_str() {
         "github" => github::read(&s.ctx, n).await?,
+        "forgejo" => forgejo::read(&s.ctx, n, None, false).await?,
         "linear" => linear::read(&s.ctx, &s.scope.to_ascii_uppercase(), n).await?,
         "tanstack-source" => source::read(&s.ctx, n, None, false).await?,
         _ => {
@@ -123,6 +125,9 @@ pub(in crate::workbench::forge) async fn comments(
     }
     let (s, _) = resolve(&app, p, &q).await?;
     match s.ctx.kind.as_str() {
+        "forgejo" => forgejo::read(&s.ctx, n, q.cursor.as_deref(), true)
+            .await
+            .map(Json),
         "linear" => linear::comments(
             &s.ctx,
             &s.scope.to_ascii_uppercase(),

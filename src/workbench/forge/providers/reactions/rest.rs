@@ -39,9 +39,11 @@ pub(super) async fn apply(
     let mut complete = false;
     for page in 1..=200 {
         let mut u = url.clone();
-        u.query_pairs_mut()
-            .append_pair("page", &page.to_string())
-            .append_pair(if gitlab { "per_page" } else { "limit" }, "50");
+        if gitlab {
+            u.query_pairs_mut()
+                .append_pair("page", &page.to_string())
+                .append_pair("per_page", "50");
+        }
         let v = get(c, u).await?;
         let rows = v.as_array().ok_or_else(|| invalid("issue reaction list"))?;
         if let Some(r) = rows.iter().find(|r| {
@@ -54,7 +56,7 @@ pub(super) async fn apply(
             complete = true;
             break;
         }
-        if rows.len() < 50 {
+        if !gitlab || rows.len() < 50 {
             complete = true;
             break;
         }
@@ -92,28 +94,18 @@ pub(super) async fn apply(
 
 async fn verify_forgejo_comment(c: &Context, target: &Url, id: &str) -> Result<(), ForgeError> {
     let n = positive(id)?;
-    let url = child(target.clone(), &["comments"]);
-    for page in 1..=200 {
-        let mut next = url.clone();
-        next.query_pairs_mut()
-            .append_pair("page", &page.to_string())
-            .append_pair("limit", "50");
-        let data = get(c, next).await?;
-        let rows = data
-            .as_array()
-            .ok_or_else(|| invalid("Forgejo issue comments"))?;
-        if rows.iter().any(|r| r["id"].as_u64() == Some(n)) {
-            return Ok(());
-        }
-        if rows.len() < 50 {
-            return Err(ForgeError::remote(
-                404,
-                "comment does not belong to the selected issue",
-            ));
-        }
+    let result = get(c, child(target.clone(), &["comments"])).await?;
+    if result
+        .as_array()
+        .ok_or_else(|| invalid("Forgejo issue comments"))?
+        .iter()
+        .any(|r| r["id"].as_u64() == Some(n))
+    {
+        Ok(())
+    } else {
+        Err(ForgeError::remote(
+            404,
+            "comment does not belong to the selected issue",
+        ))
     }
-    Err(ForgeError::remote(
-        502,
-        "cannot establish comment ownership within the page limit",
-    ))
 }

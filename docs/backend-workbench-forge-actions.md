@@ -105,3 +105,5 @@ A missing write receipt can be reconciled by reading the same viewer, issue, sub
 GitHub 状态操作接受 Open、Completed、Not planned 和 Duplicate，并在写回及对账时核对远端编号、state 和 state_reason。对已关闭 Issue 改变关闭原因会返回明确错误。GitLab、Forgejo 和 TanStack Source 接受详情展示的 Open 与 Closed。
 
 Linear 的相同详情和评论入口验证 workspace、team 和原生编号，按状态类型及 position 排出工作流并识别 duplicate 关闭项，显示状态迁移、标签、标题和责任人事件，解析 GitHub/GitLab 附件里的 PR 标识。TanStack Source 解析数字时间戳，排除隐藏评论，返回按登录及锁定状态计算的权限、fixedBy 改动和较早时间线。两个 HTTP 场景分别位于 workbench_issue_accounts 和 workbench_forge，尚待集中运行。
+
+Forgejo 的扩展工单入口通过原生 timeline 读取事件和跨仓库 PR 引用，按引用仓库和编号去重。评论从原生整表每次取 50 项，再并行读取本页各条评论的反应。写权限同时取决于仓库归档、push 权限、作者和工单锁定状态。macOS 协议场景位于 `tests/workbench_forge/providers.rs`，覆盖锁定工单、51 条评论、两位反应者和重复的跨仓引用。统一执行命令为 `cargo test --locked --test workbench_forge`，本批仅编译。

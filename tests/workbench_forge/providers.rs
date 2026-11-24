@@ -563,6 +563,26 @@ fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Res
         .into_owned()
         .collect::<HashMap<_, _>>();
     let date = "2026-11-01T00:00:00Z";
+    if kind == "forgejo" {
+        let reactions = json!([{"content":"+1","user":{"login":"viewer"}},{"content":"+1","user":{"login":"reader"}}]);
+        let native = match path {
+            "repos/team/repo/issues/72" => Some(json!({"number":72,"state":"open","title":"locked","body":"story","is_locked":true,
+                "user":{"login":"viewer"},"created_at":date,"updated_at":date,"html_url":"https://forgejo.example/team/repo/issues/72"})),
+            "repos/team/repo/issues/72/comments" => Some(json!((1..=51).map(|id|json!({"id":id,"body":format!("note {id}"),"created_at":date,"user":{"login":"reader"}})).collect::<Vec<_>>())),
+            "repos/team/repo/issues/72/timeline" if params["page"]=="1" => {
+                let reference=json!({"type":"pull_ref","id":2,"created_at":date,"ref_issue":{"number":4,"pull_request":{},"repository":{"full_name":"third/repo"}}});
+                Some(json!([reference,reference]))
+            }
+            "repos/team/repo/issues/72/timeline" => Some(Value::Null),
+            "repos/team/repo/issues/72/reactions" => Some(reactions),
+            path if path.starts_with("repos/team/repo/issues/comments/") && path.ends_with("/reactions") => Some(reactions),
+            "repos/third/repo/pulls/4" => Some(json!({"number":4,"title":"fix","merged":true,"state":"closed","html_url":"https://forgejo.example/third/repo/pulls/4"})),
+            _ => None,
+        };
+        if let Some(v) = native {
+            return Some(Json(v).into_response());
+        }
+    }
     if kind == "tanstack-source" && path.ends_with("/issues/72") {
         let notes = if params.contains_key("cursor") {
             json!([{"id":1,"author":"viewer","comment":"old","at":1000}])
@@ -627,6 +647,29 @@ fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Res
     Some(res)
 }
 async fn verify_search(c: &reqwest::Client, base: &str, project: &str, kind: &str) {
+    if kind == "forgejo" {
+        let issue = format!("{base}/projects/{project}/forge/issues/72");
+        let detail = ok(c.get(format!("{issue}/detail"))).await;
+        assert_eq!(
+            detail["viewerPermissions"],
+            json!({"setState":true,"comment":false,"edit":true,"labels":false,"assignees":false})
+        );
+        assert_eq!(detail["comments"].as_array().unwrap().len(), 50);
+        assert_eq!(detail["commentsCursor"], "2");
+        let expected =
+            json!([{"content":"thumbs-up","count":2,"actors":["reader"],"viewerHasReacted":true}]);
+        assert_eq!(detail["comments"][0]["reactions"], expected);
+        assert_eq!(detail["reactions"], expected);
+        assert_eq!(detail["events"][1]["detail"], "#4");
+        let linked = detail["linkedPullRequests"].as_array().unwrap();
+        assert_eq!(linked.len(), 1);
+        assert_eq!(linked[0]["repository"], "third/repo");
+        assert_eq!(linked[0]["state"], "merged");
+        let end = ok(c.get(format!("{issue}/comments")).query(&[("cursor", "2")])).await;
+        assert_eq!(end["comments"].as_array().unwrap().len(), 1);
+        assert_eq!(end["comments"][0]["id"], "51");
+        assert!(end["nextCursor"].is_null());
+    }
     if kind == "tanstack-source" {
         let issue = format!("{base}/projects/{project}/forge/issues/72");
         let detail = ok(c.get(format!("{issue}/detail"))).await;

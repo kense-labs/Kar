@@ -17,6 +17,26 @@ pub(crate) enum Content {
     Eyes,
 }
 impl Content {
+    pub(super) fn from_host(value: &str, gitlab: bool) -> Option<Self> {
+        [
+            Self::ThumbsUp,
+            Self::ThumbsDown,
+            Self::Laugh,
+            Self::Hooray,
+            Self::Confused,
+            Self::Heart,
+            Self::Rocket,
+            Self::Eyes,
+        ]
+        .into_iter()
+        .find(|c| {
+            if gitlab {
+                c.gitlab() == value
+            } else {
+                c.standard() == value
+            }
+        })
+    }
     pub(super) fn from_linear(value: &str) -> Option<Self> {
         [
             Self::ThumbsUp,
