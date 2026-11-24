@@ -30,6 +30,7 @@ impl Runtime {
         let report = |protocol| declaration(protocol, id, version.as_ref());
         let mut declaration = match self.protocol {
             Protocol::KimiKap => match &version {
+                Some(v) if crate::kimi::identified_kap_build(v) => report(Protocol::KimiKap),
                 Some(v) if !crate::kimi::kap_candidate(v) => report(Protocol::Acp),
                 // Some candidate installations expose only ACP. The capability handshake decides.
                 _ => report(Protocol::KimiKap).intersection(report(Protocol::Acp)),
@@ -447,7 +448,14 @@ mod tests {
         let legacy = report("kimi", Some("kimi 2.7.2"));
         assert_eq!(legacy["stop_task"], false);
         assert!(legacy["refused_session_options"]["append_system_prompt"].is_string());
-        let new = report("kimi", Some("2.7.2-botiverse.1"));
+        let patched = report("kimi", Some("2.7.2-botiverse.1"));
+        for key in ["stop_task", "steering", "image_input"] {
+            assert_eq!(patched[key], true, "{key}");
+        }
+        assert_eq!(patched["manual_compaction"]["kind"], "supported");
+        assert_eq!(patched["subagent_results"]["background"], "child_text");
+
+        let new = report("kimi", Some("2.7.3"));
         for key in ["stop_task", "steering", "manual_compaction", "image_input"] {
             assert!(new.get(key).is_none(), "{key}");
         }

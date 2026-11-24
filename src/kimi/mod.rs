@@ -12,10 +12,13 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 use web::{Socket, Web, segment};
 
+pub(crate) fn identified_kap_build(v: &semver::Version) -> bool {
+    v.pre.as_str().split('.').next() == Some("botiverse")
+        && v >= &semver::Version::parse("2.7.2-botiverse.1").unwrap()
+}
+
 pub(crate) fn kap_candidate(v: &semver::Version) -> bool {
-    v >= &semver::Version::new(2, 7, 3)
-        || (v.pre.as_str().starts_with("botiverse.")
-            && v >= &semver::Version::parse("2.7.2-botiverse.1").unwrap())
+    identified_kap_build(v) || v >= &semver::Version::new(2, 7, 3)
 }
 
 /// A host can die after the HTTP request arrives but before the native turn ID is saved.
