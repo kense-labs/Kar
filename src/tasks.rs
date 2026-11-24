@@ -45,6 +45,9 @@ pub struct TaskDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(alias = "childSessionId")]
     pub child_session_id: Option<String>,
+    /// Initial child model from the native task-start frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -145,6 +148,7 @@ impl NativeTask {
                 self.details
                     .child_session_id
                     .clone_from(&details.child_session_id);
+                self.details.model.clone_from(&details.model);
                 self.details.ambient = details.ambient;
             }
             TaskChange::Updated {

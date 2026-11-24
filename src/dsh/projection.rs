@@ -20,6 +20,8 @@ pub(super) struct Projection {
     pub cursor: Option<i64>,
     pub active: Option<u64>,
     window: Option<u64>,
+    model: Option<String>,
+    effort: Option<String>,
     spent: TokenTotals,
     // Live attempt IDs restart at one when the vendor process restarts. Committed
     // settlements delimit retries inside the durable (turn, step) pair.
@@ -116,6 +118,35 @@ impl Projection {
             });
         }
     }
+    fn selection(
+        &mut self,
+        provider: &Value,
+        model: &Value,
+        effort: &Value,
+        initial: bool,
+        events: &mut Vec<Event>,
+    ) {
+        if (!initial || self.model.is_none())
+            && let Some(provider) = provider.as_str().filter(|s| !s.is_empty())
+            && let Some(model) = model.as_str().filter(|s| !s.is_empty())
+        {
+            let model = format!("{provider}/{model}");
+            if self.model.as_ref() != Some(&model) {
+                self.model = Some(model.clone());
+                events.push(Event::Model { model });
+            }
+        }
+        if (!initial || self.effort.is_none())
+            && let Some(effort) = effort.as_str().filter(|s| !s.is_empty())
+            && self.effort.as_deref() != Some(effort)
+        {
+            self.effort = Some(effort.into());
+            events.push(Event::Effort {
+                effort: effort.into(),
+            });
+        }
+    }
+
     pub fn event(&mut self, session: &str, e: &Value) -> Vec<Event> {
         let mut out = Vec::new();
         self.observe_settlement(e);
@@ -170,14 +201,22 @@ impl Projection {
             Some("request/context") => self.window = d["contextWindow"].as_u64(),
             Some("request/header") => {
                 let cfg = &d["header"]["config"];
-                if let (Some(p), Some(m)) = (cfg["provider"].as_str(), cfg["model"].as_str()) {
-                    out.push(Event::Model {
-                        model: format!("{p}/{m}"),
-                    });
-                }
-                if let Some(effort) = string(&cfg["reasoningEffort"]) {
-                    out.push(Event::Effort { effort });
-                }
+                self.selection(
+                    &cfg["provider"],
+                    &cfg["model"],
+                    &cfg["reasoningEffort"],
+                    false,
+                    &mut out,
+                );
+            }
+            Some("subagent/descriptor") => {
+                self.selection(
+                    &d["agentProvider"],
+                    &d["agentModel"],
+                    &d["agentReasoningEffort"],
+                    true,
+                    &mut out,
+                );
             }
             Some("tool/call") => {
                 if let (Some(id), Some(name)) = (string(&d["callId"]), string(&d["name"])) {
@@ -304,4 +343,54 @@ fn failure(reason: &Value) -> TurnFailure {
     );
     f.status = status;
     f
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn child_descriptor_and_headers_track_each_sessions_confirmed_selection() {
+        let descriptor = json!({"type":"subagent/descriptor","data":{
+            "agentProvider":"vendor","agentModel":"child","agentReasoningEffort":"high","provider":"spawn"}});
+        let header = |config| json!({"type":"request/header","data":{"header":{"config":config}}});
+        let mut child = Projection::default();
+        let mut sibling = Projection::default();
+        let initial = vec![
+            Event::Model {
+                model: "vendor/child".into(),
+            },
+            Event::Effort {
+                effort: "high".into(),
+            },
+        ];
+        assert_eq!(child.event("child", &descriptor), initial);
+        assert!(
+            child
+                .event(
+                    "child",
+                    &header(json!({"provider":"vendor","model":"child","reasoningEffort":"high"}))
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            child.event("child", &header(json!({"reasoningEffort":"low"}))),
+            [Event::Effort {
+                effort: "low".into()
+            }]
+        );
+        assert_eq!(sibling.event("sibling", &descriptor), initial);
+        assert_eq!(
+            child.event(
+                "child",
+                &header(json!({"provider":"vendor","model":"later","reasoningEffort":"low"}))
+            ),
+            [Event::Model {
+                model: "vendor/later".into()
+            }]
+        );
+        assert!(child.event("child", &descriptor).is_empty());
+        assert!(Projection::default().event("anonymous",&json!({"type":"subagent/descriptor","data":{"agentModel":"orphan","provider":"spawn"}})).is_empty());
+    }
 }

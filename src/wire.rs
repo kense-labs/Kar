@@ -397,7 +397,12 @@ pub(crate) fn project(p: Protocol, v: &Value, cursor: bool) -> Vec<Event> {
                     _ => {}
                 },
                 "assistant" | "user" => {
-                    if v["type"] == "assistant" {
+                    if v["type"] == "assistant"
+                        && (p != Protocol::Claude
+                            || v["parent_tool_use_id"]
+                                .as_str()
+                                .is_some_and(|id| !id.is_empty()))
+                    {
                         events.extend(settings(
                             v.pointer("/message/model")
                                 .and_then(Value::as_str)
@@ -561,6 +566,9 @@ pub(crate) fn project(p: Protocol, v: &Value, cursor: bool) -> Vec<Event> {
 }
 pub(crate) fn session_id(p: Protocol, v: &Value) -> Option<String> {
     match p {
+        Protocol::Codex if v["method"] == "thread/started" => string(v, "/params/thread/id")
+            .filter(|id| !id.is_empty())
+            .or_else(|| string(v, "/params/threadId")),
         Protocol::Codex => string(v, "/params/threadId").or_else(|| string(v, "/params/thread/id")),
         Protocol::Acp | Protocol::Factory => string(v, "/params/sessionId"),
         Protocol::Claude | Protocol::Qoder | Protocol::Qwen => string(v, "/session_id"),

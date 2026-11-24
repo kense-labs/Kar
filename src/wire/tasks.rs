@@ -47,6 +47,7 @@ pub(super) fn reported(p: Protocol, v: &Value) -> Option<Event> {
                 task_type: Type::Agent,
                 details: TaskDetails {
                     native_type: string(&u["subagent_type"]),
+                    model: string(&u["model"]),
                     description: string(&u["description"]),
                     child_session_id: string(&u["child_session_id"]),
                     ..Default::default()
@@ -151,6 +152,19 @@ impl CodexTasks {
     }
     pub(crate) fn observe(&mut self, root: Option<&str>, v: &Value, events: &mut Vec<Event>) {
         let p = &v["params"];
+        if v["method"] == "thread/started" {
+            let thread = &p["thread"];
+            if let Some(id) = thread["id"].as_str().filter(|id| !id.is_empty())
+                && root.is_some_and(|root| root != id)
+            {
+                events.extend(super::settings(
+                    thread["model"].as_str(),
+                    thread["reasoningEffort"].as_str(),
+                    None,
+                ));
+            }
+            return;
+        }
         let Some(reporter) = p["threadId"].as_str() else {
             return;
         };
@@ -195,6 +209,7 @@ impl CodexTasks {
                             task_type: Type::Agent,
                             details: TaskDetails {
                                 native_type: Some("subAgent".into()),
+                                model: string(&item["model"]),
                                 description: path,
                                 tool_call_id: string(&item["id"]),
                                 child_session_id: Some(child.into()),

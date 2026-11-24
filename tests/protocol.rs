@@ -13,6 +13,8 @@ mod acp_failures;
 mod antigravity_steering;
 #[path = "support/billing.rs"]
 mod billing_fixture;
+#[path = "protocol/child_models.rs"]
+mod child_models;
 #[path = "protocol/claude_input.rs"]
 mod claude_input;
 #[path = "protocol/dsh_skills.rs"]
@@ -250,6 +252,17 @@ fn peer(protocol: &str) {
                                 json!({"method":"turn/started","params":{"threadId":"session-1","turn":{"id":"t"}}}),
                             );
                         }
+                        if name == "child-selections" {
+                            child_models::rpc_frames(protocol);
+                            if protocol == "codex" {
+                                emit(
+                                    json!({"method":"turn/completed","params":{"threadId":"session-1","turn":{"id":"t","status":"completed"}}}),
+                                );
+                            } else {
+                                rpc(json!({"stopReason":"end_turn"}));
+                            }
+                            continue;
+                        }
                         if name == "wait" {
                             if protocol == "codex" {
                                 emit(
@@ -460,6 +473,11 @@ fn peer(protocol: &str) {
                     json!({"type":"control_response","response":{"subtype":"success","request_id":v["request_id"],"response":{"models":[{"value":"demo"}]}}}),
                 ),
                 Some("user") => {
+                    if v["message"]["content"] == "child-selections"
+                        || v["message"]["content"][0]["text"] == "child-selections"
+                    {
+                        child_models::claude_frames(id);
+                    }
                     if protocol == "qwen" {
                         assert!(uuid::Uuid::parse_str(v["uuid"].as_str().unwrap()).is_ok());
                     }
@@ -1258,6 +1276,11 @@ async fn main() {
             .unwrap();
         println!("{p:?} conversation, native model catalog, replay and resume passed");
     }
+    tokio::time::timeout(Duration::from_secs(12), child_models::exercise())
+        .await
+        .unwrap()
+        .unwrap();
+    println!("Child model and effort attribution, task snapshots and recording replay passed");
     for p in [Protocol::Codex, Protocol::Acp] {
         tokio::time::timeout(Duration::from_secs(12), controls(p))
             .await

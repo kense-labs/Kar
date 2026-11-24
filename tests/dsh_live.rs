@@ -929,6 +929,52 @@ async fn check_session_log_upload(protocol: Protocol) {
     })
     .await
     .expect("expected a separate native child model request");
+    if protocol == Protocol::Dsh {
+        let child_id = tb
+            .data
+            .upload_requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(session, _)| !session.is_empty() && session != &native)
+            .unwrap()
+            .0
+            .clone();
+        let mut records = chat.subscribe(None).unwrap();
+        let selected = tokio::time::timeout(Duration::from_secs(8), async {
+            while let Some(record) = records.next().await {
+                if record.session_id.as_deref() != Some(&child_id) {
+                    continue;
+                }
+                for event in &record.events {
+                    if let kar::Event::Model { model } = event {
+                        let data = &record.native["event"]["data"];
+                        let (provider, id) =
+                            if record.native["event"]["type"] == "subagent/descriptor" {
+                                (&data["agentProvider"], &data["agentModel"])
+                            } else {
+                                assert_eq!(record.native["event"]["type"], "request/header");
+                                (
+                                    &data["header"]["config"]["provider"],
+                                    &data["header"]["config"]["model"],
+                                )
+                            };
+                        assert_eq!(record.agent_path.last(), Some(&child_id));
+                        assert_eq!(
+                            model,
+                            &format!("{}/{}", provider.as_str().unwrap(), id.as_str().unwrap())
+                        );
+                        return model.clone();
+                    }
+                }
+            }
+            panic!("child stream closed before its native model was reported")
+        })
+        .await
+        .expect("expected attributed DSH child model");
+        assert_eq!(chat.snapshot().model.as_ref(), tb.opts.model.as_ref());
+        eprintln!("DSH reported {selected} for its separate child session");
+    }
     chat.close().await.unwrap();
     let reopened = tb
         .store

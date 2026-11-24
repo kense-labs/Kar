@@ -251,6 +251,7 @@ pub(crate) struct Actor {
     compactions: wire::compaction::Compactions,
     child_tasks: wire::tasks::CodexTasks,
     ancestry: HashMap<String, Vec<String>>,
+    claude_child_models: HashMap<Vec<String>, String>,
     last_assistant_anchor: Option<String>,
     claude_followup: Option<uuid::Uuid>,
     claude_errors: HashMap<Vec<String>, Value>,
@@ -325,6 +326,7 @@ impl Actor {
             queue: VecDeque::new(),
             secrets,
             ancestry: HashMap::new(),
+            claude_child_models: HashMap::new(),
             arguments: Default::default(),
             manual_compaction: None,
             command_revision: 0,
@@ -1751,7 +1753,7 @@ impl Actor {
             }
             children.observe(root.as_deref(), &v, &mut events);
         }
-        let parent = v["parent_tool_use_id"].as_str();
+        let parent = v["parent_tool_use_id"].as_str().filter(|id| !id.is_empty());
         let path = self
             .cursor_children
             .as_ref()
@@ -1770,6 +1772,16 @@ impl Actor {
             Protocol::Claude | Protocol::Qoder | Protocol::Qwen
         ) {
             events.retain(|event| {
+                if self.protocol == Protocol::Claude
+                    && !path.is_empty()
+                    && let Event::Model { model } = event
+                {
+                    if model == "<synthetic>" || self.claude_child_models.get(&path) == Some(model)
+                    {
+                        return false;
+                    }
+                    self.claude_child_models.insert(path.clone(), model.clone());
+                }
                 let Event::ToolStarted { id, .. } = event else {
                     return true;
                 };
