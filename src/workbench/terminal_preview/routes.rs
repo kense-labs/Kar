@@ -35,6 +35,10 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
             axum::routing::put(resize),
         )
         .route("/projects/{p}/terminals/{id}/ports", get(ports))
+        .route(
+            "/projects/{p}/terminals/{id}/ports/stop",
+            post(stop_listener),
+        )
         .route("/projects/{p}/previews", get(previews).post(open_preview))
         .route(
             "/projects/{p}/previews/{id}",
@@ -193,6 +197,28 @@ async fn ports(
             return process::ports(root);
         }
         Ok(vec![])
+    })
+    .await
+}
+#[derive(Deserialize)]
+struct StopListener {
+    pid: u32,
+    port: u16,
+    born: Option<u64>,
+}
+async fn stop_listener(
+    State(app): State<Workbench>,
+    Path((p, id)): Path<(Uuid, Uuid)>,
+    Json(q): Json<StopListener>,
+) -> Reply<()> {
+    blocking(move || {
+        app.project(p)?;
+        let term = app.0.terminal_preview.find(p, id)?.snapshot();
+        let root = term
+            .process
+            .filter(|_| matches!(term.status, Status::Running))
+            .ok_or_else(super::missing)?;
+        process::stop_listener(root, q.pid, q.port, q.born)
     })
     .await
 }

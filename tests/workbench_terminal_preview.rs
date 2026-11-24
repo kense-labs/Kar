@@ -490,3 +490,61 @@ async fn clear_wakes_two_observers_and_survives_restart_without_replacing_the_pt
     restarted.kill().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn stop_checks_live_owner_and_job_and_only_terminates_the_selected_listener() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("root");
+    fs::create_dir(&root)?;
+    let server = Server::start(&temp.path().join("state"), &root).await?;
+    let c = Client::new();
+    let one = launch(&server, &c, &root.join("one"), "one").await?;
+    let two = launch(&server, &c, &root.join("two"), "two").await?;
+    let request = |term: &str, target: &Value| {
+        c.post(format!("{term}/ports/stop")).bearer_auth(TOKEN)
+        .json(&json!({"pid":target["owner"]["pid"],"born":target["owner"]["born"],"port":target["port"]}))
+    };
+    assert_eq!(
+        request(&one.term, &two.target).send().await?.status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut wrong = one.target.clone();
+    wrong["owner"]["born"] = 0.into();
+    assert_eq!(
+        request(&one.term, &wrong).send().await?.status(),
+        StatusCode::NOT_FOUND
+    );
+    request(&one.term, &one.target)
+        .send()
+        .await?
+        .error_for_status()?;
+    let addr = |s: &Fixture| format!("127.0.0.1:{}", s.target["port"]);
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(addr(&one)).await.is_err() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert!(tokio::net::TcpStream::connect(addr(&one)).await.is_err());
+    let (other, url) = browser_origin_url(&two.grant).await?;
+    assert!(
+        other
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?
+            .contains("Kar preview two")
+    );
+    assert_eq!(
+        request(&one.term, &one.target).send().await?.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(api(c.get(&one.term)).await?["status"]["state"], "running");
+    for fixture in [one, two] {
+        api(c.delete(fixture.term)).await?;
+    }
+    server.kill().await?;
+    Ok(())
+}

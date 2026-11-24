@@ -220,3 +220,102 @@ pub(super) fn owns_peer(
 ) -> Result<bool> {
     Ok(false)
 }
+
+#[cfg(target_os = "macos")]
+pub(super) fn stop_listener(root: ProcessId, pid: u32, port: u16, born: Option<u64>) -> Result<()> {
+    use libproc::processes::{ProcFilter, pids_by_type};
+    use nix::{
+        errno::Errno,
+        sys::signal::{Signal, killpg},
+        unistd::{Pid, getpgid},
+    };
+    use std::time::{Duration, Instant};
+    let not_found = || {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "preview listener not found",
+        ))
+    };
+    let shared = || {
+        Error::Refused(
+            "shared-group: the listener does not have an independent terminal job".into(),
+        )
+    };
+    let failed =
+        || Error::Refused("signal-failed: could not inspect or signal the preview job".into());
+    let owner = ports(root)?
+        .into_iter()
+        .find(|target| {
+            target.owner.pid == pid
+                && target.port == port
+                && born.is_none_or(|b| target.owner.born == b)
+        })
+        .map(|t| t.owner)
+        .ok_or_else(not_found)?;
+    let pid = Pid::from_raw(owner.pid as i32);
+    let group = match getpgid(Some(pid)) {
+        Ok(group) => group,
+        Err(Errno::ESRCH) => return Ok(()),
+        Err(_) => return Err(failed()),
+    };
+    if group.as_raw() <= 1 || getpgid(Some(Pid::from_raw(root.pid as i32))) == Ok(group) {
+        return Err(shared());
+    }
+    let members = || -> Result<Vec<ProcessId>> {
+        let list = pids_by_type(ProcFilter::ByProgramGroup {
+            pgrpid: group.as_raw() as u32,
+        })
+        .map_err(|_| failed())?;
+        // Require an identity for every extant group member. A vanished process cannot receive a signal.
+        let mut found = vec![];
+        for id in list {
+            if let Some(key) = identity(id) {
+                found.push(key);
+            } else if getpgid(Some(Pid::from_raw(id as i32))) == Ok(group) {
+                return Err(failed());
+            }
+        }
+        Ok(found)
+    };
+    let before = members()?;
+    let allowed = descendants(root);
+    if before.iter().any(|p| !allowed.contains(p) || *p == root) {
+        return Err(shared());
+    }
+    if !before.contains(&owner)
+        || identity(owner.pid) != Some(owner)
+        || getpgid(Some(pid)) != Ok(group)
+    {
+        return Err(not_found());
+    }
+    let signal = |sig| match killpg(group, sig) {
+        Ok(()) => Ok(()),
+        Err(Errno::ESRCH) => Ok(()),
+        Err(_) => Err(failed()),
+    };
+    signal(Signal::SIGTERM)?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let now = members()?;
+        if !now.iter().any(|p| before.contains(p)) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let allowed = descendants(root);
+            if now
+                .iter()
+                .any(|p| !before.contains(p) && !allowed.contains(p))
+            {
+                return Err(shared());
+            }
+            return signal(Signal::SIGKILL);
+        }
+        std::thread::sleep(Duration::from_millis(125));
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub(super) fn stop_listener(_: ProcessId, _: u32, _: u16, _: Option<u64>) -> Result<()> {
+    Err(Error::Unsupported(
+        "stopping terminal listeners on this platform".into(),
+    ))
+}
