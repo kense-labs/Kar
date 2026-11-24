@@ -115,14 +115,14 @@ impl Wire {
         self.child.stop().await;
     }
 
-    pub(super) async fn send(&mut self, value: Value) -> Result<()> {
+    pub(crate) async fn send(&mut self, value: Value) -> Result<()> {
         let mut bytes = serde_json::to_vec(&value)?;
         bytes.push(b'\n');
         self.stdin.write_all(&bytes).await?;
         self.stdin.flush().await?;
         Ok(())
     }
-    pub(super) async fn next(&mut self) -> Result<Value> {
+    pub(crate) async fn next(&mut self) -> Result<Value> {
         let mut buf = vec![];
         loop {
             buf.clear();

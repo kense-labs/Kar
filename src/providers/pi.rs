@@ -1,6 +1,7 @@
 mod catalog;
 mod login;
 mod models;
+pub(crate) use models::picker as model_choices;
 mod sdk;
 mod terminal;
 use super::{Method, ProviderAuthOptions, ProviderStatus, within};

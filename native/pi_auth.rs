@@ -2,6 +2,7 @@
 //! are supplied on stdin and are resolved and stored only by Pi.
 mod node_api;
 mod pi_catalog;
+mod pi_picker;
 mod pipe;
 use node_api::{Env, Handle, Read};
 use std::{
@@ -366,7 +367,8 @@ extern "C" fn napi_register_module_v1(env: Handle, exports: Handle) -> Handle {
         frame("READY", b"");
         let start = input_line().ok_or("configuration")?;
         let cfg = jsparse(e, e.text(&start)?)?;
-        if e.json(e.get(cfg, c"op")?)? == br#""menu""# {
+        let op = e.json(e.get(cfg, c"op")?)?;
+        if op == br#""menu""# {
             // Enumerating login methods needs the models configuration only.
             // Opening the real AuthStorage would create an empty auth.json.
             let storage = load("./core/auth-storage.js")?;
@@ -379,7 +381,14 @@ extern "C" fn napi_register_module_v1(env: Handle, exports: Handle) -> Handle {
             &[
                 e.call(process, c"cwd", &[])?,
                 e.get(cfg, c"agentDir")?,
-                jsparse(e, e.text(r#"{"projectTrusted":false}"#)?)?,
+                jsparse(
+                    e,
+                    e.text(if op == br#""picker""# {
+                        r#"{"projectTrusted":true}"#
+                    } else {
+                        r#"{"projectTrusted":false}"#
+                    })?,
+                )?,
             ],
         )?;
         let global = e.call(settings, c"getGlobalSettings", &[])?;
@@ -397,6 +406,11 @@ extern "C" fn napi_register_module_v1(env: Handle, exports: Handle) -> Handle {
         e.set(state, c"config", cfg)?;
         e.set(state, c"settings", settings)?;
         e.set(state, c"package", package)?;
+        if op == br#""picker""# {
+            e.set(state, c"piAi", load("@earendil-works/pi-ai")?)?;
+            pi_picker::start(e, state)?;
+            return Ok(exports);
+        }
         let p = e.call(model, c"create", &[cfg])?;
         on_promise(e, state, p, dispatch)?;
         Ok(exports)

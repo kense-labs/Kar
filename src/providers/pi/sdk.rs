@@ -137,6 +137,18 @@ impl Host {
         }
         Ok((tag.into(), data.into()))
     }
+    pub(super) async fn picker(&mut self) -> Result<String> {
+        // Project extensions can log on stdout while registering their providers.
+        while let Some(line) = self.output.next_line().await? {
+            if let Some(data) = line.strip_prefix("KAR-AUTH PICKER ") {
+                return Ok(data.into());
+            }
+            if line.starts_with("KAR-AUTH ERROR ") {
+                return Err(protocol());
+            }
+        }
+        Err(protocol())
+    }
     pub(super) fn config(pi: &PiProviders, op: &str) -> Result<Value> {
         Ok(json!({
             "op": op,

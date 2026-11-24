@@ -16,7 +16,7 @@ pub(super) async fn skills(
     let result = runtime
         .query_workspace(opts, true, async |probe, path, _, _| {
             let mut lock = Some(crate::dsh::profile::lock(probe, "acp").await?);
-            let running = owner.insert(launch(probe, path)?);
+            let running = owner.insert(launch(probe, path, json!({"cwd":probe.cwd}))?);
             let snapshot = read(&mut running.process, &mut lock).await?;
             let complete = snapshot["complete"].as_bool().ok_or_else(invalid)?;
             let items = rows(&snapshot["skills"])?
@@ -65,7 +65,7 @@ struct Running {
     process: OwnedProcess,
     _directory: tempfile::TempDir,
 }
-fn launch(probe: &Probe, executable: &Path) -> Result<Running> {
+fn launch(probe: &Probe, executable: &Path, scope: Value) -> Result<Running> {
     let directory = tempfile::tempdir()?;
     let plugin = directory.path().join("skills.node");
     std::fs::write(
@@ -78,7 +78,7 @@ fn launch(probe: &Probe, executable: &Path) -> Result<Running> {
         &patch,
         serde_json::to_vec(&json!([
             {"id":"acp","disabled":true},
-            {"insert":[{"id":"kar-rust-skills","name":uri.as_str(),"config":{"cwd":probe.cwd}}]}
+            {"insert":[{"id":"kar-rust-skills","name":uri.as_str(),"config":scope}]}
         ]))?,
     )?;
     let mut options = probe
@@ -152,7 +152,7 @@ async fn read(process: &mut OwnedProcess, lock: &mut Option<File>) -> Result<Val
         match snapshot["error"].as_str() {
             Some("native_query_unavailable") => {
                 return Err(Error::Unsupported(
-                    "DSH does not expose skills.snapshot".into(),
+                    "DSH does not expose the requested inventory method".into(),
                 ));
             }
             Some(_) => return Err(invalid()),
@@ -166,4 +166,118 @@ fn addon_unavailable(line: &str) -> bool {
         || (line.contains("skills.node")
             && (line.contains("code signature") || line.contains("Unknown file extension")))
         || line.contains("--experimental-addon-modules is not allowed")
+}
+
+pub(crate) async fn model_choices(
+    rt: &Runtime,
+    opts: &crate::SessionOptions,
+) -> Result<Vec<crate::forms::ModelEntry>> {
+    let runtime = rt.selected(opts).await?;
+    let version = crate::dsh::release(&runtime, opts, None).await?;
+    if version < semver::Version::parse("0.2.1-rc.5").unwrap() {
+        return Err(Error::Unsupported(
+            "DSH model listing requires 0.2.1-rc.5 or later".into(),
+        ));
+    }
+    let probe = Probe::for_session(opts)?;
+    let mut lock = Some(crate::dsh::profile::lock(&probe, "acp").await?);
+    let mut run = launch(
+        &probe,
+        &runtime.program,
+        json!({"cwd":probe.cwd,"catalog":"models"}),
+    )?;
+    let snapshot = read(&mut run.process, &mut lock).await;
+    run.process.stop().await;
+    project_models(&snapshot?)
+}
+
+fn project_models(catalog: &Value) -> Result<Vec<crate::forms::ModelEntry>> {
+    use crate::{forms::ModelEntry, providers::ProviderErrorKind};
+    let mut entries = vec![];
+    let providers = rows(&catalog["providers"])?;
+    let default = &catalog["default"];
+    for p in providers {
+        let Some(provider) = p["id"].as_str() else {
+            continue;
+        };
+        for model in p["models"].as_array().into_iter().flatten() {
+            let Some(id) = model["id"].as_str() else {
+                continue;
+            };
+            let mut metadata = serde_json::Map::new();
+            let mut source = json!({"id":provider});
+            if let Some(name) = p["name"].as_str() {
+                source["displayName"] = name.into();
+            }
+            metadata.insert("provider".into(), source);
+            if let Some(name) = model["name"].as_str() {
+                metadata.insert("displayName".into(), name.into());
+            }
+            let reasoning = &model["reasoning"];
+            let efforts = reasoning.as_object().map(|_| {
+                reasoning["efforts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v["id"].as_str().map(str::to_owned))
+                    .collect()
+            });
+            if let Some(level) = reasoning["defaultEffort"].as_str() {
+                metadata.insert("defaultEffort".into(), level.into());
+            }
+            entries.push(ModelEntry {
+                id: format!("{provider}/{id}"),
+                default: default["provider"] == provider && default["model"] == id,
+                effort_levels: efforts,
+                disabled: None,
+                metadata,
+            });
+        }
+    }
+    if entries.is_empty() {
+        if default["provider"].as_str().is_some_and(|id| {
+            !id.is_empty()
+                && providers.iter().any(|p| {
+                    p["id"] == id
+                        && !p["failure"].is_string()
+                        && p["models"].as_array().is_none_or(Vec::is_empty)
+                })
+        }) {
+            return Err(ProviderErrorKind::AuthenticationFailed
+                .error("DSH's default provider advertises no credentialed models"));
+        }
+        if providers.iter().any(|p| p["failure"].is_string()) {
+            return Err(Error::Unsupported(
+                "DSH could not list any provider's models".into(),
+            ));
+        }
+    }
+    Ok(entries)
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+    #[test]
+    fn picker_distinguishes_failed_unconfigured_and_empty_default() {
+        let source = json!({"default":{"provider":"deep","model":"a"},"providers":[{"id":"deep","name":"Deep","models":[{"id":"a","name":"A","reasoning":{"efforts":[{"id":"high"}],"defaultEffort":"high"}}]}]});
+        let row = &project_models(&source).unwrap()[0];
+        assert!(row.default);
+        assert_eq!(row.id, "deep/a");
+        assert_eq!(row.effort_levels.as_ref().unwrap(), &["high"]);
+        assert_eq!(row.metadata["provider"]["displayName"], "Deep");
+        let cases = [
+            json!({"default":{"provider":"p"},"providers":[{"id":"p","models":[]}]}),
+            json!({"default":{"provider":"p"},"providers":[{"id":"p","failure":"failed"}]}),
+            json!({"default":{"provider":"other"},"providers":[{"id":"p","models":[]}]}),
+        ];
+        assert!(
+            matches!(project_models(&cases[0]),Err(Error::Provider(error)) if error.kind==crate::providers::ProviderErrorKind::AuthenticationFailed)
+        );
+        assert!(matches!(
+            project_models(&cases[1]),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(project_models(&cases[2]).unwrap().is_empty());
+    }
 }

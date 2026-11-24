@@ -2,7 +2,7 @@
 mod opencode;
 pub(crate) use opencode::workspace_skills as opencode_workspace_skills;
 pub(crate) use opencode::{fork as opencode_fork, recovery as opencode_recovery};
-mod pi;
+pub(crate) mod pi;
 mod qwen;
 pub use opencode::OpenCodeProviders;
 pub use pi::{
@@ -72,7 +72,7 @@ pub struct ProviderError {
     pub status: Option<u16>,
 }
 impl ProviderErrorKind {
-    fn error(self, detail: &str) -> Error {
+    pub(crate) fn error(self, detail: &str) -> Error {
         ProviderError {
             kind: self,
             detail: detail.into(),

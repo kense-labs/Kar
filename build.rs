@@ -5,6 +5,7 @@ fn main() {
         "node_api",
         "pipe",
         "dsh_skills",
+        "dsh_models",
         "dsh_profile",
         "dsh_agent_controls",
         "dsh_agent_startup",
@@ -15,6 +16,7 @@ fn main() {
         "pi_requests",
         "pi_auth",
         "pi_catalog",
+        "pi_picker",
     ] {
         println!("cargo:rerun-if-changed=native/{file}.rs");
     }

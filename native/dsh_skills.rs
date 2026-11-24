@@ -2,6 +2,7 @@
 //! All callbacks run on the DSH event-loop thread. Promise callbacks retain their
 //! context via Function.bind; no native reference outlives its callback scope.
 
+mod dsh_models;
 mod node_api;
 use node_api::{Env, Handle, Read};
 use std::{
@@ -52,6 +53,10 @@ extern "C" fn completed(env: Handle, info: Handle) -> Handle {
 extern "C" fn loaded(env: Handle, info: Handle) -> Handle {
     callback(env, |e| {
         let (ctx, [scope]) = e.args(info)?;
+        let catalog = e.get(scope, c"catalog")?;
+        if e.kind(catalog)? == 4 && e.json(catalog)? == br#""models""# {
+            return dsh_models::read(e, ctx);
+        }
         let skills = e.call(ctx, c"get", &[e.text("skills")?])?;
         if e.kind(skills)? != 6 {
             return Err("native_query_unavailable");

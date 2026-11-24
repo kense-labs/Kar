@@ -21,6 +21,16 @@ impl Runtime {
             if let Some(menu) = crate::acp_models::Menu::for_runtime(self) {
                 return menu.list(self, options).await;
             }
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+            if self.id == "dsh" {
+                return crate::inventory::dsh::model_choices(self, options).await;
+            }
+            if self.protocol == crate::Protocol::Pi && self.id == "pi" {
+                return crate::providers::pi::model_choices(self, options).await;
+            }
+            if self.protocol == crate::Protocol::Qoder && self.id == "qoder" {
+                return crate::qoder::picker::read(self, options).await;
+            }
             if self.protocol == crate::Protocol::Claude && self.id == "claude" {
                 let rows = crate::inventory::claude_models(&self.selected(options).await?, options)
                     .await?;
@@ -73,6 +83,17 @@ impl Runtime {
         let result = match tokio::time::timeout(options.handshake_timeout, read).await {
             Ok(Ok(models)) => Ok(models),
             Err(_) | Ok(Err(Error::Timeout(_))) => Err(ListingReason::Timeout),
+            Ok(Err(Error::Provider(e))) => Err(match e.kind {
+                crate::providers::ProviderErrorKind::TimedOut => ListingReason::Timeout,
+                crate::providers::ProviderErrorKind::AuthenticationFailed => {
+                    ListingReason::Unauthenticated
+                }
+                crate::providers::ProviderErrorKind::UnsupportedInstallation
+                | crate::providers::ProviderErrorKind::VersionUnsupported => {
+                    ListingReason::Unsupported
+                }
+                _ => ListingReason::Failed,
+            }),
             Ok(Err(Error::Unsupported(_))) => Err(ListingReason::Unsupported),
             Ok(Err(Error::Open(error))) if matches!(*error, OpenError::RuntimeFailure { ref failure, .. } if failure.class == FailureClass::Auth) => {
                 Err(ListingReason::Unauthenticated)

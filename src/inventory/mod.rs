@@ -6,7 +6,7 @@ mod codex;
 pub(crate) mod codex_models;
 mod cursor;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-mod dsh;
+pub(crate) mod dsh;
 mod entries;
 pub(crate) mod model_choices;
 pub use entries::{CommandEntry, McpServerEntry, SkillEntry, SkillScope, ToolEntry};

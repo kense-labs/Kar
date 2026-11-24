@@ -1,4 +1,5 @@
 //! Qoder's worker and per-session daemon transports share the stream-JSON conversation.
+pub(crate) mod picker;
 use crate::{Error, Result, Runtime, Session, SessionOptions};
 use semver::Version;
 use serde_json::{Value, json};
@@ -328,6 +329,10 @@ pub(crate) fn private_reply(method: &str, v: &Value, session: Option<&str>) -> R
 fn resolved<'a>(models: &'a Value, selector: &str, version: &Version) -> Option<&'a str> {
     let rows = models.as_array()?;
     let row = rows.iter().find(|r| r["value"] == selector)?;
+    model_name(row, rows, version)
+}
+fn model_name<'a>(row: &'a Value, rows: &[Value], version: &Version) -> Option<&'a str> {
+    let selector = row["value"].as_str().filter(|s| !s.is_empty())?;
     if version < &Version::new(1, 1, 82) {
         return row
             .pointer("/serverModel/display_name")?
