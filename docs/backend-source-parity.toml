@@ -350,8 +350,8 @@ phase = 2
 name = "工作区、独立工作树和仓库范围的联动回滚"
 upstream = ["apps/server/src/orchestration-v2/CheckpointRollbackService.ts", "apps/server/src/orchestration-v2/CheckpointRollbackService.taskFolder.test.ts", "apps/server/src/orchestration-v2/CheckpointRestoreSafety.ts"]
 kar = ["src/chat/checkpoint/restore.rs", "src/chat/fork/worktree.rs"]
-status = "根目录、受管仓库、跨目录分叉基线及全仓库冲突预检已接入，待统一验收"
-implementation_ref = "0efe2ce, 772a249, e78c698"
+status = "工作区文件恢复、独立分叉以及保留原聊天 ID 仅回退模型分别有入口。原聊天同一次操作内同时回退模型与文件仍缺。"
+implementation_ref = "0efe2ce, 772a249, e78c698, f5f1273, 3ab6da6"
 test_target = "cargo test --locked --test chat_restart -- workbench-task-folders"
 accept = "两个受管仓库在同一回合修改。预览指出各自的路径；存在冲突时所有仓库都维持原内容。落盘恢复、重启重试及在独立目录分叉后继续聊时，逐一读取文件、原生会话和父工作区。"
 
@@ -569,7 +569,8 @@ phase = 2
 name = "ACP 注册表安装、账号、供应商和会话管理"
 upstream = ["apps/server/src/provider/AcpRegistrySessions.ts", "apps/server/src/ws.ts"]
 kar = ["src/workbench/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+status = "目录搜索、准备、启动、关闭后卸载和固定版本重装已集成。动态代理的本地命令配置、认证、模型菜单和仅支持新建的代理另见 backend-workbench-acp-registry.md。"
+implementation_ref = "2c53f5b, cbd3c93"
 test_target = "cargo test --locked --test protocol"
 accept = "按固定来源搜索并准备 ACP 实例、处理 URL 授权；列出及选择供应商和会话、导入、删除、禁用、卸载及退出。逐操作检查原生副作用和范围。"
 
@@ -783,7 +784,8 @@ name = "工作台 MCP 议题关联和操作"
 upstream = ["apps/server/src/mcp/toolkits/issues/tools.ts", "apps/server/src/mcp/toolkits/issues/handlers.ts"]
 kar = ["src/workbench/forge"]
 operation_mapping = "backend-workbench-mcp-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+status = "授权模型可列出、读取、创建、评论、关闭与重开。聊天与 Issue 的绑定、解绑、列出关联仍缺模型工具。"
+implementation_ref = "634e11f, 4553498"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "逐工具核对仓库、远端账号和聊天范围、绑定与解绑；写后直接向托管端读取。"
 
@@ -897,7 +899,8 @@ name = "工作台 MCP 工作流操作"
 upstream = ["apps/server/src/mcp/toolkits/workflow/tools.ts", "apps/server/src/mcp/toolkits/workflow/handlers.ts"]
 kar = ["src/workbench/workflows"]
 operation_mapping = "backend-workbench-mcp-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+status = "模型入口可列出、启动、读取、恢复、取消运行并处理问题。按键读取、写入和删除持久值的模型工具仍缺，见本轮功能复核。"
+implementation_ref = "d9f0442"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "按工具的每种 action 编排，核对定义和运行、超时、重复命令与回报的回合归属。"
 
@@ -908,7 +911,8 @@ name = "工作台 MCP 工作树和交接"
 upstream = ["apps/server/src/mcp/toolkits/worktree/tools.ts", "apps/server/src/mcp/toolkits/worktree/handlers.ts"]
 kar = ["src/workbench/git.rs"]
 operation_mapping = "backend-workbench-mcp-map.tsv"
-status = "已核对固定版本的声明与处理函数。待接通相应的 Kar 入口并统一实测。"
+status = "模型可列出工作树、查看状态并在回合边界移交同一聊天，剩余参数和实测单列。"
+implementation_ref = "ee01eae"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "检查含未提交更改的交接、状态及列表，目标树和仓库受当前项目约束。"
 
@@ -1074,3 +1078,23 @@ kar = ["src/workbench/background.rs", "src/chat/queue.rs"]
 status = "原始任务启动游标、原回合和控制器丢失已保存。按主动取消/进程退出生成并投递说明以及重启去重待实现。"
 test_target = "cargo test --locked --test chat_restart -- workbench-background"
 accept = "后台命令失联后按是否标记等待选择下一次唤醒，恢复原会话后在原回合关联处读取说明。用户主动取消的记录有相应原因；连续两次崩溃最多向模型交付一次同一说明。"
+
+[[gap]]
+id = "stream-text-groups"
+phase = 1
+name = "按原生消息及阶段合并增量事件并在静默时刷新"
+upstream = ["packages/oar/src/contracts/session.ts#L163", "packages/oar/src/observe/events.ts#L133", "packages/oar/src/runtimes/codex/messages.ts#L15"]
+kar = ["src/stream.rs", "src/session.rs", "src/wire.rs"]
+status = "公开订阅提供逐事件读取。当前缺少可选的文本合并、消息和阶段边界、静默刷新。"
+test_target = "tests/protocol.rs，尚需对应场景"
+accept = "在同一 Codex 回合依次输出多个原生消息、阶段和代理的增量。合并后每组保留最后游标；跨界或超时刷新；从游标续读没有重复。"
+
+[[gap]]
+id = "installation-host-diagnostic"
+phase = 1
+name = "安装探测报告宿主或必需依赖不满足的原因"
+upstream = ["packages/oar/src/contracts/installation.ts#L65", "packages/oar/src/runtimes/pi/installation.ts#L77"]
+kar = ["src/installation.rs", "src/installation"]
+status = "Kar 提供缺失和程序探测失败等状态。当前缺少独立的宿主不支持、必需依赖缺失诊断分类。"
+test_target = "src/installation.rs，尚需对应的隔离安装探测场景"
+accept = "对实际需要宿主依赖的启动模式分别制造缺依赖、找不到程序、程序版本过旧，检查客户端读取的具体原因。"
