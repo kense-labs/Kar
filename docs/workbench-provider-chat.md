@@ -24,6 +24,15 @@ cargo test --locked --test workbench_provider_chat -- installed muse
 
 每条命令创建独立临时工作区和聊天存储，通过真实 Kar CLI 发出两轮请求。第二轮在新进程中恢复原生会话，提示只要求复述第一轮随机值。断言读取两轮各自的助手输出。
 
-## 边界
+## Muse 的四项能力边界
 
-Muse 当前可恢复已结束回合的会话。若原生回复表示回合仍活跃、投影不可用或会话 ID 不匹配，Kar 会返回具体错误。Muse 原生分叉、子代理自主唤醒及后台工作流的审批不在此适配器批次。Kiro 和 Fx 的恢复取决于本机发行版协商到的 ACP 会话能力；运行时拒绝时 Kar 通过普通入口返回原因。
+以下对照使用工作台固定提交和它锁定的 `@muse-code/sdk@1.4.6`。证据来自生产适配器源码。测试文件定位用于复核预期，尚未在本轮执行。[依赖锁定](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/package.json#L32)
+
+| 用户操作 | 固定 T3 的行为 | 当前 Kar 的可观察结果 |
+|---|---|---|
+| Muse 进程在回答中退出，重新打开会话 | 适配器声明活动回合不支持原生恢复。进程退出时将正在进行的回合标为失败，只有空闲时退出才允许当前适配器重新启动。重新打开已保存的会话会调用 `session/resume`，返回的 `activeTurnId` 本身不能让工作台接管原回合。[回合能力](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L128-L136) · [退出处理](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L1125-L1147) · [恢复会话](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L1955-L1986) | 已结束回合的会话可以恢复。新的 MSP 连接若报告 `activeTurnId`，Kar 明确拒绝打开，提示该回合结束后再恢复。[打开校验](../src/session/muse.rs) |
+| 选中已完成回合，创建 Muse 原生子会话 | 线程、回合和子代理分叉均声明为不可用。生产分叉入口直接返回错误；源码记录已完成回合的切点遭原生 `InvalidCut` 拒绝，并注明可以使用可移植交接。这里没有覆盖其他原生切点或其他 Muse 版本的实机证据。[能力声明](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L119-L126) · [分叉入口](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L2497-L2513) | 原生分叉请求返回不支持，父聊天继续使用原来的原生会话。[运行时分叉入口](../src/runtime.rs) |
+| 没有用户发消息，Muse 自行开始后台回合 | 有当前聊天和续跑服务时，适配器会向工作台登记续跑请求，缓存该原生回合的事件。工作台接纳请求后沿用已有回合 ID，回放缓存，无须再次发送 `turn/start`。宿主退出会清空等待中的请求。[登记与归属](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L1438-L1474) · [接纳已有回合](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L2158-L2167) | Kar 仅投影本次提交所拥有的原生回合。空闲时收到的自主回合不会形成可见的聊天回合。这是 Kar 的实现缺口。[回合过滤](../src/transport/muse.rs) |
+| 工作流子代理在父回合结束后请求审批 | 适配器把带 `subagentOrigin` 的审批挂在线程上，可跨越父回合结束；普通模式下用户仍可应答。完全访问模式下适配器尝试选择批准，原生拒绝且该请求仍待处理时才显示。会话能力另声明待审批请求不跨宿主重启保留。[审批归属](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L1183-L1215) · [应答与回退](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L1313-L1333) · [重启边界](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-muse/src/server/adapter.ts#L112-L118) | Kar 仅将根回合的审批送入交互队列。后台子代理的审批不会显示，用户无法从 Kar 决定。这是 Kar 的实现缺口。[审批筛选](../src/transport/muse.rs) |
+
+Kiro 和 Fx 的恢复取决于本机发行版协商到的 ACP 会话能力。运行时拒绝时，Kar 通过普通入口返回原因。
