@@ -103,9 +103,26 @@ pub(super) async fn run() -> kar::Result<()> {
         .await?;
     assert!(matches!(s.steer("error").await, Err(Error::Refused(_))));
     assert!(matches!(s.steer("unknown").await, Err(Error::Protocol(_))));
-    let Delivery::Queued { turn: fallback, .. } = s.deliver("fallback").await? else {
+    let fallback_id = uuid::Uuid::new_v4();
+    let Delivery::Queued {
+        input_id,
+        turn: fallback,
+    } = s.deliver_with_id(fallback_id, "fallback").await?
+    else {
         panic!("not queued")
     };
+    assert_eq!(input_id, fallback_id);
+    let rows = s.records();
+    let rejected = rows
+        .iter()
+        .find(|r| r.native["type"] == "steer" && r.native["inputId"] == fallback_id.to_string())
+        .expect("steer fallback reused the logical ID");
+    let accepted = fallback.admission().expect("queue admission receipt");
+    assert_eq!(accepted.request.native["inputId"], fallback_id.to_string());
+    assert_ne!(
+        rejected.control_request_id(),
+        accepted.request.control_request_id()
+    );
     s.abort().await?;
     assert_eq!(first.wait().await?, Outcome::Aborted);
     assert_eq!(fallback.wait().await?, Outcome::Completed);

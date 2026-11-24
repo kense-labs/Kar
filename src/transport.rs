@@ -1096,20 +1096,24 @@ impl Actor {
                 let request = self
                     .journal
                     .control_request(json!({"type":"withdraw","inputId":input}));
-                let Some(pos) = self.queue.iter().position(|e| e.id == input) else {
+                let mut removed = false;
+                while let Some(pos) = self.queue.iter().position(|e| e.id == input) {
+                    let entry = self.queue.remove(pos).expect("queued entry was present");
+                    let _ = entry.done.send(Ok(crate::TurnReport {
+                        native_input_receipt: None,
+                        outcome: Outcome::Aborted,
+                        structured_output: None,
+                        failure: None,
+                        text: String::new(),
+                    }));
+                    removed = true;
+                }
+                if !removed {
                     self.journal
                         .control_decision(request, Some(("not_queued", "input is not queued")));
                     let _ = tx.send(Err(Error::Refused("input is not queued".into())));
                     return Ok(true);
-                };
-                let entry = self.queue.remove(pos).expect("queue position exists");
-                let _ = entry.done.send(Ok(crate::TurnReport {
-                    native_input_receipt: None,
-                    outcome: Outcome::Aborted,
-                    structured_output: None,
-                    failure: None,
-                    text: String::new(),
-                }));
+                }
                 self.record(
                     Direction::Host,
                     RecordKind::Response,

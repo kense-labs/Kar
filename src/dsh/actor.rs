@@ -701,7 +701,7 @@ impl Actor {
             Command::Queue(id, input, ack, done) => {
                 let request = input.request_id;
                 self.journal.queue_request(id, &input, &self.secrets);
-                let r = if self.compacting.is_some() {
+                let r = if self.compacting.is_some() || self.turns.contains_key(&id.to_string()) {
                     Err(Error::Busy)
                 } else {
                     self.submit(input, id, Some(done), true).await

@@ -83,6 +83,18 @@ pub(crate) async fn check(s: &Session, slow: &str, hold: impl Fn(), release: imp
     let from = s.records().len();
     let first = s.prompt(slow).await.unwrap();
     let (removed, withdrawn_turn) = s.queue("withdraw this input").await.unwrap();
+    let retry = s
+        .queue_with_id(removed, "withdraw this input")
+        .await
+        .unwrap();
+    assert_ne!(
+        withdrawn_turn
+            .admission()
+            .unwrap()
+            .request
+            .control_request_id(),
+        retry.admission().unwrap().request.control_request_id()
+    );
     let rows = s.records();
     let (before, accepted) = control(&rows, "queue", removed);
     assert_eq!(accepted.native["type"], "accepted");
@@ -99,6 +111,7 @@ pub(crate) async fn check(s: &Session, slow: &str, hold: impl Fn(), release: imp
     let (request, decision) = control(&after, "withdraw", removed);
     assert_eq!(decision.native["type"], "accepted");
     assert_eq!(withdrawn_turn.wait().await.unwrap(), Outcome::Aborted);
+    assert_eq!(retry.wait().await.unwrap(), Outcome::Aborted);
     for gone in [removed, Uuid::new_v4()] {
         assert!(matches!(s.withdraw(gone).await, Err(Error::Refused(_))));
         let after = s.records();

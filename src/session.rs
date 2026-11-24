@@ -1567,46 +1567,76 @@ impl Session {
             receiver,
         })
     }
-    /// Queue an input in the host process. It starts when the preceding turn ends.
+    /// Queue an input, using the backend's native or adapter queue.
     pub async fn queue(&self, text: impl Into<String>) -> Result<(Uuid, Turn)> {
         let id = Uuid::new_v4();
+        self.queue_with_id(id, text).await.map(|turn| (id, turn))
+    }
+    pub async fn queue_with_id(&self, id: Uuid, text: impl Into<String>) -> Result<Turn> {
         let (done, receiver) = oneshot::channel();
         let input = crate::input::Input::text(text.into());
         let request = input.request_id;
         self.check_input("queue", id, request, &input.text, &[])?;
         crate::input::check_text(&input.text, self.text_limit)?;
         self.call(|tx| Command::Queue(id, input, tx, done)).await?;
-        Ok((
-            id,
-            Turn {
-                input_id: id,
-                admission: self.control_receipt(&request.to_string()),
-                receiver,
-            },
-        ))
+        Ok(Turn {
+            input_id: id,
+            admission: self.control_receipt(&request.to_string()),
+            receiver,
+        })
     }
     pub async fn withdraw(&self, id: Uuid) -> Result<()> {
         self.call(|tx| Command::Withdraw(id, tx)).await
     }
     /// Start now when idle, steer a live native turn when supported, otherwise queue.
     pub async fn deliver(&self, text: impl Into<String>) -> Result<Delivery> {
+        self.deliver_with_id(Uuid::new_v4(), text).await
+    }
+    /// Keep one logical input ID across a status race, steering refusal and queue fallback.
+    pub async fn deliver_with_id(
+        &self,
+        input_id: Uuid,
+        text: impl Into<String>,
+    ) -> Result<Delivery> {
         let text = text.into();
-        match self.prompt(text.clone()).await {
-            Ok(turn) => return Ok(Delivery::Started(turn)),
-            Err(Error::Busy) => {}
-            Err(error) => return Err(error),
-        }
-        if self.capabilities().steering {
-            match self.steer(text.clone()).await {
-                Ok(()) => return Ok(Delivery::Steered),
-                Err(Error::Refused(reason))
-                    if reason == "no active turn"
-                        || reason == "runtime has not acknowledged this turn" => {}
-                Err(error) => return Err(error),
+        let running_since = || match self.status() {
+            crate::observe::AgentStatus::Running { since_seq, .. } => Some(since_seq),
+            _ => None,
+        };
+        for _ in 0..4 {
+            if running_since().is_none() {
+                match self.prompt_with_id(input_id, text.clone()).await {
+                    Ok(turn) => return Ok(Delivery::Started(turn)),
+                    Err(Error::Busy) => {}
+                    Err(error) => return Err(error),
+                }
             }
+            let Some(target) = running_since() else {
+                continue;
+            };
+            if self.capabilities().steering {
+                match self.steer_with_id(input_id, text.clone()).await {
+                    Ok(()) => return Ok(Delivery::Steered),
+                    Err(Error::Refused(_) | Error::Unsupported(_))
+                        if running_since() != Some(target) =>
+                    {
+                        continue;
+                    }
+                    Err(Error::Unsupported(_)) => {}
+                    Err(Error::Refused(reason))
+                        if matches!(
+                            reason.as_str(),
+                            "no active turn"
+                                | "no active DSH turn"
+                                | "runtime has not acknowledged this turn"
+                        ) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            let turn = self.queue_with_id(input_id, text).await?;
+            return Ok(Delivery::Queued { input_id, turn });
         }
-        let (input_id, turn) = self.queue(text).await?;
-        Ok(Delivery::Queued { input_id, turn })
+        Err(Error::Busy)
     }
     pub async fn steer(&self, text: impl Into<String>) -> Result<()> {
         self.steer_with_id(Uuid::new_v4(), text).await
