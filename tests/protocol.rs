@@ -27,6 +27,8 @@ mod codex_catalog;
 mod crew;
 #[path = "protocol/crew_options.rs"]
 mod crew_options;
+#[path = "protocol/delivery.rs"]
+mod delivery;
 #[path = "protocol/dsh_skills.rs"]
 mod dsh_skills;
 #[path = "protocol/environment.rs"]
@@ -1069,55 +1071,6 @@ async fn controls(p: Protocol) -> kar::Result<()> {
     }
     session.close().await
 }
-async fn delivery_timing() -> kar::Result<()> {
-    use kar::{DeliverLanded, DeliverOptions, DeliverWhen, InputOptions};
-    use std::sync::Arc;
-    let (_dir, runtime, opts) = rig(Protocol::Acp, ApprovalMode::Deny);
-    let session = runtime.open(opts).await?;
-    assert!(!session.capabilities().steering);
-    let mut events = session.subscribe(None)?;
-    let active = session.prompt("delivery-tool-wait").await?;
-    loop {
-        let r = events.next().await.expect("active session");
-        if r.events.iter().any(|e| matches!(e, Event::ToolStarted{id,..} if id=="held-tool")) { break; }
-    }
-    let first = session.deliver_with_options("merged-first", DeliverOptions{when: DeliverWhen::AfterTurn, ..Default::default()}).await?;
-    assert_eq!(first.landed, DeliverLanded::Queued);
-    let one = uuid::Uuid::new_v4();
-    let two = uuid::Uuid::new_v4();
-    let background = {
-        let session = session.clone();
-        tokio::spawn(async move {
-            session.deliver_with_options("interrupt-one", DeliverOptions{
-                when: DeliverWhen::Interrupt{max_wait: Duration::from_secs(12)},
-                input: InputOptions{input_id: Some(one), ..Default::default()},
-                merge: Some(Arc::new(|items| Ok(kar::MergedInput{text: items.iter().map(|i|i.text.as_str()).collect::<Vec<_>>().join(" + "), ..Default::default()}))),
-            }).await
-        })
-    };
-    loop {
-        let r = events.next().await.expect("active session");
-        if r.events.iter().any(|e|matches!(e,Event::InputQueued{input_id} if input_id==&one.to_string())) {break;}
-    }
-    let result=session.deliver_with_options("interrupt-two",DeliverOptions{
-        when:DeliverWhen::Interrupt{max_wait:Duration::ZERO},
-        input:InputOptions{input_id:Some(two),..Default::default()},..Default::default()
-    }).await?;
-    assert_eq!(active.wait().await?,Outcome::Aborted);
-    let shared=background.await.unwrap()?;
-    assert_eq!(shared.input_id,one);
-    assert_eq!(result.input_id,two);
-    assert_eq!(result.landed,DeliverLanded::Prompted);
-    assert_eq!(result.merged_input_ids,[first.input_id,one,two]);
-    assert_eq!(shared.merged_input_ids,result.merged_input_ids);
-    let request=&result.control.unwrap().request;
-    assert_eq!(request.native.pointer("/params/prompt/0/text").and_then(Value::as_str),Some("merged-first + interrupt-one + interrupt-two"));
-    assert_eq!(request.carries,result.merged_input_ids.iter().map(ToString::to_string).collect::<Vec<_>>());
-    let idle=session.deliver_with_options("normal", DeliverOptions{when:DeliverWhen::WhenIdle,..Default::default()}).await?;
-    assert_eq!(idle.landed,DeliverLanded::Prompted);
-    session.close().await
-}
-
 async fn failures() -> kar::Result<()> {
     for message in ["exit", "malformed"] {
         let (_d, r, opts) = rig(Protocol::Acp, ApprovalMode::Deny);
@@ -1763,7 +1716,7 @@ async fn main() {
     structured_output().await.unwrap();
     manual_compaction_controls().await.unwrap();
     failures().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(12), delivery_timing()).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(12), delivery::run()).await.unwrap().unwrap();
     acp_failures::run().await.unwrap();
     tokio::time::timeout(Duration::from_secs(20), claude_input::run())
         .await
