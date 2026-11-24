@@ -1,4 +1,5 @@
 //! Read live table leaves from an already opened native SQLite snapshot.
+mod projection;
 use sqlite_core::{Database, Row, Value as SqlValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -31,6 +32,22 @@ impl Tables {
         name: &str,
         mut consume: impl FnMut(&Columns, Row) -> io::Result<()>,
     ) -> io::Result<()> {
+        self.leaves(name, |page, _, _, columns| {
+            for row in self
+                .db
+                .read_table(page, columns.0.len())
+                .map_err(sqlite_err)?
+            {
+                consume(columns, row)?;
+            }
+            Ok(())
+        })
+    }
+    fn leaves(
+        &self,
+        name: &str,
+        mut visit: impl FnMut(u32, &[u8], usize, &Columns) -> io::Result<()>,
+    ) -> io::Result<()> {
         let Some((root, names)) = self.tables.get(name) else {
             return Ok(());
         };
@@ -48,20 +65,16 @@ impl Tables {
             if !visited.insert(page) || visited.len() > self.db.page_count() as usize {
                 return Err(invalid("invalid SQLite table traversal"));
             }
-            let data = self
+            let full = self
                 .db
                 .raw_page(page)
                 .ok_or_else(|| invalid("missing SQLite page"))?;
             let start = if page == 1 { 100 } else { 0 };
-            let data = data
+            let data = full
                 .get(start..)
                 .ok_or_else(|| invalid("short SQLite page"))?;
             match data.first() {
-                Some(13) => {
-                    for row in self.db.read_table(page, names.len()).map_err(sqlite_err)? {
-                        consume(&cols, row)?;
-                    }
-                }
+                Some(13) => visit(page, &full, start, &cols)?,
                 Some(5) => {
                     let get16 = |at: usize| {
                         data.get(at..at + 2)

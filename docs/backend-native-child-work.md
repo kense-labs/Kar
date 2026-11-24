@@ -18,3 +18,5 @@ Kar 保留 Antigravity 原生默认 `antigravity-cli`，也识别启动指定的
 
 - `cargo test --locked --test chat_restart -- workbench-native-child-work` 使用真实 Kar SDK、工作台 HTTP 与 Git，搭配隔离的 ACP peer、SQLite/protobuf、子收件箱和步骤文件。核对重启时改传配置目录、切换到 Codex 后原生分叉继承历史、planner 与随机工具 ID、重复批次、同名 MCP、错误回合、重复 detached 收件人、链接日志。
 - `cargo test --locked --test chat_restart -- workbench-native-child-work-live` 只读已经运行的 Kar 工作台中的真实回合。需要回环地址 `KAR_CHILD_WORK_URL`、`KAR_WORKBENCH_TOKEN`、`KAR_CHILD_WORK_PROJECT`、`KAR_CHILD_WORK_CHAT`、`KAR_CHILD_WORK_TURN`、`KAR_CHILD_WORK_TOOL` 和 `KAR_CHILD_WORK_EXPECTED`（用逗号按原生顺序列出子会话 ID）。该回合须由记录实例归属的 Kar 版本创建，至少有一个子会话保留了步骤。它核对 HTTP 读回的全部子会话身份与步骤是否存在，不发送消息。
+
+SQLite 查询先读表叶页上的列类型和长度，确定候选步骤后才读取该步的 protobuf 字节与溢出页。单步上限 1 MiB，候选调用最多 200 个，调用字节合计上限 8 MiB。库级复验用 `cargo test --locked --lib unrelated_overflow_is_never_followed_and_bounded_blobs_cross_pages_intact`，核对无关大字段的损坏溢出链不会影响选中小字段的完整读取。

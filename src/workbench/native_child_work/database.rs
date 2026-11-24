@@ -7,7 +7,7 @@ use crate::workbench::{
     antigravity_proto::Fields,
     native_sqlite::{Tables, sqlite_err},
 };
-use sqlite_core::{Database, Value};
+use sqlite_core::Database;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::File,
@@ -147,30 +147,26 @@ fn lookup(db: &Tables, root: &str, target: &Batch, siblings: &[Batch]) -> Option
     let mut planners = HashMap::new();
     // Bound candidate metadata first. Native idx is not necessarily the table rowid.
     let mut rows = BTreeMap::new();
-    db.read("steps", |c, row| {
-        let idx = match c.get(&row, "idx") {
-            Some(Value::Integer(i)) => *i,
-            Some(Value::Null) => row.rowid,
-            _ => return Err(profile::invalid()),
-        };
-        let format = c.int(&row, "step_format").ok_or_else(profile::invalid)?;
-        let data = match c.get(&row, "step_payload") {
-            Some(Value::Blob(b)) => Some(b),
-            _ => None,
-        };
+    db.records("steps", |row| {
+        let idx = row.integer("idx")?.unwrap_or(row.rowid);
+        let is_invoke = row.integer("step_type")? == Some(127);
+        if !is_invoke && !needed.contains(&idx) {
+            return Ok(());
+        }
+        let format = row.integer("step_format")?.ok_or_else(profile::invalid)?;
+        let data = row.blob("step_payload")?;
         if format == 0 && needed.contains(&idx) {
             let calls = data
                 .filter(|b| b.len() <= MAX_STEP)
-                .and_then(|b| planner(b));
+                .map(|b| b.read(db, MAX_STEP))
+                .transpose()?
+                .and_then(|bytes| planner(&bytes));
             if planners.insert(idx, calls).is_some() {
                 return Err(profile::invalid());
             }
         }
-        if c.int(&row, "step_type") == Some(127)
-            && index.is_none_or(|start| idx > start && format == 0)
-        {
-            let size = data.map_or(usize::MAX, |b| b.len());
-            if rows.insert(idx, (size, format)).is_some() {
+        if is_invoke && index.is_none_or(|start| idx > start && format == 0) {
+            if rows.insert(idx, (data, format)).is_some() {
                 return Err(profile::invalid());
             }
             if rows.len() > MAX_ROWS {
@@ -192,8 +188,9 @@ fn lookup(db: &Tables, root: &str, target: &Batch, siblings: &[Batch]) -> Option
         claimed.extend(ids);
     }
     let mut bytes = 0usize;
-    let mut allowed = HashSet::new();
-    for (idx, (size, format)) in rows {
+    let mut matched = None;
+    for (_idx, (blob, format)) in rows {
+        let size = blob.as_ref().map_or(usize::MAX, |b| b.len());
         bytes = bytes.saturating_add(size);
         if size > MAX_STEP || bytes > MAX_SCAN || format != 0 {
             if index.is_some() {
@@ -202,23 +199,7 @@ fn lookup(db: &Tables, root: &str, target: &Batch, siblings: &[Batch]) -> Option
                 return None;
             }
         }
-        allowed.insert(idx);
-    }
-    let mut records = BTreeMap::new();
-    db.read("steps", |c, row| {
-        let idx = c.int(&row, "idx").unwrap_or(row.rowid);
-        if !allowed.contains(&idx) {
-            return Ok(());
-        }
-        let Some(Value::Blob(data)) = c.get(&row, "step_payload") else {
-            return Err(profile::invalid());
-        };
-        records.insert(idx, Invoke::decode(data));
-        Ok(())
-    })
-    .ok()?;
-    let mut matched = None;
-    for record in records.into_values() {
+        let record = Invoke::decode(&blob?.read(db, MAX_STEP).ok()?);
         if index.is_some() {
             if let Some(record) = record
                 && record
