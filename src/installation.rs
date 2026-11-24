@@ -1,5 +1,6 @@
 //! Local installation discovery and noninteractive vendor readiness probes.
 mod cache;
+mod host;
 mod paths;
 use crate::{Error, Installation, Protocol, Result, Runtime, SessionOptions};
 use regex::Regex;
@@ -30,6 +31,10 @@ pub enum InstallationIssue {
     ReadinessFailed,
     UnrecognizedExecutable,
     VersionUnsupported,
+    DependencyMissing,
+    UnsupportedHost,
+    UnsupportedPlatform,
+    UnsupportedNodeVersion,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -285,6 +290,7 @@ impl Probe {
     }
     async fn verify(&self, rt: &Runtime, c: &Candidate) -> InstallationSnapshot {
         use InstallationIssue::*;
+        if let Some(failure) = host::missing_interpreter(self, c) { return failure; }
         let id = rt.id.as_str();
         let (args, identity): (&[&str], &str) = match id {
             "codex" => (
@@ -340,11 +346,12 @@ impl Probe {
             15
         };
         if !args.is_empty() {
-            let Ok(out) = self.run(&c.command, args, timeout).await else {
-                return c.fail(ReadinessFailed, "could not run the readiness probe");
+            let out = match self.run(&c.command, args, timeout).await {
+                Ok(out) => out,
+                Err(error) => return host::spawn_failure(c, error, "could not run the readiness probe"),
             };
             if !out.status.success() {
-                return c.fail(ReadinessFailed, "the readiness command failed");
+                return host::reported_failure(c, &out).unwrap_or_else(|| c.fail(ReadinessFailed, "the readiness command failed"));
             }
             let help = format!(
                 "{}\n{}",
@@ -367,9 +374,11 @@ impl Probe {
         } else {
             "--version"
         };
-        let Ok(out) = self.run(&c.command, &[version_arg], timeout).await else {
-            return c.fail(ReadinessFailed, "could not run the version probe");
+        let out = match self.run(&c.command, &[version_arg], timeout).await {
+            Ok(out) => out,
+            Err(error) => return host::spawn_failure(c, error, "could not run the version probe"),
         };
+        if let Some(failure) = host::reported_failure(c, &out) { return failure; }
         let version = out
             .status
             .success()
