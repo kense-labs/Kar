@@ -174,3 +174,16 @@ sea-trial/vendor/codex-idle-queue.vendor.test.ts#L29	52	df4c4be	codex	原生候�
 sea-trial/vendor/codex-idle-queue.vendor.test.ts#L29	53	df4c4be	codex	原生候选已编译	tests/native_live/codex_queue.rs	"async fn native_queue_receipt_idle_interruption_and_restart_of_admission() >> .prompt(""resume with prompt"")"	真实 Codex app-server 与隔离回环模型的候选；本轮只确认 macOS 编译。
 sea-trial/vendor/codex-idle-queue.vendor.test.ts#L29	55	df4c4be	codex	原生候选已编译	tests/native_live/codex_queue.rs	"async fn native_queue_receipt_idle_interruption_and_restart_of_admission() >> next.admission().unwrap().response.native[""type""]"	真实 Codex app-server 与隔离回环模型的候选；本轮只确认 macOS 编译。
 sea-trial/vendor/codex-idle-queue.vendor.test.ts#L29	56	df4c4be	codex	原生候选已编译	tests/native_live/codex_queue.rs	async fn native_queue_receipt_idle_interruption_and_restart_of_admission() >> tokio::time::timeout(LIMIT, next.wait())	真实 Codex app-server 与隔离回环模型的候选；本轮只确认 macOS 编译。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	7	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	"assert_eq!(receipt.response.native[""type""], ""accepted"");"	steer 的本次回执为 accepted，另外核对 abort 回执。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	8	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	assert_eq!(sent.unwrap().status, TurnStatus::Aborted);	原生回合被中断。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	9	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	"chat.send(Uuid::new_v4(), ""NEXT_PROMPT"")"	下一轮回合必须完成。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	10	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	assert_eq!(statuses.get(&unread), Some(&kar::SteerStatus::Cancelled));	已接受但未读的输入在原回合归为已取消。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	11	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	"r.input_drop_reason(&unread_id) == Some(""turn_interrupted"")"	按原输入 UUID 检查原生中断原因。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	12	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	"assert!(rows.iter().all(|r| !(r.native[""method""] == ""item/started"""	没有带此 clientId 的原始 item/started。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	14	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	assert!(observed.iter().any(|(next, _)| *next));	记录后续提示确实到达模型。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	15	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	assert!(!observed.iter().any(|(_, has_marker)| *has_marker));	检查整个原生模型请求 input，均没有本次标记。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	17	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	assert_eq!(drop.len(), 1);	丢弃来源是唯一的原生带类型事件帧。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	18	a545e3e	codex	原生候选已编译	tests/codex_process_cleanup.rs	"assert_eq!(drop[0].frame_type(), Some(""turn/completed""));"	原生结束帧类型。
+sea-trial/vendor/input-dropped.vendor.test.ts#L5	19	a545e3e	codex	部分口径，待实机	tests/codex_process_cleanup.rs	assert!(dropped < ended);	Kar 同帧还携带插话状态及分叉锚点；核对丢弃先于终态，不宣称与上游事件数组逐项相同。
+sea-trial/cases/session.ts#L277	294	83cb976	codex	原生候选已编译	tests/native_live.rs	async fn durable_cli_roundtrip( >> assert_eq!(result.chat.native_id, native);	继续后仍使用原生线程 ID。
+sea-trial/cases/session.ts#L277	295	83cb976	codex	原生候选已编译	tests/native_live.rs	async fn durable_cli_roundtrip( >> assert_eq!(recovered.status, kar::chat::TurnStatus::Completed);	针对 Codex 复验已恢复回合的终态，以及该场景前面的续聊结果。
