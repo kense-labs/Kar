@@ -102,6 +102,7 @@ pub(crate) enum Command {
     ),
     Send(Value, Reply<()>),
     Prompt(
+        uuid::Uuid,
         crate::input::Input,
         Option<crate::chat::Admission>,
         Reply<()>,
@@ -377,7 +378,14 @@ impl Actor {
         mut events: Vec<Event>,
         path: Vec<String>,
     ) {
-        let stamp = origin.into();
+        let mut stamp = origin.into();
+        if stamp.direction == Direction::ToRuntime
+            && kind == RecordKind::Request
+            && events.contains(&Event::PromptDispatched)
+            && let Some(id) = self.turn.as_ref().and_then(|t| t.chat_input)
+        {
+            stamp = stamp.with_prompt(id, self.protocol == Protocol::Pi);
+        }
         let direction = stamp.direction;
         let session = self.source(&v).or_else(|| self.session());
         if direction == Direction::ToRuntime {
@@ -911,7 +919,7 @@ impl Actor {
                 self.pi_deadlines.remove(&key);
                 let _ = tx.send(Ok(()));
             }
-            Command::Prompt(prompt, admission, tx, done) => {
+            Command::Prompt(id, prompt, admission, tx, done) => {
                 if self.turn.is_some()
                     || self.claude_notifications.active()
                     || self.claude_steering.waiting()
@@ -922,7 +930,7 @@ impl Actor {
                     let _ = tx.send(Err(Error::Busy));
                     return Ok(true);
                 }
-                let input_id = admission.as_ref().map(crate::chat::Admission::request_id);
+                let input_id = Some(id);
                 if let Err(err) = crate::chat::Admission::commit(admission).await {
                     let _ = tx.send(Err(err));
                     return Ok(true);

@@ -287,6 +287,7 @@ pub(super) async fn claude() {
             .load(std::sync::atomic::Ordering::Relaxed)
             > 0
     );
+    super::public_readbacks::check(&a).await.unwrap();
     for session in [a, b] {
         session.close().await.unwrap();
         for r in session.records() {

@@ -5,6 +5,8 @@ mod claude_history;
 mod cursor;
 #[path = "native_live/pi_history.rs"]
 mod pi_history;
+#[path = "support/public_readbacks.rs"]
+mod public_readbacks;
 #[path = "native_live/resume_prompts.rs"]
 mod resume_prompts;
 #[path = "support/sse.rs"]

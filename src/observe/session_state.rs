@@ -102,6 +102,14 @@ pub struct SessionSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<crate::NativeTask>,
 }
+impl SessionSnapshot {
+    pub(crate) fn into_readback<T>(self, project: impl FnOnce(Self) -> T) -> super::Readback<T> {
+        super::Readback {
+            seq: self.cursor.as_ref().map(|c| c.after_seq),
+            value: project(self),
+        }
+    }
+}
 struct Run {
     span: Option<String>,
     since_seq: u64,

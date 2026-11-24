@@ -179,6 +179,7 @@ mod tests {
             ),
         ] {
             let record = Record {
+                prompt: None,
                 events: c.observe(protocol, &native).into_iter().collect(),
                 native,
                 seq: 4,

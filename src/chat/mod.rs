@@ -707,7 +707,7 @@ impl Sender {
         };
         let result = match self
             .session
-            .start_prompt(text, Vec::new(), Some(admission))
+            .start_prompt(id, text, Vec::new(), Some(admission))
             .await
         {
             Ok(turn) => {

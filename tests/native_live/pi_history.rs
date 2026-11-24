@@ -671,3 +671,14 @@ async fn three_native_writes_fork_at_middle_and_reopen_both_contexts() {
     replied(&turn, "first/middle/late/inspect");
     parent.close().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires KAR_PI_BIN; raw public prompt identities and projection cursors"]
+async fn public_prompt_readbacks() {
+    let fixture = fixture(true).await;
+    let mut runtime = kar::runtime("pi").unwrap();
+    runtime.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
+    let session = runtime.open(fixture.options.clone()).await.unwrap();
+    super::public_readbacks::check(&session).await.unwrap();
+    session.close().await.unwrap();
+}

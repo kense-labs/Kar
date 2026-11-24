@@ -49,6 +49,9 @@ async fn message(
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    if body.to_string().contains("KAR_PUBLIC_READBACK_FIXTURE") {
+        return completion("confirmed", None);
+    }
     let messages = body["messages"].to_string();
     if messages.contains("DSH_PROMPT_") {
         let session = headers
@@ -1598,4 +1601,20 @@ async fn legacy_refuses_scoped_directories_before_prompt() {
     ));
     assert!(tb.data.requests.lock().unwrap().is_empty());
     tb.server.abort();
+}
+
+#[path = "support/public_readbacks.rs"]
+mod public_readbacks;
+
+#[tokio::test]
+#[ignore = "real Web and ACP DSH with loopback models"]
+async fn public_prompt_readbacks() {
+    for protocol in [Protocol::Dsh, Protocol::Acp] {
+        let f = testbed(protocol).await;
+        let mut options = f.opts.clone();
+        options.settings.append_system_prompt = Some("KAR_PUBLIC_READBACK_FIXTURE".into());
+        let session = f.runtime.open(options).await.unwrap();
+        public_readbacks::check(&session).await.unwrap();
+        session.close().await.unwrap();
+    }
 }

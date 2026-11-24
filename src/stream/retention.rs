@@ -79,6 +79,7 @@ impl Record {
             timestamp_ms: self.timestamp_ms,
             direction: self.direction,
             kind: self.kind,
+            prompt: self.prompt.clone(),
             session_id: self.session_id.clone(),
             span_id: self.span_id.clone(),
             agent_path: self.agent_path.clone(),

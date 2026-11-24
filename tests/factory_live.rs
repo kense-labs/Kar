@@ -807,3 +807,16 @@ async fn native_mcp_transports_on_create_and_resume() {
     }
     host.close().await;
 }
+
+#[path = "support/public_readbacks.rs"]
+mod public_readbacks;
+
+#[tokio::test]
+#[ignore = "real Factory Droid with a loopback model"]
+async fn public_prompt_readbacks() {
+    let f = fixture().await;
+    f.model.tool_seen.send_replace(true);
+    let session = f.runtime.open(f.opts.clone()).await.unwrap();
+    public_readbacks::check(&session).await.unwrap();
+    session.close().await.unwrap();
+}

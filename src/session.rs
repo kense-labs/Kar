@@ -30,9 +30,15 @@ pub struct TurnReport {
 
 /// A dispatched input. Dropping this handle stops waiting, not the agent.
 pub struct Turn {
+    input_id: Uuid,
     receiver: oneshot::Receiver<Result<TurnReport>>,
 }
 impl Turn {
+    /// UUID supplied by the caller or allocated when the prompt was submitted.
+    pub fn input_id(&self) -> Uuid {
+        self.input_id
+    }
+
     pub async fn wait(self) -> Result<Outcome> {
         Ok(self.report().await?.outcome)
     }
@@ -1356,6 +1362,16 @@ impl Session {
     pub fn snapshot(&self) -> crate::observe::SessionSnapshot {
         self.journal.snapshot()
     }
+    pub fn model_readback(&self) -> crate::observe::Readback<Option<String>> {
+        self.snapshot().into_readback(|state| state.model)
+    }
+    pub fn usage_readback(&self) -> crate::observe::Readback<crate::SessionUsage> {
+        self.snapshot().into_readback(|state| state.usage)
+    }
+    /// Read retained context measurements synchronously, including their journal position.
+    pub fn context_usage_readback(&self) -> crate::observe::Readback<Option<crate::ContextUsage>> {
+        self.snapshot().into_readback(|state| state.context_usage)
+    }
     pub fn observe_stalls(&self, threshold: Duration) -> Result<crate::observe::StallSubscription> {
         crate::observe::StallSubscription::new(self, threshold)
     }
@@ -1431,15 +1447,29 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<Turn> {
+        self.prompt_images_with_id(Uuid::new_v4(), text, images)
+            .await
+    }
+    /// Dispatch an ordinary prompt with a caller-supplied identity.
+    pub async fn prompt_with_id(&self, id: Uuid, text: impl Into<String>) -> Result<Turn> {
+        self.prompt_images_with_id(id, text, Vec::new()).await
+    }
+    pub async fn prompt_images_with_id(
+        &self,
+        id: Uuid,
+        text: impl Into<String>,
+        images: Vec<crate::InputImage>,
+    ) -> Result<Turn> {
         if !images.is_empty() && !self.image_input {
             return Err(Error::Unsupported(
                 "runtime does not advertise image input".into(),
             ));
         }
-        self.start_prompt(text.into(), images, None).await
+        self.start_prompt(id, text.into(), images, None).await
     }
     pub(crate) async fn start_prompt(
         &self,
+        id: Uuid,
         text: String,
         images: Vec<crate::InputImage>,
         admission: Option<crate::chat::Admission>,
@@ -1450,9 +1480,14 @@ impl Session {
         // A managed turn owns the workspace until the actor actually attempts dispatch.
         // A local timeout could otherwise leave a still-live command behind after releasing it.
         let timeout = admission.is_none().then_some(self.timeout);
-        self.call_with_timeout(timeout, |tx| Command::Prompt(input, admission, tx, done))
-            .await?;
-        Ok(Turn { receiver })
+        self.call_with_timeout(timeout, |tx| {
+            Command::Prompt(id, input, admission, tx, done)
+        })
+        .await?;
+        Ok(Turn {
+            input_id: id,
+            receiver,
+        })
     }
     /// Queue an input in the host process. It starts when the preceding turn ends.
     pub async fn queue(&self, text: impl Into<String>) -> Result<(Uuid, Turn)> {
@@ -1461,7 +1496,13 @@ impl Session {
         let text = text.into();
         crate::input::check_text(&text, self.text_limit)?;
         self.call(|tx| Command::Queue(id, text, tx, done)).await?;
-        Ok((id, Turn { receiver }))
+        Ok((
+            id,
+            Turn {
+                input_id: id,
+                receiver,
+            },
+        ))
     }
     pub async fn withdraw(&self, id: Uuid) -> Result<()> {
         self.call(|tx| Command::Withdraw(id, tx)).await

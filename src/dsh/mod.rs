@@ -9,7 +9,6 @@ mod web;
 
 use crate::{Error, Event, Protocol, Result, Runtime, Session, SessionOptions, stream::Journal};
 use serde_json::{Value, json};
-use uuid::Uuid;
 use web::{Socket, Web};
 
 pub(crate) fn uses_web(version: &semver::Version) -> bool {
@@ -306,9 +305,6 @@ async fn negotiate(
 }
 pub(super) fn turn_id(v: &Value) -> Option<String> {
     v.as_u64().map(|n| n.to_string())
-}
-pub(super) fn new_id(a: &Option<crate::chat::Admission>) -> Uuid {
-    a.as_ref().map_or_else(Uuid::new_v4, |a| a.request_id())
 }
 
 async fn follow(

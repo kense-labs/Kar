@@ -219,9 +219,6 @@ pub(crate) struct Admission {
     pub(super) checkpoint: super::log::TurnCapture,
 }
 impl Admission {
-    pub(crate) fn request_id(&self) -> Uuid {
-        self.id
-    }
     pub(crate) async fn commit(admission: Option<Self>) -> Result<()> {
         let Some(admission) = admission else {
             return Ok(());

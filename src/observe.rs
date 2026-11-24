@@ -17,6 +17,13 @@ pub use session_state::{
 pub use stall::{StallInfo, StallSubscription};
 use std::collections::BTreeMap;
 
+/// A projected value and the last journal sequence it consumed. An empty stream has no sequence.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Readback<T> {
+    pub seq: Option<u64>,
+    pub value: T,
+}
+
 /// Text actually written as a stdio turn prompt, excluding queue/steer controls and image data.
 pub(crate) fn sent_prompt_text(packet: &Value) -> Option<String> {
     let content = if packet["prompt_id"].is_string() && packet["content"].is_array() {

@@ -124,6 +124,16 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
             .ok_or_else(|| Error::Protocol("missing upstream receivedAt".into()))?,
         direction,
         kind,
+        prompt: if kind == RecordKind::Request && body["kind"] == "prompt" {
+            body["inputId"]
+                .as_str()
+                .map(|input_id| crate::PromptIdentity {
+                    input_id: input_id.into(),
+                    native_admission: body["admission"] == "native",
+                })
+        } else {
+            None
+        },
         session_id: Some(session_id.into()),
         span_id: v["spanId"].as_str().map(str::to_owned),
         agent_path: serde_json::from_value(v["agentPath"].clone())?,

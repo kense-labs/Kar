@@ -336,12 +336,18 @@ struct ThreadActor {
 }
 
 impl ThreadActor {
-    fn record(&self, direction: Direction, kind: RecordKind, native: Value, events: Vec<Event>) {
+    fn record(
+        &self,
+        direction: impl Into<crate::stream::RecordStamp>,
+        kind: RecordKind,
+        native: Value,
+        events: Vec<Event>,
+    ) {
         self.journal
             .push(direction, kind, None, Vec::new(), native, events);
     }
 
-    async fn submit(&self, input: Input) -> Result<Value> {
+    async fn submit(&self, input: Input, id: Option<Uuid>) -> Result<Value> {
         let mut body = json!({"input":input.text});
         if !input.images.is_empty() {
             body["images"] = input
@@ -351,8 +357,13 @@ impl ThreadActor {
                 .collect::<Vec<_>>()
                 .into();
         }
+        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.record(
-            Direction::ToRuntime,
+            if let Some(id) = id {
+                stamp.with_prompt(id, false)
+            } else {
+                stamp
+            },
             RecordKind::Request,
             body.clone(),
             vec![],
@@ -387,8 +398,8 @@ impl ThreadActor {
         }
     }
 
-    async fn start(&mut self, input: Input, done: Report) -> Result<()> {
-        let answer = match self.submit(input).await {
+    async fn start(&mut self, id: Uuid, input: Input, done: Report) -> Result<()> {
+        let answer = match self.submit(input, Some(id)).await {
             Ok(value) => value,
             Err(error) => {
                 let _ = done.send(Err(Error::Refused(error.to_string())));
@@ -587,12 +598,12 @@ impl ThreadActor {
 
     async fn command(&mut self, command: Command) -> bool {
         match command {
-            Command::Prompt(input, admission, ack, done) => {
+            Command::Prompt(id, input, admission, ack, done) => {
                 let result = if self.turn.is_some() || !self.queue.is_empty() {
                     Err(Error::Busy)
                 } else {
                     match crate::chat::Admission::commit(admission).await {
-                        Ok(()) => self.start(input, done).await,
+                        Ok(()) => self.start(id, input, done).await,
                         Err(e) => Err(e),
                     }
                 };
@@ -622,7 +633,7 @@ impl ThreadActor {
             }
             Command::Steer(input, ack) => {
                 let answer = if self.turn.is_some() {
-                    self.submit(input).await
+                    self.submit(input, None).await
                 } else {
                     Err(Error::Refused("no active turn".into()))
                 };
@@ -715,7 +726,7 @@ impl ThreadActor {
             if self.turn.is_none()
                 && let Some((id, text, done)) = self.queue.pop_front()
             {
-                let _ = self.start(Input::text(text), done).await;
+                let _ = self.start(id, Input::text(text), done).await;
                 self.journal.host_event(Event::InputRemoved {
                     input_id: id.to_string(),
                 });

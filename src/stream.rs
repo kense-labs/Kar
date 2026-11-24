@@ -39,10 +39,11 @@ pub enum Direction {
 }
 /// Captured before projecting a packet so relative deadlines and the
 /// journal record share the same clock reading.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct RecordStamp {
     pub direction: Direction,
     pub timestamp_ms: u64,
+    prompt: Option<PromptIdentity>,
 }
 
 impl From<Direction> for RecordStamp {
@@ -50,9 +51,27 @@ impl From<Direction> for RecordStamp {
         Self {
             direction,
             timestamp_ms: timestamp_ms(),
+            prompt: None,
         }
     }
 }
+/// Host identity of an ordinary prompt. Native admission is reported by Pi RPC.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptIdentity {
+    pub input_id: String,
+    pub native_admission: bool,
+}
+
+impl RecordStamp {
+    pub(crate) fn with_prompt(mut self, input_id: impl ToString, native_admission: bool) -> Self {
+        self.prompt = Some(PromptIdentity {
+            input_id: input_id.to_string(),
+            native_admission,
+        });
+        self
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordKind {
@@ -373,6 +392,8 @@ pub struct Record {
     pub timestamp_ms: u64,
     pub direction: Direction,
     pub kind: RecordKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<PromptIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -513,6 +534,7 @@ impl Journal {
             elided: false,
             upstream: None,
             span_id,
+            prompt: stamp.prompt,
             stream_id: self.id,
             seq,
             timestamp_ms: stamp.timestamp_ms,

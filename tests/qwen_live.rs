@@ -342,3 +342,16 @@ async fn native_memory_default_survives_chat_restart_and_user_settings_take_prec
     assert_eq!(std::fs::read_to_string(defaults).unwrap(), original);
     http.abort();
 }
+
+#[path = "support/public_readbacks.rs"]
+mod public_readbacks;
+
+#[tokio::test]
+#[ignore = "real Qwen Code with a loopback model"]
+async fn public_prompt_readbacks() {
+    let f = fixture().await;
+    let session = runtime("qwen").unwrap().open(f.opts.clone()).await.unwrap();
+    public_readbacks::check(&session).await.unwrap();
+    session.close().await.unwrap();
+    f.http.abort();
+}

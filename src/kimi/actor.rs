@@ -103,7 +103,13 @@ impl Actor {
             || self.pending_abort.is_some()
             || self.compaction.is_some()
     }
-    fn record(&self, dir: Direction, kind: RecordKind, mut body: Value, events: Vec<Event>) {
+    fn record(
+        &self,
+        dir: impl Into<crate::stream::RecordStamp>,
+        kind: RecordKind,
+        mut body: Value,
+        events: Vec<Event>,
+    ) {
         redact(&mut body, &self.secrets);
         self.journal.push(dir, kind, None, vec![], body, events);
     }
@@ -150,7 +156,17 @@ impl Actor {
             events.push(Event::PromptDispatched);
         }
         events.push(Event::UserMessage { text });
-        self.record(Direction::ToRuntime, RecordKind::Request, public, events);
+        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
+        self.record(
+            if steer {
+                stamp
+            } else {
+                stamp.with_prompt(id, false)
+            },
+            RecordKind::Request,
+            public,
+            events,
+        );
         let id = id.to_string();
         self.sent.insert(id.clone());
         if let Some(done) = done {
@@ -522,12 +538,12 @@ impl Actor {
     }
     async fn command(&mut self, c: Command) -> Result<()> {
         match c {
-            Command::Prompt(input, admission, ack, done) => {
+            Command::Prompt(id, input, admission, ack, done) => {
                 let res = if self.busy() || !self.queue.is_empty() {
                     Err(Error::Busy)
                 } else {
                     match crate::chat::Admission::commit(admission).await {
-                        Ok(()) => self.submit(input, Uuid::new_v4(), Some(done)).await,
+                        Ok(()) => self.submit(input, id, Some(done)).await,
                         Err(e) => Err(e),
                     }
                 };

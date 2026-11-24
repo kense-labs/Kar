@@ -375,6 +375,8 @@ async fn main() -> kar::Result<()> {
 }
 ```
 
+Rust 宿主可以用 `session.prompt_with_id(uuid, text)` 或 `prompt_images_with_id` 指定普通输入的 UUID。`prompt` 自动生成 UUID，返回的 `Turn::input_id()` 和发往供应商的请求记录 `Record::prompt` 可用于核对同一输入。Pi RPC 记录原生输入接纳方式。浏览器 Pi Durable 保留宿主传入的字符串请求 ID。`model_readback()`、`usage_readback()` 和 `context_usage_readback()` 从同一份状态快照返回该查询的值和已消费的最后一个 `seq`。空记录流的序号为 `None`。
+
 UI 可以同时通过 `session.subscribe(None)` 读取历史和后续记录。传入上一条记录的 `cursor()` 时，从下一条继续。子进程退出后订阅会结束，等待中的调用会返回错误。适配器重新打开原生会话时会分配新的 `stream_id`，序号从零开始。持久化时请保留两个字段。`observe::SessionView` 可以把实时或保存的记录还原为按 agent 分组的消息、工具状态和用量视图。
 
 失败回合可从 `TurnReport.failure`、`ChatTurn.failure` 或实时事件 `turn_failure` 读取失败分类和供应商原文。Codex、Claude、Pi、OpenCode、Grok 和 CodeBuddy 会优先采用原生错误类别。CodeBuddy 的任务失败即使通过成功的 RPC 响应返回，也会结束为失败回合。浏览器中的 Pi Durable 从对应输入的原生回执读取失败原因。缺少结构化证据时，ACP 与 Pi Durable 可按供应商原文分类，无法识别时保留 `unknown`。界面可用 `FailureClass::advice()` 获取重试时机和是否需要用户处理。

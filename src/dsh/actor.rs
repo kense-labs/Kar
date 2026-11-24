@@ -1,5 +1,4 @@
 use super::{
-    new_id,
     projection::Projection,
     turn_id,
     web::{self, Socket, Web},
@@ -194,8 +193,13 @@ impl Actor {
             events.push(Event::PromptDispatched);
         }
         events.push(Event::UserMessage { text });
+        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.journal.push(
-            Direction::ToRuntime,
+            if steer {
+                stamp
+            } else {
+                stamp.with_prompt(id, false)
+            },
             RecordKind::Request,
             None,
             vec![],
@@ -632,8 +636,7 @@ impl Actor {
 
     async fn command(&mut self, c: Command) -> Result<()> {
         match c {
-            Command::Prompt(input, a, ack, done) => {
-                let id = new_id(&a);
+            Command::Prompt(id, input, a, ack, done) => {
                 let result = if self.busy() {
                     Err(Error::Busy)
                 } else {

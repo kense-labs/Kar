@@ -141,6 +141,18 @@ export async function exercise() {
                 "native and projected arguments differ for "+id);
         }
     }
+    const before = recovered.records().length;
+    const auto = await recovered.prompt("without inputId");
+    check((await recovered.wait(auto.id)).status==="done","anonymous prompt did not finish");
+    const rows = recovered.records();
+    const autoIds = rows.slice(before).flatMap(r=>r.prompt ? [r.prompt.input_id] : []);
+    check(autoIds.length===1 && /^[0-9a-f-]{36}$/.test(autoIds[0]),"missing generated prompt identity");
+    check(rows.filter(r=>r.prompt?.input_id==="lookup").length===1,"opaque supplied identity lost");
+    const snap = recovered.snapshot();
+    for(const [read,expected] of [[recovered.modelReadback(),snap.model],[recovered.usageReadback(),snap.usage],
+        [recovered.contextUsageReadback(),snap.context_usage ?? null]]) {
+        check(read.seq===snap.cursor.after_seq && JSON.stringify(read.value)===JSON.stringify(expected),"query cursor or value mismatch");
+    }
     await recovered.close();await reopened.close(ctx);
     return {records:records.length,conversation:id};
 }

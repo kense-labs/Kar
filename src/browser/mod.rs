@@ -341,10 +341,18 @@ impl Core {
                 }
                 return Ok(existing);
             }
-            body["requestId"] = id.clone().into();
+        }
+        let request_id =
+            request_id.or_else(|| (mode == "reject").then(|| uuid::Uuid::new_v4().to_string()));
+        let mut stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
+        if let Some(id) = &request_id {
+            if mode == "reject" {
+                stamp = stamp.with_prompt(id, false);
+            }
+            body["requestId"] = id.as_str().into();
         }
         self.journal.push(
-            Direction::ToRuntime,
+            stamp,
             RecordKind::Request,
             None,
             vec![],
@@ -423,6 +431,27 @@ impl DurableSession {
             &serde_json::to_value(self.core.journal.snapshot())
                 .map_err(|e| error(e.to_string()))?,
         )
+    }
+    #[wasm_bindgen(js_name=modelReadback)]
+    pub fn model_readback(&self) -> JsResult<JsValue> {
+        js(&json!(
+            self.core.journal.snapshot().into_readback(|s| s.model)
+        ))
+    }
+    #[wasm_bindgen(js_name=usageReadback)]
+    pub fn usage_readback(&self) -> JsResult<JsValue> {
+        js(&json!(
+            self.core.journal.snapshot().into_readback(|s| s.usage)
+        ))
+    }
+    #[wasm_bindgen(js_name=contextUsageReadback)]
+    pub fn context_usage_readback(&self) -> JsResult<JsValue> {
+        js(&json!(
+            self.core
+                .journal
+                .snapshot()
+                .into_readback(|s| s.context_usage)
+        ))
     }
     #[wasm_bindgen(js_name=subscribeEvents)]
     pub fn subscribe_events(&self, cursor: JsValue) -> JsResult<DurableEvents> {

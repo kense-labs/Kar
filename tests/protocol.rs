@@ -37,6 +37,8 @@ mod pi_registry;
 mod private_inputs;
 #[path = "protocol/provider.rs"]
 mod provider;
+#[path = "support/public_readbacks.rs"]
+mod public_readbacks;
 #[path = "protocol/qoder.rs"]
 mod qoder;
 #[path = "protocol/qwen_providers.rs"]
@@ -651,6 +653,9 @@ async fn exercise(protocol: Protocol) -> kar::Result<()> {
         assert_eq!(session.model().as_deref(), Some("demo"));
     }
     assert_eq!(session.models().await?.as_array().unwrap().len(), 1);
+    let readbacks = r.open(opts.clone()).await?;
+    public_readbacks::check(&readbacks).await?;
+    readbacks.close().await?;
     let mut stream = session.subscribe(None)?;
     let result = session.prompt("normal").await?.wait().await?;
     assert_eq!(result, Outcome::Completed);
