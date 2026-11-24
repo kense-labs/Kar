@@ -83,9 +83,22 @@ pub(in crate::workbench) fn launched_by(
     caller: Uuid,
     target: Uuid,
 ) -> bool {
-    db.model_project_commands
-        .get(&target)
-        .is_some_and(|r| r.chat == caller && r.name == "kar_thread_launch" && r.result.is_some())
+    launched_project(db, caller, target).is_some()
+}
+pub(in crate::workbench) fn launched_project(
+    db: &crate::workbench::Catalog,
+    caller: Uuid,
+    target: Uuid,
+) -> Option<Uuid> {
+    let receipt = db.model_project_commands.get(&target)?;
+    if receipt.chat != caller || receipt.name != "kar_thread_launch" {
+        return None;
+    }
+    let result = receipt.result.as_ref()?;
+    if result["thread_id"].as_str()?.parse::<Uuid>().ok()? != target {
+        return None;
+    }
+    result["project_id"].as_str()?.parse().ok()
 }
 pub(super) fn handles(name: &str) -> bool {
     matches!(
@@ -115,7 +128,7 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         tools.push(Tool{name:"kar_project_clone",description:"Start a tracked repository clone into a granted directory and register the project.",properties:json!({"command_id":id,"project_id":id,"title":string,"directory":string,"source":string,"lookup":{"type":"object"},"protocol":{"enum":["https","ssh","auto"]}}),required:&["command_id","title","directory"]});
     }
     if policy.project_access.launch {
-        tools.push(Tool{name:"kar_thread_launch",description:"Launch a top-level chat in a project, scratch folder, or verified worktree. Reuse command_id after a lost reply.",properties:json!({"command_id":id,"project_id":id,"scratch":flag,"title":string,"runtime":string,"model":string,"message":string,"attachments":{"type":"array","items":id},"requested_output_schema":{},"workspace":{"enum":["root","worktree","existing_worktree"]},"directory":string,"base_ref":string,"branch":string,"start_from_origin":flag,"effort":string,"acp_mode":string}),required:&["command_id","title"]});
+        tools.push(Tool{name:"kar_thread_launch",description:"Launch a top-level chat in a project, scratch folder, or verified worktree. Reuse command_id after a lost reply.",properties:json!({"command_id":id,"project_id":id,"scratch":flag,"title":string,"runtime":string,"model":string,"message":string,"attachments":{"type":"array","items":id},"requested_output_schema":{},"workspace":{"enum":["root","worktree","existing_worktree"]},"directory":string,"base_ref":string,"branch":string,"start_from_origin":flag,"generate_title":flag,"approvals":{"enum":["deny","host"]},"effort":string,"acp_mode":string}),required:&["command_id","title"]});
     }
     tools
 }
@@ -165,9 +178,11 @@ pub(super) async fn call(
     name: &str,
     input: Value,
 ) -> Result<Value> {
+    let cmd = id(&input, "command_id")?;
+    let gate = app.0.mcp.command_gate(cmd);
+    let _command = gate.lock().await;
     let policy = check(app, caller, name)?;
     let grant = caller.grant.as_ref().unwrap();
-    let cmd = id(&input, "command_id")?;
     let definition = tools(caller)
         .into_iter()
         .find(|t| t.name == name)
@@ -175,7 +190,11 @@ pub(super) async fn call(
     let obj = input
         .as_object()
         .ok_or_else(|| refused("expected project operation arguments"))?;
-    if definition.required.iter().any(|key| !obj.contains_key(*key)) {
+    if definition
+        .required
+        .iter()
+        .any(|key| !obj.contains_key(*key))
+    {
         return Err(refused("missing required project operation field"));
     }
     if obj.keys().any(|k| definition.properties.get(k).is_none()) {
@@ -238,6 +257,18 @@ pub(super) async fn call(
                 p,
                 string(&input, "title")?.into(),
                 clone,
+                |db, result| {
+                    if !grant.active()
+                        || Policy::current(db, grant.project, grant.chat) != Some(&policy)
+                    {
+                        return Err(refused("project grant changed during repository lookup"));
+                    }
+                    db.model_project_commands
+                        .get_mut(&cmd)
+                        .ok_or_else(|| refused("missing clone command"))?
+                        .result = Some(result.clone());
+                    Ok(())
+                },
             )
             .await?
         }

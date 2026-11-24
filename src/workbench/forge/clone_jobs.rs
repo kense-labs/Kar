@@ -174,15 +174,18 @@ struct Start {
     input: CloneInput,
 }
 
+type CloneReceipt<'a> = dyn Fn(&mut crate::workbench::Catalog, &Value) -> crate::Result<()> + 'a;
+
 fn begin(
     app: &Workbench,
     id: Uuid,
     title: String,
     input: Prepared,
     retry: bool,
+    record: Option<&CloneReceipt<'_>>,
 ) -> Result<Job, ForgeError> {
     // Another registered project may already own this empty checkout after a failed attempt.
-    let id = if retry {
+    let id = if retry || record.is_some() {
         id
     } else {
         let db = app.0.catalog.lock().unwrap();
@@ -201,7 +204,7 @@ fn begin(
             return Err(Error::Refused("project ID was deleted".into()));
         }
         if let Some(old) = db.forge.clones.get(&id) {
-            if old.phase == "running" || old.phase == "done" || old.input.dest != input.dest {
+            if record.is_some() || old.phase == "running" || old.phase == "done" || old.input.dest != input.dest {
                 return Err(Error::Busy);
             }
         } else if retry {
@@ -222,6 +225,9 @@ fn begin(
             || db.projects.get(&id).is_some_and(|p| p.root != input.dest)
         {
             return Err(Error::Busy);
+        }
+        if let Some(record) = record {
+            record(db, &started(id, &input))?;
         }
         match std::fs::create_dir(&input.dest) {
             Ok(()) => {}
@@ -332,24 +338,26 @@ fn begin(
     });
     Ok(job)
 }
-pub(in crate::workbench) async fn model_start(app: Workbench, id: Uuid, title: String, payload: Value) -> crate::Result<Value> {
-    if let Some(j) = app.0.catalog.lock().unwrap().forge.clones.get(&id) {
-        if payload["directory"] != json!(j.input.dest) { return Err(Error::Refused("clone request ID already used".into())); }
-        return Ok(json!({"projectId":j.project,"cwd":j.input.dest,"phase":j.phase}));
-    }
-    let input = serde_json::from_value(payload)?;
-    let Json(result) = start(State(app),Json(Start{id,title,input})).await.map_err(|e| Error::Refused(e.detail))?;
-    Ok(result)
+fn started(id: Uuid, input: &Prepared) -> Value {
+    json!({"projectId":id,"cwd":input.dest,"repository":input.repo,"remoteUrl":input.source})
+}
+
+pub(in crate::workbench) async fn model_start(
+    app: Workbench, id: Uuid, title: String, payload: Value,
+    record: impl Fn(&mut crate::workbench::Catalog, &Value) -> crate::Result<()> + Send + Sync,
+) -> crate::Result<Value> {
+    let request = serde_json::from_value(payload)?;
+    let prepared = repository::prepare(&app, request).await.map_err(|e| Error::Refused(e.detail))?;
+    let job = begin(&app, id, title, prepared, false, Some(&record)).map_err(|e| Error::Refused(e.detail))?;
+    Ok(started(job.project, &job.input))
 }
 async fn start(State(app): State<Workbench>, Json(s): Json<Start>) -> Reply<Value> {
     if s.title.trim().is_empty() {
         return Err(ForgeError::bad("project title is required"));
     }
     let input = repository::prepare(&app, s.input).await?;
-    let job = begin(&app, s.id, s.title, input, false)?;
-    Ok(Json(
-        json!({"projectId":job.project,"cwd":job.input.dest,"repository":job.input.repo,"remoteUrl":job.input.source}),
-    ))
+    let job = begin(&app, s.id, s.title, input, false, None)?;
+    Ok(Json(started(job.project, &job.input)))
 }
 async fn cancel(State(app): State<Workbench>, Path(id): Path<Uuid>) -> Reply<Value> {
     let active = app.0.clones.tasks.lock().unwrap().get(&id).cloned();
@@ -367,7 +375,7 @@ async fn retry(State(app): State<Workbench>, Path(id): Path<Uuid>) -> Reply<Valu
     };
     let project = app.project(id)?;
     app.destination(&job.input.dest)?;
-    match begin(&app, id, project.name, job.input, true) {
+    match begin(&app, id, project.name, job.input, true, None) {
         Ok(_) => Ok(Json(json!({"applied":true}))),
         Err(e) if e.status == 409 => Ok(Json(json!({"applied":false}))),
         Err(e) => Err(e),

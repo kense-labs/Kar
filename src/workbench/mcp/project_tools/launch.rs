@@ -9,7 +9,7 @@ pub(super) async fn run(
     chat: Uuid,
     input: &Value,
 ) -> Result<Value> {
-    let title = string(input, "title")?.trim().to_owned();
+    let mut title = string(input, "title")?.trim().to_owned();
     if title.chars().count() > 200 || title.contains(['\n', '\r', '\0']) {
         return Err(refused("invalid chat title"));
     }
@@ -68,6 +68,55 @@ pub(super) async fn run(
     if input.get("requested_output_schema").is_some() && message.is_none() {
         return Err(refused("requested_output_schema needs a launch message"));
     }
+    if input
+        .get("generate_title")
+        .cloned()
+        .map(serde_json::from_value::<bool>)
+        .transpose()?
+        .unwrap_or(false)
+    {
+        let seed = message
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| attachments.first().map(|a| a.name.as_str()))
+            .ok_or_else(|| refused("a generated title needs a message or attachment"))?;
+        title = seed
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(80)
+            .collect();
+    }
+    let approvals = input
+        .get("approvals")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or(parent.approvals);
+    if parent.approvals == crate::ApprovalMode::Deny && approvals != parent.approvals {
+        return Err(refused(
+            "approval mode exceeds the calling chat's permissions",
+        ));
+    }
+    let requested_mode = input
+        .get("acp_mode")
+        .map(|_| string(input, "acp_mode"))
+        .transpose()?;
+    if requested_mode.is_some() && requested_mode != parent.settings.acp_mode.as_deref() {
+        return Err(refused(
+            "native mode must remain within the calling chat's permissions",
+        ));
+    }
+    let same_runtime = runtime == parent.runtime;
+    if !same_runtime
+        && (!parent.settings.disallowed_tools.is_empty()
+            || !parent.settings.exclude_user_configuration.is_empty()
+            || parent.settings.acp_mode.is_some())
+    {
+        return Err(refused(
+            "the chosen runtime cannot inherit native restrictions from another provider",
+        ));
+    }
     let strategy = input
         .get("workspace")
         .map(|_| string(input, "workspace"))
@@ -103,8 +152,20 @@ pub(super) async fn run(
             app.bind_model_checkout(project, chat, &path)?;
         }
         "worktree" => {
-            let dest = access.directory(Path::new(string(input, "directory")?))?;
-            let branch = string(input, "branch")?.to_owned();
+            let dest = match input.get("directory") {
+                Some(_) => access.directory(Path::new(string(input, "directory")?))?,
+                None => {
+                    let parent = access
+                        .directories
+                        .first()
+                        .ok_or_else(|| refused("worktree launch needs a granted directory"))?;
+                    access.directory(&parent.join(format!("kar-{chat}")))?
+                }
+            };
+            let branch = match input.get("branch") {
+                Some(_) => string(input, "branch")?.to_owned(),
+                None => format!("kar-{chat}"),
+            };
             let base = input
                 .get("base_ref")
                 .map(|_| string(input, "base_ref"))
@@ -135,7 +196,10 @@ pub(super) async fn run(
         }
         _ => return Err(refused("unsupported launch workspace")),
     }
-    if !grant.active() {
+    if !grant.active()
+        || !super::super::issues::authorized(app, grant)
+            .is_some_and(|p| p.executes() && &p.project_access == access)
+    {
         return Err(refused("calling grant expired"));
     }
     let settings = crate::SessionSettings {
@@ -148,14 +212,25 @@ pub(super) async fn run(
                     .then(|| parent.settings.effort.clone())
                     .flatten()
             }),
-        acp_mode: input
-            .get("acp_mode")
-            .map(|_| string(input, "acp_mode").map(str::to_owned))
-            .transpose()?,
+        acp_mode: parent.settings.acp_mode.clone(),
+        disallowed_tools: parent.settings.disallowed_tools.clone(),
+        exclude_user_configuration: parent.settings.exclude_user_configuration.clone(),
+        // An explicit grant to trust one checkout does not grant trust to a new one.
+        pi_project_trusted: match parent.settings.pi_project_trusted {
+            Some(true)
+                if project != grant.project || strategy != "root" || p.root != parent.workspace =>
+            {
+                Some(false)
+            }
+            other => other,
+        },
+        system_prompt: parent.settings.system_prompt.clone(),
+        append_system_prompt: parent.settings.append_system_prompt.clone(),
+        end_turn_processes_on_abort: parent.settings.end_turn_processes_on_abort,
         ..Default::default()
     };
     let child = app
-        .create_chat_with_settings(project, chat, &runtime, model, parent.approvals, settings)
+        .create_chat_with_settings(project, chat, &runtime, model, approvals, settings)
         .await?;
     let title_id = crate::chat::stable_id([chat.as_bytes().as_slice(), b"model-launch-title"]);
     thread_state::model_rename(app.clone(), project, chat, title_id, title).await?;

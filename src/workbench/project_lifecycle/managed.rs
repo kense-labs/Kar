@@ -166,6 +166,13 @@ impl Workbench {
         let dir = workspace.parent(Path::new("child"), false)?;
         let src = stage.path().file_name().ok_or_else(denied)?.to_owned();
         self.update(|catalog| {
+            if let Some(id) = requested {
+                if catalog.lifecycle.is_deleted(id) { return Err(denied()); }
+                if let Some(p) = catalog.projects.get(&id) {
+                    if p.root != parent.join(slug) || p.metadata.deleted { return Err(denied()); }
+                    return Ok(p.clone());
+                }
+            }
             for i in 1..=if requested.is_some() {1} else {100} {
                 let dest = if i == 1 {
                     slug.to_owned()
@@ -216,9 +223,7 @@ impl Workbench {
                 "all managed project folder names are in use".into(),
             ))
         })
-        .inspect(|_| {
-            let _ = stage.keep();
-        })
+
     }
 
     pub(super) fn promote_scratch_chat(&self, chat: Uuid) -> Result<Project> {
