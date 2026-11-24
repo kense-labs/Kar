@@ -54,6 +54,26 @@ async fn scenario() {
         .await;
         let text = json(b.get(&file_url)).await;
         assert_eq!(text["text"], format!("only-{name}\ncommon-marker"));
+        let absent = json(b.get(format!("{scope}/file?path=missing&allow_missing=true"))).await;
+        assert_eq!(absent["exists"], false);
+        let bom = path.join("bom");
+        std::fs::write(&bom, b"\xef\xbb\xbfhello").unwrap();
+        let absolute = json(b.get(format!("{scope}/file")).query(&[("path", &bom)])).await;
+        assert_eq!(absolute["text"], "hello");
+        assert_eq!(absolute["byte_length"], 8);
+        json(
+            a.put(format!("{scope}/file?path=bom"))
+                .json(&json!({"text":"saved"})),
+        )
+        .await;
+        assert_eq!(std::fs::read(&bom).unwrap(), b"\xef\xbb\xbfsaved");
+        let mut split = vec![b'x'; 1024 * 1024 - 1];
+        split.extend_from_slice("界".as_bytes());
+        std::fs::write(path.join("limit"), &split).unwrap();
+        let preview = json(b.get(format!("{scope}/file?path=limit"))).await;
+        assert_eq!(preview["truncated"], true);
+        assert_eq!(preview["byte_length"], split.len());
+        assert_eq!(preview["text"].as_str().unwrap().len(), 1024 * 1024 - 1);
         for (kind, needle) in [("paths", "same"), ("content", "common-marker")] {
             let hits = json(
                 b.get(format!("{scope}/search"))

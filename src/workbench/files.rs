@@ -40,13 +40,16 @@ pub(super) struct Workspace {
 
 impl Workbench {
     pub(super) fn workspace(&self, project: &Project) -> Result<Workspace> {
-        let allowed = self.allowed(&project.root)?;
-        if project.root.canonicalize()? != project.root {
+        self.workspace_at(&project.root)
+    }
+
+    pub(super) fn workspace_at(&self, root: &Path) -> Result<Workspace> {
+        let allowed = self.allowed(root)?;
+        if root.canonicalize()? != root {
             return Err(denied());
         }
         let mut dir = allowed.dir.try_clone()?;
-        for part in project
-            .root
+        for part in root
             .strip_prefix(&allowed.path)
             .map_err(|_| denied())?
             .components()
@@ -54,7 +57,7 @@ impl Workbench {
             dir = dir.open_dir_nofollow(part.as_os_str())?;
         }
         Ok(Workspace {
-            root: project.root.clone(),
+            root: root.to_owned(),
             private: self.0.chats.directory().into(),
             dir,
         })
@@ -91,7 +94,7 @@ impl Workspace {
         checked(resolved.strip_prefix(&self.root).map_err(|_| denied())?)
     }
 
-    fn parent(&self, path: &Path, create: bool) -> Result<Dir> {
+    pub(super) fn parent(&self, path: &Path, create: bool) -> Result<Dir> {
         let mut dir = self.dir.try_clone()?;
         for part in path.parent().ok_or_else(denied)?.components() {
             let name = part.as_os_str();
@@ -117,6 +120,20 @@ impl Workspace {
 
     /// The caller has resolved this path once. Never follow a replacement link.
     pub(super) fn read_bytes(&self, path: &Path, limit: usize) -> Result<Vec<u8>> {
+        let file = self.open_regular(path)?;
+        if file.metadata()?.len() > limit as u64 {
+            return Err(Error::Refused(format!("file exceeds {limit} bytes")));
+        }
+        let mut data = Vec::new();
+        file.take((limit as u64).saturating_add(1))
+            .read_to_end(&mut data)?;
+        if data.len() > limit {
+            return Err(Error::Refused(format!("file exceeds {limit} bytes")));
+        }
+        Ok(data)
+    }
+
+    pub(super) fn open_regular(&self, path: &Path) -> Result<cap_std::fs::File> {
         let dir = self.parent(path, false)?;
         let name = path.file_name().ok_or_else(denied)?;
         let mut options = OpenOptions::new();
@@ -127,19 +144,10 @@ impl Workspace {
             options.custom_flags(nix::libc::O_NONBLOCK);
         }
         let file = dir.open_with(name, &options)?;
-        let meta = file.metadata()?;
-        if !meta.is_file() || meta.len() > limit as u64 {
-            return Err(Error::Refused(format!(
-                "expected a regular file of at most {limit} bytes"
-            )));
+        if !file.metadata()?.is_file() {
+            return Err(Error::Refused("expected a regular file".into()));
         }
-        let mut data = Vec::new();
-        file.take((limit as u64).saturating_add(1))
-            .read_to_end(&mut data)?;
-        if data.len() > limit {
-            return Err(Error::Refused(format!("file exceeds {limit} bytes")));
-        }
-        Ok(data)
+        Ok(file)
     }
 
     pub(super) fn write_bytes(&self, path: &Path, data: &[u8]) -> Result<()> {
@@ -211,4 +219,22 @@ pub(super) fn preview(data: Vec<u8>) -> Result<String> {
         ));
     }
     String::from_utf8(data).map_err(|_| Error::Refused("file is not UTF-8 text".into()))
+}
+
+pub(super) fn text_preview(bytes: &[u8], size: u64) -> Result<serde_json::Value> {
+    let truncated = size > READ_LIMIT as u64;
+    let bytes = &bytes[..bytes.len().min(READ_LIMIT)];
+    if bytes.contains(&0) {
+        return Err(Error::Refused("file contains binary data".into()));
+    }
+    let text = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) if truncated && e.error_len().is_none() => {
+            std::str::from_utf8(&bytes[..e.valid_up_to()]).expect("valid prefix")
+        }
+        Err(_) => return Err(Error::Refused("file is not UTF-8 text".into())),
+    };
+    Ok(
+        serde_json::json!({"text":text.strip_prefix('\u{feff}').unwrap_or(text),"byte_length":size,"truncated":truncated,"exists":true}),
+    )
 }

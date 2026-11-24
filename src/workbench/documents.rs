@@ -24,6 +24,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    io::Read,
     path::{Path as FsPath, PathBuf},
     sync::Mutex,
 };
@@ -55,6 +56,13 @@ impl WorkingFile for WorkingPath {
 enum Access<T> {
     Ordinary(T),
     Document(DocumentService),
+}
+
+#[derive(Clone, Copy)]
+enum FileMode {
+    Read,
+    Write,
+    Register,
 }
 
 enum FileError {
@@ -93,7 +101,7 @@ impl Workbench {
         path: PathBuf,
     ) -> std::result::Result<DocumentService, FileError> {
         match self
-            .file_access(project, path, true, false, |_, _| Ok(()))
+            .file_access(project, path, FileMode::Register, |_, _| Ok(()))
             .await?
         {
             Access::Document(service) => Ok(service),
@@ -105,14 +113,22 @@ impl Workbench {
         &self,
         project: Uuid,
         path: PathBuf,
-        register: bool,
-        create: bool,
+        mode: FileMode,
         ordinary: impl FnOnce(&Workspace, &FsPath) -> Result<T> + Send + 'static,
     ) -> std::result::Result<Access<T>, FileError> {
         let app = self.clone();
         tokio::task::spawn_blocking(move || {
-            let workspace = app.workspace(&app.project(project)?)?;
-            let relative = workspace.target(&path, create)?;
+            let project = app.project(project)?;
+            let (workspace, requested) = if matches!(mode, FileMode::Read) && path.is_absolute() {
+                let root = &app.allowed(&path)?.path;
+                (
+                    app.workspace_at(root)?,
+                    path.strip_prefix(root).expect("authorized root"),
+                )
+            } else {
+                (app.workspace(&project)?, path.as_path())
+            };
+            let relative = workspace.target(requested, matches!(mode, FileMode::Write))?;
             let identity = workspace.root.join(&relative);
             let digest = Sha256::digest(identity.as_os_str().as_encoded_bytes());
             let dir = app.0.state.join("documents").join(format!("{digest:x}"));
@@ -123,7 +139,9 @@ impl Workbench {
             if let Some(writer) = writers.get(&identity) {
                 return Ok(Access::Document(writer.clone()));
             }
-            if !register && !dir.join("manifest.json").try_exists().map_err(Error::Io)? {
+            if !matches!(mode, FileMode::Register)
+                && !dir.join("manifest.json").try_exists().map_err(Error::Io)?
+            {
                 // Serialize this save with first-time registration of this same file.
                 return Ok(Access::Ordinary(ordinary(&workspace, &relative)?));
             }
@@ -144,6 +162,8 @@ impl Workbench {
 #[derive(Deserialize)]
 struct FileQuery {
     path: PathBuf,
+    #[serde(default)]
+    allow_missing: bool,
 }
 
 async fn document(
@@ -169,13 +189,33 @@ async fn read_file(
     Path(project): Path<Uuid>,
     Query(q): Query<FileQuery>,
 ) -> std::result::Result<Response, FileError> {
+    let path = if let Ok(rest) = q.path.strip_prefix("~") {
+        std::env::home_dir().ok_or_else(super::denied)?.join(rest)
+    } else {
+        q.path
+    };
     let access = app
-        .file_access(project, q.path, false, false, |workspace, relative| {
-            files::preview(workspace.read_bytes(relative, files::READ_LIMIT)?)
+        .file_access(project, path, FileMode::Read, |workspace, relative| {
+            let file = workspace.open_regular(relative)?;
+            let size = file.metadata().map_err(Error::Io)?.len();
+            let mut bytes = Vec::new();
+            file.take(files::READ_LIMIT as u64)
+                .read_to_end(&mut bytes)
+                .map_err(Error::Io)?;
+            files::text_preview(&bytes, size)
         })
-        .await?;
-    let result = match access {
-        Access::Ordinary(text) => json!({"text":text}),
+        .await;
+    if q.allow_missing
+        && matches!(&access, Err(FileError::Workspace(Error::Io(e))) if e.kind()==std::io::ErrorKind::NotFound)
+    {
+        app.project(project)?;
+        return Ok(
+            Json(json!({"text":"","byte_length":0,"truncated":false,"exists":false}))
+                .into_response(),
+        );
+    }
+    let result = match access? {
+        Access::Ordinary(value) => value,
         Access::Document(service) => {
             let (rev, data) = service
                 .run(|s| {
@@ -183,7 +223,9 @@ async fn read_file(
                     Ok((rev, s.snapshot(rev)?))
                 })
                 .await?;
-            json!({"text":files::preview(data)?, "revision":rev})
+            let mut result = files::text_preview(&data, data.len() as u64)?;
+            result["revision"] = rev.into();
+            result
         }
     };
     Ok(Json(result).into_response())
@@ -208,9 +250,23 @@ async fn write_file(
     let bytes = axum::body::Bytes::from(input.text);
     let ordinary_bytes = bytes.clone();
     let access = app
-        .file_access(project, q.path, false, true, move |workspace, relative| {
-            workspace.write_bytes(relative, &ordinary_bytes)
-        })
+        .file_access(
+            project,
+            q.path,
+            FileMode::Write,
+            move |workspace, relative| {
+                if !ordinary_bytes.starts_with(b"\xef\xbb\xbf")
+                    && let Ok(mut file) = workspace.open_regular(relative)
+                {
+                    let mut prefix = [0; 3];
+                    if file.read_exact(&mut prefix).is_ok() && prefix == *b"\xef\xbb\xbf" {
+                        return workspace
+                            .write_bytes(relative, &[&prefix[..], &ordinary_bytes].concat());
+                    }
+                }
+                workspace.write_bytes(relative, &ordinary_bytes)
+            },
+        )
         .await?;
     let Access::Document(service) = access else {
         return Ok(Json(()).into_response());
@@ -219,7 +275,17 @@ async fn write_file(
     else {
         return Err(FileError::Precondition);
     };
-    let digest = service.run(move |s| s.stage(&bytes)).await?;
+    let digest = service
+        .run(move |s| {
+            if !bytes.starts_with(b"\xef\xbb\xbf")
+                && s.snapshot(base_revision)?.starts_with(b"\xef\xbb\xbf")
+            {
+                s.stage(&[&b"\xef\xbb\xbf"[..], &bytes].concat())
+            } else {
+                s.stage(&bytes)
+            }
+        })
+        .await?;
     let receipt = service
         .submit(Command {
             author: "owner".into(),
