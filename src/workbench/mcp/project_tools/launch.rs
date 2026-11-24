@@ -230,7 +230,15 @@ pub(super) async fn run(
         ..Default::default()
     };
     let child = app
-        .create_chat_with_settings(project, chat, &runtime, model, approvals, settings)
+        .create_chat_as(
+            project,
+            chat,
+            &runtime,
+            model,
+            approvals,
+            settings,
+            Some(grant.chat),
+        )
         .await?;
     let title_id = crate::chat::stable_id([chat.as_bytes().as_slice(), b"model-launch-title"]);
     thread_state::model_rename(app.clone(), project, chat, title_id, title).await?;

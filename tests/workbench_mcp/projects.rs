@@ -44,6 +44,25 @@ pub(super) async fn exercise(
         server::json(call("kar_project_read", get)).await["result"]["structuredContent"]["name"],
         "Renamed"
     );
+    let hijack =
+        json!({"command_id":chat,"project_id":project,"title":"Existing chat","workspace":"root"});
+    assert!(server::json(call("kar_thread_launch", hijack)).await["error"].is_object());
+    let clone_id = Uuid::new_v4();
+    let clone_dir = directory.join("cloned");
+    let cmd = json!({"command_id":clone_id,"title":"Local clone","directory":clone_dir,"source":saved["root"]});
+    let (left, right) = tokio::join!(
+        server::json(call("kar_project_clone", cmd.clone())),
+        server::json(call("kar_project_clone", cmd))
+    );
+    assert_eq!(
+        left["result"]["structuredContent"]["projectId"],
+        json!(clone_id),
+        "{left}"
+    );
+    assert_eq!(
+        left["result"]["structuredContent"],
+        right["result"]["structuredContent"]
+    );
     let id = Uuid::new_v4();
     let launch = json!({"command_id":id,"project_id":create,"title":"New conversation","workspace":"root","runtime":"codex"});
     let launched = server::json(call("kar_thread_launch", launch.clone())).await;

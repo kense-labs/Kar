@@ -446,11 +446,27 @@ impl Workbench {
         runtime: &str,
         model: Option<String>,
         approvals: crate::ApprovalMode,
+        settings: crate::SessionSettings,
+    ) -> Result<ProjectChat> {
+        self.create_chat_as(project, id, runtime, model, approvals, settings, None).await
+    }
+
+    async fn create_chat_as(
+        &self,
+        project: Uuid,
+        id: Uuid,
+        runtime: &str,
+        model: Option<String>,
+        approvals: crate::ApprovalMode,
         mut settings: crate::SessionSettings,
+        launching_chat: Option<Uuid>,
     ) -> Result<ProjectChat> {
         forge::clone_jobs::ready(self, project)?;
         let slot = self.controller(id);
         let mut owner = slot.owner.lock().await;
+        if mcp::pending_launch(&self.0.catalog.lock().unwrap(), id) != launching_chat {
+            return Err(Error::Refused("chat ID is reserved for another launch".into()));
+        }
         let cwd = self.reserve_chat_directory(project, id)?;
         settings.additional_directories = self.chat_directories(&cwd, &settings)?;
         match self.0.chats.initial_info(id) {

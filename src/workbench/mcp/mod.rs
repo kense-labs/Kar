@@ -13,6 +13,7 @@ mod html;
 pub(in crate::workbench) use preview_tools::DevicePermission;
 mod toolkit;
 pub(super) mod project_tools;
+pub(in crate::workbench) use project_tools::pending_launch;
 mod workflow;
 pub(in crate::workbench) mod worktree;
 use super::{Workbench, access};

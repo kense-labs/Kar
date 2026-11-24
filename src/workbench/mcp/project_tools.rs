@@ -78,6 +78,15 @@ pub(in crate::workbench) struct Receipt {
     digest: String,
     result: Option<Value>,
 }
+pub(in crate::workbench) fn pending_launch(
+    db: &crate::workbench::Catalog,
+    id: Uuid,
+) -> Option<Uuid> {
+    db.model_project_commands
+        .get(&id)
+        .filter(|r| r.name == "kar_thread_launch" && r.result.is_none())
+        .map(|r| r.chat)
+}
 pub(in crate::workbench) fn launched_project(
     db: &crate::workbench::Catalog,
     caller: Uuid,
@@ -194,12 +203,25 @@ pub(super) async fn call(
         return Err(refused("unknown project operation field"));
     }
     let digest = crate::workbench::access::digest(&serde_json::to_string(&input)?);
-    if let Some(result) = app.update(|db| {
+    let slot = app.controller(cmd);
+    let reservation = if name == "kar_thread_launch" {
+        Some(slot.owner.lock().await)
+    } else {
+        None
+    };
+    let existing = app.update(|db| {
         if let Some(old) = db.model_project_commands.get(&cmd) {
             if old.chat != grant.chat || old.name != name || old.digest != digest {
                 return Err(refused("command ID belongs to another project operation"));
             }
             return Ok(old.result.clone());
+        }
+        if name == "kar_thread_launch" {
+            match app.0.chats.initial_info(cmd) {
+                Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Ok(_) => return Err(refused("launch ID belongs to an existing chat")),
+                Err(e) => return Err(e),
+            }
         }
         db.model_project_commands.insert(
             cmd,
@@ -211,7 +233,9 @@ pub(super) async fn call(
             },
         );
         Ok(None)
-    })? {
+    })?;
+    drop(reservation);
+    if let Some(result) = existing {
         return Ok(result);
     }
     let p = target(
