@@ -55,6 +55,10 @@ pub(super) fn cases() -> Vec<Case> {
         ("workbench-suggestions", "two independent subscribers, Claude push and Codex sampling protocol fixtures"),
         ("workbench-shell","two independent HTTP clients, persisted directory cursor, activity, snooze expiry and restart"),
         (
+            "workbench-native-child-work",
+            "isolated Antigravity ACP protocol fixture, SQLite/protobuf records and detached inbox; historical forks and rejection of unrelated batches",
+        ),
+        (
             "workbench-usage",
             "isolated HOME, native-format usage records and a local HTTP price source",
         ),
@@ -159,6 +163,19 @@ pub(super) fn cases() -> Vec<Case> {
         cases.push(usage);
     }
     for (test, env, conditions) in [
+        (
+            "workbench-native-child-work-live",
+            &[
+                "KAR_CHILD_WORK_URL",
+                "KAR_WORKBENCH_TOKEN",
+                "KAR_CHILD_WORK_PROJECT",
+                "KAR_CHILD_WORK_CHAT",
+                "KAR_CHILD_WORK_TURN",
+                "KAR_CHILD_WORK_TOOL",
+                "KAR_CHILD_WORK_EXPECTED",
+            ][..],
+            "read-only HTTP on an existing loopback Kar workbench with recorded native child IDs (comma separated); the provider is not invoked",
+        ),
         (
             "workbench-usage-live",
             &["KAR_USAGE_LIVE_PROVIDER", "KAR_USAGE_LIVE_SINCE_DAY"][..],
