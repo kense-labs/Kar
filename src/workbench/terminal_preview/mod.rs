@@ -540,3 +540,10 @@ impl TerminalPreview {
         self.grants.close(project,tab,None)
     }
 }
+
+pub(in crate::workbench) fn owns_local_port(owner: ProcessId, port:u16)->bool {
+    process::identity(owner.pid)==Some(owner) && process::ports(owner).is_ok_and(|ports| ports.iter().any(|p|p.port==port && p.address.is_loopback()))
+}
+pub(in crate::workbench) fn stop_owned_process(owner:ProcessId) {
+    if process::identity(owner.pid)==Some(owner){process::stop_tree(owner);}
+}

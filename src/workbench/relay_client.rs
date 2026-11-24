@@ -1,4 +1,5 @@
 //! Resolve and install the pinned tunnel client in Kar's private state.
+pub(super) mod tunnel;
 use super::{Workbench, http::ApiError};
 use crate::{Error, Result};
 use axum::{

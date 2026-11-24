@@ -126,6 +126,7 @@ impl Controller {
 }
 
 struct Inner {
+    relay: relay_client::tunnel::Service,
     acp_registry: acp_registry::Catalog,
     acp_auth: acp_registry::auth::Jobs,
     mcp: mcp::Registry,
@@ -228,6 +229,7 @@ impl Workbench {
             }));
             let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
             Inner {
+                relay: Default::default(),
                 acp_registry: Default::default(),
                 acp_auth: Default::default(),
                 mcp: Default::default(),
