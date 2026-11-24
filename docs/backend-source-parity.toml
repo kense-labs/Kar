@@ -99,7 +99,8 @@ phase = 2
 name = "在已有授权目录内初始化仓库"
 upstream = ["packages/contracts/src/git.ts","apps/server/src/git/GitWorkflowService.ts","apps/server/src/ws.ts"]
 kar = ["src/workbench/git.rs","src/workbench_git.rs"]
-status = "待补齐或对照现有实现核销"
+status = "普通目录初始化和已有仓库复用已接入 CLI 与项目 HTTP。待统一验收"
+implementation_ref = "b091774"
 test_target = "cargo test --locked --test workbench_git"
 accept = "对普通目录执行初始化，从独立 Git 进程检查仓库和既有文件；再核对已有仓库、不可写目录和越过授权根时的处理。"
 
@@ -109,7 +110,8 @@ phase = 2
 name = "搜索、过滤及分页列出本地和远端分支"
 upstream = ["packages/contracts/src/git.ts","apps/server/src/git/GitWorkflowService.ts"]
 kar = ["src/workbench/git.rs","src/workbench_git.rs"]
-status = "待补齐或对照现有实现核销"
+status = "分支过滤、远端匹配、分页及工作树占用信息已接入。待统一验收"
+implementation_ref = "b091774"
 test_target = "cargo test --locked --test workbench_git"
 accept = "创建多个本地分支和远端跟踪分支，用查询、分支类别、远端匹配选项、刷新和小页大小遍历；对照固定源码和 git 引用核对命中、顺序、游标及下一页。"
 
@@ -119,7 +121,8 @@ phase = 2
 name = "不创建新工作树即可建分支或切换现有分支"
 upstream = ["packages/contracts/src/git.ts","apps/server/src/git/GitWorkflowService.ts","apps/server/src/ws.ts"]
 kar = ["src/workbench/git.rs","src/workbench_git.rs"]
-status = "待补齐或对照现有实现核销"
+status = "新建、切换及受管工作树的中断恢复已接入。待统一验收"
+implementation_ref = "b091774"
 test_target = "cargo test --locked --test workbench_git"
 accept = "依次建分支但留在当前分支、建分支并切换、切回已有分支。由另一客户端读取分支状态；覆盖活动聊天及切换会覆盖本地修改的情况，核对拒绝和原文件。"
 
@@ -149,7 +152,8 @@ phase = 2
 name = "清空指定终端的历史并通知客户端"
 upstream = ["packages/contracts/src/terminal.ts","apps/server/src/terminal/Manager.ts"]
 kar = ["src/workbench/terminal_preview/routes.rs"]
-status = "待补齐或对照现有实现核销"
+status = "清屏边界已持久化并发布到两个 PTY 观察者。待统一验收"
+implementation_ref = "1072da0"
 test_target = "cargo test --locked --test workbench_terminal_preview"
 accept = "两个客户端订阅同一终端。写入可识别输出后清空，核对 cleared 事件、顺序和持久历史，再继续在同一 PTY 输出新内容；另一终端的历史保留。"
 
@@ -169,7 +173,8 @@ phase = 2
 name = "按发现的进程和端口停止指定开发服务"
 upstream = ["packages/contracts/src/preview.ts","apps/server/src/preview/PortScanner.ts","apps/server/src/ws.ts"]
 kar = ["src/workbench/terminal_preview/routes.rs","src/workbench/terminal_preview/preview.rs"]
-status = "待补齐或对照现有实现核销"
+status = "按当前端口、PID 与作业组重新确认后停止本地服务。待统一验收"
+implementation_ref = "56fd8c0"
 test_target = "cargo test --locked --test workbench_terminal_preview"
 accept = "运行两个本地服务，按真实 PID 和端口停止其中一个，独立访问两端确认效果。用已退出进程以及不匹配或无权操作的目标复验固定实现的拒绝条件。"
 
@@ -202,3 +207,63 @@ kar = ["src/workbench/workflows/routes.rs","src/workbench/workflows/mod.rs"]
 status = "待补齐或对照现有实现核销"
 test_target = "cargo test --locked --test workbench_workflows"
 accept = "经公共接口轮换令牌，用旧、新令牌分别投递；按上游语义核对接纳结果、记录列表、单条详情及实际触发次数。对另一任务核对可见范围。"
+
+[[gap]]
+id = "project-entries"
+phase = 2
+name = "项目目录的直接子项和 Git 忽略文件"
+upstream = ["apps/server/src/workspace/WorkspaceEntries.ts"]
+kar = ["src/workbench/files.rs"]
+status = "已从固定源码定位，待补齐"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "列出根目录及子目录的直接文件和目录。用混合大小写查询已忽略的单文件，核对字节数、截断和整个被忽略目录的排除。"
+
+[[gap]]
+id = "filesystem-inspection"
+phase = 2
+name = "目录补全和有序批量元数据"
+upstream = ["apps/server/src/workspace/WorkspaceEntries.ts", "apps/server/src/workspace/WorkspaceFileSystem.ts", "packages/contracts/src/filesystem.ts"]
+kar = ["src/workbench/files.rs"]
+status = "已从固定源码定位，待补齐"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "补全绝对和当前项目相对路径；按输入原序返回文件类型、大小和 MIME，核对缺失、不可读、越界、目录和 64 个条目的上限。"
+
+[[gap]]
+id = "project-read-options"
+phase = 2
+name = "可选文件读取、截断及字节数"
+upstream = ["apps/server/src/workspace/WorkspaceFileSystem.ts", "packages/contracts/src/project.ts"]
+kar = ["src/workbench/files.rs"]
+status = "已从固定源码定位，待补齐"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "读取缺失的可选文件、非文本内容、超过预览上限的 UTF-8 文件及授权根下的绝对路径，独立核对字节数、截断标记、存在性和文件内容。"
+
+[[gap]]
+id = "project-lifecycle"
+phase = 2
+name = "项目更新、固定、归档与安全删除"
+upstream = ["apps/server/src/project/ProjectMutation.ts", "packages/contracts/src/project.ts"]
+kar = ["src/workbench/mod.rs"]
+status = "已从固定源码定位，待补齐"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "用不同命令 ID 更新项目标题、脚本、目录和设置，同时修改目录列表。重复命令、重启、归档恢复和删除非空项目时核对线程和实际文件。"
+
+[[gap]]
+id = "project-creation"
+phase = 2
+name = "暂存项目、新项目及从聊天建立项目"
+upstream = ["apps/server/src/ws.ts", "packages/contracts/src/project.ts"]
+kar = ["src/workbench/mod.rs"]
+status = "已从固定源码定位，待补齐"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "重复获取暂存项目结果一致。由名称创建新项目，检查目录和初始提交失败的可读结果；用已有聊天创建项目，并从该聊天读回归属。"
+
+[[gap]]
+id = "webhook-rules"
+phase = 2
+name = "原始请求、签名配置、过滤、过期及合并窗口"
+upstream = ["apps/server/src/scheduledTasks/ScheduledTaskService.ts", "apps/server/src/scheduledTasks/webhookDedupe.ts", "apps/server/src/scheduledTasks/webhookFilter.ts", "packages/contracts/src/scheduledTask.ts"]
+kar = ["src/workbench/workflows/mod.rs", "src/workbench/workflows/routes.rs"]
+status = "已从固定源码定位，待补齐"
+test_target = "cargo test --locked --test workbench_workflows"
+accept = "对同一任务发送签名格式不同、符合筛选、被过滤、过期和重复的事件，重启后核对重放键、合并窗口、实际执行次数、限流及脱敏明细。"
