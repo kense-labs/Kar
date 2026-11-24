@@ -1,0 +1,110 @@
+# Kar 工作台后端 · 第二阶段验收清单
+phase = 2
+prerequisite = "backend-acceptance.toml"
+start_when = "主线程完成第一阶段所有可做的实现、修复和验证，记录逐项证据并分别列明供应商限制、缺环境项与 Windows 实机例外之后，接着执行本清单。"
+baseline_commit = "2808e878de91aacc7fb82887f18414976be7ae34"
+scope = "以固定提交中以下七组服务的可观察行为为对照，按适用驱动、版本和权限逐项验收。"
+implementation = "Kar 自有服务、协议适配、持久化、任务执行和 API 均用 Rust。通过协议接入供应商原生程序、系统 shell、Git、浏览器和外部服务。"
+platforms = "在 macOS、Linux 完成可执行的验证。沿用第一阶段的 Windows 实机例外，并执行环境可做的编译或协议测试。"
+
+[evidence]
+per_case = ["能力与用例", "Kar 提交与参考契约", "平台及依赖版本", "初始状态和输入", "预期与实测结果", "可重跑的命令、测试名及证据", "状态"]
+states = ["已验收", "未完成或失败", "供应商不支持", "缺环境待验证", "Windows 实机排除"]
+rules = "验收通过要求从正常服务入口执行并观察持久状态。供应商限制附对应版本的依据。缺环境项写明所缺账号、部署或设备，附本地替代验证和补验方法。各自记录协议测试和真实联调结果。"
+test_entry = "各项下面的 cargo 命令是实施后建议提供的 Rust 集成测试入口，当前仅登记方案。如沿用已有测试目标，交付时替换为等价命令，并核对实际执行的用例名与数量。"
+
+[estimate]
+unit = "单个 Codex 主线程连续开发的小时数，每项含实现与定向回归。"
+assumptions = "复用第一阶段已验收的会话、游标、检查点、供应商控制和 HTTP 基础。估算覆盖七项的适用行为及可执行的联调；账号、远端部署或实机的外部等待另计。"
+final_integration_hours = [24, 56]
+total_hours = [312, 648]
+main_uncertainty = "代码托管平台各自支持的操作、原生运行时交接差异，以及跨设备授权和隧道的真实联调。"
+
+[[items]]
+id = "projects"
+name = "统一项目、聊天与工作区服务"
+hours = [32, 64]
+reference = ["packages/contracts/src/rpc.ts", "apps/server/src/project/ProjectService.ts", "apps/server/src/workspace/WorkspaceFileSystem.ts", "apps/server/src/workspace/WorkspaceSearchIndex.ts", "apps/server/src/orchestration-v2/ThreadSearch.ts"]
+test_command = "cargo test --locked --test workbench_projects"
+accept = [
+  "创建两个含同名文件的项目，各建两个聊天。两个客户端经同一服务列出项目、打开聊天、发消息和重新订阅，核对项目和聊天 ID、消息归属及重连游标。",
+  "写入带已知关键词的文件和消息，分别执行项目文件名搜索、内容搜索和跨聊天搜索。结果须定位到正确的文件、消息及聊天，按请求作用域返回；普通工作区文件可经 API 读取和保存，越过授权目录的请求被拒绝。",
+  "归档和重新打开适用的聊天；重启服务并从第二个客户端重查项目、绑定、聊天状态、搜索结果和待收事件，与重启前的持久状态核对。"
+]
+
+[[items]]
+id = "git"
+name = "Git 仓库与独立工作树"
+hours = [40, 80]
+reference = ["packages/contracts/src/git.ts", "apps/server/src/git/GitWorkflowService.ts", "apps/server/src/vcs/VcsProvisioningService.ts", "apps/server/src/orchestration-v2/WorktreeBranchSync.ts"]
+test_command = "cargo test --locked --test workbench_git"
+accept = [
+  "用本地裸仓库充当远端，经服务克隆、查看状态、建分支并创建两个工作树。两个聊天同时改同一路径，逐个读取文件、分支和暂存区，确认各自变更互不覆盖。",
+  "经正常接口提交并推送，独立克隆核对远端提交 ID、树和内容；从另一副本产生新提交再拉取，核对状态广播及结果。模拟非快进推送、拉取冲突和有本地修改的工作树清理，检查错误及保留下来的数据。",
+  "在工作树准备或清理期间重启并重试；已有分支或目录归属清晰，无重复资源。回归第一阶段按回合恢复和分叉，核对父聊天所在工作树、分支和索引。"
+]
+
+[[items]]
+id = "handoff"
+name = "同一聊天跨供应商交接"
+hours = [24, 48]
+reference = ["apps/server/src/orchestration-v2/ProviderSwitchService.ts", "apps/server/src/orchestration-v2/ContextHandoffService.ts", "apps/server/src/orchestration-v2/testkit/ProviderSwitch.integration.test.ts"]
+test_command = "cargo test --locked --test workbench_handoff"
+accept = [
+  "在同一聊天用 A 建立两条可核对的事实和一次工具结果，切到 B 后继续提问。核对聊天 ID、工作区和用户可见时间线连续，检查 B 实际收到的交接输入及回复，源会话仍可追溯。",
+  "再从 B 切回 A，验证增量或按预算生成的摘要覆盖正确范围；旧工具副作用未重放，已发送交接只出现一次。覆盖超长历史、切换过程中仍有活动回合以及目标供应商拒绝启动的情形。",
+  "交接准备和接纳之间分别断开控制器，再恢复或重试；检查新的回合归属、失败结果和恢复策略。对声明支持的供应商组合做协议验证，并至少以两个可用的真实适配器完成一次往返。"
+]
+
+[[items]]
+id = "terminal_preview"
+name = "用户交互终端与开发服务预览"
+hours = [40, 80]
+reference = ["packages/contracts/src/terminal.ts", "apps/server/src/terminal/Manager.ts", "apps/server/src/preview/Manager.ts", "apps/server/src/preview/PreviewTunnel.ts"]
+test_command = "cargo test --locked --test workbench_terminal_preview"
+accept = [
+  "从客户端在指定工作树打开真实 PTY，输入命令并调整窗口大小；核对 shell 报告的 cwd、终端尺寸和输出。第二个客户端附着同一终端，断开后重连能补读已有输出，命令只执行一次。",
+  "启动两个可辨认的本机 HTTP 开发服务，核对端口发现、预览目标和浏览器实际加载的响应。经授权隧道访问指定目标，关闭隧道后连接失效，另一个项目不受影响。",
+  "分别测试 shell 退出、端口进程退出、客户端断开和 Kar 重启。核对历史、退出状态与资源释放；宿主重启后按实际进程存活状态恢复或明确报告终止。"
+]
+
+[[items]]
+id = "forge"
+name = "PR、Issue 与代码审阅"
+hours = [56, 120]
+reference = ["apps/server/src/sourceControl/builtInDrivers.ts", "apps/server/src/sourceControl/sourceControlDefinitions.ts", "apps/server/src/pullRequest/PullRequestService.ts", "apps/server/src/review/ReviewService.ts", "apps/server/src/issue/IssueService.ts"]
+test_command = "cargo test --locked --test workbench_forge"
+accept = [
+  "按固定提交实际注册的代码托管与问题跟踪驱动列出支持操作和启用条件。逐驱动验证仓库及身份映射、权限、返回字段和拒绝结果。用至少一个可用测试仓库走完开发分支、推送、创建 PR 并关联原聊天的链路。",
+  "从已有 PR 准备工作树，逐文件核对基准和头提交之间的差异，保存已审文件，重启后读回。远端更新头提交或关闭 PR 后同步状态，迟到或重复通知不覆盖较新结果。",
+  "在测试项目查询 Issue，打开关联聊天并执行驱动支持的状态变更。重试创建或绑定操作时核对远端对象数；权限、限流和不确定结果均可观察。真实平台缺少凭据时保留录制或本地协议测试及补验步骤。"
+]
+
+[[items]]
+id = "workflows"
+name = "定时任务与持久化工作流"
+hours = [48, 96]
+reference = ["packages/contracts/src/scheduledTask.ts", "packages/contracts/src/workflow.ts", "apps/server/src/scheduledTasks/ScheduledTaskService.ts", "apps/server/src/workflows/WorkflowRuntime.ts"]
+test_command = "cargo test --locked --test workbench_workflows"
+accept = [
+  "以可控时钟验证一次性、固定时间和间隔任务。覆盖服务停机错过触发点及两个执行者竞争同一触发；对照固定契约核对下次执行时间、补跑策略和实际运行数。",
+  "发送有效、重复和签名不符的 Webhook，记录对应触发数；有效事件只启动一次运行，拒绝事件不产生执行副作用。",
+  "执行包含脚本、agent、人工问答、等待和后续步骤的流程。在等待、人工答复和外部副作用回执前后重启；核对步骤结果、恢复位置、取消和失败重试。外部系统无法确认是否成功时保留待对账状态。"
+]
+
+[[items]]
+id = "remote_access"
+name = "远程设备接入、权限与访客分享"
+hours = [48, 104]
+reference = ["apps/server/src/auth/EnvironmentAuth.ts", "apps/server/src/auth/PairingGrantStore.ts", "apps/server/src/auth/RpcAuthorization.ts", "packages/contracts/src/guestShare.ts", "apps/server/src/guest/GuestShareService.ts"]
+test_command = "cargo test --locked --test workbench_remote_access"
+accept = [
+  "用两个独立客户端走服务端配对、授权、重新连接和撤销流程；核对凭据归属、配对凭证的重用限制，以及未配对或已撤销设备访问项目、终端、预览和聊天时的拒绝。",
+  "为指定聊天创建限时访客分享，通过受支持的远程连接实际打开。访客只能读取授权视图；提交提议后由主人接纳或驳回。断线、同一请求重试、重复接纳均不产生第二条用户消息。",
+  "核对跨聊天访问的拒绝、附件归属与大小限制、过期和主动撤销后的新请求与活动订阅。服务重启后授权及撤销状态仍正确；本机回环和真实跨设备证据分别登记。"
+]
+
+[final_acceptance]
+scenario = "在隔离测试仓库从 Issue 或 PR 建独立工作树，两个客户端打开同一聊天，由两个供应商接力。通过 PTY 运行服务，经预览确认输出，推送提交并核对 PR；用 Webhook 启动工作流，访客提议由主人接纳。在服务重启后检查各对象身份、权限、历史、执行次数及对远端的实际影响。"
+regression = ["cargo fmt --all -- --check", "cargo clippy --locked --all-targets -- -D warnings", "cargo test --locked"]
+done_when = "七组用例按实际适用的驱动和平台逐项出具证据，完成跨模块场景并回归第一阶段。可实现、可验证的缺口全部解决，供应商限制与缺环境实测分别列出。"
