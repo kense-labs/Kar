@@ -42,6 +42,24 @@ async fn say(client: &Client, url: &str, text: &str) -> Value {
     .await
 }
 
+async fn next_change(response: &mut reqwest::Response) -> Value {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut bytes = Vec::new();
+        loop {
+            bytes.extend_from_slice(&response.chunk().await.unwrap().unwrap());
+            if let Some(end) = bytes.windows(2).position(|w| w == b"\n\n") {
+                let frame = std::str::from_utf8(&bytes[..end]).unwrap();
+                if let Some(data) = frame.lines().find_map(|l| l.strip_prefix("data: ")) {
+                    break serde_json::from_str(data).unwrap();
+                }
+                bytes.drain(..end + 2);
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
 #[tokio::main]
 pub(crate) async fn run() {
     tokio::time::timeout(Duration::from_secs(120), scenario())
@@ -107,8 +125,88 @@ async fn scenario() {
     let replay = ok(a.post(format!("{parent}/forks")).json(&request)).await;
     assert_eq!(replay["history"]["turns"][2]["id"], child_turn["id"]);
     assert_eq!(fs::read(target.join("shared")).unwrap(), b"shared-next");
+    let rename = json!({"action":"rename","command_id":Uuid::new_v4(),"title":"Fork review"});
+    let renamed = ok(a.post(format!("{url}{child_path}/metadata")).json(&rename)).await;
+    assert_eq!(renamed["metadata"]["title"], "Fork review");
+    let start = renamed["sequence"].as_u64().unwrap();
+    let listen = format!("{url}/projects/{target_project}/chat-state/events?after={start}");
+    let mut a_events = a
+        .get(&listen)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let mut b_events = b
+        .get(&listen)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let tag = json!({"action":"tag","tag":"release","tagged":true,"command_id":Uuid::new_v4()});
+    let tagged = ok(b.post(format!("{url}{child_path}/metadata")).json(&tag)).await;
+    for feed in [&mut a_events, &mut b_events] {
+        assert_eq!(next_change(feed).await, tagged);
+    }
+    drop((a_events, b_events));
+    assert_eq!(
+        ok(a.post(format!("{url}{child_path}/metadata")).json(&tag)).await,
+        tagged
+    );
+    let pin = json!({"action":"pin","order":"ab","command_id":Uuid::new_v4()});
+    assert_eq!(
+        ok(a.post(format!("{url}{child_path}/metadata")).json(&pin)).await["metadata"]["pin_order"],
+        "ab"
+    );
+    let settle = json!({"action":"settle","expected_turn":child_turn["id"],"settled_ms":900,"command_id":Uuid::new_v4()});
+    let settled = ok(b.post(format!("{url}{child_path}/metadata")).json(&settle)).await;
+    assert!(settled["metadata"]["pinned_ms"].is_null());
     server.kill().await.unwrap();
     let (mut next, url) = serve(&state, &allowed, &native).await;
+    let query = format!("{url}/chat-state/query");
+    let family = ok(b.post(&query).json(&json!({"query":"family","chat":child}))).await;
+    assert_eq!(family["chats"].as_array().unwrap().len(), 2);
+    let links = ok(b
+        .post(&query)
+        .json(&json!({"query":"links","chats":[chat,child,Uuid::new_v4()]})))
+    .await;
+    assert_eq!(links["values"].as_object().unwrap().len(), 2);
+    assert_eq!(links["values"][child.to_string()]["title"], "Fork review");
+    assert_eq!(
+        links["values"][child.to_string()]["project"],
+        target_project
+    );
+    let count = ok(b
+        .post(&query)
+        .json(&json!({"query":"older_settled","before_ms":901,"limit":0})))
+    .await;
+    assert_eq!(count["counts"][&target_project], 1);
+    let page = ok(a
+        .post(&query)
+        .json(&json!({"query":"older_settled","before_ms":901,"limit":1})))
+    .await;
+    assert_eq!(page["chats"][0]["info"]["id"], child.to_string());
+    let page = ok(a
+        .post(&query)
+        .json(&json!({"query":"older_settled","before_ms":900,"after_id":child,"limit":1})))
+    .await;
+    assert!(page["chats"].as_array().unwrap().is_empty());
+    let poll = format!("{url}/projects/{target_project}/chat-state/events");
+    let mut replay_events = b
+        .get(&poll)
+        .header("last-event-id", start)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(next_change(&mut replay_events).await, tagged);
+    drop(replay_events);
+    assert_eq!(
+        ok(a.post(format!("{url}{child_path}/metadata")).json(&tag)).await,
+        tagged
+    );
     let child_find = format!("{url}{child_path}/find");
     let find = ok(b.post(&child_find).json(&json!({"query":"ha","index":1}))).await;
     // Two distinct native replies have identical text. Both remain searchable after a fork.
@@ -120,11 +218,11 @@ async fn scenario() {
     )))
     .await;
     assert_eq!(detail["item"]["turn"], occurrence["turn"]);
-    let next = ok(b
+    let next_match = ok(b
         .post(&child_find)
         .json(&json!({"query":"HA","start":occurrence,"offset":1})))
     .await;
-    assert_eq!(next["active_index"], 2);
+    assert_eq!(next_match["active_index"], 2);
     let raw = b
         .post(format!("{child_find}/events"))
         .json(&json!({"query":"ha"}))

@@ -263,6 +263,22 @@ impl ChatStore {
         self.save_inbox(&inbox)?;
         Ok(receipt)
     }
+    /// Evaluate an idle-chat change against the same admission fence used by the sender.
+    pub(crate) fn with_admission_state<T>(
+        &self,
+        id: Uuid,
+        f: impl FnOnce(super::ChatHistory, bool) -> Result<T>,
+    ) -> Result<T> {
+        let _lock = self.inbox_lock(id)?;
+        let state = self.read_state(File::open(self.path(id))?, id)?;
+        let queued = self.read_inbox(&state.info)?.entries.iter().any(|e| {
+            matches!(
+                e.status(&state),
+                InputStatus::Pending | InputStatus::Sending | InputStatus::Uncertain
+            )
+        });
+        f(self.history_from_state(id, state)?, queued)
+    }
     /// Read all queued inputs, including earlier delivery and withdrawal receipts.
     pub fn queued_inputs(&self, chat: Uuid) -> Result<Vec<QueuedInput>> {
         let file = File::open(self.path(chat))?;

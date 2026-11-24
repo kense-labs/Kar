@@ -81,6 +81,8 @@ pub struct ChatTurn {
     /// Stable across restarts; also the caller's idempotency key.
     pub id: Uuid,
     pub started_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_ms: Option<u64>,
     pub status: TurnStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_input_receipt: Option<crate::InputReceipt>,
@@ -297,6 +299,7 @@ impl ChatTurn {
         Self {
             id,
             started_ms,
+            finished_ms: None,
             status: TurnStatus::Running,
             native_input_receipt: None,
             process_cleanups: Vec::new(),
@@ -452,6 +455,12 @@ impl ChatTurn {
         self.input_sent |= is_root && frame.morph_progress.as_ref().is_some_and(|p| p.accepted);
         for edit in &frame.edits {
             match edit {
+                Edit::FinishedAt { at } => {
+                    if is_root && self.status != TurnStatus::Running {
+                        self.finished_ms.get_or_insert(*at);
+                    }
+                }
+
                 Edit::ToolSnapshot { id, activity } => {
                     let existing = self.items.iter_mut().find(|item| {
                         item.source == frame.source
@@ -943,6 +952,9 @@ impl Frame {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Edit {
+    FinishedAt {
+        at: u64,
+    },
     ToolSnapshot {
         id: String,
         activity: Tool,
@@ -1346,6 +1358,12 @@ impl MessageIds {
                         && !crate::community::morph::covers_suffix(previous, &n["trace"]),
                 });
             }
+        }
+        if r.events
+            .iter()
+            .any(|e| matches!(e, Event::TurnEnded { .. }))
+        {
+            edits.push(Edit::FinishedAt { at: r.timestamp_ms });
         }
         if edits.is_empty() && native_turn.is_none() && morph_progress.is_none() {
             None

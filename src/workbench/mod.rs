@@ -15,6 +15,8 @@ mod search;
 mod task_folders;
 mod terminal_preview;
 mod thread_find;
+mod thread_state;
+pub use thread_state::Metadata as ChatMetadata;
 pub mod workflows;
 pub use search::{Hit, SearchKind};
 
@@ -45,6 +47,8 @@ pub struct Project {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
+    #[serde(default)]
+    thread_state: thread_state::Store,
     #[serde(default)]
     forge: forge::ForgeState,
     #[serde(default)]
@@ -79,6 +83,7 @@ struct Inner {
     chats: ChatStore,
     roots: Vec<Root>,
     catalog: Mutex<Catalog>,
+    thread_updates: tokio::sync::watch::Sender<u64>,
     clones: forge::clone_jobs::Tracker,
     state: PathBuf,
     pump: chat_controls::QueuePump,
@@ -165,6 +170,7 @@ impl Workbench {
                 task_folders,
                 chats,
                 roots: allowed,
+                thread_updates: tokio::sync::watch::channel(catalog.thread_state.sequence()).0,
                 catalog: Mutex::new(catalog),
                 clones: Default::default(),
                 pump: Default::default(),
@@ -317,6 +323,12 @@ impl Workbench {
             if (include_archived || !archived) && self.owns_chat(&catalog, &p, &info)? {
                 chats.push(ProjectChat {
                     project,
+                    metadata: catalog
+                        .thread_state
+                        .rows
+                        .get(&info.id)
+                        .cloned()
+                        .unwrap_or_default(),
                     info,
                     archived,
                 });
@@ -368,6 +380,7 @@ impl Workbench {
             {
                 return Ok(ProjectChat {
                     project,
+                    metadata: self.thread_metadata(id),
                     info: self.0.chats.saved_info(id)?,
                     archived: self.archived(id),
                 });
@@ -391,6 +404,7 @@ impl Workbench {
         *owner = Some(session);
         Ok(ProjectChat {
             project,
+            metadata: self.thread_metadata(id),
             info,
             archived: false,
         })
@@ -446,6 +460,7 @@ impl Workbench {
         self.0.access.notify();
         Ok(ProjectChat {
             project,
+            metadata: self.thread_metadata(chat),
             info,
             archived,
         })
@@ -458,6 +473,8 @@ impl Workbench {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectChat {
+    #[serde(default)]
+    pub metadata: ChatMetadata,
     pub project: Uuid,
     pub info: ChatInfo,
     pub archived: bool,
