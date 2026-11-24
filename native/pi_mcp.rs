@@ -1,7 +1,45 @@
 //! Install Pi's own MCP extension with the servers supplied for this session.
 mod node_api;
 use node_api::{Env, Handle, Read, arrays};
-use std::{fs, path::PathBuf, ptr::null_mut};
+use std::{
+    fs,
+    io::Read as _,
+    path::PathBuf,
+    ptr::null_mut,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+fn startup_config() -> std::io::Result<String> {
+    static TAKEN: AtomicBool = AtomicBool::new(false);
+    if TAKEN.swap(true, Ordering::AcqRel) {
+        return Err(std::io::Error::other("Pi startup config already consumed"));
+    }
+    let mut content = String::new();
+    #[cfg(unix)]
+    {
+        let path = std::env::var_os("KAR_PI_MCP_PIPE")
+            .ok_or_else(|| std::io::Error::other("missing Pi private socket"))?;
+        std::os::unix::net::UnixStream::connect(path)?.read_to_string(&mut content)?;
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Write;
+        let name = std::env::var("KAR_PI_MCP_PIPE")
+            .map_err(|_| std::io::Error::other("missing Pi private pipe"))?;
+        let mut pipe = fs::OpenOptions::new().read(true).write(true).open(name)?;
+        let key = std::env::var("KAR_PI_MCP_KEY")
+            .map_err(|_| std::io::Error::other("missing Pi private key"))?;
+        pipe.write_all(key.as_bytes())?;
+        let mut size = [0; 8];
+        pipe.read_exact(&mut size)?;
+        let size = u64::from_le_bytes(size);
+        if (&mut pipe).take(size).read_to_string(&mut content)? as u64 != size {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        pipe.write_all(b"K")?;
+    }
+    Ok(content)
+}
 
 fn directory() -> Read<PathBuf> {
     std::env::var_os("KAR_PI_MCP_DIRECTORY")
@@ -39,8 +77,7 @@ extern "C" fn register(env: Handle, info: Handle) -> Handle {
         }
         let pi = e.get(state, c"pi")?;
         let dir = directory()?;
-        let config = fs::read_to_string(dir.join("servers.json")).map_err(|_| "missing config")?;
-        let rows = e.call(e.get(e.global()?, c"JSON")?, c"parse", &[e.text(&config)?])?;
+        let rows = e.get(state, c"servers")?;
         for i in 0..arrays::len(e, rows)? {
             let row = e.call(rows, c"at", &[arrays::index(e, i)?])?;
             e.call(
@@ -83,6 +120,9 @@ extern "C" fn factory(env: Handle, info: Handle) -> Handle {
         // ours before Pi's own session_start handler connects the direct tools.
         let state = e.call(g, c"Object", &[])?;
         e.set(state, c"pi", pi)?;
+        let config = startup_config().map_err(|_| "missing private Pi config")?;
+        let rows = e.call(e.get(g, c"JSON")?, c"parse", &[e.text(&config)?])?;
+        e.set(state, c"servers", rows)?;
         let bind = |name, callback| e.call(e.function(name, callback)?, c"bind", &[state]);
         let on_start = bind(c"register", register)?;
         e.call(pi, c"on", &[e.text("session_start")?, on_start])?;

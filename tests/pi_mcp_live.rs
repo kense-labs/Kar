@@ -31,6 +31,8 @@ use uuid::Uuid;
 struct Peer {
     requests: Arc<Mutex<Vec<Value>>>,
     calls: Arc<AtomicUsize>,
+    headers: [String; 2],
+    authorized: Arc<Mutex<BTreeSet<usize>>>,
     entered: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
 }
@@ -70,7 +72,18 @@ async fn model(State(peer): State<Peer>, Json(body): Json<Value>) -> Response {
     )
         .into_response()
 }
-async fn mcp(State(peer): State<Peer>, Json(req): Json<Value>) -> Response {
+async fn mcp(
+    State(peer): State<Peer>,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<Value>,
+) -> Response {
+    let slot = usize::from(uri.path() == "/sibling");
+    if headers.get("x-kar-auth").and_then(|v| v.to_str().ok()) != Some(peer.headers[slot].as_str())
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    peer.authorized.lock().unwrap().insert(slot);
     let data = match req["method"].as_str() {
         Some("initialize") => json!({
             "protocolVersion": req["params"]["protocolVersion"],
@@ -129,20 +142,29 @@ async fn check_stdio_environment(
         unreachable!()
     };
     for remove in [false, true] {
+        let token = format!("!kar-{}-$HOME", Uuid::new_v4());
+        let digest = receipt.with_extension("sha");
+        let directory = receipt.with_extension("dir");
         let mut shell_args: Vec<String> = [
             "-c",
-            r#"printf '%s' "${HOME-unset}" > "$1"; shift; exec "$@""#,
+            r#"printf '%s' "${HOME-unset}" > "$1"
+               printf '%s' "$KAR_TOOL_TOKEN" | cksum > "$2"
+               printf '%s' "$KAR_PI_MCP_DIRECTORY" > "$3"
+               shift 3
+               exec "$@""#,
             "env-check",
         ]
         .map(str::to_owned)
         .into();
         shell_args.push(receipt.to_str().unwrap().into());
+        shell_args.push(digest.to_str().unwrap().into());
+        shell_args.push(directory.to_str().unwrap().into());
         shell_args.push(command.clone());
         shell_args.extend(args.clone());
         let server = McpServer::Stdio {
             command: "/bin/sh".into(),
             args: shell_args,
-            env: Default::default(),
+            env: [("KAR_TOOL_TOKEN".into(), token.clone())].into(),
         };
         let resumed = store
             .resume_with(chat, |launch| {
@@ -167,6 +189,25 @@ async fn check_stdio_environment(
             opts.env[std::ffi::OsStr::new("HOME")].to_str().unwrap()
         };
         assert_eq!(fs::read_to_string(receipt).unwrap(), expected);
+        let mut checksum = std::process::Command::new("cksum")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(&mut checksum.stdin.take().unwrap(), token.as_bytes()).unwrap();
+        let expected = checksum.wait_with_output().unwrap();
+        assert!(expected.status.success());
+        assert_eq!(fs::read(&digest).unwrap(), expected.stdout);
+        let dir = fs::read_to_string(&directory).unwrap();
+        let files: BTreeSet<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            files,
+            [".owner", "pi-mcp.node", "receipt"].map(Into::into).into()
+        );
+        verify_private_inputs(receipt.parent().unwrap(), &[token]);
         fs::remove_file(receipt).unwrap();
         resumed.close().await.unwrap();
     }
@@ -215,6 +256,27 @@ async fn observe_http_call(store: &ChatStore, chat: &ChatSession, peer: &Peer) -
     turn.unwrap()
 }
 
+fn verify_private_inputs(dir: &Path, probes: &[String]) {
+    for e in fs::read_dir(dir).unwrap() {
+        let e = e.unwrap();
+        let kind = e.file_type().unwrap();
+        if kind.is_dir() {
+            verify_private_inputs(&e.path(), probes);
+        } else if kind.is_file() {
+            let bytes = fs::read(e.path()).unwrap();
+            for value in probes {
+                assert!(
+                    !bytes
+                        .windows(value.len())
+                        .any(|slice| slice == value.as_bytes()),
+                    "credential persisted in {}",
+                    e.path().display()
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires npm Pi or standalone Pi with matching KAR_PI_SDK_DIR, and Node with native addon support"]
 async fn native_stdio_http_isolation_and_resume() {
@@ -227,10 +289,14 @@ async fn native_stdio_http_isolation_and_resume() {
     fs::create_dir(&agent).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let data = Peer::default();
+    let data = Peer {
+        headers: std::array::from_fn(|_| format!("!kar-{}-$HOME", Uuid::new_v4())),
+        ..Default::default()
+    };
     let router = Router::new()
         .route("/v1/chat/completions", post(model))
         .route("/mcp", post(mcp))
+        .route("/sibling", post(mcp))
         .with_state(data.clone());
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     fs::write(agent.join("models.json"),json!({"providers":{"fixture":{"baseUrl":format!("{url}/v1"),"api":"openai-completions","apiKey":"local","models":[{"id":"fixture","name":"Fixture","input":["text"],"contextWindow":64000,"maxTokens":512}]}}}).to_string()).unwrap();
@@ -261,7 +327,7 @@ async fn native_stdio_http_isolation_and_resume() {
         .insert("local-agent".into(), stdio(&marker));
     let remote = McpServer::Http {
         url: format!("{url}/mcp"),
-        headers: Default::default(),
+        headers: [("X-Kar-Auth".into(), data.headers[0].clone())].into(),
     };
     opts.mcp_servers.insert("remote".into(), remote.clone());
     let chat = store
@@ -308,6 +374,47 @@ async fn native_stdio_http_isolation_and_resume() {
         assert!(serde_json::to_string(&turn.items).unwrap().contains(answer));
     }
     assert_eq!(data.calls.load(Ordering::SeqCst), 1);
+    let mut sibling = plain.clone();
+    sibling.mcp_servers.insert(
+        "sibling".into(),
+        McpServer::Http {
+            url: format!("{url}/sibling"),
+            headers: [("X-Kar-Auth".into(), data.headers[1].clone())].into(),
+        },
+    );
+    let second = store
+        .create("pi", Some(Path::new(&bin)), sibling)
+        .await
+        .unwrap();
+    second
+        .send(Uuid::new_v4(), "separate credential scope")
+        .await
+        .unwrap();
+    assert_eq!(names(&data), BTreeSet::from(["mcp__sibling__echo".into()]));
+    assert_eq!(*data.authorized.lock().unwrap(), BTreeSet::from([0, 1]));
+    verify_private_inputs(&base, &data.headers);
+    #[cfg(unix)]
+    {
+        let process_args = std::process::Command::new("ps")
+            .args(["-axww", "-o", "command="])
+            .output()
+            .unwrap();
+        assert!(process_args.status.success());
+        let text = String::from_utf8_lossy(&process_args.stdout);
+        assert!(
+            data.headers.iter().all(|v| !text.contains(v)),
+            "credential in process arguments"
+        );
+    }
+    for request in data.requests.lock().unwrap().iter() {
+        assert!(
+            data.headers
+                .iter()
+                .all(|v| !request.to_string().contains(v)),
+            "credential in model traffic"
+        );
+    }
+    second.close().await.unwrap();
     let other = store
         .create("pi", Some(Path::new(&bin)), plain)
         .await

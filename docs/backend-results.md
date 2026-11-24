@@ -66,6 +66,14 @@
 
 DSH 另以 Node 24.15.0 运行 `cargo test --locked --test dsh_live -- --ignored --nocapture --test-threads=2`。当时的 23 个用例全部通过，包括两种传输的提示词、创建 hook、MCP、标题、工具限制与日志上传；Web 的多客户端队列、工具 ID 重用、缺失会话、目标重启、压缩和定向停止后台作业；另覆盖工作区可写目录。对应 `KAR_DSH_BIN` 为 0.2.2-rc.5 的 Web，`KAR_DSH_ACP_BIN` 为 0.2.1-rc.5，`KAR_DSH_ACP_ROOTS_BIN` 为 0.2.2-rc.3。上表的跨供应商 CLI 用例随后单独执行。桌面 app 随附的 Node 首次运行没有载入 DSH 原生模块，换用上述 Node 后通过。DSH 的实机证据以通过的这次运行计。
 
+## Pi 启动凭据
+
+| 供应商、版本和平台 | 操作与期望 | 命令与实际结果 |
+| --- | --- | --- |
+| Pi RPC 1.4.0、1.6.0，macOS arm64，Node 24.15.0 | 每个版本同时打开两个会话，用不同的 HTTP header 访问各自的 MCP，再打开无 MCP 的会话。重启后替换或省略服务。 | 将 `KAR_PI_BIN` 分别设为各 npm 安装的 `node_modules/.bin/pi`，运行 `cargo test --locked --test pi_mcp_live -- --ignored --nocapture`。两次均通过。接收端按 URL 校验独立的随机值；模型分别看见对应工具，空会话的列表为空，恢复保留原生 ID。工作目录、聊天与运行时文件、进程参数和捕获的模型请求中均未找到 header 原值。 |
+| 同上 | 恢复时向 stdio 子进程传入包含起始 `!` 和字面 `$HOME` 的独立凭据，分别保留、移除继承的 HOME。 | 同一测试两次均通过。子进程对收到的值运行 `cksum`，与原值的校验和和长度相符。扩展目录只留下原生模块、租约和注册回执；套接字已移除。 |
+| Kar Rust 一次性交接，macOS arm64 | 指定错误的接收进程和正确的接收进程，分别读到 EOF 和完整内容；交接后无法再次连接。 | `cargo test --locked --lib pi_mcp` 两项通过。Linux x86_64 与 Windows gnullvm 的 release CLI 交叉检查通过，平台原生执行分别列为待验和本轮排除。 |
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。

@@ -160,9 +160,6 @@ pub(crate) fn credential_refusal(protocol: Protocol, id: &str) -> Option<&'stati
         Protocol::Claude if cfg!(windows) => {
             Some("Claude session MCP credentials are unavailable on Windows")
         }
-        Protocol::Pi => {
-            Some("Pi RPC does not accept per-server environment variables or HTTP headers")
-        }
         Protocol::Dsh => Some(
             "DSH session MCP requires a stdio command and arguments without credential environment or headers",
         ),

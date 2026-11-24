@@ -324,7 +324,7 @@ impl Host {
                             result=&mut answer=>{
                                 let mut value=result.map_err(|_|interaction())?;
                                 if choices.as_ref().is_some_and(|list| !list.contains(&value)){return Err(interaction())}
-                                if is_key{value=super::login::literal(&value);}
+                                if is_key{value=crate::pi_sdk::config_literal(&value);}
                                 self.send(&json!({"id":id,"answer":value})).await?;break;
                             }
                         }

@@ -508,7 +508,7 @@ impl Session {
         } else {
             None
         };
-        let pi_mcp_receipt = pi_mcp.as_ref().map(|d| d.path().join("receipt"));
+        let pi_mcp_receipt = pi_mcp.as_ref().map(crate::pi_mcp::Config::receipt);
         let mcp = McpSupport::new(runtime.protocol, &runtime.id, installed_version.as_deref());
         if runtime.protocol == Protocol::Qwen
             && options
@@ -524,6 +524,11 @@ impl Session {
             ));
         }
         let child_process = crate::process::OwnedProcess::spawn(process)?;
+        if let Some(config) = pi_mcp.as_mut()
+            && let Some(pid) = child_process.id()
+        {
+            config.spawned(pid);
+        }
         let process_root = crate::resources::Root::new(child_process.id(), None);
         let native_memory = memory.as_ref().and_then(|m| m.effective);
         let commands = Actor::start(

@@ -6,6 +6,15 @@ use std::{
 };
 const PACKAGE: &str = "@earendil-works/pi-coding-agent";
 
+pub(crate) fn config_literal(value: &str) -> String {
+    let value = value.replace('$', "$$");
+    if value.starts_with('!') {
+        format!("${value}")
+    } else {
+        value
+    }
+}
+
 pub(crate) fn standalone(program: &Path) -> bool {
     let Ok(entry) = program.canonicalize() else {
         return false;

@@ -204,7 +204,7 @@ struct Pending {
 }
 
 pub(crate) struct LaunchFiles {
-    pub pi_mcp: Option<crate::private_dir::PrivateDir>,
+    pub pi_mcp: Option<crate::pi_mcp::Config>,
     pub dsh_patch: Option<crate::dsh::profile::Patch>,
     pub qwen_defaults: Option<crate::private_dir::PrivateDir>,
     pub prompts: Vec<tempfile::NamedTempFile>,

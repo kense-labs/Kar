@@ -9,14 +9,6 @@ use crate::{
 };
 use reqwest::Url;
 
-pub(super) fn literal(value: &str) -> String {
-    let value = value.replace('$', "$$");
-    if value.starts_with('!') {
-        format!("${value}")
-    } else {
-        value
-    }
-}
 struct KeyOnly<'a>(Option<&'a str>);
 impl ProviderInteraction for KeyOnly<'_> {
     fn event(&mut self, _: ProviderEvent) -> Result<()> {
@@ -201,7 +193,7 @@ async fn converse(
                 (i + 1).to_string()
             } else if secret && decoder.method.method == Method::ApiKey {
                 // Pi treats a leading ! and embedded $ as config references.
-                literal(&answer)
+                crate::pi_sdk::config_literal(&answer)
             } else {
                 answer
             };
