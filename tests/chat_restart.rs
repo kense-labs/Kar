@@ -2026,12 +2026,18 @@ mod worktree_chats;
 mod workbench_devices;
 #[path = "support/workbench_cloud_live.rs"]
 mod workbench_cloud_live;
+#[path = "support/workbench_usage.rs"]
+mod workbench_usage;
 #[path = "support/workbench_observability.rs"]
 mod workbench_observability;
 fn main() {
     let mode = std::env::args().nth(1);
     if matches!(mode.as_deref(), Some("workbench-simlock-live" | "workbench-expo-live")) {
         workbench_cloud_live::run(mode.as_deref() == Some("workbench-expo-live"));
+        return;
+    }
+    if mode.as_deref() == Some("workbench-usage") {
+        workbench_usage::run();
         return;
     }
     if mode.as_deref() == Some("workbench-observability") {

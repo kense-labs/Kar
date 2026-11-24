@@ -3,6 +3,7 @@ mod history;
 mod otlp;
 mod trace;
 mod triage;
+mod usage;
 pub(super) use trace::observe;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -107,6 +108,7 @@ struct State {
     last: Option<Instant>,
 }
 pub(super) struct Service {
+    usage: Arc<usage::Service>,
     traces: Arc<trace::Trace>,
     triage: Arc<triage::Triage>,
     state: Arc<Mutex<State>>,
@@ -117,6 +119,7 @@ pub(super) struct Service {
 impl Service {
     pub(super) fn open(directory: &std::path::Path) -> Self {
         Self {
+            usage: Arc::new(usage::Service::new(directory)),
             traces: Arc::new(trace::Trace::new(directory)),
             triage: Arc::new(triage::Triage::new(directory)),
             state: Arc::new(Mutex::new(State {

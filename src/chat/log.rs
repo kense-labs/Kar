@@ -59,6 +59,8 @@ pub enum ChatUpdate {
         requests: Vec<crate::PendingRequest>,
     },
     UsageChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<u64>,
         reading: crate::UsageSnapshot,
     },
     ContextChanged {
@@ -584,7 +586,7 @@ impl State {
                 self.manual_compaction = Some(report);
             }
             ChatUpdate::Compaction { report } => self.last_compaction = Some(report),
-            ChatUpdate::UsageChanged { reading } => {
+            ChatUpdate::UsageChanged { reading, .. } => {
                 if (reading.usage.total.is_none() && reading.children.is_empty())
                     || self.stream != Some(reading.cursor.stream_id)
                 {
@@ -1812,7 +1814,10 @@ impl Log {
                     && prior.children == reading.children
             })
         {
-            self.commit(ChatUpdate::UsageChanged { reading })?;
+            self.commit(ChatUpdate::UsageChanged {
+                at: Some(r.timestamp_ms),
+                reading,
+            })?;
         }
         if r.events.iter().any(|e| {
             matches!(

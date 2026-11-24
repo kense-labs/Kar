@@ -162,7 +162,7 @@ async fn git(cwd: &Path, args: &[&str], seconds: u64) -> Result<String> {
     String::from_utf8(output.stdout)
         .map_err(|_| Error::Refused("invalid Kar source response".into()))
 }
-fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = tempfile::NamedTempFile::new_in(path.parent().expect("triage file"))?;
     f.write_all(bytes)?;
     f.as_file().sync_all()?;
