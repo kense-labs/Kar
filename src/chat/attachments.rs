@@ -102,18 +102,9 @@ impl ChatStore {
             return Ok(saved.attachment);
         }
         let state = self.read_state(File::open(self.path(chat))?, chat)?;
-        let inherited_end = state
-            .info
-            .forked_from
-            .as_ref()
-            .and_then(|origin| state.turns.iter().position(|t| t.id == origin.turn));
-        if inherited_end.is_some_and(|end| {
-            state.turns[..=end].iter().any(|t| {
-                t.attachments
-                    .iter()
-                    .chain(t.steered_attachments.values().flatten())
-                    .any(|a| *a == saved.attachment)
-            })
+        if state.turns[..state.inherited_len].iter().any(|turn| {
+            turn.attachments.iter().chain(turn.steered_attachments.values().flatten())
+                .any(|attachment| *attachment == saved.attachment)
         }) {
             return Ok(saved.attachment);
         }
