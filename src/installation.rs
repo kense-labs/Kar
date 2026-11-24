@@ -62,7 +62,8 @@ impl InstallationSnapshot {
             Self::Missing => None,
         }
     }
-    pub(crate) fn summary(self) -> Installation {
+    /// Compact installation status, matching `Runtime::installation` without another probe.
+    pub fn summary(self) -> Installation {
         match self {
             Self::Available { version, .. } => Installation::Available {
                 version: version.unwrap_or_default(),

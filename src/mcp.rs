@@ -17,12 +17,11 @@ struct Server {
 fn tools() -> Value {
     let string = json!({"type":"string"});
     let id = json!({"type":"string","format":"uuid"});
-    let launch =
-        json!({"runtime":string,"task":string,"name":string,"model":string,"resume":string});
+    let launch = json!({"runtime":{"type":"string","description":"Runtime ID returned by the runtimes tool."},"task":string,"name":string,"model":string,"resume":string});
     let specs = [
         (
             "runtimes",
-            "List available agent executables.",
+            "List the runtimes offered by this server and their installation status.",
             json!({}),
             vec![],
         ),
@@ -79,7 +78,27 @@ impl Server {
             "runtimes" => {
                 let mut rows = vec![];
                 for r in self.runtimes.values() {
-                    rows.push(json!({"id":r.id,"installation":r.installation().await}));
+                    let (installation, refusal) =
+                        match r.probe_installation(&Default::default()).await {
+                            Ok(snapshot) => {
+                                let refusal = r
+                                    .session_capabilities(&snapshot)
+                                    .and_then(|c| c.refused_session_options.get("env").copied());
+                                (snapshot.summary(), refusal)
+                            }
+                            Err(error) => (
+                                kar::Installation::Failed {
+                                    reason: error.to_string(),
+                                },
+                                None,
+                            ),
+                        };
+                    let mut row = json!({"id":r.id, "installation":installation});
+                    if let Some(reason) = refusal {
+                        row["spawnable"] = false.into();
+                        row["reason"] = reason.into();
+                    }
+                    rows.push(row);
                 }
                 Ok(json!({"runtimes":rows}))
             }
@@ -213,7 +232,7 @@ pub async fn serve(cwd: PathBuf, runtimes: Vec<Runtime>, max_sessions: usize) ->
                     initialized=true;
                     let versions=["2024-11-05","2025-03-26","2025-06-18","2025-11-25"];
                     let version=request.pointer("/params/protocolVersion").and_then(Value::as_str).filter(|v|versions.contains(v)).unwrap_or("2025-11-25");
-                    ok(id,json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"kar","version":env!("CARGO_PKG_VERSION")}}))
+                    ok(id,json!({"protocolVersion":version,"capabilities":{"tools":{}},"instructions":"Call runtimes for the offered runtime IDs and installation status. Pass the selected ID to run or spawn.","serverInfo":{"name":"kar","version":env!("CARGO_PKG_VERSION")}}))
                 }
                 "ping"=>ok(id,json!({})),
                 _ if !initialized=>error(id,-32002,"Initialize the server first"),

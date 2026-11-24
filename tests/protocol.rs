@@ -38,6 +38,22 @@ mod qoder;
 #[path = "protocol/qwen_providers.rs"]
 mod qwen_providers;
 
+fn record_routing(protocol: &str, task: &str) {
+    let Some(dir) = std::env::var_os("KAR_TEST_MCP_ROUTING") else {
+        return;
+    };
+    assert_eq!(task, format!("route/{protocol}"));
+    assert_eq!(std::env::var("KAR_AGENT_DEPTH").as_deref(), Ok("1"));
+    let path = std::path::Path::new(&dir).join(format!("received-{protocol}"));
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    file.write_all(task.as_bytes()).unwrap();
+}
+
 fn emit(v: Value) {
     let mut out = std::io::stdout().lock();
     writeln!(out, "{v}").unwrap();
@@ -197,6 +213,10 @@ fn peer(protocol: &str) {
                             .as_str()
                             .unwrap()
                             .into();
+                        if name.starts_with("route/") {
+                            record_routing(protocol, &name);
+                            name = "normal".into();
+                        }
                         if let Some(script) = name.strip_prefix("failure-fixture ") {
                             let script: Value = serde_json::from_str(script).unwrap();
                             for frame in script["frames"].as_array().into_iter().flatten() {
@@ -473,6 +493,16 @@ fn peer(protocol: &str) {
                     json!({"type":"control_response","response":{"subtype":"success","request_id":v["request_id"],"response":{"models":[{"value":"demo"}]}}}),
                 ),
                 Some("user") => {
+                    if std::env::var_os("KAR_TEST_MCP_ROUTING").is_some() {
+                        let content = &v["message"]["content"];
+                        record_routing(
+                            protocol,
+                            content
+                                .as_str()
+                                .or_else(|| content[0]["text"].as_str())
+                                .unwrap(),
+                        );
+                    }
                     if v["message"]["content"] == "child-selections"
                         || v["message"]["content"][0]["text"] == "child-selections"
                     {
@@ -1237,6 +1267,12 @@ async fn main() {
         }
         return;
     }
+    if std::env::var_os("KAR_TEST_MCP_ROUTING").is_some()
+        && args.iter().any(|s| s == "--input-format")
+    {
+        peer("claude");
+        return;
+    }
     if args.get(1).is_some_and(|s| s == "app-server") {
         peer("codex");
         return;
@@ -1399,9 +1435,18 @@ async fn cli_contract() -> kar::Result<()> {
         records.len() - 4
     );
     let child = Command::new(bin)
-        .args(["mcp", "--runtimes", "codex", "--max-sessions", "1", "--cwd"])
+        .args([
+            "mcp",
+            "--runtimes",
+            "codex,claude",
+            "--max-sessions",
+            "2",
+            "--cwd",
+        ])
         .arg(dir.path())
         .env("KAR_CODEX_BIN", &exe)
+        .env("KAR_CLAUDE_BIN", &exe)
+        .env("KAR_TEST_MCP_ROUTING", dir.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .kill_on_drop(true)
@@ -1415,9 +1460,18 @@ async fn cli_contract() -> kar::Result<()> {
             json!({"protocolVersion":"2025-11-25","clientInfo":{"name":"test","version":"1"},"capabilities":{}}),
         ),
         ("tools/list", json!({})),
+        ("tools/call", json!({"name":"runtimes","arguments":{}})),
         (
             "tools/call",
-            json!({"name":"run","arguments":{"runtime":"codex","task":"normal"}}),
+            json!({"name":"run","arguments":{"runtime":"codex","task":"route/codex"}}),
+        ),
+        (
+            "tools/call",
+            json!({"name":"run","arguments":{"runtime":"claude","task":"route/claude"}}),
+        ),
+        (
+            "tools/call",
+            json!({"name":"run","arguments":{"runtime":"other","task":"must not run"}}),
         ),
         ("tools/call", json!({"name":"list","arguments":{}})),
     ];
@@ -1431,13 +1485,29 @@ async fn cli_contract() -> kar::Result<()> {
         match i {
             0 => assert_eq!(r["protocolVersion"], "2025-11-25"),
             1 => assert_eq!(r["tools"].as_array().unwrap().len(), 8),
-            2 => assert_eq!(r["structuredContent"]["text"], "hello", "{reply}"),
-            3 => assert_eq!(
+            2 => assert_eq!(
+                r["structuredContent"]["runtimes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|r| r["id"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["claude", "codex"]
+            ),
+            3 | 4 => assert_eq!(r["structuredContent"]["text"], "hello", "{reply}"),
+            5 => assert_eq!(r["isError"], true, "{reply}"),
+            6 => assert_eq!(
                 r["structuredContent"]["agents"].as_array().unwrap().len(),
-                1
+                2
             ),
             _ => unreachable!(),
         }
+    }
+    for runtime in ["codex", "claude"] {
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(format!("received-{runtime}")))?,
+            format!("route/{runtime}")
+        );
     }
     drop(input);
     assert!(child.wait().await?.success());

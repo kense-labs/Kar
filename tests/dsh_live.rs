@@ -1,3 +1,5 @@
+#[path = "dsh_live/cli_routing.rs"]
+mod cli_routing;
 #[path = "support/declaration.rs"]
 mod declaration;
 #[path = "dsh_live/prompts.rs"]
