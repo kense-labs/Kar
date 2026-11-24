@@ -59,6 +59,35 @@ pub(super) async fn exercise(
     let base = format!("{url}/projects/{project}/chats");
     let opened = server::json(host.post(&base).json(&json!({"id":chat,"runtime":"codex"}))).await;
     let source = opened["info"]["native_id"].clone();
+    let root = Path::new(opened["info"]["workspace"].as_str().unwrap());
+    // Use a real file-transport upstream at a newer commit while keeping the issue tracker remote intact.
+    let upstream = db.join("branch-source");
+    super::issues::git(
+        root,
+        &["clone", "-q", "--no-local", ".", upstream.to_str().unwrap()],
+    );
+    fs::write(upstream.join("remote-base"), "remote commit").unwrap();
+    super::issues::git(&upstream, &["add", "remote-base"]);
+    super::issues::git(
+        &upstream,
+        &[
+            "-c",
+            "user.name=Kar",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgSign=false",
+            "commit",
+            "-qm",
+            "upstream",
+        ],
+    );
+    super::issues::git(
+        root,
+        &["remote", "add", "kar-upstream", upstream.to_str().unwrap()],
+    );
+    super::issues::git(root, &["config", "branch.main.remote", "kar-upstream"]);
+    super::issues::git(root, &["config", "branch.main.merge", "refs/heads/main"]);
     let old = bearer(observer).await;
     let client = Client::new();
     let original = open(&client, url, &old).await;
@@ -171,6 +200,12 @@ pub(super) async fn exercise(
     assert_eq!(checkout["attached"], true);
     assert_eq!(checkout["branch"], "kar-move");
     assert_eq!(checkout["handoffs"][0]["status"], "attached");
+    assert_eq!(
+        checkout["handoffs"][0]["remote_base"],
+        "refs/remotes/kar-upstream/main"
+    );
+    assert!(workspace.join("remote-base").is_file());
+    assert!(!root.join("remote-base").is_file());
     let again = server::json(invoke("kar_worktree_handoff", draft)).await;
     assert_eq!(
         again["result"]["structuredContent"]["handoff"],

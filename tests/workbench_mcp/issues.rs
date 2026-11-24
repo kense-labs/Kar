@@ -13,7 +13,7 @@ use std::{
 
 type Calls = Arc<Mutex<Vec<Value>>>;
 
-fn git(root: &Path, args: &[&str]) {
+pub(super) fn git(root: &Path, args: &[&str]) {
     let s = Command::new("git")
         .current_dir(root)
         .args(args)

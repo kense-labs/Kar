@@ -39,6 +39,8 @@ pub(super) struct Member {
     pub worktree_path: PathBuf,
     #[serde(default,skip_serializing_if="Option::is_none")]
     base_commit: Option<String>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    remote_base: Option<String>,
     worktree_id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     selected_branch: Option<String>,
@@ -275,7 +277,7 @@ fn member(task: &Task, path: &Path, name: String) -> Result<Member> {
         Error::Refused("repository lies outside the task's original common directory".into())
     })?;
     Ok(Member {
-        base_commit: None,
+        base_commit: None, remote_base:None,
         name,
         repository_path: path.into(),
         worktree_path: task.root.join(rel),
@@ -285,7 +287,7 @@ fn member(task: &Task, path: &Path, name: String) -> Result<Member> {
         ready: false,
     })
 }
-fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, handoff: bool) -> Result<Record> {
+fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, from_origin: Option<bool>) -> Result<Record> {
     if !q.single_checkout && app.0.chats.saved_info(id).is_ok() {
         return Err(Error::Refused("a chat already owns this ID".into()));
     }
@@ -308,7 +310,7 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, handoff: bool) -
             project_path: dir.clone(),
             project_is_worktree: true,
             repositories: vec![Member {
-                base_commit: None,
+                base_commit: None, remote_base:None,
                 name: project.name,
                 repository_path: project.root,
                 worktree_path: dir.clone(),
@@ -331,7 +333,7 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, handoff: bool) -
     }
     let tracked = folders::list(app, &project)?;
     let repos: Vec<_> = tracked.iter().filter(|f| f.state == "git").collect();
-    if repos.is_empty() && !(handoff && project.root.join(".git").exists()) {
+    if repos.is_empty() && !(from_origin.is_some() && project.root.join(".git").exists()) {
         return Err(Error::Refused(
             "the project has no tracked Git folders for a multi-repository task".into(),
         ));
@@ -418,12 +420,14 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, handoff: bool) -
             }
         }
     }
-    if handoff {
+    if let Some(from_origin)=from_origin {
         if taken.iter().any(|s|collides(s,&q.branch)) {
             return Err(Error::Refused("requested branch conflicts with an existing or pending branch".into()));
         }
         for member in &mut task.repositories {
-            member.base_commit=Some(Repository::open(&member.repository_path)?.resolve(&q.base)?);
+            let (sha,remote)=Repository::open(&member.repository_path)?.handoff_base(&q.base,from_origin && member.repository_path==project.root)?;
+            member.base_commit=Some(sha);
+            member.remote_base=remote;
         }
     }
     let actual = if project_collision {
@@ -666,9 +670,9 @@ fn rollback(app: &Workbench, r: &Record) -> Result<()> {
     Ok(())
 }
 pub(super) fn create(app: &Workbench, p: Uuid, id: Uuid, q: Create) -> Result<Task> {
-    create_managed(app,p,id,q,false)
+    create_managed(app,p,id,q,None)
 }
-fn create_managed(app: &Workbench, p: Uuid, id: Uuid, q: Create, handoff: bool) -> Result<Task> {
+fn create_managed(app: &Workbench, p: Uuid, id: Uuid, q: Create, from_origin: Option<bool>) -> Result<Task> {
     let store = &app.0.task_folders;
     let life = store.lifecycle(p, id)?;
     let cancel = life.begin()?;
@@ -687,7 +691,7 @@ fn create_managed(app: &Workbench, p: Uuid, id: Uuid, q: Create, handoff: bool) 
                 return Err(Error::Refused("cancelled task ID is retired".into()));
             }
             Some(r) => r,
-            None => plan(app, id, app.project(p)?, q, handoff)?,
+            None => plan(app, id, app.project(p)?, q, from_origin)?,
         };
         if r.progress.phase != "running" {
             r.progress = Snapshot::new(
@@ -875,6 +879,8 @@ pub(in super::super) fn single(
         .create_worktree(id, &task.project_path, &branch, &start)
 }
 
-pub(in super::super) fn handoff_task(app:&Workbench, project:Uuid, command:Uuid, directory:PathBuf, branch:String, base:String)->Result<Task>{
-    create_managed(app,project,command,Create { directory, branch, base, repositories:None, single_checkout:false },true)
+pub(in super::super) fn handoff_task(app:&Workbench, project:Uuid, command:Uuid, directory:PathBuf, branch:String, base:String, from_origin:bool)->Result<(Task,Option<String>)>{
+    let task=create_managed(app,project,command,Create { directory, branch, base, repositories:None, single_checkout:false },Some(from_origin))?;
+    let remote=task.repositories.iter().find(|r|r.repository_path==task.project_root).and_then(|r|r.remote_base.clone());
+    Ok((task,remote))
 }

@@ -30,6 +30,7 @@ fn settings(input: &Value, p: &mut Project) -> Result<()> {
     for key in [
         "defaultModelSelection",
         "autoPull",
+        "newWorktreesStartFromOrigin",
         "projectIcon",
         "faviconPath",
         "defaultThreadEnvMode",
@@ -59,7 +60,7 @@ fn settings(input: &Value, p: &mut Project) -> Result<()> {
                     }
                 }
             }
-            "autoPull" => {
+            "autoPull" | "newWorktreesStartFromOrigin" => {
                 boolean(input, key)?;
             }
             "faviconPath" | "defaultThreadEnvMode" if !v.is_null() => {
@@ -93,6 +94,7 @@ impl Workbench {
                 "title",
                 "workspaceRoot",
                 "createWorkspaceRootIfMissing",
+                "newWorktreesStartFromOrigin",
                 "defaultModelSelection",
                 "scripts",
                 "trackedFolders",
@@ -102,6 +104,7 @@ impl Workbench {
                 "workspaceRoot",
                 "defaultModelSelection",
                 "autoPull",
+                "newWorktreesStartFromOrigin",
                 "projectIcon",
                 "faviconPath",
                 "defaultThreadEnvMode",

@@ -17,6 +17,7 @@ struct Request {
     #[serde(default = "head")]
     base_ref: String,
     continuation_prompt: Option<String>,
+    start_from_origin: Option<bool>,
 }
 fn head() -> String {
     "HEAD".into()
@@ -39,6 +40,10 @@ pub(in crate::workbench) struct Move {
     directory: PathBuf,
     workspace: Option<PathBuf>,
     continuation_id: Option<Uuid>,
+    #[serde(default)]
+    start_from_origin: bool,
+    #[serde(default)]
+    remote_base: Option<String>,
     status: Phase,
     detail: Option<String>,
 }
@@ -123,6 +128,14 @@ fn committed(app: &Workbench, row: &Move) -> Result<bool> {
         h.request.id == row.request.command_id && h.source_workspace.as_ref() == Some(&row.source)
     }))
 }
+fn default_origin(project: &super::super::Project) -> bool {
+    project
+        .metadata
+        .settings
+        .get("newWorktreesStartFromOrigin")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
 fn directory_ok(policy: Option<&Policy>, target: &Path) -> bool {
     policy.and_then(Policy::worktree_directory) == target.parent()
 }
@@ -156,22 +169,23 @@ async fn finish(
     }
     let service = app.clone();
     let op = row.clone();
-    let target = tokio::task::spawn_blocking(move || {
+    let (target, remote) = tokio::task::spawn_blocking(move || {
         if service.destination(&op.directory)? != op.directory {
             return Err(crate::workbench::denied());
         }
-        let task = crate::workbench::task_folders::handoff_task(
+        let (task, remote) = crate::workbench::task_folders::handoff_task(
             &service,
             op.project,
             id,
             op.directory,
             op.request.branch,
             op.request.base_ref,
+            op.start_from_origin,
         )?;
         if service.0.task_folders.workspace(op.project, id)?.as_ref() != Some(&task.project_path) {
             return Err(crate::workbench::denied());
         }
-        Ok(task.project_path.canonicalize()?)
+        Ok((task.project_path.canonicalize()?, remote))
     })
     .await
     .map_err(|e| Error::Closed(e.to_string()))??;
@@ -244,6 +258,7 @@ async fn finish(
             .get_mut(&id)
             .ok_or_else(crate::workbench::missing)?;
         r.workspace = Some(target);
+        r.remote_base = remote;
         r.status = Phase::Attached;
         r.detail = None;
         Ok(())
@@ -321,7 +336,7 @@ fn dispatch(
             .filter(|r| r.project == project && r.chat == chat)
             .collect::<Vec<_>>();
         return Ok((
-            json!({"attached":checkout,"workspace":info.workspace,"project_workspace":registered.root,"branch":branch,"handoffs":rows}),
+            json!({"attached":checkout,"workspace":info.workspace,"project_workspace":registered.root,"branch":branch,"default_start_from_origin":default_origin(&registered),"handoffs":rows}),
             None,
         ));
     }
@@ -387,10 +402,15 @@ fn dispatch(
             ));
         }
         let continuation_id = request.continuation_prompt.as_ref().map(|_| Uuid::new_v4());
+        let start_from_origin = request
+            .start_from_origin
+            .unwrap_or_else(|| default_origin(&registered));
         let row = Move {
             project,
             chat,
             continuation_id,
+            start_from_origin,
+            remote_base: None,
             request,
             source: info.workspace,
             directory,

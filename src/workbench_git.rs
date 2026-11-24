@@ -8,6 +8,7 @@ use std::{
 };
 
 mod branches;
+mod handoff_base;
 mod stacked;
 pub(crate) use stacked::{PublishTarget, StackCheckout};
 mod worktrees;
