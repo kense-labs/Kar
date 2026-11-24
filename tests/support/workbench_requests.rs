@@ -85,7 +85,43 @@ async fn scenario() {
             .status()
             .is_success()
     );
-    ok(answer(&a, &chat, &second, "second")).await;
+    let store = kar::chat::ChatStore::open(&state).unwrap();
+    let attachment = Uuid::new_v4();
+    store
+        .persist_attachment(
+            id,
+            attachment,
+            "reference.txt",
+            "text/plain",
+            kar::chat::AttachmentKind::File,
+            b"client evidence",
+        )
+        .unwrap();
+    let other: Uuid = Uuid::new_v4();
+    ok(a.post(format!("{url}/projects/{p}/chats"))
+        .json(&json!({"id":other,"runtime":"codex"})))
+    .await;
+    let outside = Uuid::new_v4();
+    store
+        .persist_attachment(
+            other,
+            outside,
+            "private.txt",
+            "text/plain",
+            kar::chat::AttachmentKind::File,
+            b"other chat",
+        )
+        .unwrap();
+    let with_files = |qid: &str, file: Uuid| {
+        a.post(format!("{chat}/requests/respond")).json(&json!({
+        "id":second["id"],"cursor":second["cursor"],"action":"question","reply":{"action":"submit","values":{"q":"second"}},
+        "attachments_by_question_id":{(qid):[file]}
+    }))
+    };
+    for invalid in [with_files("unknown", attachment), with_files("q", outside)] {
+        assert!(!invalid.send().await.unwrap().status().is_success());
+    }
+    ok(with_files("q", attachment)).await;
     assert_eq!(sending.await.unwrap()["status"], "completed");
     let disk = fs::read_to_string(native.join("form-answers")).unwrap();
     let receipts: Vec<Value> = disk
@@ -98,9 +134,20 @@ async fn scenario() {
             .iter()
             .all(|r| r["session"] == created["info"]["native_id"])
     );
+    let value = receipts[1]["answer"]["answers"]["q"]["answers"][0]
+        .as_str()
+        .unwrap();
+    let refs: Vec<Value> = serde_json::from_str(
+        value
+            .strip_prefix("second\n\nAttached files (JSON):\n")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0]["name"], "reference.txt");
     assert_eq!(
-        receipts[1]["answer"]["answers"]["q"]["answers"][0],
-        "second"
+        fs::read(refs[0]["path"].as_str().unwrap()).unwrap(),
+        b"client evidence"
     );
     let turn = Uuid::new_v4();
     let post = a

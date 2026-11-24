@@ -531,6 +531,91 @@ pub(crate) fn answer(method: &str, body: &Value, reply: QuestionReply) -> Result
     })
 }
 
+/// File references have already been resolved within the requesting chat. The actor
+/// validates the answer against the live provider schema before it writes the native reply.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn answer_with_files(
+    method: &str,
+    body: &Value,
+    reply: QuestionReply,
+    files: std::collections::BTreeMap<String, String>,
+) -> Result<Value> {
+    if files.is_empty() {
+        return answer(method, body, reply);
+    }
+    let QuestionReply::Submit { mut values } = reply else {
+        return Err(Error::Refused(
+            "attachments require a submitted answer".into(),
+        ));
+    };
+    let form =
+        form(method, body).ok_or_else(|| Error::Unsupported("request has no questions".into()))?;
+    let mut choice_notes = Vec::new();
+    for (id, note) in files {
+        let field = form
+            .fields
+            .iter()
+            .find(|f| f.id == id)
+            .ok_or_else(|| Error::Refused("unknown attachment question".into()))?;
+        if field.secret {
+            return Err(Error::Refused(
+                "attachments cannot be added to a secret answer".into(),
+            ));
+        }
+        match field.kind {
+            FieldKind::Text | FieldKind::Editor => {
+                let value = values
+                    .entry(&id)
+                    .or_insert_with(|| Value::String(String::new()));
+                let Value::String(s) = value else {
+                    return Err(Error::Refused("attachments require a text answer".into()));
+                };
+                if !s.is_empty() {
+                    s.push_str("\n\n");
+                }
+                s.push_str(&note);
+            }
+            FieldKind::Select | FieldKind::MultiSelect
+                if matches!(method, "item/tool/requestUserInput" | "can_use_tool") =>
+            {
+                if values.get(&id).is_none() && field.allow_other {
+                    values.insert(
+                        id,
+                        if field.kind == FieldKind::MultiSelect {
+                            json!([note])
+                        } else {
+                            Value::String(note)
+                        },
+                    );
+                } else {
+                    choice_notes.push((id, field.label.clone(), note));
+                }
+            }
+            _ => {
+                return Err(Error::Refused(
+                    "this question cannot carry file references".into(),
+                ));
+            }
+        }
+    }
+    let mut payload = answer(method, body, QuestionReply::Submit { values })?;
+    for (id, label, note) in choice_notes {
+        if method == "item/tool/requestUserInput" {
+            let notes = payload["answers"][id]["answers"]
+                .as_array_mut()
+                .ok_or_else(|| Error::Refused("expected a choice answer".into()))?;
+            notes.push(Value::String(note));
+        } else {
+            let value = &mut payload["updatedInput"]["answers"][label];
+            let Value::String(text) = value else {
+                return Err(Error::Refused("expected a choice answer".into()));
+            };
+            text.push_str("\n\n");
+            text.push_str(&note);
+        }
+    }
+    Ok(payload)
+}
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn redact_answer(method: &str, body: &Value, payload: &mut Value) {
     if method == "item/tool/requestUserInput" {

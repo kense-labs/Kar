@@ -206,13 +206,50 @@ impl ChatStore {
         }
         Ok(out)
     }
+    pub(crate) fn question_attachment_notes(
+        &self,
+        chat: Uuid,
+        questions: std::collections::BTreeMap<String, Vec<Uuid>>,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        if questions.values().map(Vec::len).sum::<usize>() > 100 {
+            return Err(Error::Refused("at most 100 attachments per answer".into()));
+        }
+        let mut notes = std::collections::BTreeMap::new();
+        for (question, ids) in questions {
+            let mut references = Vec::new();
+            for file in self.attachments(chat, &ids)? {
+                self.verified_bytes(&file)?;
+                references.push(self.file_reference(&file));
+            }
+            if !references.is_empty() {
+                notes.insert(
+                    question,
+                    format!(
+                        "Attached files (JSON):\n{}",
+                        serde_json::Value::Array(references)
+                    ),
+                );
+            }
+        }
+        Ok(notes)
+    }
+    fn verified_bytes(&self, file: &Attachment) -> Result<Vec<u8>> {
+        let bytes = fs::read(self.attachment_path(file))?;
+        if bytes.len() as u64 != file.bytes
+            || format!("{:x}", Sha256::digest(&bytes)) != file.sha256
+        {
+            return Err(Error::Refused("attachment content changed".into()));
+        }
+        Ok(bytes)
+    }
+    fn file_reference(&self, a: &Attachment) -> serde_json::Value {
+        serde_json::json!({"name":a.name,"path":self.attachment_path(a),"mime":a.mime})
+    }
     pub(super) fn file_context(&self, attachments: &[Attachment]) -> String {
         let files = attachments
             .iter()
             .filter(|a| a.kind == AttachmentKind::File)
-            .map(
-                |a| serde_json::json!({"name":a.name,"path":self.attachment_path(a),"mime":a.mime}),
-            )
+            .map(|a| self.file_reference(a))
             .collect::<Vec<_>>();
         if files.is_empty() {
             String::new()
@@ -235,11 +272,7 @@ impl ChatStore {
             if &saved != a {
                 return Err(Error::Refused("attachment metadata changed".into()));
             }
-            let path = self.attachment_path(a);
-            let data = fs::read(&path)?;
-            if data.len() as u64 != a.bytes || format!("{:x}", Sha256::digest(&data)) != a.sha256 {
-                return Err(Error::Refused("attachment content changed".into()));
-            }
+            let data = self.verified_bytes(a)?;
             if a.kind == AttachmentKind::Image {
                 images.push(InputImage::from_bytes(&data)?);
             }

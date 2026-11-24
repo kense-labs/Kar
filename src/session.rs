@@ -1848,10 +1848,16 @@ impl Session {
         request: &crate::PendingRequest,
         reply: crate::QuestionReply,
     ) -> Result<()> {
+        self.answer_question_with_files(request, reply, Default::default()).await
+    }
+    pub(crate) async fn answer_question_with_files(
+        &self, request: &crate::PendingRequest, reply: crate::QuestionReply,
+        files: std::collections::BTreeMap<String,String>,
+    ) -> Result<()> {
         self.call(|tx| {
             Command::Respond(
                 request.id.clone(),
-                crate::transport::HostAnswer::Question(request.cursor.clone(), reply),
+                crate::transport::HostAnswer::Question(request.cursor.clone(), reply, files),
                 tx,
             )
         })

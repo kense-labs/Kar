@@ -162,6 +162,8 @@ enum Answer {
     },
     Question {
         reply: QuestionReply,
+        #[serde(default)]
+        attachments_by_question_id: std::collections::BTreeMap<String, Vec<Uuid>>,
     },
     Policy {
         choice: PolicyChoice,
@@ -201,7 +203,24 @@ async fn respond(
     // answer a later prompt even when the provider reuses the same numeric request ID.
     match input.answer {
         Answer::Decide { decision } => session.decide(&request, decision).await?,
-        Answer::Question { reply } => session.answer_question(&request, reply).await?,
+        Answer::Question {
+            reply,
+            attachments_by_question_id,
+        } => {
+            if attachments_by_question_id.is_empty() {
+                session.answer_question(&request, reply).await?;
+            } else {
+                let store = app.0.chats.clone();
+                let notes = tokio::task::spawn_blocking(move || {
+                    store.question_attachment_notes(c, attachments_by_question_id)
+                })
+                .await
+                .map_err(|e| Error::Closed(e.to_string()))??;
+                session
+                    .answer_question_with_files(&request, reply, notes)
+                    .await?;
+            }
+        }
         Answer::Policy { choice } => session.select_policy(&request, choice).await?,
         Answer::Resources {
             decision,

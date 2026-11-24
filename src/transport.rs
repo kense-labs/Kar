@@ -54,7 +54,7 @@ pub(crate) enum HostAnswer {
     Native(Value),
     Checked(crate::Cursor, Value),
     Permission(crate::Cursor, crate::PermissionDecision),
-    Question(crate::Cursor, crate::QuestionReply),
+    Question(crate::Cursor, crate::QuestionReply, std::collections::BTreeMap<String,String>),
     Policy(crate::Cursor, crate::PolicyChoice),
     Resources(
         crate::Cursor,
@@ -73,8 +73,8 @@ impl HostAnswer {
         match self {
             Self::Native(value) => Ok(value),
             Self::Checked(cursor, value) if journal.has_request(id, &cursor) => Ok(value),
-            Self::Question(cursor, reply) if journal.has_request(id, &cursor) => {
-                crate::questions::answer(method, body, reply)
+            Self::Question(cursor, reply, files) if journal.has_request(id, &cursor) => {
+                crate::questions::answer_with_files(method, body, reply, files)
             }
             Self::Policy(cursor, choice) if journal.has_request(id, &cursor) => {
                 crate::permissions::select(method, body, choice).ok_or_else(|| {
@@ -87,7 +87,7 @@ impl HostAnswer {
                 })
             }
             Self::Checked(_, _)
-            | Self::Question(_, _)
+            | Self::Question(_, _, _)
             | Self::Policy(_, _)
             | Self::Resources(_, _, _) => Err(Error::Refused(
                 "request is stale or belongs to a different stream".into(),
