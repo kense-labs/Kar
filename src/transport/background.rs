@@ -1,5 +1,6 @@
 //! Claude's live roster is process-owned. Wait marks change the Working view, never the native result.
 mod antigravity;
+mod shells;
 
 use super::{Actor, Direction, Event, Protocol, RecordKind, Value};
 use crate::{
@@ -13,6 +14,7 @@ pub(super) const WAIT: &str = "kar/background/wait";
 
 #[derive(Default)]
 pub(super) struct ClaudeBackground {
+    shells: Option<shells::Tracker>,
     antigravity: Option<antigravity::Commands>,
     tools: VecDeque<Launch>,
     seen: VecDeque<Uuid>,
@@ -25,8 +27,23 @@ struct Launch {
 }
 
 impl ClaudeBackground {
-    pub(super) fn for_runtime(protocol: Protocol, id: &str) -> Self {
-        Self { antigravity: (protocol == Protocol::Acp && id == "antigravity").then(Default::default), ..Default::default() }
+    pub(super) fn for_runtime(
+        protocol: Protocol,
+        id: &str,
+        enabled: bool,
+        process: Option<crate::resources::tree::ProcessId>,
+        opts: &crate::SessionOptions,
+        secrets: &[String],
+    ) -> Self {
+        let mut shells = enabled.then(|| shells::Tracker::for_runtime(id)).flatten();
+        if let Some(s) = &mut shells {
+            s.configure(process, shells::database(opts), secrets);
+        }
+        Self {
+            shells,
+            antigravity: (protocol == Protocol::Acp && id == "antigravity").then(Default::default),
+            ..Default::default()
+        }
     }
     fn tools(&mut self, events: &[Event], turn: Option<Uuid>, secrets: &[String]) -> bool {
         let mut changed = false;
@@ -123,9 +140,96 @@ fn mark(id: &str, work: BackgroundWork) -> Event {
     }
 }
 impl Actor {
+    pub(super) fn has_opencode_shells(&self) -> bool {
+        self.background.shells.is_some()
+    }
+    pub(super) fn refresh_shells(&mut self) {
+        let Some(root) = self.session() else {
+            return;
+        };
+        let Some(tracker) = self.background.shells.as_mut() else {
+            return;
+        };
+        tracker.root(&root);
+        let mut events = Vec::new();
+        tracker.refresh(&mut events);
+        if !events.is_empty() {
+            self.journal.push(
+                Direction::FromRuntime,
+                RecordKind::Frame,
+                Some(root),
+                vec![],
+                serde_json::json!({"type":"kar/opencode-shell-jobs"}),
+                events,
+            );
+        }
+    }
+    pub(super) fn stop_shell(&mut self, id: &str, expected: Option<&crate::Cursor>) -> Result<()> {
+        let tracker =
+            self.background.shells.as_ref().ok_or_else(|| {
+                Error::Unsupported("OpenCode shell controller unavailable".into())
+            })?;
+        let key = tracker.resolve_alias(id).ok_or_else(|| {
+            Error::Refused("unknown OpenCode shell in this native session".into())
+        })?;
+        let snapshot = self.journal.snapshot();
+        if !snapshot.tasks.iter().any(|r| {
+            r.id == key
+                && r.pending_background()
+                && r.source.path.is_empty()
+                && r.source.session_id.as_deref() == Some(&snapshot.id)
+                && r.started_at.as_ref().is_some_and(|c| {
+                    c.stream_id == self.journal.id() && expected.is_none_or(|e| e == c)
+                })
+        }) {
+            return Err(Error::Refused(
+                "OpenCode shell occurrence is no longer running".into(),
+            ));
+        }
+        let key = key.to_owned();
+        self.background
+            .shells
+            .as_mut()
+            .expect("selected OpenCode tracker")
+            .stop(&key)
+    }
     pub(super) fn background_frame(&mut self, v: &Value, events: &mut Vec<Event>) {
+        let root = self.session();
+        if let Some(tracker) = &mut self.background.shells {
+            if let Some(root) = root {
+                tracker.root(&root);
+                let start = events.len();
+                tracker.frame(
+                    v,
+                    self.turn
+                        .as_ref()
+                        .map(|t| t.chat_input.unwrap_or(t.prompt_request)),
+                    events,
+                );
+                // A native job row may have surfaced and already been awaited before the ACP tool receipt.
+                for event in &mut events[start..] {
+                    if let Event::Task {
+                        id,
+                        change: TaskChange::Background { work },
+                    } = event
+                    {
+                        work.awaited = self.journal.snapshot().tasks.iter().any(|r| {
+                            r.id == *id
+                                && r.pending_background()
+                                && r.background_work.as_ref().is_some_and(|w| w.awaited)
+                        });
+                    }
+                }
+            }
+            return;
+        }
         if let Some(commands) = &mut self.background.antigravity {
-            commands.frame(v, self.turn.as_ref().and_then(|t| t.chat_input), self.turn.is_some(), events);
+            commands.frame(
+                v,
+                self.turn.as_ref().and_then(|t| t.chat_input),
+                self.turn.is_some(),
+                events,
+            );
             return;
         }
         if self.protocol != Protocol::Claude {
@@ -290,8 +394,10 @@ impl Actor {
         req: BackgroundWaitRequest,
     ) -> Result<BackgroundWaitReceipt> {
         let held_commands = self.background.antigravity.is_some();
-        if self.protocol != Protocol::Claude && !held_commands {
-            return Err(Error::Unsupported("background waits on this runtime".into()));
+        if self.protocol != Protocol::Claude && !held_commands && self.background.shells.is_none() {
+            return Err(Error::Unsupported(
+                "background waits on this runtime".into(),
+            ));
         }
         let snapshot = self.journal.snapshot();
         let mut done = HashSet::new();
@@ -314,8 +420,21 @@ impl Actor {
         for id in &req.task_ids {
             // The Antigravity adapter holds the turn itself. Its surfaced tool may have no shell ID.
             let selected = if held_commands {
-                candidates.values().find(|row| req.started_at.get(id).is_none_or(|at| row.started_at.as_ref() == Some(at)))
-            } else { candidates.get(id.as_str()) }.filter(|row| {
+                candidates.values().find(|row| {
+                    req.started_at
+                        .get(id)
+                        .is_none_or(|at| row.started_at.as_ref() == Some(at))
+                })
+            } else {
+                candidates.get(
+                    self.background
+                        .shells
+                        .as_ref()
+                        .and_then(|s| s.resolve_alias(id))
+                        .unwrap_or(id.as_str()),
+                )
+            }
+            .filter(|row| {
                 req.started_at
                     .get(id)
                     .is_none_or(|at| row.started_at.as_ref() == Some(at))
@@ -324,14 +443,18 @@ impl Actor {
                 unmatched.push(id.clone());
                 continue;
             };
-            if !done.insert(id) {
+            if !done.insert(if held_commands {
+                id.as_str()
+            } else {
+                row.id.as_str()
+            }) {
                 continue;
             }
             matched.push(id.clone());
             let mut work = row.background_work.clone().unwrap();
             if !held_commands && work.awaited != req.waiting {
                 work.awaited = req.waiting;
-                changes.push(mark(id, work));
+                changes.push(mark(&row.id, work));
             }
         }
         if req.waiting && matched.is_empty() {

@@ -55,10 +55,11 @@ impl Workbench {
                     t.status,
                     crate::chat::TurnStatus::Completed | crate::chat::TurnStatus::Aborted
                 ) && lost.iter().any(|r| {
-                    r.background_work
-                        .as_ref()
-                        .is_some_and(|w| w.awaited && w.turn_id == Some(t.id)
-                            && r.background_exit != Some(crate::BackgroundExit::HostClosed))
+                    r.background_work.as_ref().is_some_and(|w| {
+                        w.awaited
+                            && w.turn_id == Some(t.id)
+                            && r.background_exit != Some(crate::BackgroundExit::HostClosed)
+                    })
                 })
             })
             .map(|t| t.id)
@@ -89,6 +90,21 @@ impl Workbench {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct StopShell {
+    started_at: crate::Cursor,
+}
+async fn stop_shell(
+    State(app): State<Workbench>,
+    Path((p, c, id)): Path<(Uuid, Uuid, String)>,
+    Json(req): Json<StopShell>,
+) -> std::result::Result<StatusCode, ApiError> {
+    let session = app
+        .active_control(p, c)?
+        .ok_or_else(|| Error::Closed("background task controller unavailable".into()))?;
+    session.stop_background_shell(&id, req.started_at).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 async fn get_tasks(
     State(app): State<Workbench>,
     Path((p, c)): Path<(Uuid, Uuid)>,
@@ -131,6 +147,10 @@ pub(super) fn routes() -> Router<Workbench> {
         .route(
             "/projects/{project}/chats/{chat}/background-tasks",
             get(get_tasks),
+        )
+        .route(
+            "/projects/{project}/chats/{chat}/background-tasks/{task}/stop",
+            post(stop_shell),
         )
         .route(
             "/projects/{project}/chats/{chat}/background-tasks/await",

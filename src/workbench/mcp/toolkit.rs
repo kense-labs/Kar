@@ -121,7 +121,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             required:&["action"],
         });
     }
-    if caller.grant.as_ref().is_some_and(|g| matches!(g.runtime.as_str(), "claude" | "antigravity")) {
+    if caller.grant.as_ref().is_some_and(|g| g.supports_background_wait()) {
         tools.push(Tool {
             name:"kar_background_wait",
             description:"Mark or clear waits for a live background task in this chat. Antigravity holds its running command or scheduled wake.",
@@ -298,7 +298,7 @@ pub(super) async fn call(
         let grant = caller
             .grant
             .as_ref()
-            .filter(|g| matches!(g.runtime.as_str(), "claude" | "antigravity") && g.active())
+            .filter(|g| g.supports_background_wait() && g.active())
             .ok_or_else(|| bad("This runtime needs a live background-task controller"))?;
         let request = crate::BackgroundWaitRequest {
             task_ids: mark.task_ids,

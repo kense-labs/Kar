@@ -89,7 +89,7 @@ struct Field {
     serial: u64,
     range: Range<usize>,
 }
-pub(in crate::workbench) struct Record<'a> {
+pub(crate) struct Record<'a> {
     pub rowid: i64,
     columns: &'a Columns<'a>,
     fields: Vec<Field>,
@@ -120,6 +120,15 @@ impl Record<'_> {
             size: field.range.len(),
             ..self.payload
         }
+    }
+    pub(crate) fn bounded_text(&self, key: &str, max: usize) -> io::Result<Option<String>> {
+        let field = self.field(key)?;
+        if field.serial < 13 || field.serial % 2 == 0 || field.range.len() > max {
+            return Ok(None);
+        }
+        String::from_utf8(self.slice(field).read(self.db, max)?)
+            .map(Some)
+            .map_err(|_| malformed())
     }
     pub(in crate::workbench) fn integer(&self, key: &str) -> io::Result<Option<i64>> {
         let field = self.field(key)?;
@@ -208,7 +217,7 @@ fn parse<'a>(
     })
 }
 impl Tables {
-    pub(in crate::workbench) fn records(
+    pub(crate) fn records(
         &self,
         name: &str,
         mut consume: impl FnMut(Record) -> io::Result<()>,

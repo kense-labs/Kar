@@ -922,3 +922,62 @@ async fn native_picker_and_models_cli_list_without_opening_a_chat() {
     );
     assert!(calls.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+#[ignore = "requires OpenCode 2.2.7+ and its real shell tool; set KAR_OPENCODE_SHELL_STOP=1 for 2.3.2+ local macOS PID"]
+async fn native_background_shell_receipt_wait_and_terminal() {
+    use kar::{BackgroundWaitRequest, TaskStatus};
+    let home = tempfile::tempdir().unwrap();
+    let (opts, _) = fixture(&home.path().canonicalize().unwrap());
+    let work = opts.cwd.clone();
+    let session = kar::runtime("opencode").unwrap().open(opts).await.unwrap();
+    let turn = session.prompt("KAR-SHELL-JOB-PROBE").await.unwrap();
+    let task = tokio::time::timeout(Duration::from_secs(35), async {
+        loop {
+            if let Some(t) = session.tasks().into_iter().find(|t| {
+                t.background_work
+                    .as_ref()
+                    .is_some_and(|w| w.pending && w.tool_use_id.is_some())
+            }) {
+                break t;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("no native background launch");
+    let id = task.id;
+    let receipt = session
+        .await_background_tasks(BackgroundWaitRequest {
+            task_ids: vec![id.clone()],
+            waiting: true,
+            started_at: [(id.clone(), task.started_at.unwrap())].into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(receipt.matched, [id.as_str()]);
+    let stop =
+        std::env::var_os("KAR_OPENCODE_SHELL_STOP").as_deref() == Some(std::ffi::OsStr::new("1"));
+    if stop {
+        session.stop_task(&id).await.unwrap();
+    } else {
+        std::fs::write(work.join("shell-release"), "").unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(35), async {
+        loop {
+            if let Some(t) = session.tasks().into_iter().find(|t| {
+                t.id == id && matches!(t.status, TaskStatus::Failed | TaskStatus::Stopped)
+            }) {
+                if !stop {
+                    assert_eq!(t.status, TaskStatus::Failed);
+                }
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(75)).await;
+        }
+    })
+    .await
+    .expect("no native shell completion");
+    drop(turn);
+    session.close().await.unwrap();
+}

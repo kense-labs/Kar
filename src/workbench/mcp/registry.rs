@@ -44,6 +44,14 @@ impl Grant {
             IDLE.saturating_sub(elapsed)
         }
     }
+    pub(super) fn supports_background_wait(&self) -> bool {
+        matches!(self.runtime.as_str(), "claude" | "antigravity")
+            || self
+                .process
+                .get()
+                .and_then(Weak::upgrade)
+                .is_some_and(|s| s.opencode_shells)
+    }
     pub(super) fn caller_turn(&self) -> Option<Uuid> {
         self.process.get()?.upgrade()?.model_caller_turn()
     }
@@ -77,6 +85,7 @@ impl Lease {
     pub(in crate::workbench) fn attach(&self, chat: &mut crate::chat::ChatSession) {
         chat.forget_workbench_registration();
         let _ = self.grant.process.set(chat.live_session());
+        if self.grant.runtime=="opencode" && self.grant.supports_background_wait(){self.tools_changed();}
     }
     pub(super) fn tools_changed(&self) {
         self.grant.changes.send_modify(|n| *n += 1);

@@ -1,5 +1,6 @@
 //! Read live table leaves from an already opened native SQLite snapshot.
 mod projection;
+pub(crate) mod store;
 use sqlite_core::{Database, Row, Value as SqlValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +12,7 @@ pub(super) fn invalid(m: &str) -> io::Error {
 pub(super) fn sqlite_err(e: sqlite_core::Error) -> io::Error {
     invalid(&format!("reading native SQLite database: {e:?}"))
 }
-pub(super) struct Tables {
+pub(crate) struct Tables {
     db: Database,
     tables: BTreeMap<String, (u32, Vec<String>)>,
 }
@@ -24,7 +25,7 @@ impl Tables {
             .collect();
         Self { db, tables }
     }
-    pub(super) fn has_table(&self, name: &str) -> bool {
+    pub(crate) fn has_table(&self, name: &str) -> bool {
         self.tables.contains_key(name)
     }
     pub(super) fn read(

@@ -329,6 +329,7 @@ fn respond_observed(
             && conversation.contains("KAR-LIVE-STEER-TEXT")
             && last.contains("KAR-LIVE-SECOND")
             && !last.contains("tool_result");
+        let opencode_shell = workspace.is_some() && last.contains("KAR-SHELL-JOB-PROBE") && request["tools"].as_array().is_some_and(|tools| tools.iter().any(|t|t["name"]=="shell"));
         let fork_read = workspace.is_some() && last.contains("KAR-FORK-READ-SHARED");
         let queue_read = workspace.is_some()
             && !summarizing
@@ -343,6 +344,7 @@ fn respond_observed(
             || followup_write
             || fork_read
             || queue_read
+            || opencode_shell
         {
             let answered = request["messages"]
                 .as_array()
@@ -353,7 +355,10 @@ fn respond_observed(
             let background = last.contains("kar-background-task");
             let asking = last.contains("kar-form-question");
             if !answered || background || asking || schema_turn || spawn_probe {
-                let (name, id, input) = if queue_read {
+                let (name, id, input) = if opencode_shell {
+                    // The real provider starts and owns the process. The test releases it by creating a file.
+                    ("shell","toolu_shell_job",json!({"command":"i=0; while [ ! -f shell-release ] && [ $i -lt 45 ]; do sleep 1; i=$((i+1)); done; exit 7","background":true}))
+                } else if queue_read {
                     let tool = request["tools"]
                         .as_array()
                         .unwrap()

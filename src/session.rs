@@ -130,6 +130,8 @@ pub struct Session {
     protocol: Protocol,
     info: Value,
     pub(crate) image_input: bool,
+    pub(crate) opencode_shells: bool,
+    opencode_shell_stop: bool,
     native_resume: bool,
     cursor_parameterized: bool,
     acp_steering: bool,
@@ -167,6 +169,8 @@ impl Session {
             image_input: matches!(protocol, Protocol::Cybion | Protocol::KimiKap),
             request_capture: None,
             process_root: None,
+            opencode_shells:false,
+            opencode_shell_stop:false,
             factory_dir: None,
             dsh_file: None,
             text_limit: None,
@@ -375,12 +379,16 @@ impl Session {
         let mut opencode_agents = vec![];
         let mut extended_children = false;
         let mut opencode_v1 = false;
+        let mut opencode_shells=false;
+        let mut opencode_shell_stop=false;
         let mut installed_version = version.map(str::to_owned);
         let _startup = if runtime.protocol == Protocol::Acp && runtime.id == "opencode" {
             let lock = crate::options::opencode::startup(&options, &cwd).await?;
             let release = crate::options::opencode::release(runtime, &options).await?;
             installed_version = Some(release.to_string());
             opencode_v1 = release.major == 1;
+            opencode_shells=release.major==2 && release>=semver::Version::new(2,2,7);
+            opencode_shell_stop=opencode_shells && cfg!(target_os="macos") && release>=semver::Version::new(2,3,2);
             extended_children = release.major == 2 && release >= semver::Version::new(2, 3, 0);
             if options.settings.system_prompt.is_some()
                 || options.settings.append_system_prompt.is_some()
@@ -688,6 +696,7 @@ impl Session {
             &options,
             crate::transport::Launch {
                 registry_installation,
+                opencode_shells,
                 opencode_v2: runtime.id == "opencode" && !opencode_v1,
                 dsh_patch,
                 pi_mcp,
@@ -727,6 +736,8 @@ impl Session {
             ),
             request_capture,
             process_root,
+            opencode_shells,
+            opencode_shell_stop,
             factory_dir: (runtime.protocol == Protocol::Factory)
                 .then(|| crate::factory::recovery::directory(&options, &cwd))
                 .flatten(),
@@ -1571,7 +1582,7 @@ impl Session {
             host_queue: self.protocol != Protocol::Codex,
             durable_native_queue: self.protocol == Protocol::Codex,
             output_schema: self.supports_output_schema,
-            stop_task: matches!(
+            stop_task: self.opencode_shell_stop || matches!(
                 self.protocol,
                 Protocol::Codex
                     | Protocol::Claude
@@ -1977,6 +1988,20 @@ impl Session {
         self.call(|tx| Command::StopTask(id.into(), None, tx))
             .await
             .map(|_| ())
+    }
+    pub(crate) async fn stop_background_shell(
+        &self,
+        id: &str,
+        occurrence: crate::Cursor,
+    ) -> Result<()> {
+        if !self.opencode_shell_stop {
+            return Err(Error::Unsupported(
+                "this runtime does not expose stoppable background shells".into(),
+            ));
+        }
+        self.call(|tx| Command::StopTask(id.into(), Some(occurrence), tx))
+            .await
+            .map(drop)
     }
     /// Mark live background work on this controller; the native model turn may already have ended.
     pub async fn await_background_tasks(

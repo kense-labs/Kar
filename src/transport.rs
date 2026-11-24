@@ -311,6 +311,7 @@ struct Pending {
 pub(crate) struct Launch {
     pub registry_installation: Option<std::fs::File>,
     pub opencode_v2: bool,
+    pub opencode_shells: bool,
     pub pi_mcp: Option<crate::pi_mcp::Config>,
     pub dsh_patch: Option<crate::dsh::profile::Patch>,
     pub qwen_defaults: Option<crate::private_dir::PrivateDir>,
@@ -412,7 +413,7 @@ impl Actor {
             acp_mcp: (runtime.protocol == Protocol::Acp).then(||
                 options.workbench_registration.as_ref().and_then(|r|acp_mcp::Proxy::new(r,tx.downgrade()))).flatten(),
             muse: (runtime.protocol == Protocol::Muse).then(|| muse::Projection::new(options)),
-            background: background::ClaudeBackground::for_runtime(runtime.protocol, &runtime.id),
+            background: background::ClaudeBackground::for_runtime(runtime.protocol, &runtime.id, files.opencode_shells, child.id().and_then(crate::resources::tree::identity), options, &secrets),
             close_ack: None,
             protocol: runtime.protocol,
             usage: wire::usage::Projection::new(
@@ -1161,6 +1162,7 @@ impl Actor {
                     let _ = tx.send(Err(Error::Refused("workflow occurrence is no longer running".into())));
                 }
                 _ if tx.is_closed() => {},
+                Protocol::Acp if self.has_opencode_shells() => {let _=tx.send(self.stop_shell(&task, expected.as_ref()).map(|_|Value::Null));}
                 Protocol::Codex => match id
                     .as_deref()
                     .ok_or_else(|| Error::Closed("session identity unavailable".into()))
@@ -3612,6 +3614,8 @@ impl Actor {
     ) {
         let mut lines = BufReader::new(stdout).lines();
         let mut buffered = BufferedLines::new();
+        let mut shell_refresh=tokio::time::interval(Duration::from_secs(1));
+        shell_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let reason = loop {
             if self.turn.is_none()
                 && self.pi_independent.is_none()
@@ -3654,6 +3658,7 @@ impl Actor {
             let deadline = self.pi_deadlines.values().map(|(at, _)| *at).min();
             let interrupt = self.interrupt_timeout.deadline();
             tokio::select! {
+                _ = shell_refresh.tick(), if self.has_opencode_shells() => self.refresh_shells(),
                 () = self.journal.delivery.resume.notified() => continue,
                 () = crate::prompt_suggestions::Native::changed(&mut self.suggestions) => {
                     if let Err(e) = self.configure_prompt_suggestions().await { break e.to_string() }

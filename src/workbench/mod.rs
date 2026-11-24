@@ -12,7 +12,7 @@ mod chat_controls;
 mod configuration;
 mod devices;
 mod antigravity_proto;
-mod native_sqlite;
+pub(crate) mod native_sqlite;
 mod native_child_work;
 mod observability;
 mod mcp;
