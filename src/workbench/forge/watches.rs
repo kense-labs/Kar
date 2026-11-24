@@ -255,6 +255,11 @@ pub(in crate::workbench) fn recover(app: &Workbench) {
                         if let Some(w) = db.forge.watches.get_mut(&id)
                             && w.pending.as_ref().is_some_and(|v| v.id == n.id)
                         {
+                            let remote=w.repo.split_once("://").and_then(|(_,s)|s.split_once('/'));
+                            if let Some((host,repository))=remote{
+                                let outcome=match w.last.state.as_str(){"merged"=>"completed","closed"|"declined"=>"cancelled",_ if w.last.passed()=>"completed",_ if w.last.checks.as_ref().is_some_and(|checks|checks.values().any(|s|s=="failure"))=>"failed",_=>"updated"};
+                                db.milestone_watches.push(json!({"type":"pr.watch_wake","id":n.id,"projectId":w.project,"threadId":w.chat,"at":now(),"pullRequests":[{"host":host,"repository":repository,"number":w.number}],"outcome":outcome,"summary":n.text,"watchEnded":!w.active}));
+                            }
                             w.pending = None;
                         }
                         Ok(())

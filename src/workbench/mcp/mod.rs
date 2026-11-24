@@ -1,5 +1,6 @@
 //! Workbench tools use a caller-scoped transport independent of the runtime's stdio MCP server.
 mod forge_tools;
+pub(in crate::workbench) mod milestones;
 pub(in crate::workbench) mod orchestrator;
 pub(in crate::workbench) mod operations;
 mod issues;
@@ -267,7 +268,7 @@ async fn rpc(
         };
         let mut result = response(
             id,
-            json!({"protocolVersion":STATEFUL,"serverInfo":server_info(),"capabilities":capabilities()}),
+            json!({"protocolVersion":STATEFUL,"serverInfo":server_info(),"capabilities":milestones::capabilities(&caller,capabilities())}),
             false,
         );
         result.headers_mut().insert(
@@ -291,11 +292,14 @@ async fn rpc(
             invalid("Missing request id")
         };
     }
+    if method.starts_with("events/") {
+        return milestones::rpc(app,&caller,&h,method,p,id,stateless,session).await;
+    }
     let deferred = hdr(&h, "kar-tool-exposure") == Some("deferred") && caller.grant.is_some();
     let result = match method {
         "ping" => json!({}),
         "server/discover" if stateless => {
-            json!({"supportedVersions":[STATEFUL,STATELESS],"capabilities":capabilities()})
+            json!({"supportedVersions":[STATEFUL,STATELESS],"capabilities":milestones::capabilities(&caller,capabilities())})
         }
         "tools/list" if p.get("cursor").is_none_or(Value::is_null) => {
             json!({"tools":toolkit::list(&caller,deferred)})

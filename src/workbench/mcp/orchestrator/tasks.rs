@@ -524,3 +524,5 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
         Ok(saved.view())
     }
 }
+
+pub(in crate::workbench) fn milestone_parent(db:&Catalog,chat:Uuid)->Option<Uuid>{db.model_tasks.get(&chat).map(|t|t.parent)}

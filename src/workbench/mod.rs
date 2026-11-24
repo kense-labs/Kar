@@ -101,6 +101,7 @@ struct Catalog {
     git_actions: BTreeMap<Uuid, git_actions::Record>,
     #[serde(default)]
     imported_transcripts: BTreeMap<Uuid, BTreeMap<PathBuf, (String, Uuid)>>,
+    #[serde(default)] milestone_watches:mcp::milestones::Log,
     projects: BTreeMap<Uuid, Project>,
     #[serde(default)]
     lifecycle: project_lifecycle::State,
@@ -145,6 +146,7 @@ struct Inner {
     acp_registry: acp_registry::Catalog,
     acp_auth: acp_registry::auth::Jobs,
     mcp: mcp::Registry,
+    milestone_hub:mcp::milestones::Hub,
     shell: shell::Service,
     suggestions: crate::PromptSuggestions,
     observability: observability::Service,
@@ -229,6 +231,7 @@ impl Workbench {
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
         let workflows = workflows::Engine::open(&state, clock)?;
         let tracker_accounts=forge::trackers::Store::open(&state)?;
+        let milestone_hub=mcp::milestones::Hub::open(&state)?;
         let shell = shell::Service::open(&state,&allowed)?;
         let access = access::AccessStore::open(&state)?;
         let devices = devices::Service::open(&state)?;
@@ -253,6 +256,7 @@ impl Workbench {
                 acp_registry: Default::default(),
                 acp_auth: Default::default(),
                 mcp: Default::default(),
+                milestone_hub,
                 shell,
                 suggestions: crate::PromptSuggestions::new(catalog.prompt_suggestions),
                 observability: observability::Service::open(&state),

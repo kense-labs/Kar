@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Registry {
+    #[serde(default)] milestones:crate::workbench::mcp::milestones::Log,
     #[serde(default)]
     oauth: oauth::Store,
     #[serde(default)]
@@ -161,6 +162,7 @@ impl AccessStore {
         let result = f(&mut db)?;
         let parent = self.file.parent().expect("workbench state directory");
         guest::maintain(&mut db, parent)?;
+        guest::milestones::record(&current,&mut db);
         let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(Error::Io)?;
         serde_json::to_writer(&mut tmp, &db).map_err(Error::from)?;
         tmp.as_file().sync_all().map_err(Error::Io)?;

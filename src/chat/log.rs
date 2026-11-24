@@ -1,5 +1,6 @@
 mod acp_children;
 mod claude;
+pub(super) mod milestones;
 mod codex;
 pub(crate) mod pi;
 use super::checkpoint::RepositoryCheckpoint;
@@ -1416,7 +1417,8 @@ impl Log {
         }
         Ok(())
     }
-    pub(super) fn commit(&mut self, mut row: ChatUpdate) -> Result<()> {
+    pub(super) fn commit(&mut self,row:ChatUpdate)->Result<()>{self.commit_transition(row,false)}
+    fn commit_transition(&mut self, mut row: ChatUpdate, expired:bool) -> Result<()> {
         self.healthy()?;
         if let ChatUpdate::Frame { id, frame } | ChatUpdate::Reconciled { id, frame } = &mut row {
             if let Some(store) = &self.native_store
@@ -1460,7 +1462,7 @@ impl Log {
             }
             self.state.clean_handoff_echo(*id, frame);
         }
-        let result = append(&mut self.file, &row).and_then(|_| self.state.apply(row));
+        let result=milestones::commit(&mut self.file,&mut self.state,row,expired);
         if let Err(e) = &result {
             self.error = Some(format!("chat journal write: {e}"));
         }
@@ -2025,7 +2027,7 @@ impl Log {
         }) {
             let mut requests = self.state.pending_requests.clone();
             if crate::interaction::update_pending(&mut requests, r, root) {
-                self.commit(ChatUpdate::RequestsChanged { requests })?;
+                self.commit_transition(ChatUpdate::RequestsChanged { requests },r.events.iter().any(|e|matches!(e,Event::Exited{..}|Event::Released)))?;
             }
         }
         if root {

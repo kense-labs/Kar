@@ -1,6 +1,7 @@
 //! Project-bound durable workflows. An attempt is committed before an external call.
 //! Only a receipt, or explicit reconciliation, allows that step to advance.
 mod mailbox;
+mod milestones;
 pub(in crate::workbench) mod model_schedules;
 pub(in crate::workbench) use mailbox::Message;
 mod routes;
@@ -234,6 +235,7 @@ pub enum Action {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Data {
+    #[serde(default)] milestones:crate::workbench::mcp::milestones::Log,
     #[serde(default)]
     model_schedules:BTreeMap<Uuid,model_schedules::Binding>,
     #[serde(default)]
@@ -327,6 +329,7 @@ impl Engine {
         let approved = check(&current)?;
         let mut next = current.clone();
         let value = f(&mut next, approved)?;
+        milestones::record(&current,&mut next,self.clock.now_ms());
         next.revision = next
             .revision
             .checked_add(1)

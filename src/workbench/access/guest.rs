@@ -2,6 +2,7 @@
 use super::*;
 use crate::chat::{ChatCursor, InputStatus, Item, Role};
 mod retention;
+pub(super) mod milestones;
 mod delivery;
 mod files;
 use axum::{

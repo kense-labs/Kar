@@ -13,6 +13,8 @@ mod collaboration;
 mod environment;
 #[path = "workbench_mcp/workflow.rs"]
 mod workflow;
+#[path="workbench_mcp/milestones.rs"]
+mod milestones;
 #[path = "workbench_mcp/operations.rs"]
 mod operations;
 #[path="workbench_mcp/orchestrator.rs"]
@@ -227,9 +229,12 @@ async fn scenario() {
     if std::env::var_os("KAR_MCP_BROWSER_LIVE").is_some(){preview_tools::browser(&url,&a,p,chat,&root,call).await;}
     preview_tools::desktop(&url,&a,p,chat,call).await;
     preview_tools::public_page(&url,&a,p,chat,call).await;
+    let (milestone_cursor,live_milestones)=milestones::begin(&c,&url,owner,provider).await;
     workflow::exercise(&url, &a, p, chat, call).await;
     operations::exercise(&url, &a, p, chat, &observer, call).await;
     orchestrator::exercise(&url,&a,p,chat,&observer,call).await;
+    let first_milestone=milestones::recover(&c,&url,owner,&milestone_cursor,None).await;
+    milestones::observe_live(live_milestones,&first_milestone).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")
             .header("mcp-protocol-version", "2026-07-28")
@@ -306,6 +311,7 @@ async fn scenario() {
     let interrupted=worktree::Interrupted::prepare(&a,&url,p,&observer,&checkouts,&db).await;
     kar.kill().await.unwrap();
     let (mut restarted, url) = server::serve_with_env(&state,&authorized,&db,&[("KAR_TEST_MCP_OBSERVER",address.as_ref()),("KAR_FEEDBACK_URL","".as_ref())]).await;
+    milestones::recover(&c,&url,owner,&milestone_cursor,Some(&first_milestone)).await;
     let policy = server::json(a.get(format!(
         "{url}/projects/{p}/chats/{chat}/model-tools/permissions"
     )))

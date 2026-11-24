@@ -278,7 +278,7 @@ impl ChatStore {
             if has_controller()? {
                 return Ok(true);
             }
-            let (state, valid) = log::read_locked(file, chat)?;
+            let (mut state, valid) = log::read_locked(file, chat)?;
             if state.needs_controller() {
                 file.set_len(valid)?;
                 file.seek(SeekFrom::Start(valid))?;
@@ -297,12 +297,12 @@ impl ChatStore {
                 log::append_locked(file, &ChatUpdate::NotificationsInterrupted)?;
             }
             if !state.pending_requests.is_empty() {
-                log::append_locked(file, &ChatUpdate::RequestsChanged { requests: vec![] })?;
+                log::milestones::orphan(file,&mut state,ChatUpdate::RequestsChanged { requests: vec![] })?;
             }
             if let Some(id) = state.active() {
-                log::append_locked(
-                    file,
-                    &ChatUpdate::End {
+                log::milestones::orphan(
+                    file, &mut state,
+                    ChatUpdate::End {
                         id,
                         status: super::TurnStatus::Interrupted,
                     },

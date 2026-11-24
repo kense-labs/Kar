@@ -28,6 +28,7 @@ pub use checkpoint::{
     ChangeKind, Checkpoint, CheckpointPoint, FileChange, RollbackReport, TurnDiff,
 };
 mod log;
+mod milestones;
 pub(crate) use log::pi::recover as recover_pi;
 mod queue;
 pub(crate) use queue::Admission;

@@ -146,6 +146,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, req: Value) -> R
     }
 }
 pub(super) use tasks::owned;
+pub(in crate::workbench) use tasks::milestone_parent;
 pub(in crate::workbench) use tasks::peer_routes;
 pub(in crate::workbench) use tasks::{Task, recover};
 pub(in crate::workbench) fn scheduled_execution(
