@@ -6,6 +6,7 @@ pub(crate) mod compaction;
 pub(crate) mod cursor_children;
 pub(crate) mod failure;
 pub(crate) mod opencode;
+pub(crate) mod qwen_content;
 pub(crate) mod tasks;
 mod tool_activity;
 #[cfg(test)]
@@ -382,7 +383,7 @@ pub(crate) fn project(p: Protocol, v: &Value, cursor: bool) -> Vec<Event> {
                     events.extend(settings(v["model"].as_str(), None, None))
                 }
                 "stream_event" => match s(e, "type") {
-                    "content_block_delta" => {
+                    "content_block_delta" if p != Protocol::Qwen => {
                         let d = &e["delta"];
                         text(&mut events, d["text"].as_str());
                         reasoning(&mut events, d["thinking"].as_str())
@@ -414,7 +415,7 @@ pub(crate) fn project(p: Protocol, v: &Value, cursor: bool) -> Vec<Event> {
                     if let Some(parts) = v.pointer("/message/content").and_then(Value::as_array) {
                         for part in parts {
                             match s(part, "type") {
-                                "text" if s(v, "type") == "assistant" => {
+                                "text" if p != Protocol::Qwen && s(v, "type") == "assistant" => {
                                     events.push(Event::Message {
                                         text: s(part, "text").into(),
                                     })
@@ -455,16 +456,16 @@ pub(crate) fn project(p: Protocol, v: &Value, cursor: bool) -> Vec<Event> {
                         );
                         return events;
                     }
-                    if p == Protocol::Qwen
-                        && (v["is_error"] == true || s(v, "subtype") != "success")
-                    {
+                    let failed = v["is_error"] == true
+                        || (p != Protocol::Qwen && s(v, "subtype") != "success");
+                    if p == Protocol::Qwen && failed {
                         events.push(Event::TurnFailure {
                             failure: failure::qwen(v),
                         });
                     }
                     done(
                         &mut events,
-                        if v["is_error"] == true || s(v, "subtype") != "success" {
+                        if failed {
                             Outcome::Failed
                         } else {
                             Outcome::Completed

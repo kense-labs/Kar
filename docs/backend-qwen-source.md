@@ -35,3 +35,9 @@ Qwen 的 `launch.ts`、`options.ts` 和公共 `shared/launch-args.ts` 定义了�
 | `qwen-skills.vendor.test.ts` | `src/inventory/skills.rs` 通过 ACP 调用 `qwen/status/workspace/skills` 获取原生列表。统一复验 `cargo test --locked --test skill_inventory_live qwen -- --ignored --nocapture` |
 | `qwen-tool-ids.vendor.test.ts` | `src/wire/tool_activity.rs`、`src/wire/argument_stream.rs` 和 `src/transport.rs` 按原生调用 ID 和工具路径记录工具事件。跨恢复重用 ID、同一回复的三路重复 ID 和参数分片四种形态尚缺本批实机断言 |
 | `qwen.vendor.test.ts` | 恢复后的历史、根上下文、原生初始化、工具排除和提示词组合在 `tests/qwen_live.rs`。MCP 双传输带凭据跨重启、工具结果与原生记忆提醒的边界、扩展存储锁冲突、真实后台子任务的逐事件断言均列为待统一验证 |
+
+## 上下文查询回执与流式文本
+
+固定版 `qwen/context-usage.ts` 与 `qwen.vendor.test.ts` 要求每次根回合结束前的主动查询有可追溯的请求和回执。Kar 以原生请求 ID 关联两端的记录，回执先于回合结束，原生报告的窗口和非估算的 token 数附在回执上。读取超时会记录 Kar 的读取失败，保留原回合的结果。补充断言在 `actual_qwen_turn_catalog_history_and_interrupt`。
+
+固定版 `tests/qwen/stream-content.test.ts` 定义了 Qwen 复用块索引、在块停止后重新分配快照 ID 的行为。Kar 按原生会话与父工具 ID 跟踪未完成消息，保留重复段落和独立回合，只合并由块边界确认的快照。纯推理快照和没有流式前缀的内容也能投影。Kar 的完整文本事件继续提供最终消息，供实时与持久化时间线使用。统一复验命令为 `cargo test --locked --lib wire::qwen_content::tests` 与 `cargo test --locked --test qwen_live actual_qwen_turn_catalog_history_and_interrupt -- --ignored --nocapture`。这批新增断言已通过 macOS 全目标编译，尚未执行。

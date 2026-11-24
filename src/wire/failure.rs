@@ -160,7 +160,13 @@ pub(super) fn qwen(v: &Value) -> TurnFailure {
     let reason = v
         .pointer("/error/message")
         .and_then(Value::as_str)
-        .unwrap_or_else(|| v["subtype"].as_str().unwrap_or("Qwen turn failed"));
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            format!(
+                "Qwen result: {}",
+                v["subtype"].as_str().unwrap_or("unknown")
+            )
+        });
     TurnFailure::new(
         if v["subtype"] == "error_max_turns" {
             Class::LimitReached

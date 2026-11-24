@@ -278,6 +278,7 @@ pub(crate) struct Actor {
     queue: VecDeque<Queued>,
     secrets: Vec<String>,
     arguments: wire::argument_stream::ArgumentStreams,
+    qwen_content: wire::qwen_content::QwenContent,
     manual_compaction: Option<crate::compaction::Operation>,
     command_revision: u64,
     compactions: wire::compaction::Compactions,
@@ -361,6 +362,7 @@ impl Actor {
             ancestry: HashMap::new(),
             claude_child_models: HashMap::new(),
             arguments: Default::default(),
+            qwen_content: Default::default(),
             manual_compaction: None,
             command_revision: 0,
             compactions: Default::default(),
@@ -1879,6 +1881,9 @@ impl Actor {
             .and_then(|c| c.project(root.as_deref(), &v, &mut self.compactions))
             .unwrap_or_else(|| {
                 let mut events = wire::project(self.protocol, &v, self.cursor_children.is_some());
+                if self.protocol == Protocol::Qwen {
+                    self.qwen_content.observe(&v, &mut events);
+                }
                 events.extend(self.compactions.observe(self.protocol, &v));
                 events
             });
@@ -2764,8 +2769,8 @@ impl Actor {
             }
         }
     }
-    // Pi and Qwen expose the latest context via RPC. Attach the private readback to
-    // the original terminal event, preserving subsequent wire order and bounding the wait.
+    // Read context before publishing the terminal frame. Qwen exposes this RPC
+    // in its session journal; Pi and Factory attach their reading to the terminal event.
     async fn turn_context(
         &mut self,
         packet: &Value,
@@ -2815,12 +2820,43 @@ impl Actor {
         } else {
             json!({"type":"control_request","request_id":id,"request":{"subtype":"get_context_usage","show_details":false}})
         };
+        if qwen {
+            self.record(
+                Direction::ToRuntime,
+                RecordKind::Request,
+                query.clone(),
+                vec![],
+                vec![],
+            );
+            match self.readback_frame(&query, &id, lines, buffer).await {
+                Some(reply) => {
+                    let mut stamp = RecordStamp::from(Direction::FromRuntime);
+                    stamp.response_to = Some(id);
+                    let usage = wire::result(self.protocol, &reply)
+                        .ok()
+                        .and_then(|body| crate::context::qwen(&body));
+                    self.record(
+                        stamp,
+                        RecordKind::Response,
+                        reply,
+                        usage
+                            .map(|usage| Event::ContextUsage { usage })
+                            .into_iter()
+                            .collect(),
+                        vec![],
+                    );
+                }
+                None => {
+                    let mut stamp = RecordStamp::from(Direction::Host);
+                    stamp.response_to = Some(id);
+                    self.record(stamp, RecordKind::Response, json!({"type":"context_readback_failed","reason":"no native context response within the readback window"}), vec![], vec![]);
+                }
+            }
+            return None;
+        }
         let body = self.private_readback(&query, &id, lines, buffer).await?;
         if factory {
             return crate::factory::context(&body);
-        }
-        if !pi {
-            return crate::context::qwen(&body);
         }
         if self.pi_independent.is_none()
             && packet["type"] == "agent_settled"
@@ -2853,6 +2889,21 @@ impl Actor {
     }
 
     async fn private_readback(
+        &mut self,
+        query: &Value,
+        id: &str,
+        lines: &mut RuntimeLines,
+        buffer: &mut BufferedLines,
+    ) -> Option<Value> {
+        let mut reply = self.readback_frame(query, id, lines, buffer).await?;
+        if self.protocol == Protocol::Pi {
+            return (reply["command"] == query["type"] && reply["success"] == true)
+                .then(|| reply["data"].take());
+        }
+        wire::result(self.protocol, &reply).ok()
+    }
+
+    async fn readback_frame(
         &mut self,
         query: &Value,
         id: &str,
@@ -2892,17 +2943,13 @@ impl Actor {
                         return None;
                     }
                 };
-                if let Ok(mut reply) = serde_json::from_str::<Value>(&line)
+                if let Ok(reply) = serde_json::from_str::<Value>(&line)
                     && wire::response_id(self.protocol, &reply)
                         .as_ref()
                         .and_then(Value::as_str)
                         == Some(id)
                 {
-                    if self.protocol == Protocol::Pi {
-                        return (reply["command"] == query["type"] && reply["success"] == true)
-                            .then(|| reply["data"].take());
-                    }
-                    return wire::result(self.protocol, &reply).ok();
+                    return Some(reply);
                 }
                 size += line.len();
                 buffer.push_back(Ok(line));

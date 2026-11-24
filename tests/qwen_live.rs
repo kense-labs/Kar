@@ -235,6 +235,34 @@ async fn actual_qwen_turn_catalog_history_and_interrupt() {
         let current = session
             .current_context()
             .expect("Qwen context before the turn handle resolves");
+        let records = session.records();
+        let query = records
+            .iter()
+            .find(|r| r.native["request"]["subtype"] == "get_context_usage")
+            .unwrap();
+        let reading = records
+            .iter()
+            .find(|r| {
+                r.response_to
+                    .as_deref()
+                    .is_some_and(|id| query.native["request_id"] == id)
+            })
+            .unwrap();
+        let end = records
+            .iter()
+            .find(|r| {
+                r.events
+                    .iter()
+                    .any(|e| matches!(e, kar::Event::TurnEnded { .. }))
+            })
+            .unwrap();
+        assert!(query.seq < reading.seq && reading.seq < end.seq);
+        assert!(
+            reading
+                .events
+                .iter()
+                .any(|e| matches!(e, kar::Event::ContextUsage { usage } if *usage == current))
+        );
         let usage = session.context_usage().await.unwrap();
         assert_eq!(current.context_window, usage["contextWindowSize"].as_u64());
         assert_eq!(usage["subtype"], "get_context_usage");
