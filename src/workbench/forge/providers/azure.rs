@@ -141,17 +141,7 @@ impl<'a> Location<'a> {
             ));
         }
         let n = number(&v["id"])?;
-        let present = |key: &str| fields[key].as_str().is_some_and(|s| !s.trim().is_empty());
-        let body_field = if !present("System.Description")
-            && (fields["System.WorkItemType"]
-                .as_str()
-                .is_some_and(|s| s.eq_ignore_ascii_case("Bug"))
-                || present("Microsoft.VSTS.TCM.ReproSteps"))
-        {
-            "Microsoft.VSTS.TCM.ReproSteps"
-        } else {
-            "System.Description"
-        };
+        let body_field = issue_body_field(fields);
         Ok(
             json!({"number":n,"body_field":body_field,"state":fields["System.State"],"title":fields["System.Title"],"body":fields[body_field],
             "updated_at":fields["System.ChangedDate"],"url":v.pointer("/_links/html/href"),"work_item_type":fields["System.WorkItemType"],"revision":v["rev"]}),
@@ -564,6 +554,22 @@ pub(super) fn issue_scope(c: &Context) -> Result<String, ForgeError> {
     } else {
         format!("{}/{}", l.org, l.project)
     })
+}
+pub(super) fn issue_body_field(fields: &Value) -> &'static str {
+    let present = |key: &str| fields[key].as_str().is_some_and(|s| !s.trim().is_empty());
+    if !present("System.Description")
+        && (fields["System.WorkItemType"]
+            .as_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case("Bug"))
+            || present("Microsoft.VSTS.TCM.ReproSteps"))
+    {
+        "Microsoft.VSTS.TCM.ReproSteps"
+    } else {
+        "System.Description"
+    }
+}
+pub(super) fn organization_pull(c: &Context, n: u64) -> Result<Url, ForgeError> {
+    Location::from(c)?.url(c, false, "git", &["pullrequests", &n.to_string()])
 }
 pub(super) fn wit_endpoint(c: &Context, parts: &[&str]) -> Result<Url, ForgeError> {
     Location::from(c)?.url(c, true, "wit", parts)

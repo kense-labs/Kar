@@ -594,6 +594,41 @@ fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Res
             "fixedBy":[{"number":9,"title":"Fix","state":"merged"}],"next":if params.contains_key("cursor"){None}else{Some("older")}})).into_response());
     }
     if kind == "azure-devops" {
+        if path.ends_with("/workitems/72") {
+            assert_eq!(params["$expand"], "relations");
+            let link =
+                json!({"rel":"ArtifactLink","url":"vstfs:///Git/PullRequestId/proj%2Frepo%2F9"});
+            return Some(Json(json!({"id":72,"fields":{"System.TeamProject":"proj","System.Title":"regression","System.WorkItemType":"Task","System.State":"ResolvedQA",
+                "System.CreatedDate":date,"System.Description":" ","Microsoft.VSTS.TCM.ReproSteps":"Reproduce"},"relations":[link,link]})).into_response());
+        }
+        if path.ends_with("/workitems/73") {
+            return Some(
+                Json(json!({"id":73,"fields":{"System.TeamProject":"other"}})).into_response(),
+            );
+        }
+        if path.ends_with("/workitems/72/comments") {
+            assert_eq!(params["order"], "desc");
+            assert_eq!(params["$expand"], "reactions");
+            assert_eq!(params["api-version"], "7.1-preview.4");
+            let page = if params.contains_key("continuationToken") {
+                assert_eq!(params["continuationToken"], "older +/");
+                json!({"comments":[{"id":1,"text":"old","createdDate":date}]})
+            } else {
+                json!({"continuationToken":"older +/","comments":[{"id":4,"text":"gone","isDeleted":true,"createdDate":date},{"id":3,"text":"newer","createdDate":date},
+                    {"id":2,"text":"older","createdDate":date,"createdBy":{"displayName":"Viewer","uniqueName":"v@example"},
+                    "reactions":[{"type":"smile","count":2,"isCurrentUserEngaged":true},{"type":"unknown","count":1}]}]})
+            };
+            return Some(Json(page).into_response());
+        }
+        if path.ends_with("/workitems/72/updates") {
+            assert_eq!(params["$top"], "100");
+            return Some(Json(json!({"value":[{"id":1},{"id":2,"revisedDate":"9999-01-01",
+                "fields":{"System.ChangedDate":{"newValue":date},"System.State":{"oldValue":"Doing","newValue":"ResolvedQA"},
+                "System.Tags":{"oldValue":"red; green","newValue":"green; blue"},"System.AssignedTo":{"oldValue":"old","newValue":{"uniqueName":"new"}}}}]})).into_response());
+        }
+        if path == "org/_apis/git/pullrequests/9" {
+            return Some(Json(json!({"pullRequestId":9,"title":"Board fix","status":"completed","repository":{"name":"sibling","project":{"name":"proj"}}})).into_response());
+        }
         if path.ends_with("/workitemtypes") {
             return Some(Json(json!({"value":[{"name":"Task","states":[{"name":"ResolvedQA","category":"Resolved"}]}]})).into_response());
         }
@@ -647,6 +682,58 @@ fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Res
     Some(res)
 }
 async fn verify_search(c: &reqwest::Client, base: &str, project: &str, kind: &str) {
+    if kind == "azure-devops" {
+        let issue = format!("{base}/projects/{project}/forge/issues/72");
+        let detail = ok(c.get(format!("{issue}/detail"))).await;
+        assert_eq!(detail["body"], "Reproduce");
+        assert_eq!(
+            detail["state"],
+            json!({"name":"ResolvedQA","category":"closed"})
+        );
+        assert_eq!(detail["states"], json!([detail["state"]]));
+        assert!(detail["viewer"].is_null());
+        assert!(detail.get("reactions").is_none());
+        let events = detail["events"].as_array().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|r| r["kind"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["closed", "unlabeled", "labeled", "unassigned", "assigned"]
+        );
+        assert_eq!(events[4]["id"], "update-2-4");
+        assert_eq!(events[4]["createdAt"], "2026-11-01T00:00:00Z");
+        let notes = detail["comments"].as_array().unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0]["id"], "2");
+        assert_eq!(notes[0]["author"]["login"], "v@example");
+        assert_eq!(
+            notes[0]["reactions"],
+            json!([{"content":"laugh","count":2,"viewerHasReacted":true,"actors":[]}])
+        );
+        let linked = detail["linkedPullRequests"].as_array().unwrap();
+        assert_eq!(linked.len(), 1);
+        assert_eq!(linked[0]["repository"], "proj/sibling");
+        assert_eq!(linked[0]["closesIssue"], false);
+        let more = ok(c
+            .get(format!("{issue}/comments"))
+            .query(&[("cursor", detail["commentsCursor"].as_str().unwrap())]))
+        .await;
+        assert_eq!(more["comments"][0]["id"], "1");
+        assert!(more["nextCursor"].is_null());
+        assert_eq!(
+            c.get(format!("{issue}/comments"))
+                .query(&[("cursor", "@unexpected")])
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16(),
+            400
+        );
+        let other = format!("{base}/projects/{project}/forge/issues/73/comments");
+        assert_eq!(c.get(other).send().await.unwrap().status().as_u16(), 404);
+    }
     if kind == "forgejo" {
         let issue = format!("{base}/projects/{project}/forge/issues/72");
         let detail = ok(c.get(format!("{issue}/detail"))).await;

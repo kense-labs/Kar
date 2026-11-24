@@ -3,12 +3,97 @@ use super::*;
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
-fn actor(v: &Value) -> Option<Value> {
+pub(super) fn actor(v: &Value) -> Option<Value> {
+    let clean = |s: &str| !s.trim().is_empty();
+    let login = [
+        v.as_str(),
+        v["uniqueName"].as_str(),
+        v["displayName"].as_str(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|s| clean(s))?;
     Some(
-        json!({"login":v.as_str().or_else(||v["uniqueName"].as_str()).or_else(||v["displayName"].as_str())?,"name":v["displayName"],"avatarUrl":v["imageUrl"]}),
+        json!({"login":login,"name":v["displayName"].as_str().map(str::trim).filter(|s|clean(s)),
+        "avatarUrl":v["imageUrl"].as_str().map(str::trim).filter(|s|clean(s))}),
     )
 }
 
+pub(super) fn closed_states(types: &Value) -> Result<BTreeSet<String>, ForgeError> {
+    let mut closed = BTreeSet::new();
+    for t in types["value"]
+        .as_array()
+        .ok_or_else(|| invalid("Azure work item types"))?
+    {
+        for s in t["states"].as_array().into_iter().flatten() {
+            if matches!(
+                s["category"].as_str(),
+                Some("Resolved" | "Completed" | "Removed")
+            ) && let Some(name) = s["name"].as_str()
+            {
+                closed.insert(name.to_lowercase());
+            }
+        }
+    }
+    if closed.is_empty() {
+        closed.extend(["closed", "done", "removed", "resolved", "completed"].map(str::to_string));
+    }
+    Ok(closed)
+}
+pub(super) fn summary(
+    c: &Context,
+    scope: &str,
+    item: &Value,
+    closed: &BTreeSet<String>,
+) -> Result<Value, ForgeError> {
+    let project = scope.rsplit('/').next().unwrap();
+    let n = number(&item["id"])?;
+    let f = &item["fields"];
+    if !f["System.TeamProject"]
+        .as_str()
+        .is_some_and(|p| p.eq_ignore_ascii_case(project))
+    {
+        return Err(ForgeError::remote(
+            404,
+            "work item is outside the Azure project",
+        ));
+    }
+    let name = f["System.State"].as_str().unwrap_or("New");
+    let tags = f["System.Tags"]
+        .as_str()
+        .unwrap_or("")
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<BTreeSet<_>>();
+    let url = match item.pointer("/_links/html/href").and_then(Value::as_str) {
+        Some(url) => url.to_string(),
+        None => {
+            let mut url = Url::parse(&format!(
+                "https://{}/",
+                if c.host == "ssh.dev.azure.com" {
+                    "dev.azure.com"
+                } else {
+                    &c.host
+                }
+            ))
+            .map_err(|_| invalid("Azure host"))?;
+            url.path_segments_mut()
+                .unwrap()
+                .extend(scope.split('/'))
+                .extend(["_workitems", "edit", &n.to_string()]);
+            url.to_string()
+        }
+    };
+    let created = f["System.CreatedDate"]
+        .as_str()
+        .ok_or_else(|| invalid("Azure issue creation date"))?;
+    let value = json!({"key":n.to_string(),"displayKey":format!("#{n}"),"title":f["System.Title"],"url":url,"author":actor(&f["System.CreatedBy"]),
+            "state":{"category":if closed.contains(&name.to_lowercase()){"closed"}else{"open"},"name":name},"createdAt":created,"updatedAt":f["System.ChangedDate"].as_str().unwrap_or(created),
+            "closedAt":f["Microsoft.VSTS.Common.ClosedDate"],"assignees":actor(&f["System.AssignedTo"]).into_iter().collect::<Vec<_>>(),"labels":tags.into_iter().map(|s|json!({"name":s,"color":null})).collect::<Vec<_>>(),"commentCount":f["System.CommentCount"].as_u64().unwrap_or(0)});
+    Ok(value)
+}
 pub(super) async fn listing(
     c: &Context,
     r: &Request,
@@ -42,24 +127,7 @@ pub(super) async fn listing(
         ));
     }
     let types = get(c, wit_endpoint(c, &["workitemtypes"])?).await?;
-    let mut closed = BTreeSet::new();
-    for t in types["value"]
-        .as_array()
-        .ok_or_else(|| invalid("Azure work item types"))?
-    {
-        for s in t["states"].as_array().into_iter().flatten() {
-            if matches!(
-                s["category"].as_str(),
-                Some("Resolved" | "Completed" | "Removed")
-            ) && let Some(name) = s["name"].as_str()
-            {
-                closed.insert(name.to_lowercase());
-            }
-        }
-    }
-    if closed.is_empty() {
-        closed.extend(["closed", "done", "removed", "resolved", "completed"].map(str::to_string));
-    }
+    let closed = closed_states(&types)?;
     if r.state != "all" {
         clauses.push(format!(
             "[System.State] {} IN ({})",
@@ -121,53 +189,13 @@ pub(super) async fn listing(
     )
     .await?;
     let scope = issue_scope(c)?;
-    let project = scope.rsplit('/').next().unwrap();
     let mut found = BTreeMap::new();
     for item in reply["value"]
         .as_array()
         .ok_or_else(|| invalid("Azure work item page"))?
     {
         let n = number(&item["id"])?;
-        let f = &item["fields"];
-        if !f["System.TeamProject"]
-            .as_str()
-            .is_some_and(|p| p.eq_ignore_ascii_case(project))
-        {
-            return Err(invalid("Azure project identity"));
-        }
-        let name = f["System.State"].as_str().unwrap_or("New");
-        let tags = f["System.Tags"]
-            .as_str()
-            .unwrap_or("")
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .collect::<BTreeSet<_>>();
-        let url = match item.pointer("/_links/html/href").and_then(Value::as_str) {
-            Some(url) => url.to_string(),
-            None => {
-                let mut url = Url::parse(&format!(
-                    "https://{}/",
-                    if c.host == "ssh.dev.azure.com" {
-                        "dev.azure.com"
-                    } else {
-                        &c.host
-                    }
-                ))
-                .map_err(|_| invalid("Azure host"))?;
-                url.path_segments_mut()
-                    .unwrap()
-                    .extend(scope.split('/'))
-                    .extend(["_workitems", "edit", &n.to_string()]);
-                url.to_string()
-            }
-        };
-        let created = f["System.CreatedDate"]
-            .as_str()
-            .ok_or_else(|| invalid("Azure issue creation date"))?;
-        let value = json!({"key":n.to_string(),"displayKey":format!("#{n}"),"title":f["System.Title"],"url":url,"author":actor(&f["System.CreatedBy"]),
-            "state":{"category":if closed.contains(&name.to_lowercase()){"closed"}else{"open"},"name":name},"createdAt":created,"updatedAt":f["System.ChangedDate"].as_str().unwrap_or(created),
-            "closedAt":f["Microsoft.VSTS.Common.ClosedDate"],"assignees":actor(&f["System.AssignedTo"]).into_iter().collect::<Vec<_>>(),"labels":tags.into_iter().map(|s|json!({"name":s,"color":null})).collect::<Vec<_>>(),"commentCount":f["System.CommentCount"].as_u64().unwrap_or(0)});
+        let value = summary(c, &scope, item, &closed)?;
         if !ids_to_read.contains(&n) || found.insert(n, value).is_some() {
             return Err(invalid("Azure batch membership"));
         }
