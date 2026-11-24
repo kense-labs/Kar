@@ -10,7 +10,20 @@ fn context(app: &Workbench, p: Uuid, id: &str) -> Result<(Runtime, crate::Instal
     if dynamic(id) {
         return Err(Error::Unsupported("this agent provides ACP authentication under acp-registry; ACP has no standard account quota method".into()));
     }
-    Ok((crate::runtime(id)?, opts.installation_options()))
+    let instance = crate::provider_instance::configured()?
+        .into_iter()
+        .find(|instance| instance.id == id);
+    let driver = instance
+        .as_ref()
+        .map_or(id, |instance| instance.runtime.runtime());
+    let mut runtime = app.0.chats.resolve_runtime(driver, &mut opts)?;
+    if let Some(instance) = instance {
+        instance.configure(&mut opts);
+        if let Some(program) = instance.program {
+            runtime.program = program;
+        }
+    }
+    Ok((runtime, opts.installation_options()))
 }
 async fn status(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String)>) -> Reply {
     let (rt, installation) = context(&app, p, &id)?;
