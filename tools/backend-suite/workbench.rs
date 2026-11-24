@@ -87,7 +87,7 @@ pub(super) fn cases() -> Vec<Case> {
             "workbench_terminal_preview",
             "chrome_loads_project_preview",
             "installed macOS Google Chrome (default Applications path or KAR_TEST_CHROME), real PTY and local HTTP",
-            &[][..],
+            &["KAR_TEST_CHROME"][..],
         ),
     ] {
         let mut case = scenario(

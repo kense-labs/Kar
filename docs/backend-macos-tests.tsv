@@ -99,6 +99,7 @@ grok	grok_live	host_tool_is_ready_on_the_first_turn	KAR_GROK_BIN	requires KAR_GR
 grok	grok_live	isolated_grok_lists_models_for_the_runtime_form_without_a_chat	KAR_GROK_BIN	requires the official Grok CLI with the ACP model listing extension
 grok	grok_live	native_image_reaches_the_model	KAR_GROK_BIN	requires KAR_GROK_BIN; a local chat-completions model observes the image bytes
 grok	grok_live	native_interjection_reaches_the_next_model_step_and_both_clients	KAR_GROK_BIN	requires KAR_GROK_BIN; exercises real Grok interjection against a loopback model
+grok	grok_live	native_process_placement_keeps_two_workspaces_independent	KAR_GROK_BIN	Grok ACP, isolated profiles and a loopback model, distinct workspaces
 grok	setup_cli	grok	KAR_GROK_BIN	managed macOS Grok >=1.0.46; grok update --check --json can reach its configured channel; verifies read-only check and unchanged executable identity/version
 grok	skill_inventory_live	grok	KAR_GROK_BIN	requires KAR_GROK_BIN
 grok	skill_inventory_live	grok_mcp	KAR_GROK_BIN	requires KAR_GROK_BIN
@@ -119,7 +120,9 @@ morph	morph_live	reattach_running_task_then_deliver_offline_queue	KAR_MORPH_BIN	
 opencode	native_live	actual_opencode_steering_reaches_next_model_step	KAR_OPENCODE_BIN	requires OpenCode 1 or OpenCode 2 with ACP steering; uses a loopback model
 opencode	native_live	actual_opencode_turn_and_resume	KAR_OPENCODE_BIN	requires installed OpenCode; uses a loopback model fixture
 opencode	native_live	opencode_fork::kill_controller_after_native_end_and_deliver_queue	KAR_OPENCODE_BIN	requires OpenCode 1 or 2 and Unix signals; kills only the test controller after a real native commit
+opencode	native_live	opencode_fork::native_picker_and_models_cli_list_without_opening_a_chat	KAR_OPENCODE_BIN	version-specific local models command, workspace-scoped configuration; no model turn
 opencode	native_live	opencode_fork::native_primary_prompt_replacement_and_retraction_across_resume	KAR_OPENCODE_BIN	OpenCode >=2.2.0 with a configurable primary agent on macOS; isolated home and a loopback model; verifies effective instructions on create, replacement, retraction and resume (f26013b)
+opencode	native_live	opencode_fork::native_process_placement_keeps_two_workspaces_independent	KAR_OPENCODE_BIN	OpenCode ACP, isolated profiles and a loopback model, distinct workspaces
 opencode	native_live	opencode_fork::native_retry_is_projected_once_and_replayed_at_its_original_time	KAR_OPENCODE_BIN	OpenCode 2.3.2 on macOS with a real ACP executable, isolated HOME and a loopback Anthropic endpoint that returns HTTP 529 before recovery
 opencode	native_live	opencode_fork::native_turn_fork_rolls_back_workspace_and_context	KAR_OPENCODE_BIN	requires OpenCode 2; uses its native session database and a loopback model
 opencode	native_live	opencode_fork::native_whole_session_fork_keeps_independent_model_contexts	KAR_OPENCODE_BIN	requires OpenCode with native ACP session/fork; verifies the next model requests on both branches

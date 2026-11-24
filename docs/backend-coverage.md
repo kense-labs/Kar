@@ -70,3 +70,5 @@ cargo run --locked --example backend_suite -- --runtime kar --execute --output /
 在统一入口使用 `--runtime <供应商> --filter backend_public` 可以列出该供应商的公共契约场景。14 个本地进程适配器均登记了安装快照、能力声明、未知推理级别、原生会话恢复四项。声明账户用量的适配器另有账户快照。每条命令单独建立临时工作区，使用所选原生程序，可由 `KAR_PUBLIC_<供应商大写>_MODEL` 指定模型。能力测试按声明检查无鉴权 HTTP MCP、真实回合后的上下文或会话文件。命令记录原生会话 ID 或明确拒绝的原因。登记及编译仅表示用例可以进入集中验收。
 
 公共回合场景复用同一套 Rust 断言。每个本地适配器登记了显式与自动 UUID、带图与空输入、活动回合互斥、排队、撤回、插话、中止、关闭、原生恢复和订阅回放的现场命令。对同一会话的多回合、观察者隔离、游标续收、回合边界、结束后插话和关闭回执用 `session.framing-and-attribution` 合并采集，以便比较同一批原生记录。也可以将其中任一固定公共 ID 传给 `cargo run --locked --example backend_public -- --runtime <runtime> --case <id>` 重跑。模型菜单提供至少两档时，`session.effort-listed-levels-apply-across-resume` 完成一个真实回合，换档并在同一原生会话续聊。供应商未声明的能力和实际拒绝会保留在结果，编译和列出命令均不能代替现场证据。
+
+集中执行时，未显式指定的标准供应商程序由 Kar 的安装发现入口查找；解析出的实际路径传给子进程并写入每项记录。指定 daemon、worker、ACP 旧版本等变体仍用各自的环境变量指向对应发行包。Chrome 预览接受 `KAR_TEST_CHROME` 或 macOS 标准应用路径，缺少浏览器会保留为待配环境。

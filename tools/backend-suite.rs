@@ -296,6 +296,33 @@ async fn installation(rt: &str, path: OsString, dir: &Path) -> Result<Value> {
         .await?;
     Ok(serde_json::to_value(snapshot)?)
 }
+// Canonical program keys can be populated from Kar's ordinary native discovery. Keys
+// for a particular release, daemon, or protocol are explicit test prerequisites.
+async fn local_program(key: &str, dir: &Path) -> Option<OsString> {
+    if key == "KAR_TEST_CHROME" {
+        let installed =
+            PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+        return installed.is_file().then(|| installed.into_os_string());
+    }
+    let id = key.strip_prefix("KAR_")?.strip_suffix("_BIN")?;
+    if id.contains('_') {
+        return None;
+    }
+    let rt = kar::runtime(&id.to_ascii_lowercase()).ok()?;
+    let cwd = tempfile::tempdir_in(dir).ok()?;
+    let opts = kar::InstallationOptions {
+        cwd: Some(cwd.path().into()),
+        ..Default::default()
+    };
+    match rt.probe_installation(&opts).await.ok()? {
+        kar::InstallationSnapshot::Available {
+            command: Some(path),
+            ..
+        } => Some(path.into_os_string()),
+        _ => None,
+    }
+}
+
 // Custom test binaries may treat --list as a request to run a scenario. Read
 // the Cargo manifest before invoking libtest, including for new test targets.
 fn audit_names(matrix: &[Case]) -> Result<()> {
@@ -426,14 +453,26 @@ async fn run() -> Result<bool> {
         &json!({"type":"run","revision":rev,"platform":platform,"arch":arch,"rust":output_text("rustc",&["-V"])?,"changes":output_text("git",&["status","--porcelain","--untracked-files=normal"])?,"selected":cases.len()}),
     )?;
     let mut probes = BTreeMap::new();
+    let mut discovered = BTreeMap::new();
     let mut complete = true;
     for (i, c) in cases.iter().enumerate() {
         let mut row = json!({"type":"case","runtime":c.runtime,"target":c.target,"test":c.test,"requires":c.requires,"executable":c.program,"argv":c.args,"switches":c.switches,"revision":rev,"platform":platform,"arch":arch});
-        let absent: Vec<_> = c
-            .environment
-            .iter()
-            .filter(|key| std::env::var_os(key).is_none_or(|v| v.is_empty()))
-            .collect();
+        let mut local = BTreeMap::new();
+        let mut absent = Vec::new();
+        for key in &c.environment {
+            if std::env::var_os(key).is_some_and(|v| !v.is_empty()) {
+                continue;
+            }
+            if !discovered.contains_key(key) {
+                discovered.insert(key.clone(), local_program(key, dir).await);
+            }
+            if let Some(path) = &discovered[key] {
+                local.insert(key.clone(), path.clone());
+            } else {
+                absent.push(key);
+            }
+        }
+        row["discovered_programs"] = json!(local);
         if !absent.is_empty() {
             row["status"] = "missing_environment".into();
             row["missing"] = json!(absent);
@@ -450,7 +489,11 @@ async fn run() -> Result<bool> {
             .filter(|k| k.ends_with("_BIN"))
             .enumerate()
         {
-            let path = std::env::var_os(key).expect("checked");
+            let path = local
+                .get(key)
+                .cloned()
+                .or_else(|| std::env::var_os(key))
+                .expect("checked");
             let provider = key
                 .trim_start_matches("KAR_")
                 .split('_')
@@ -505,6 +548,7 @@ async fn run() -> Result<bool> {
             .collect();
         let status = Command::new(&c.program)
             .args(&argv)
+            .envs(&local)
             .envs(&c.switches)
             .stdin(Stdio::null())
             .stdout(File::create_new(dir.join(&out))?)
