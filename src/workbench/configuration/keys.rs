@@ -149,10 +149,10 @@ pub(super) struct Upsert {
     when: Option<String>,
     replace: Option<Rule>,
 }
-fn change(db: &mut Catalog, r: Rule, replace: Option<Rule>) -> Result<()> {
+fn change(rules: &mut Vec<Rule>, r: Rule, replace: Option<Rule>) -> Result<()> {
     let target = r.resolved()?;
     let old = replace.as_ref().map(Rule::resolved).transpose()?;
-    let rules = &mut db.server.bindings;
+
     if !rules.iter().any(|v| v.command == r.command)
         && replace
             .as_ref()
@@ -175,23 +175,128 @@ fn change(db: &mut Catalog, r: Rule, replace: Option<Rule>) -> Result<()> {
     rules.push(r);
     Ok(())
 }
+type Loaded = (Vec<Rule>, Vec<Value>, Vec<Value>);
+fn load(app: &Workbench) -> Result<Loaded> {
+    let path = app.0.state.join("keybindings.json");
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let rules = {
+                let db = app.0.catalog.lock().unwrap();
+                if db.server.keys_file_seen {
+                    Vec::new()
+                } else {
+                    db.server.bindings.clone()
+                }
+            };
+            let mut tmp = tempfile::NamedTempFile::new_in(&app.0.state)?;
+            serde_json::to_writer_pretty(&mut tmp, &rules)?;
+            tmp.as_file().sync_all()?;
+            match tmp.persist_noclobber(&path) {
+                Ok(_) => std::fs::File::open(&path)?,
+                Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    std::fs::File::open(path)?
+                }
+                Err(e) => return Err(e.error.into()),
+            }
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if file.metadata()?.len() > 1 << 20 {
+        return Err(bad("Keyboard configuration exceeds 1 MiB"));
+    }
+    let entries: Vec<Value> = serde_json::from_reader(json_comments::StripComments::new(file))?;
+    if entries.len() > 256 {
+        return Err(bad("At most 256 keyboard rules are supported"));
+    }
+    let mut valid = Vec::new();
+    let mut unknown = Vec::new();
+    let mut issues = Vec::new();
+    for (i, v) in entries.into_iter().enumerate() {
+        match serde_json::from_value::<Rule>(v.clone())
+            .map_err(Error::from)
+            .and_then(|r| {
+                r.resolved()?;
+                Ok(r)
+            }) {
+            Ok(r) => valid.push(r),
+            Err(e) => {
+                issues.push(json!({"kind":"keybinding","index":i,"message":e.to_string()}));
+                unknown.push(v)
+            }
+        }
+    }
+    Ok((valid, unknown, issues))
+}
+fn save_file(app: &Workbench, values: &[Value]) -> Result<()> {
+    use std::io::Write;
+    let path = app.0.state.join("keybindings.json");
+    let mut tmp = tempfile::NamedTempFile::new_in(&app.0.state)?;
+    serde_json::to_writer_pretty(&mut tmp, values)?;
+    tmp.write_all(b"\n")?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    #[cfg(unix)]
+    std::fs::File::open(&app.0.state)?.sync_all()?;
+    Ok(())
+}
+fn publish(app: &Workbench, rules: Vec<Rule>, issues: Vec<Value>) -> Result<()> {
+    {
+        let db = app.0.catalog.lock().unwrap();
+        if db.server.keys_file_seen && db.server.bindings == rules && db.server.issues == issues {
+            return Ok(());
+        }
+    }
+    app.update(|db| {
+        db.server.bindings = rules;
+        db.server.issues = issues;
+        db.server.keys_file_seen = true;
+        Ok(())
+    })
+}
+pub(super) fn reload(app: &Workbench) -> Result<()> {
+    let _guard = app.0.keybindings_lock.lock().unwrap();
+    match load(app) {
+        Ok((rules, _, issues)) => publish(app, rules, issues),
+        Err(e) => {
+            let rules = app.0.catalog.lock().unwrap().server.bindings.clone();
+            publish(
+                app,
+                rules,
+                vec![json!({"kind":"keybindings-file","message":e.to_string()})],
+            )
+        }
+    }
+}
+fn edit(app: &Workbench, action: impl FnOnce(&mut Vec<Rule>) -> Result<()>) -> Result<Value> {
+    let _guard = app.0.keybindings_lock.lock().unwrap();
+    let (mut rules, unknown, _) = load(app)?;
+    action(&mut rules)?;
+    if unknown.len() + rules.len() > 256 {
+        return Err(bad("At most 256 keyboard rules are supported"));
+    }
+    let mut values = unknown;
+    for rule in &rules {
+        values.push(serde_json::to_value(rule)?);
+    }
+    save_file(app, &values)?;
+    let (rules, _, issues) = load(app)?;
+    let result = json!({"keybindings":resolved(&rules)?,"issues":issues});
+    publish(app, rules, issues)?;
+    Ok(result)
+}
 pub(super) async fn upsert(State(app): State<Workbench>, Json(p): Json<Upsert>) -> Reply {
     let r = Rule {
         key: p.key,
         command: p.command,
         when: p.when,
     };
-    Ok(Json(app.update(|db| {
-        change(db, r, p.replace)?;
-        Ok(json!({"keybindings":resolved(&db.server.bindings)?,"issues":[]}))
-    })?))
+    Ok(Json(edit(&app, |rules| change(rules, r, p.replace))?))
 }
 pub(super) async fn remove(State(app): State<Workbench>, Json(p): Json<Rule>) -> Reply {
     let target = p.resolved()?;
-    Ok(Json(app.update(|db| {
-        db.server
-            .bindings
-            .retain(|v| v.resolved().is_ok_and(|v| v != target));
-        Ok(json!({"keybindings":resolved(&db.server.bindings)?,"issues":[]}))
+    Ok(Json(edit(&app, |rules| {
+        rules.retain(|v| v.resolved().is_ok_and(|v| v != target));
+        Ok(())
     })?))
 }

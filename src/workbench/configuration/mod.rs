@@ -20,6 +20,10 @@ fn bad(s: &str) -> Error {
 pub(super) struct Config {
     values: BTreeMap<String, Value>,
     bindings: Vec<keys::Rule>,
+    #[serde(default)]
+    issues: Vec<Value>,
+    #[serde(default)]
+    keys_file_seen: bool,
     pub revision: u64,
 }
 const SHARED: &[(&str, &str)] = &[
@@ -121,6 +125,7 @@ fn apply(db: &mut Catalog, patch: Value) -> Result<Value> {
     Ok(settings(db))
 }
 fn snapshot(app: &Workbench) -> Result<Value> {
+    keys::reload(app)?;
     let env = environment::descriptor(app)?;
     let db = app.0.catalog.lock().unwrap();
     let providers = crate::runtimes()
@@ -129,7 +134,7 @@ fn snapshot(app: &Workbench) -> Result<Value> {
         .collect::<Vec<_>>();
     let root = app.0.roots.first().map(|r| r.path.clone());
     Ok(
-        json!({"revision":db.server.revision,"environment":env,"auth":{"sessionCookieName":"kar_session","sessionMethods":["browser-session-cookie","bearer-access-token","dpop-access-token"]},"cwd":root,"newProjectsRoot":root,"providers":providers,"keybindings":keys::resolved(&db.server.bindings)?,"issues":[],"settings":settings(&db),"serverTime":jiff::Timestamp::now().to_string()}),
+        json!({"revision":db.server.revision,"environment":env,"auth":{"sessionCookieName":"kar_session","sessionMethods":["browser-session-cookie","bearer-access-token","dpop-access-token"]},"cwd":root,"newProjectsRoot":root,"providers":providers,"keybindings":keys::resolved(&db.server.bindings)?,"issues":db.server.issues,"keybindingsConfigPath":app.0.state.join("keybindings.json"),"settings":settings(&db),"serverTime":jiff::Timestamp::now().to_string()}),
     )
 }
 pub(super) fn next_revision(current: &Catalog, next: &mut Catalog) {
@@ -150,8 +155,9 @@ async fn events(
     State(app): State<Workbench>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
     let rx = app.0.config_changes.subscribe();
-    let stream =
-        futures_util::stream::unfold((app, rx, None), |(app, mut rx, mut last)| async move {
+    let stream = futures_util::stream::unfold(
+        (app, rx, None),
+        |(app, mut rx, mut last)| async move {
             loop {
                 let revision = *rx.borrow_and_update();
                 if last != Some(revision) {
@@ -164,9 +170,10 @@ async fn events(
                         .ok()?;
                     return Some((Ok(e), (app, rx, last)));
                 }
-                rx.changed().await.ok()?;
+                tokio::select! { r=rx.changed()=>{r.ok()?;},_=tokio::time::sleep(std::time::Duration::from_millis(800))=>{keys::reload(&app).ok()?;}}
             }
-        });
+        },
+    );
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 pub(super) fn routes() -> Router<Workbench> {

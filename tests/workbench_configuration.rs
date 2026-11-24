@@ -80,5 +80,48 @@ async fn shortcuts_and_preferences_reconnect() {
             .iter()
             .any(|r| r["command"] == "workspace.focusNext" && r["shortcut"]["key"] == "8")
     );
+    let path = persisted["keybindingsConfigPath"].as_str().unwrap();
+    let mut stream = host
+        .get(format!("{base}/server/config/events"))
+        .send()
+        .await
+        .unwrap()
+        .bytes_stream()
+        .eventsource();
+    let _initial = stream.next().await.unwrap().unwrap();
+    std::fs::write(path, "[broken").unwrap();
+    let issue = tokio::time::timeout(Duration::from_secs(6), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let invalid: Value = serde_json::from_str(&issue.data).unwrap();
+    assert!(!invalid["issues"].as_array().unwrap().is_empty());
+    assert_eq!(invalid["keybindings"], removed["keybindings"]);
+    assert!(
+        host.put(format!("{base}/server/keybindings"))
+            .json(&key)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_client_error()
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "[broken");
+    std::fs::write(path, r#"[{"key":"ctrl+k","command":"script.build.run"}]"#).unwrap();
+    let fixed = tokio::time::timeout(Duration::from_secs(6), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let fixed: Value = serde_json::from_str(&fixed.data).unwrap();
+    assert_eq!(fixed["issues"], json!([]));
+    assert!(
+        fixed["keybindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["command"] == "script.build.run")
+    );
     proc.kill().await.unwrap();
 }

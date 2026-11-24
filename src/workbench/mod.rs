@@ -132,6 +132,7 @@ impl Controller {
 struct Inner {
     managed_providers:managed_providers::Manager,
     config_changes:tokio::sync::watch::Sender<u64>,
+    keybindings_lock:Mutex<()>,
     relay: relay_client::tunnel::Service,
     acp_registry: acp_registry::Catalog,
     acp_auth: acp_registry::auth::Jobs,
@@ -238,6 +239,7 @@ impl Workbench {
                 relay: Default::default(),
                 managed_providers:Default::default(),
                 config_changes:tokio::sync::watch::channel(catalog.server.revision).0,
+                keybindings_lock:Default::default(),
                 acp_registry: Default::default(),
                 acp_auth: Default::default(),
                 mcp: Default::default(),
