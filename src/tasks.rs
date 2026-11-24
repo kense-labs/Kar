@@ -88,6 +88,9 @@ pub struct NativeTask {
     #[serde(flatten)]
     pub details: TaskDetails,
     pub started_ms: Option<u64>,
+    /// The native start record distinguishes reused task IDs, including starts in the same millisecond.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<crate::Cursor>,
     pub ended_ms: Option<u64>,
     pub summary: Option<String>,
     pub output: Option<String>,
@@ -106,6 +109,7 @@ impl NativeTask {
             status: TaskStatus::Running,
             details: TaskDetails::default(),
             started_ms: None,
+            started_at: None,
             ended_ms: None,
             summary: None,
             output: None,
@@ -212,6 +216,9 @@ pub(crate) fn changes(rows: &[NativeTask], record: &Record, root: bool) -> Vec<N
                     .cloned()
                     .unwrap_or_else(|| NativeTask::new(id, source));
                 next.apply(change, record.timestamp_ms);
+                if matches!(change, TaskChange::Started { .. }) {
+                    next.started_at = Some(record.cursor());
+                }
                 if prior != Some(&next) {
                     changed.push(next);
                 }

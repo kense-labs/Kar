@@ -176,7 +176,7 @@ pub(crate) enum Command {
     ),
     Withdraw(uuid::Uuid, Reply<()>),
     Abort(AbortRequest),
-    StopTask(String, Reply<Value>),
+    StopTask(String, Option<crate::Cursor>, Reply<Value>),
     Steer(
         uuid::Uuid,
         crate::input::Input,
@@ -1072,7 +1072,21 @@ impl Actor {
                     .expect("RPC was queued")
                     .open = open;
             }
-            Command::StopTask(task, tx) => match self.protocol {
+            Command::StopTask(task, expected, tx) => match self.protocol {
+                Protocol::Claude if expected.as_ref().is_some_and(|occurrence| {
+                    let snapshot = self.journal.snapshot();
+                    !snapshot.tasks.iter().any(|row| {
+                        row.id == task
+                            && row.source.path.is_empty()
+                            && row.source.session_id.as_deref() == Some(snapshot.id.as_str())
+                            && row.task_type == crate::TaskType::Workflow
+                            && row.status == crate::TaskStatus::Running
+                            && row.started_at.as_ref() == Some(occurrence)
+                    })
+                }) => {
+                    let _ = tx.send(Err(Error::Refused("workflow occurrence is no longer running".into())));
+                }
+                _ if tx.is_closed() => {},
                 Protocol::Codex => match id
                     .as_deref()
                     .ok_or_else(|| Error::Closed("session identity unavailable".into()))

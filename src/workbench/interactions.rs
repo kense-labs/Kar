@@ -35,6 +35,29 @@ struct Attempt {
     request_id: Option<Uuid>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowOccurrence {
+    started_at: Cursor,
+}
+
+async fn stop_workflow(
+    State(app): State<Workbench>,
+    Path((project, chat, task)): Path<(Uuid, Uuid, String)>,
+    Json(input): Json<WorkflowOccurrence>,
+) -> std::result::Result<Json<()>, ApiError> {
+    let session = app
+        .active_control(project, chat)?
+        .ok_or_else(|| Error::Refused("workflow controller is unavailable".into()))?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        session.stop_workflow(&task, input.started_at),
+    )
+    .await
+    .map_err(|_| Error::Closed("workflow stop timed out awaiting the native reply".into()))??;
+    Ok(Json(()))
+}
+
 async fn interrupt(
     State(app): State<Workbench>,
     Path((p, c, turn)): Path<(Uuid, Uuid, Uuid)>,
@@ -195,6 +218,10 @@ async fn respond(
 
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
+        .route(
+            "/projects/{project}/chats/{chat}/tasks/{task}/stop-workflow",
+            post(stop_workflow),
+        )
         .route(
             "/projects/{project}/chats/{chat}/queue/{input}/steer",
             post(promote),

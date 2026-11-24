@@ -41,7 +41,7 @@ impl Fixture {
         let workspace = dir.join("work/one");
         fs::create_dir_all(&workspace).unwrap();
         fs::create_dir(dir.join("bin")).unwrap();
-        for name in ["codex", "qwen"] {
+        for name in ["codex", "qwen", "claude"] {
             let dest = dir
                 .join("bin")
                 .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
@@ -87,7 +87,12 @@ impl Fixture {
             .env("KAR_WORKBENCH_TOKEN", "isolated-handoff-test")
             .stdout(Stdio::piped())
             .kill_on_drop(true);
-        for name in ["codex", "qwen"] {
+        let providers: &[&str] = if self.live {
+            &["codex", "qwen"]
+        } else {
+            &["codex", "qwen", "claude"]
+        };
+        for &name in providers {
             let key = format!("KAR_{}_BIN", name.to_ascii_uppercase());
             cmd.env_remove(format!("KAR_HANDOFF_REAL_{}", name.to_ascii_uppercase()));
             if self.live {
@@ -372,7 +377,39 @@ async fn protocol() {
     let bounded = f.handoff(&small).await;
     assert!(bounded["context"].as_str().unwrap().len() <= 512);
     assert!(bounded["omitted_items"].as_u64().unwrap() > 0);
+    workflow_stop(&mut f).await;
     f.stop().await;
+}
+async fn workflow_stop(f: &mut Fixture) {
+    let chats = format!("{}/projects/{}/chats", f.base, f.project);
+    f.chat = Uuid::new_v4();
+    body(
+        f.client
+            .post(&chats)
+            .json(&json!({"id":f.chat,"runtime":"claude"})),
+    )
+    .await;
+    let stop = f.endpoint("tasks/job/stop-workflow");
+    f.send(Uuid::new_v4(), "start native workflow").await;
+    let first = f.history().await["tasks"][0]["started_at"].clone();
+    assert!(first["stream_id"].is_string());
+    let stop_job = |occ: &Value| f.client.post(&stop).json(&json!({"started_at":occ}));
+    body(stop_job(&first)).await;
+    assert!(!stop_job(&first).send().await.unwrap().status().is_success());
+    f.send(Uuid::new_v4(), "start native workflow").await;
+    let next = f.history().await["tasks"][0]["started_at"].clone();
+    assert_ne!(next, first);
+    assert!(!stop_job(&first).send().await.unwrap().status().is_success());
+    let unknown = f
+        .client
+        .post(f.endpoint("tasks/missing/stop-workflow"))
+        .json(&json!({"started_at":next}));
+    assert!(!unknown.send().await.unwrap().status().is_success());
+    body(stop_job(&next)).await;
+    assert_eq!(
+        f.calls().iter().filter(|v| v["stopped"] == "job").count(),
+        2
+    );
 }
 async fn live() {
     let mut f = Fixture::new(true).await;

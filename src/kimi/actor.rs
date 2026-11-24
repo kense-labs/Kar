@@ -614,7 +614,7 @@ impl Actor {
                 self.journal.control_result(request, &res, &self.secrets);
                 let _ = ack.send(res);
             }
-            Command::StopTask(id, ack) => {
+            Command::StopTask(id, _, ack) => {
                 let agent = self
                     .projection
                     .task_agents

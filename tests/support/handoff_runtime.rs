@@ -24,7 +24,7 @@ fn audit(v: Value) {
 fn input<'a>(runtime: &str, v: &'a Value) -> Option<&'a str> {
     let content = match runtime {
         "codex" if v["method"] == "turn/start" => &v["params"]["input"],
-        "qwen" if v["type"] == "user" => &v["message"]["content"],
+        "qwen" | "claude" if v["type"] == "user" => &v["message"]["content"],
         _ => return None,
     };
     content.as_str().or_else(|| content[0]["text"].as_str())
@@ -97,7 +97,9 @@ fn fixture(runtime: &str) {
     if args.iter().any(|a| a == "--version") {
         println!(
             "{}",
-            if runtime == "qwen" {
+            if runtime == "claude" {
+                "2.1.134"
+            } else if runtime == "qwen" {
                 "0.27.4"
             } else {
                 "0.143.0"
@@ -224,6 +226,13 @@ fn fixture(runtime: &str) {
                 None => {}
             }
         } else if v["type"] == "control_request" {
+            if v["request"]["subtype"] == "stop_task" {
+                assert_eq!(v["request"]["task_id"], "job");
+                audit(json!({"runtime":runtime,"session":sid,"stopped":"job"}));
+                emit(
+                    json!({"type":"system","subtype":"task_notification","task_id":"job","session_id":sid,"status":"stopped"}),
+                );
+            }
             let initialization = v["request"]["subtype"] == "initialize";
             if initialization {
                 assert!(std::env::var_os("KAR_WORKBENCH_TOKEN").is_none());
@@ -248,6 +257,11 @@ fn fixture(runtime: &str) {
             );
         } else if let Some(text) = input(runtime, &v) {
             audit(json!({"runtime":runtime,"session":sid,"text":text,"cwd":cwd,"uuid":v["uuid"]}));
+            if runtime == "claude" && text == "start native workflow" {
+                emit(
+                    json!({"type":"system","subtype":"task_started","task_id":"job","task_type":"local_workflow","session_id":sid,"is_backgrounded":true}),
+                );
+            }
             let reply = if ["fact-one", "fact-two", "tool-proof-"]
                 .iter()
                 .all(|fact| text.contains(fact))
@@ -269,7 +283,8 @@ pub fn child() -> bool {
     let Some(path) = std::env::args_os().next().map(PathBuf::from) else {
         return false;
     };
-    let Some(runtime @ ("codex" | "qwen")) = path.file_stem().and_then(|s| s.to_str()) else {
+    let Some(runtime @ ("codex" | "qwen" | "claude")) = path.file_stem().and_then(|s| s.to_str())
+    else {
         return false;
     };
     assert!(std::env::var_os("KAR_HANDOFF_FIXTURE").is_some());

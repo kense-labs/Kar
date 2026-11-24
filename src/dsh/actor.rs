@@ -748,7 +748,7 @@ impl Actor {
                 self.journal.control_result(request, &r, &self.secrets);
                 let _ = ack.send(r);
             }
-            Command::StopTask(id, ack) => {
+            Command::StopTask(id, _, ack) => {
                 self.stopping.retain(|_, ack| !ack.is_closed());
                 match self.request_stop(&id).await {
                     Ok(()) => {

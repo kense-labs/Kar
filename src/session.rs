@@ -1752,9 +1752,21 @@ impl Session {
         if id.is_empty() {
             return Err(Error::Refused("a native task id is required".into()));
         }
-        self.call(|tx| Command::StopTask(id.into(), tx))
+        self.call(|tx| Command::StopTask(id.into(), None, tx))
             .await
             .map(|_| ())
+    }
+    /// Stop the selected running workflow in its original Claude process.
+    pub async fn stop_workflow(&self, id: &str, occurrence: crate::Cursor) -> Result<()> {
+        if self.protocol() != Protocol::Claude {
+            return Err(Error::Unsupported("native workflow stop on this adapter".into()));
+        }
+        if id.is_empty() || occurrence.stream_id != self.stream_id() {
+            return Err(Error::Refused("workflow occurrence is no longer running".into()));
+        }
+        self.call(|reply| Command::StopTask(id.into(), Some(occurrence), reply))
+            .await
+            .map(drop)
     }
     pub async fn abort(&self) -> Result<()> {
         self.abort_prompt(None).await

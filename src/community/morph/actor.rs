@@ -461,7 +461,7 @@ impl Actor {
                     };
                 let _ = ack.send(result);
             }
-            Command::StopTask(_, ack) => {
+            Command::StopTask(_, _, ack) => {
                 let _ = ack.send(Err(Error::Unsupported(
                     "native task stop on this adapter".into(),
                 )));

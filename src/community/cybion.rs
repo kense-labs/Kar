@@ -764,7 +764,7 @@ impl ThreadActor {
                 let _ = ack.send(Ok(()));
                 return false;
             }
-            Command::StopTask(_, ack) => {
+            Command::StopTask(_, _, ack) => {
                 let _ = ack.send(Err(Error::Unsupported(
                     "native task stop on this adapter".into(),
                 )));
