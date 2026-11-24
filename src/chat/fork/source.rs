@@ -222,6 +222,7 @@ mod tests {
         let turn = Uuid::new_v4();
         state
             .apply(super::super::super::ChatUpdate::Begin {
+                requested_output_schema: None,
                 background_note: None,
                 merged_context: None,
                 attachments: Vec::new(),

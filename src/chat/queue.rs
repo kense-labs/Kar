@@ -452,6 +452,7 @@ fn different_prompt() -> Error {
 /// A durable Begin consumes the input even if the process dies before a receipt arrives.
 pub(crate) struct Admission {
     pub(super) merged_context: Option<MergedContext>,
+    pub(super) requested_output_schema: Option<serde_json::Value>,
     pub(super) background_note: Option<super::BackgroundNote>,
     pub(super) attachments: Vec<super::Attachment>,
     pub(super) store: ChatStore,
@@ -532,6 +533,7 @@ impl Admission {
             self.attachments,
             self.background_note,
             self.merged_context,
+            self.requested_output_schema,
         )?;
         if let Some(id)=transfer_id {
             inbox.context_transfers.get_mut(&id).unwrap().bound=Some(self.id);

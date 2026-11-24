@@ -306,7 +306,7 @@ impl super::log::State {
             && self
                 .turns
                 .iter()
-                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty() && t.background_note.is_none() && t.merged_context.is_none())
+                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty() && t.background_note.is_none() && t.merged_context.is_none() && t.requested_output_schema.is_none())
         {
             return Cow::Borrowed(&self.turns);
         }
@@ -343,6 +343,9 @@ impl super::log::State {
                             if let Some(h) = handoff {
                                 *text = h.native_input(text);
                             }
+                            if let Some(schema)=&turn.requested_output_schema {
+                                text.push_str(&super::output_instructions(schema));
+                            }
                             Some(&turn.attachments)
                         } else {
                             provider_id
@@ -366,7 +369,7 @@ impl super::log::State {
         let Some(original) = turn.prompt() else {
             return;
         };
-        if handoff.is_none() && turn.background_note.is_none() && turn.merged_context.is_none() {
+        if handoff.is_none() && turn.background_note.is_none() && turn.merged_context.is_none() && turn.requested_output_schema.is_none() {
             return;
         }
         if !frame.source.path.is_empty()
@@ -374,6 +377,7 @@ impl super::log::State {
         {
             return;
         }
+        let schema_suffix=turn.requested_output_schema.as_ref().map(super::output_instructions);
         for edit in &mut frame.edits {
             let text = match edit {
                 super::ChatEdit::Text {
@@ -384,7 +388,8 @@ impl super::log::State {
                 | super::ChatEdit::UserInput { text, .. } => text,
                 _ => continue,
             };
-            let carried = handoff.and_then(|h| h.user_input(text)).unwrap_or(text);
+            let authored=schema_suffix.as_deref().and_then(|s|text.strip_suffix(s)).unwrap_or(text);
+            let carried = handoff.and_then(|h| h.user_input(authored)).unwrap_or(authored);
             let mut expected=turn.background_note.as_ref().map_or_else(||original.to_owned(),|n|n.prompt(original));
             if let Some(m)=&turn.merged_context {expected=m.prompt(&expected);}
             let matches=carried==expected;
@@ -615,5 +620,32 @@ impl super::ChatStore {
         let receipt = log.state.handoffs.last().unwrap().clone();
         let chat = super::ChatSession::bind(session, log, self.clone(), opts)?;
         Ok((receipt, Some(chat)))
+    }
+}
+
+#[cfg(test)]
+mod output_recovery {
+    use super::*;
+    use crate::chat::{ChatEdit,ChatFrame,ChatUpdate};
+    use serde_json::json;
+
+    #[test]
+    fn recovery_matches_the_schema_on_the_native_request_and_removes_its_echo() {
+        let tmp=tempfile::tempdir().unwrap();
+        let store=super::super::ChatStore::open(tmp.path()).unwrap();
+        let id=Uuid::new_v4();
+        let info:ChatInfo=serde_json::from_value(json!({"id":id,"workspace":tmp.path(),"runtime":"qwen","protocol":"qwen","native_id":"native","created_ms":1,"program":"qwen","approvals":"deny"})).unwrap();
+        let mut file=tempfile::tempfile().unwrap();
+        super::super::log::header(&mut file,&info).unwrap();
+        let (mut state,_)=super::super::log::read(&mut file,id).unwrap();
+        let turn=Uuid::new_v4();
+        let schema=json!({"type":"array"});
+        let begin:ChatUpdate=serde_json::from_value(json!({"kind":"begin","id":turn,"at":2,"text":"compare","requested_output_schema":schema})).unwrap();
+        state.apply(begin).unwrap();
+        let expected=format!("compare{}",super::super::output_instructions(&schema));
+        assert_eq!(state.recovery_turns(&store)[0].prompt(),Some(expected.as_str()));
+        let mut frame=ChatFrame{cursor:crate::Cursor{stream_id:Uuid::new_v4(),after_seq:1},morph_progress:None,elided:false,native_turn:None,source:crate::observe::Agent{path:vec![],session_id:Some("native".into())},edits:vec![ChatEdit::UserInput{id:"native-user".into(),text:expected}]};
+        state.clean_handoff_echo(turn,&mut frame);
+        assert!(matches!(&frame.edits[0],ChatEdit::UserInput{text,..} if text=="compare"));
     }
 }

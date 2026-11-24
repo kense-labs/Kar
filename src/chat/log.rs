@@ -95,6 +95,8 @@ pub enum ChatUpdate {
     },
     Begin {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        requested_output_schema: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         background_note: Option<super::BackgroundNote>,
         #[serde(default,skip_serializing_if="Option::is_none")]
         merged_context: Option<super::MergedContext>,
@@ -766,6 +768,7 @@ impl State {
                 self.turns[index].input_sent = true;
             }
             ChatUpdate::Begin {
+                requested_output_schema,
                 background_note,
                 merged_context,
                 attachments,
@@ -780,6 +783,7 @@ impl State {
                 turn.attachments = attachments;
                 turn.background_note = background_note;
                 turn.merged_context = merged_context;
+                turn.requested_output_schema = requested_output_schema;
                 if let Some(h) = self
                     .handoffs
                     .iter_mut()
@@ -1682,10 +1686,12 @@ impl Log {
         attachments: Vec<super::Attachment>,
         background_note: Option<super::BackgroundNote>,
         merged_context: Option<super::MergedContext>,
+        requested_output_schema: Option<serde_json::Value>,
     ) -> Result<()> {
         self.ids = MessageIds::default();
         self.dispatched = false;
         self.commit(ChatUpdate::Begin {
+            requested_output_schema,
             background_note,
             merged_context,
             attachments,
@@ -1886,6 +1892,7 @@ impl Log {
         self.ids = MessageIds::default();
         self.dispatched = true;
         self.commit(ChatUpdate::Begin {
+            requested_output_schema: None,
             background_note: None,
             merged_context: None,
             attachments: Vec::new(),

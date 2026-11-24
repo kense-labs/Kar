@@ -82,6 +82,9 @@ pub struct TimelineItem {
 pub struct ChatTurn {
     #[serde(default, skip_serializing_if="Option::is_none")]
     pub merged_context: Option<super::MergedContext>,
+    /// The exact per-run schema included in this native prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_output_schema: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_note: Option<super::BackgroundNote>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -346,6 +349,7 @@ impl ChatTurn {
                 .collect(),
             fork_anchor: None,
             native_turn_id: None,
+            requested_output_schema: None,
             background_note: None,
             merged_context: None,
             pi_input_timestamp_ms: None,

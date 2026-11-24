@@ -952,6 +952,9 @@ impl ChatSession {
         closed
     }
 }
+fn output_instructions(schema:&serde_json::Value)->String {
+    format!("\n\nWhen the work is complete, call kar_submit_output with JSON text matching this schema. Correct any validation error before finishing.\n{schema}")
+}
 impl Sender {
     async fn run_turn(
         &self,
@@ -1039,9 +1042,9 @@ impl Sender {
             let prompt = merge.as_ref().map_or(prompt.clone(), |m| m.prompt(&prompt));
             (log.state.dispatch_text(&prompt), note, merge)
         };
-        let wire_text = if let Some(schema) = store.run_schema(self.info.id, id)? {
-            format!("{wire_text}\n\nWhen the work is complete, call kar_submit_output with JSON text matching this schema. Correct any validation error before finishing.\n{schema}")
-        } else { wire_text };
+        let requested_output_schema=store.run_schema(self.info.id,id)?;
+        let mut wire_text=wire_text;
+        if let Some(schema)=&requested_output_schema { wire_text.push_str(&output_instructions(schema)); }
         crate::input::check_text(&wire_text, crate::input::text_limit(&self.info.runtime))?;
         let store_for_input = store.clone();
         let chat = self.info.id;
@@ -1058,6 +1061,7 @@ impl Sender {
         }
         let admission = Admission {
             merged_context,
+            requested_output_schema,
             background_note,
             attachments,
             store: store.clone(),
