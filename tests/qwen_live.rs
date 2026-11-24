@@ -4,6 +4,8 @@ mod abort_turn;
 mod busy_prompt;
 #[path = "support/declaration.rs"]
 mod declaration;
+#[path = "qwen_live/effort.rs"]
+mod effort;
 #[path = "support/image_input.rs"]
 mod image_input;
 

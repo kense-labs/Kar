@@ -1,4 +1,5 @@
 mod image_input;
+mod qwen;
 
 use crate::options::mcp_capabilities::McpSupport;
 use crate::{
@@ -1084,17 +1085,13 @@ impl Session {
                 if let Some(effort) = &options.settings.effort {
                     init["effort"] = effort.as_str().into();
                 }
-                session.info = session.rpc("initialize", init).await?;
+                session.info = session.rpc("initialize", init).await.map_err(|error| {
+                    qwen::initialize_error(error, options.settings.effort.as_deref())
+                })?;
                 if let Some(effort) = &options.settings.effort {
-                    let state = &session.info["effort_status"];
-                    if state["effort"] != effort.as_str()
-                        || state["applied"] != true
-                        || state.get("override") != Some(&Value::Null)
-                    {
-                        return Err(Error::Refused(
-                            "Qwen did not confirm requested effort".into(),
-                        ));
-                    }
+                    session
+                        .confirm_qwen_effort(effort, options.model.as_deref())
+                        .await?;
                 }
                 if required_id(&session.info, "/session_id")? != id {
                     return Err(Error::Protocol(
@@ -1898,7 +1895,11 @@ impl Session {
                         "runtime returned an invalid model catalog".into(),
                     ));
                 }
-                Ok(reply["models"].take())
+                let mut models = reply["models"].take();
+                if self.protocol == Protocol::Qwen {
+                    qwen::project_models(models.as_array_mut().expect("checked model array"));
+                }
+                Ok(models)
             }
         }
     }
