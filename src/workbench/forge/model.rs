@@ -188,6 +188,33 @@ pub(in crate::workbench) async fn pull(
     op: Operation,
     authorize: impl Fn(&Catalog, &str) -> crate::Result<()>,
 ) -> Result<Value, ForgeError> {
+    if let Operation::PullCommand {
+        number,
+        command: action,
+    } = &op
+    {
+        if action.mutates() {
+            return routes::model_forge_write(
+                app,
+                p,
+                chat,
+                command.ok_or_else(|| ForgeError::bad("command ID required"))?,
+                None,
+                op,
+                authorize,
+            )
+            .await;
+        }
+        if command.is_some() {
+            return Err(ForgeError::bad("reads do not accept a command ID"));
+        }
+        let c = Context::open(app.clone(), p).await?;
+        let repo = c.identity();
+        authorize(&app.0.catalog.lock().unwrap(), &repo)?;
+        let result = providers::pull_tools::execute(&c, *number, action).await?;
+        authorize(&app.0.catalog.lock().unwrap(), &repo)?;
+        return Ok(result);
+    }
     match op {
         Operation::Pulls
         | Operation::Pull { .. }

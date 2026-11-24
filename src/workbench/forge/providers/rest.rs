@@ -216,6 +216,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         ));
     }
     match op {
+        Operation::PullCommand{number,command}=>crate::workbench::forge::providers::pull_tools::execute(c,*number,command).await,
         op @ (Operation::SubmitReview { .. }
         | Operation::ReplyToThread { .. }
         | Operation::SetThreadResolution { .. }

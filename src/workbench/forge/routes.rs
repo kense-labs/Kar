@@ -65,6 +65,7 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
             let (number, kind) = match m.operation {
                 Operation::CreatePull { .. } => (v["number"].as_u64(), "pull"),
                 Operation::SubmitReview { number, .. }
+                | Operation::PullCommand { number, .. }
                 | Operation::ReplyToThread { number, .. }
                 | Operation::SetThreadResolution { number, .. } => (Some(number), "pull"),
                 Operation::CreateIssue { .. } => (v["number"].as_u64(), "issue"),

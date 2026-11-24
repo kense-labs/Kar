@@ -16,8 +16,9 @@ use toolkit::Tool;
 const ISSUE_LINKS: &str = "kar_issue_links";
 const PULL_LINKS: &str = "kar_pull_request_links";
 const PULL: &str = "kar_pull_request";
+const CI: &str = "kar_ci";
 pub(super) fn handles(name: &str) -> bool {
-    matches!(name, ISSUE_LINKS | PULL_LINKS | PULL)
+    matches!(name, ISSUE_LINKS | PULL_LINKS | PULL | CI)
 }
 
 pub(super) fn tools(c: &Caller) -> Vec<Tool> {
@@ -43,10 +44,20 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
     if p.reads_pulls() {
         let mut acts = vec!["list", "read", "threads", "thread_comments"];
         if p.writes_pulls() && !c.plan {
-            acts.extend(["create", "review", "reply", "resolve"]);
+            acts.extend([
+                "create", "review", "reply", "resolve", "update", "merge", "comment",
+            ]);
         }
         let string = json!({"type":"string"});
-        tools.push(Tool{name:PULL,description:"Use this chat's granted pull-request repository. Read and review changes, open a pull for an existing branch, reply to a review thread or resolve it. Reuse command_id for mutations.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"command_id":id,"number":{"type":"integer","minimum":1},"cursor":string,"review_thread_id":string,"head":string,"head_repository":string,"base":string,"title":string,"body":string,"verdict":{"enum":["comment","approve","request-changes"]},"comments":{"type":"array","items":{"type":"object"}},"resolved":{"type":"boolean"}}),required:&["action"]});
+        tools.push(Tool{name:PULL,description:"Use this chat's granted pull-request repository. Read and review changes, open a pull for an existing branch, reply to a review thread or resolve it. Reuse command_id for mutations.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"command_id":id,"number":{"type":"integer","minimum":1},"cursor":string,"review_thread_id":string,"head":string,"head_repository":string,"base":string,"title":string,"body":string,"verdict":{"enum":["comment","approve","request-changes"]},"comments":{"type":"array","items":{"type":"object"}},"resolved":{"type":"boolean"},"ready":{"type":"boolean"},"auto":{"type":"boolean"},"expected_head_sha":string,"method":{"enum":["merge","squash","rebase"]},"state":{"enum":["open","closed"]},"add_labels":{"type":"array","items":string},"remove_labels":{"type":"array","items":string},"request_reviewers":{"type":"array","items":string}}),required:&["action"]});
+    }
+    if p.reads_pulls() {
+        let acts = if !c.plan && p.writes_pulls() {
+            vec!["checks", "logs", "rerun"]
+        } else {
+            vec!["checks", "logs"]
+        };
+        tools.push(Tool{name:CI,description:"Inspect checks for the current PR head, tail failing or named logs, or request a rerun. Reuse command_id for a rerun.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"number":{"type":"integer","minimum":1},"command_id":id,"check":{"type":"string"},"tail_lines":{"type":"integer","minimum":1,"maximum":2000}}),required:&["action","number"]});
     }
     tools
 }
@@ -78,7 +89,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
         .to_owned();
     let write = !matches!(
         action.as_str(),
-        "list" | "read" | "threads" | "thread_comments"
+        "list" | "read" | "threads" | "thread_comments" | "checks" | "logs"
     );
     let p = c.policy.ok_or_else(denied)?;
     let grant = c.grant.ok_or_else(denied)?;
@@ -108,7 +119,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
     };
     let name = name.to_owned();
     let result = tokio::spawn(async move {
-        if name == PULL {
+        if name == PULL || name == CI {
             let fields = input.as_object_mut().unwrap();
             fields.remove("action");
             let id = fields
@@ -116,6 +127,31 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(|_| forge::ForgeError::bad("invalid command ID"))?;
+            if name == CI || matches!(action.as_str(), "comment" | "merge" | "update") {
+                if name == CI && !matches!(action.as_str(), "checks" | "logs" | "rerun") {
+                    return Err(forge::ForgeError::bad("unknown CI action"));
+                }
+                let number = fields
+                    .remove("number")
+                    .and_then(|v| v.as_u64())
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| forge::ForgeError::bad("positive pull number required"))?;
+                fields.insert("action".into(), action.into());
+                let request = serde_json::from_value(input)
+                    .map_err(|e| forge::ForgeError::bad(e.to_string()))?;
+                return forge::model::pull(
+                    app,
+                    project,
+                    chat,
+                    id,
+                    forge::Operation::PullCommand {
+                        number,
+                        command: request,
+                    },
+                    authorize,
+                )
+                .await;
+            }
             let op = match action.as_str() {
                 "list" => "pulls",
                 "read" => "pull",

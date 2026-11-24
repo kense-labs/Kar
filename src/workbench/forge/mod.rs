@@ -5,6 +5,7 @@ mod github;
 mod linked_chats;
 pub(in crate::workbench) mod model;
 mod providers;
+pub(in crate::workbench) use providers::pull_tools::Request as PullCommand;
 mod publish;
 mod repository;
 mod review;
@@ -61,6 +62,7 @@ pub(crate) enum Operation {
         number: u64,
     },
     Pulls,
+    PullCommand{number:u64, command:PullCommand},
     CreatePull {
         head: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,6 +139,7 @@ pub(crate) enum Operation {
 }
 impl Operation {
     fn mutates(&self) -> bool {
+        if let Self::PullCommand{command,..}=self{return command.mutates();}
         matches!(
             self,
             Self::CreatePull { .. }
@@ -604,6 +607,7 @@ impl Context {
         format!("{}://{}/{}", self.kind, self.host, self.repository)
     }
     async fn execute(&self, op: &Operation) -> Result<Value, ForgeError> {
+
         if let Operation::CreatePull {
             head_repository: Some(source),
             ..

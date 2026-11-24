@@ -45,9 +45,15 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
     let calls = Calls::default();
     let pull = json!({"number":19,"title":"Scoped pull","state":"open","html_url":"https://models.example/kar/demo/pull/19","head":{"ref":"feature","sha":"abc"},"base":{"ref":"main","sha":"def"}});
     let detail = pull.clone();
+    let ci = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let api = Router::new()
         .route("/repos/kar/demo/pulls",get(move||async move{Json(json!([pull]))}))
-        .route("/repos/kar/demo/pulls/19",get(move||async move{Json(detail)}))
+        .route("/repos/kar/demo/pulls/19",get(move||async move{Json(detail)}).patch(|Json(body):Json<Value>|async move{assert_eq!(body["title"],"Changed");Json(json!({"number":19}))}))
+        .route("/repos/kar/demo/pulls/19/merge",axum::routing::put(|Json(body):Json<Value>|async move{assert_eq!(body["sha"],"abc");Json(json!({"merged":true,"sha":"merged"}))}))
+        .route("/repos/kar/demo/commits/abc/check-runs",get(||async{Json(json!({"check_runs":[{"id":4,"name":"tests","head_sha":"abc","conclusion":"failure","details_url":"https://models.example/kar/demo/actions/runs/8/job/41"}]}))}))
+        .route("/repos/kar/demo/actions/jobs/41",get(||async{Json(json!({"id":41,"run_id":8,"head_sha":"abc"}))}))
+        .route("/repos/kar/demo/actions/jobs/41/logs",get(||async{"start\none\ntwo\n"}))
+        .route("/repos/kar/demo/actions/jobs/41/rerun",post(move||{let ci=ci.clone();async move{assert_eq!(ci.fetch_add(1,std::sync::atomic::Ordering::SeqCst),0);StatusCode::CREATED}}))
         .route(
             "/repos/kar/demo/issues",
             post(
@@ -179,6 +185,40 @@ pub(super) async fn exercise(
             .as_str()
             .unwrap()
             .contains("models.example/kar/demo")
+    );
+    let read_log = server::json(make(
+        "kar_ci",
+        json!({"action":"logs","number":19,"tail_lines":2}),
+    ))
+    .await;
+    assert_eq!(
+        read_log["result"]["structuredContent"]["checks"][0]["log"],
+        "one\ntwo"
+    );
+    let rerun = json!({"action":"rerun","number":19,"command_id":Uuid::new_v4()});
+    assert!(denied(
+        &server::json(make("kar_ci", rerun.clone()).header("kar-mode-limit", "auto/plan")).await
+    ));
+    for _ in 0..2 {
+        let res = server::json(make("kar_ci", rerun.clone())).await;
+        assert_eq!(
+            res["result"]["structuredContent"]["checks"][0]["rerun"],
+            true
+        );
+    }
+    let update =
+        json!({"action":"update","number":19,"title":"Changed","command_id":Uuid::new_v4()});
+    assert_eq!(
+        server::json(make("kar_pull_request", update)).await["result"]["structuredContent"]["updated"],
+        true
+    );
+    let merge =
+        json!({"action":"merge","number":19,"expected_head_sha":"old","command_id":Uuid::new_v4()});
+    assert!(denied(&server::json(make("kar_pull_request", merge)).await));
+    let merge = json!({"action":"merge","number":19,"expected_head_sha":"abc","method":"squash","command_id":Uuid::new_v4()});
+    assert_eq!(
+        server::json(make("kar_pull_request", merge)).await["result"]["structuredContent"]["merged"],
+        true
     );
     for name in [create, comment] {
         let search = server::json(make("tool_search", json!({"query":name}))).await;
