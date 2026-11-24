@@ -65,6 +65,9 @@ pub struct HistoryInstance {
 }
 impl HistoryInstance {
     pub(crate) fn configure(&self, opt: &mut SessionOptions) {
+        if self.runtime == HistoryRuntime::Pi {
+            opt.pi_session_root = Some(self.sessions.clone());
+        }
         opt.env.insert(
             self.runtime.home_env().into(),
             self.home.clone().into_os_string(),
@@ -93,6 +96,18 @@ struct InstanceSettings {
     program: Option<PathBuf>,
 }
 pub(crate) fn configured() -> Result<Vec<HistoryInstance>> {
+    instances(None)
+}
+
+/// An explicitly selected instance may have no native history until its first prompt.
+pub(crate) fn for_launch(runtime: &str, id: &str) -> Result<HistoryInstance> {
+    instances(Some(id))?
+        .into_iter()
+        .find(|instance| instance.id == id && instance.runtime.runtime() == runtime)
+        .ok_or_else(|| Error::Refused(format!("unknown or disabled {runtime} instance {id}")))
+}
+
+fn instances(selected: Option<&str>) -> Result<Vec<HistoryInstance>> {
     let mut conf = FileConfig::default();
     if let Some(path) = env::var_os("KAR_AGENT_SESSION_CONFIG").filter(|s| !s.is_empty()) {
         let file = File::open(path)?;
@@ -142,7 +157,7 @@ pub(crate) fn configured() -> Result<Vec<HistoryInstance>> {
                 "invalid or reserved provider instance ID".into(),
             ));
         }
-        if conf.enabled == Some(false) {
+        if conf.enabled == Some(false) || selected.is_some_and(|name| name != id) {
             continue;
         }
         if conf.sessions.is_some() && conf.runtime != HistoryRuntime::Pi {
@@ -174,8 +189,11 @@ pub(crate) fn configured() -> Result<Vec<HistoryInstance>> {
                 "sessions"
             })
         });
-        let Ok(sessions) = sessions.canonicalize() else {
-            continue;
+        let sessions = match sessions.canonicalize() {
+            Ok(path) => path,
+            Err(e) if selected.is_some() && e.kind() == std::io::ErrorKind::NotFound => sessions,
+            Err(e) if selected.is_some() => return Err(e.into()),
+            Err(_) => continue,
         };
         if seen.insert((conf.runtime, sessions.clone())) {
             result.push(HistoryInstance {

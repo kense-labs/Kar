@@ -87,6 +87,13 @@ impl Fixture {
             .env("KAR_WORKBENCH_TOKEN", "isolated-handoff-test")
             .stdout(Stdio::piped())
             .kill_on_drop(true);
+        if !self.live {
+            cmd.env("CODEX_HOME", self.dir.join("primary-account"));
+            let config = self.dir.join("instances.toml");
+            if config.exists() {
+                cmd.env("KAR_AGENT_SESSION_CONFIG", config);
+            }
+        }
         let providers: &[&str] = if self.live {
             &["codex", "qwen"]
         } else {
@@ -411,6 +418,43 @@ async fn workflow_stop(f: &mut Fixture) {
         2
     );
 }
+/// Two named accounts of the same runtime and model have distinct native sessions.
+async fn named_instances() {
+    let mut f = Fixture::new(false).await;
+    let second = f.dir.join("second-account");
+    fs::write(
+        f.dir.join("instances.toml"),
+        format!(
+            "[instances.second]\nruntime = \"codex\"\nhome = {}\n",
+            json!(second)
+        ),
+    )
+    .unwrap();
+    f.restart().await;
+    f.send(Uuid::new_v4(), "first account fact").await;
+    let first = f.history().await["chat"]["native_id"].clone();
+    let switch = json!({"id":Uuid::new_v4(),"runtime":"codex","instance_id":"second"});
+    let second_receipt = f.handoff(&switch).await;
+    let second_id = &second_receipt["target"]["native_id"];
+    assert!(second_id.is_string());
+    assert_ne!(second_id, &first);
+    assert_eq!(second_receipt["target"]["instance"]["id"], "second");
+    f.send(Uuid::new_v4(), "second account fact").await;
+    assert_eq!(f.calls().last().unwrap()["instance_home"], json!(second));
+    f.restart().await;
+    assert_eq!(f.handoff(&switch).await["target"]["native_id"], *second_id);
+    let back = f
+        .handoff(&json!({"id":Uuid::new_v4(),"runtime":"codex","instance_id":"codex"}))
+        .await;
+    assert_eq!(back["target"]["native_id"], first);
+    f.send(Uuid::new_v4(), "continue first account").await;
+    assert_eq!(
+        f.calls().last().unwrap()["instance_home"],
+        json!(f.dir.join("primary-account"))
+    );
+    f.stop().await;
+}
+
 async fn live() {
     let mut f = Fixture::new(true).await;
     let secret = Uuid::new_v4().to_string();
@@ -522,7 +566,8 @@ fn main() {
                 if live_mode {
                     live().await
                 } else {
-                    protocol().await
+                    protocol().await;
+                    named_instances().await
                 }
             },
         )

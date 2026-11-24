@@ -173,6 +173,18 @@ pub(crate) fn env_path(opts: &SessionOptions, name: &str) -> Option<PathBuf> {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
 }
+pub(crate) fn pi_workspace_sessions(cwd: &Path, opts: &SessionOptions) -> Result<PathBuf> {
+    let root = match &opts.pi_session_root {
+        Some(path) => path.clone(),
+        None => instructions::agent_dir(opts, cwd)?.join("sessions"),
+    };
+    let path = cwd.to_string_lossy();
+    let slug = path
+        .trim_start_matches(['/', '\\'])
+        .replace(['/', '\\', ':'], "-");
+    Ok(root.join(format!("--{slug}--")))
+}
+
 /// Pi takes a file on argv, while callers resume by the native session ID.
 pub(crate) fn pi_file(cwd: &Path, opts: &SessionOptions, id: &str) -> Result<PathBuf> {
     if let Some(path) = &opts.pi_resume_file {
@@ -207,12 +219,7 @@ pub(crate) fn pi_file(cwd: &Path, opts: &SessionOptions, id: &str) -> Result<Pat
         }
         return Ok(path.clone());
     }
-    let agent_dir = instructions::agent_dir(opts, cwd)?;
-    let path = cwd.to_string_lossy();
-    let slug = path
-        .trim_start_matches(['/', '\\'])
-        .replace(['/', '\\', ':'], "-");
-    let dir = agent_dir.join("sessions").join(format!("--{slug}--"));
+    let dir = pi_workspace_sessions(cwd, opts)?;
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => Some(entries),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,

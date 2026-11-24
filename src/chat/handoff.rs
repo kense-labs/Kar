@@ -10,6 +10,8 @@ use uuid::Uuid;
 pub struct HandoffRequest {
     pub id: Uuid,
     pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default = "default_budget")]
@@ -33,6 +35,20 @@ pub struct ProviderSession {
     pub settings: SessionSettings,
 }
 impl ProviderSession {
+    fn matches_instance(&self, instance: &crate::provider_instance::HistoryInstance) -> bool {
+        match &self.instance {
+            Some(old) => old == instance,
+            None => self.runtime == instance.id,
+        }
+    }
+
+    fn same_native_session(&self, other: &Self) -> bool {
+        self.native_id == other.native_id
+            && self.runtime == other.runtime
+            && self.instance.as_ref().map_or(&self.runtime, |i| &i.id)
+                == other.instance.as_ref().map_or(&other.runtime, |i| &i.id)
+    }
+
     pub(super) fn current(info: &ChatInfo) -> Self {
         Self {
             antigravity_profile: info.antigravity_profile.clone(),
@@ -68,6 +84,9 @@ pub enum HandoffStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Handoff {
     pub request: HandoffRequest,
+    /// Pin the selected namespace before native launch so retry cannot switch accounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_instance: Option<crate::provider_instance::HistoryInstance>,
     pub status: HandoffStatus,
     pub from: ProviderSession,
     pub target: Option<ProviderSession>,
@@ -90,6 +109,7 @@ const CURRENT: &str = "\n\nCurrent user request\n";
 impl Handoff {
     fn prepare(
         request: HandoffRequest,
+        destination_instance: Option<crate::provider_instance::HistoryInstance>,
         info: &ChatInfo,
         turns: &[ChatTurn],
         history: &[Self],
@@ -103,19 +123,32 @@ impl Handoff {
             h.status == HandoffStatus::Ready
                 && h.from.runtime == request.runtime
                 && h.from.model == request.model
+                && destination_instance
+                    .as_ref()
+                    .is_none_or(|instance| h.from.matches_instance(instance))
         });
         // Merely making a native session active does not teach it any history.
         // Only a turn witnessed by the target advances its continuation boundary.
         let last_input = previous.and_then(|h| {
-            turns.iter().rposition(|turn| {
-                (turn.input_sent
-                    || turn.native_turn_id.is_some()
-                    || turn.status == super::TurnStatus::Completed)
-                    && turn.items.first().is_some_and(|i| {
-                        i.source.path.is_empty()
-                            && i.source.session_id.as_deref() == Some(h.from.native_id.as_str())
-                    })
-            })
+            turns
+                .iter()
+                .enumerate()
+                .rfind(|(index, turn)| {
+                    (turn.input_sent
+                        || turn.native_turn_id.is_some()
+                        || turn.status == super::TurnStatus::Completed)
+                        && history
+                            .iter()
+                            .find(|owner| {
+                                owner.status == HandoffStatus::Ready && owner.through_turn > *index
+                            })
+                            .is_some_and(|owner| owner.from.same_native_session(&h.from))
+                        && turn.items.first().is_some_and(|i| {
+                            i.source.path.is_empty()
+                                && i.source.session_id.as_deref() == Some(h.from.native_id.as_str())
+                        })
+                })
+                .map(|(index, _)| index)
         });
         let start = last_input.map_or(0, |i| i + 1);
         let target = previous.filter(|h| {
@@ -203,6 +236,7 @@ impl Handoff {
         };
         Ok(Self {
             request,
+            destination_instance,
             status: HandoffStatus::Prepared,
             from: ProviderSession::current(info),
             target: target.map(|h| h.from.clone()),
@@ -259,15 +293,21 @@ impl super::log::State {
         {
             return Cow::Borrowed(&self.turns);
         }
+        let current = ProviderSession::current(&self.info);
         let turns = self
             .turns
             .iter()
-            .filter(|t| {
-                t.items
-                    .first()
-                    .is_some_and(|i| i.source.session_id.as_deref() == Some(&self.info.native_id))
+            .enumerate()
+            .filter(|(index, t)| {
+                self.handoffs
+                    .iter()
+                    .find(|h| h.status == HandoffStatus::Ready && h.through_turn > *index)
+                    .is_none_or(|h| h.from.same_native_session(&current))
+                    && t.items.first().is_some_and(|i| {
+                        i.source.session_id.as_deref() == Some(&self.info.native_id)
+                    })
             })
-            .map(|t| {
+            .map(|(_, t)| {
                 let mut turn = t.clone();
                 if let Some(h) = self.handoffs.iter().find(|h| h.input == Some(turn.id))
                     && let Some(super::TimelineItem {
@@ -376,6 +416,7 @@ impl super::ChatStore {
         &self,
         id: Uuid,
         request: HandoffRequest,
+        destination: Option<crate::provider_instance::HistoryInstance>,
         configure: impl FnOnce(&mut crate::SessionOptions),
     ) -> Result<(Handoff, Option<super::ChatSession>)> {
         let mut log = self.open_controller(id).await?;
@@ -401,7 +442,16 @@ impl super::ChatStore {
             {
                 return Err(Error::Busy);
             }
-            if log.state.info.runtime == request.runtime && log.state.info.model == request.model {
+            if log.state.info.runtime == request.runtime
+                && log.state.info.model == request.model
+                && destination.as_ref().is_none_or(|instance| {
+                    log.state
+                        .info
+                        .active_instance()
+                        .map_or(log.state.info.runtime.as_str(), |i| &i.id)
+                        == instance.id
+                })
+            {
                 return Err(Error::Refused(
                     "target provider session is already active".into(),
                 ));
@@ -411,13 +461,18 @@ impl super::ChatStore {
             }
             let h = Handoff::prepare(
                 request,
+                destination,
                 &log.state.info,
                 &log.state.turns,
                 &log.state.handoffs,
             )?;
             self.prepare_handoff(&mut log, h)?;
         }
-        self.finish_handoff(log, |opts| { configure(opts); Ok(()) }).await
+        self.finish_handoff(log, |opts| {
+            configure(opts);
+            Ok(())
+        })
+        .await
     }
 
     pub(super) async fn finish_handoff(
@@ -439,6 +494,9 @@ impl super::ChatStore {
         let mut opts = crate::SessionOptions::new(&log.state.info.workspace);
         opts.approvals = log.state.info.approvals;
         opts.unset_env.clone_from(&log.state.info.unset_env);
+        if let Some(instance) = &h.destination_instance {
+            instance.configure(&mut opts);
+        }
         if let Some(target) = &h.target {
             opts.settings = target.settings.clone();
             let mut saved = log.state.info.clone();
@@ -463,9 +521,15 @@ impl super::ChatStore {
                 target.activate(&mut saved);
                 (saved.launch_runtime(&opts).await?, None)
             } else {
-                crate::runtime(&h.request.runtime)?
-                    .selected_with_version(&opts)
-                    .await?
+                let mut runtime = crate::runtime(&h.request.runtime)?;
+                if let Some(program) = h
+                    .destination_instance
+                    .as_ref()
+                    .and_then(|i| i.program.as_ref())
+                {
+                    runtime.program = program.clone();
+                }
+                runtime.selected_with_version(&opts).await?
             };
             let session = runtime
                 .open_selected_with_version(opts.before_chat_attach()?, version.as_deref())
@@ -494,7 +558,11 @@ impl super::ChatStore {
         };
         let target = ProviderSession {
             antigravity_profile: super::AntigravityProfile::at_launch(&runtime.id, &opts),
-            instance: h.target.as_ref().and_then(|s| s.instance.clone()),
+            instance: h
+                .target
+                .as_ref()
+                .and_then(|s| s.instance.clone())
+                .or(h.destination_instance.clone()),
             runtime: runtime.id,
             protocol: session.protocol(),
             program: runtime.program,

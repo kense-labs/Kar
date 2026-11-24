@@ -487,6 +487,9 @@ impl Session {
             }
             Protocol::Pi => {
                 process.arg("--no-mcp");
+                if options.pi_session_root.is_some() {
+                    process.arg("--session-dir").arg(crate::options::pi_workspace_sessions(&cwd, &options)?);
+                }
                 if let Some(pi) = &pi {
                     pi.configure(&mut process);
                 }

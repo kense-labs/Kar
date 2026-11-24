@@ -26,14 +26,14 @@ impl Workbench {
             if app.archived(chat) {
                 return Err(Error::Refused("chat is archived".into()));
             }
-            if let Some(h) = app
+            let existing = app
                 .0
                 .chats
                 .history(chat)?
                 .handoffs
                 .into_iter()
-                .find(|h| h.request.id == request.id)
-            {
+                .find(|h| h.request.id == request.id);
+            let destination = if let Some(h) = existing {
                 if h.request != request {
                     return Err(Error::Refused(
                         "handoff id belongs to another request".into(),
@@ -42,7 +42,12 @@ impl Workbench {
                 if h.status != HandoffStatus::Prepared {
                     return Ok(h);
                 }
-            }
+                h.destination_instance
+            } else {
+                request.instance_id.as_deref()
+                    .map(|id| crate::provider_instance::for_launch(&request.runtime, id))
+                    .transpose()?
+            };
             if let Some(source) = &*owner {
                 if source.needs_controller()?
                     || app.0.chats.queued_inputs(chat)?.iter().any(|i| {
@@ -62,7 +67,7 @@ impl Workbench {
             let (receipt, mut next) = app
                 .0
                 .chats
-                .handoff(chat, request, |opts| {
+                .handoff(chat, request, destination, |opts| {
                     opts.prompt_suggestions = app.suggestion_source(chat);
                     if let Some(lease) = &tools { lease.configure(opts); }
                 })
