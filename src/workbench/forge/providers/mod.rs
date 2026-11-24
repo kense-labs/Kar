@@ -1,10 +1,10 @@
 //! REST and native CLI drivers for non-GitHub hosts in the fixed workbench contract.
-mod azure;
-mod credentials;
-mod hosted;
+pub(super) mod azure;
+pub(super) mod credentials;
+pub(super) mod hosted;
 pub(super) mod issue;
 pub(super) mod linear;
-mod rest;
+pub(super) mod rest;
 pub(super) mod reviews;
 use super::{Context, ForgeError, Operation};
 use reqwest::Method;
@@ -27,7 +27,7 @@ fn verify(v: Value, n: u64) -> Result<Value, ForgeError> {
         Err(invalid("object identity"))
     }
 }
-fn path(c: &Context, parts: &[&str]) -> Result<Url, ForgeError> {
+pub(super) fn path(c: &Context, parts: &[&str]) -> Result<Url, ForgeError> {
     let mut url = c.api_base.clone();
     url.path_segments_mut()
         .map_err(|_| ForgeError::bad("invalid forge API URL"))?
@@ -118,7 +118,7 @@ async fn send(
     }
     serde_json::from_slice(&bytes).map_err(|_| classify("forge returned invalid JSON"))
 }
-async fn get(c: &Context, url: Url) -> Result<Value, ForgeError> {
+pub(super) async fn get(c: &Context, url: Url) -> Result<Value, ForgeError> {
     send(c, Method::GET, url, None, false).await
 }
 fn account(v: &Value, field: &str) -> Result<Value, ForgeError> {

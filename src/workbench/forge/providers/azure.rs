@@ -351,3 +351,10 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
 }
 
 mod issue_actions;
+
+pub(in crate::workbench::forge) async fn repository(c: &Context) -> Result<Value, ForgeError> {
+    let l = Location::from(c)?;
+    let r = get(c, l.git(c, &[])?).await?;
+    l.check_repo(&r)?;
+    Ok(r)
+}

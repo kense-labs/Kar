@@ -11,7 +11,7 @@ fn repository(c: &Context) -> Result<(&str, &str), ForgeError> {
         .filter(|(o, r)| !o.is_empty() && !r.is_empty() && !r.contains('/'))
         .ok_or_else(|| ForgeError::bad("expected owner/repository"))
 }
-pub(super) fn resource(
+pub(in crate::workbench::forge) fn resource(
     c: &Context,
     collection: Option<&str>,
     n: Option<u64>,

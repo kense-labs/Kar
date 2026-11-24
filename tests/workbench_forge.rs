@@ -36,7 +36,9 @@ struct Forge {
 }
 type Mock = Arc<Mutex<Forge>>;
 async fn identity() -> Json<Value> {
-    Json(json!({"full_name":"team/repo","permissions":{"push":true},"default_branch":"main"}))
+    Json(
+        json!({"full_name":"team/repo","html_url":"https://review.example/team/repo","ssh_url":"git@review.example:team/repo.git","permissions":{"push":true},"default_branch":"main"}),
+    )
 }
 async fn user() -> Json<Value> {
     Json(json!({"login":"kar-test","id":5432}))
@@ -348,6 +350,7 @@ async fn scenario() {
     assert_eq!(stale["state"], "closed");
     let links = ok(a.get(format!("{forge}/links"))).await;
     assert_eq!(links.as_array().unwrap().len(), 4);
+    actions::repository(&a, &url, &bare, &root).await;
     actions::routing(&a, &forge, &url, id).await;
     actions::issue(&a, &forge, id).await;
     actions::review(&a, &forge, id).await;

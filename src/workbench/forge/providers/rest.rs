@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn project(c: &Context) -> Result<Url, ForgeError> {
+pub(in crate::workbench::forge) fn project(c: &Context) -> Result<Url, ForgeError> {
     if c.kind == "gitlab" {
         return path(c, &["projects", &c.repository]);
     }

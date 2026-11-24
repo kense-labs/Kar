@@ -2,6 +2,7 @@
 mod actions;
 mod github;
 mod providers;
+mod repository;
 mod review;
 mod routes;
 pub(super) use routes::stacked_pull;
@@ -455,61 +456,58 @@ impl Context {
                     .map_err(|_| ForgeError::bad("origin is not UTF-8"))?
                     .trim(),
             )?;
-            let config = Config::load()?;
-            let (kind, base, key) = if let Some(h) = config
-                .hosts
-                .into_iter()
-                .find(|h| h.host.eq_ignore_ascii_case(&host))
-            {
-                (h.kind, h.api_base, h.token_env)
-            } else {
-                let (kind, base) = default_host(&host).ok_or_else(|| {
-                    ForgeError::unsupported(
-                        "unknown forge host; register it in the host configuration",
-                    )
-                })?;
-                let key = match host.as_str() {
-                    "github.com" => Some("GH_TOKEN".to_owned()),
-                    "gitlab.com" => Some("GITLAB_TOKEN".to_owned()),
-                    "git.cafe" => Some("CAFE_TOKEN".to_owned()),
-                    "source.tanstack.com" => Some("SRC_TOKEN".to_owned()),
-                    "origin.cursor.com" => Some("KAR_CURSOR_ORIGIN_TOKEN".to_owned()),
-                    "bitbucket.org" => Some("KAR_BITBUCKET_TOKEN".to_owned()),
-                    "codeberg.org" => Some("KAR_FORGEJO_TOKEN".to_owned()),
-                    "dev.azure.com" | "ssh.dev.azure.com" => {
-                        Some("AZURE_DEVOPS_EXT_PAT".to_owned())
-                    }
-                    _ => None,
-                };
-                (kind.into(), base, key)
-            };
-            if !DRIVER_KINDS.contains(&kind.as_str()) {
-                return Err(ForgeError::bad("unknown configured driver"));
-            }
-            if kind == "tanstack-source"
-                && std::env::var("KAR_TANSTACK_SOURCE").as_deref() != Ok("1")
-            {
-                return Err(ForgeError::unsupported(
-                    "TanStack Source requires KAR_TANSTACK_SOURCE=1",
-                ));
-            }
-            let api_base = Self::base(&base)?;
-            let token = key
-                .and_then(|key| std::env::var(key).ok())
-                .filter(|s| !s.is_empty());
-            let client = Self::client()?;
-            Ok(Self {
-                kind,
-                host,
-                repository,
-                api_base,
-                token,
-                client,
-                cwd: repo.root().into(),
-            })
+            Self::located(host, repository, repo.root().into())
         })
         .await
         .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))?
+    }
+    fn located(host: String, repository: String, cwd: PathBuf) -> Result<Self, ForgeError> {
+        let config = Config::load()?;
+        let (kind, base, key) = if let Some(h) = config
+            .hosts
+            .into_iter()
+            .find(|h| h.host.eq_ignore_ascii_case(&host))
+        {
+            (h.kind, h.api_base, h.token_env)
+        } else {
+            let (kind, base) = default_host(&host).ok_or_else(|| {
+                ForgeError::unsupported("unknown forge host; register it in the host configuration")
+            })?;
+            let key = match host.as_str() {
+                "github.com" => Some("GH_TOKEN".to_owned()),
+                "gitlab.com" => Some("GITLAB_TOKEN".to_owned()),
+                "git.cafe" => Some("CAFE_TOKEN".to_owned()),
+                "source.tanstack.com" => Some("SRC_TOKEN".to_owned()),
+                "origin.cursor.com" => Some("KAR_CURSOR_ORIGIN_TOKEN".to_owned()),
+                "bitbucket.org" => Some("KAR_BITBUCKET_TOKEN".to_owned()),
+                "codeberg.org" => Some("KAR_FORGEJO_TOKEN".to_owned()),
+                "dev.azure.com" | "ssh.dev.azure.com" => Some("AZURE_DEVOPS_EXT_PAT".to_owned()),
+                _ => None,
+            };
+            (kind.into(), base, key)
+        };
+        if !DRIVER_KINDS.contains(&kind.as_str()) {
+            return Err(ForgeError::bad("unknown configured driver"));
+        }
+        if kind == "tanstack-source" && std::env::var("KAR_TANSTACK_SOURCE").as_deref() != Ok("1") {
+            return Err(ForgeError::unsupported(
+                "TanStack Source requires KAR_TANSTACK_SOURCE=1",
+            ));
+        }
+        let api_base = Self::base(&base)?;
+        let token = key
+            .and_then(|key| std::env::var(key).ok())
+            .filter(|s| !s.is_empty());
+        let client = Self::client()?;
+        Ok(Self {
+            kind,
+            host,
+            repository,
+            api_base,
+            token,
+            client,
+            cwd,
+        })
     }
     fn identity(&self) -> String {
         format!("{}://{}/{}", self.kind, self.host, self.repository)

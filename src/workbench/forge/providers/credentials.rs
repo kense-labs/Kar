@@ -5,7 +5,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// Consult the vendor's own authenticated CLI only for its known public API.
 /// A configured API proxy uses its configured credential and never inherits
 /// a login for the original service.
-pub(super) async fn resolve(c: &Context) -> Result<Option<String>, ForgeError> {
+pub(in crate::workbench::forge) async fn resolve(
+    c: &Context,
+) -> Result<Option<String>, ForgeError> {
     if c.token.is_some() {
         return Ok(None);
     }

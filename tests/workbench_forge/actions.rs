@@ -204,3 +204,38 @@ pub(super) async fn routing(c: &reqwest::Client, forge: &str, base: &str, chat: 
     }
     assert_eq!(ok(c.get(&star)).await, true);
 }
+
+pub(super) async fn repository(c: &reqwest::Client, base: &str, bare: &Path, root: &Path) {
+    let lookup = format!("{base}/forge/repositories/lookup");
+    let clone = format!("{base}/forge/repositories/clone");
+    let row = ok(c
+        .post(&lookup)
+        .json(&json!({"provider":"github","host":"review.example","repository":"team/repo"})))
+    .await;
+    assert_eq!(
+        row,
+        json!({"provider":"github","nameWithOwner":"team/repo","url":"https://review.example/team/repo","sshUrl":"git@review.example:team/repo.git"})
+    );
+    assert_eq!(
+        c.post(&lookup)
+            .json(&json!({"provider":"gitlab","host":"review.example","repository":"team/repo"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let dest = root.join("nested/deeper/clone");
+    let input = json!({"source":bare,"directory":dest});
+    let data = ok(c.post(&clone).json(&input)).await;
+    assert_eq!(data["cwd"], json!(dest));
+    assert!(data["repository"].is_null());
+    assert_eq!(
+        git(&dest, &["rev-parse", "refs/remotes/origin/feature"]),
+        git(bare, &["rev-parse", "feature"])
+    );
+    assert_eq!(
+        c.post(&clone).json(&input).send().await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+}

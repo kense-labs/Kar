@@ -486,6 +486,7 @@ async fn issue_tracker(State(app): State<Workbench>, Path(project): Path<Uuid>) 
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .merge(routing::routes())
+        .merge(repository::routes())
         .route("/forge/drivers", get(drivers))
         .route(
             "/projects/{project}/forge/issue-tracker",
