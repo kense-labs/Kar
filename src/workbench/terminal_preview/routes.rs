@@ -1,3 +1,4 @@
+mod stream;
 use super::browser::{self, Adjust, Display, Viewport};
 use super::{
     InputReceipt, Meta, Page, Port, Status, TerminalEvent, Workbench, preview::Preview, process,
@@ -69,6 +70,8 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
             axum::routing::put(viewport),
         )
         .route("/projects/{p}/previews/{id}/screen", get(screen))
+        .route("/projects/{p}/previews/{id}/stream",get(stream::open))
+        .route("/projects/{p}/previews/{id}/stream/upload",post(stream::upload))
         .route(
             "/projects/{p}/preview-profiles/{profile}/clear",
             post(clear_profile),

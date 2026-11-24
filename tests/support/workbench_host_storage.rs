@@ -63,7 +63,7 @@ pub(super) async fn exercise() {
     let storage = format!("{base}/storage");
     assert_eq!(
         public.get(&storage).send().await.unwrap().status(),
-        StatusCode::UNAUTHORIZED
+        StatusCode::FORBIDDEN
     );
     let trace=host.post(format!("{base}/telemetry/v1/traces")).json(&json!({"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"trace-one","spanId":"one","name":"ui.render","startTimeUnixNano":"1000000","endTimeUnixNano":"3000000"}]}]}]})).send().await.unwrap();
     assert_eq!(trace.status(), StatusCode::NO_CONTENT);
@@ -81,7 +81,7 @@ pub(super) async fn exercise() {
     let relay = format!("{base}/access/relay-client");
     assert_eq!(
         public.get(&relay).send().await.unwrap().status(),
-        StatusCode::UNAUTHORIZED
+        StatusCode::FORBIDDEN
     );
     let err = host.get(&relay).send().await.unwrap();
     assert_eq!(err.status(), StatusCode::BAD_REQUEST);

@@ -288,7 +288,7 @@ fn audience(path: &str) -> Option<&'static str> {
     let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
     match parts.as_slice() {
         ["devices", "screenshot" | "stream" | "video" | "input"]
-        | ["projects", _, "previews", _, "screen" | "tunnel"] => Some("media"),
+        | ["projects", _, "previews", _, "screen" | "tunnel" | "stream"] => Some("media"),
         ["projects", _, "chats", _, "events"]
         | ["projects", _, "terminals", _, "output"]
         | ["projects", _, "git", "events"]

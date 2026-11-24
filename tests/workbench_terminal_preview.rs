@@ -567,7 +567,7 @@ fn browser_document(stream: &mut std::net::TcpStream, input: &mut impl BufRead) 
     } else {
         // Observe actual renderer state. Fetching a cacheable asset makes cache eviction visible
         // independently of the Kar API's response to the clear request.
-        ("text/html","no-store",r#"<html><body>Kar preview browser-controls<script>
+        ("text/html","no-store",r#"<html><body>Kar preview browser-controls<input type="file" id="chosen" onchange="document.body.dataset.chosen=this.files[0].name"><script>
           const load = crypto.randomUUID();
           const stored = localStorage.kar || (localStorage.kar = crypto.randomUUID());
           if (!document.cookie) document.cookie = 'kar=' + crypto.randomUUID() + '; path=/';
@@ -651,6 +651,53 @@ async fn managed_chromium_applies_controls_and_keeps_two_profiles_independent() 
         .bytes()
         .await?;
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let stream = format!("{base}/stream");
+    let upload = format!("{stream}/upload");
+    let invalid = c
+        .post(&upload)
+        .bearer_auth(TOKEN)
+        .json(&json!({"selector":"#chosen","files":[{"name":"../outside","base64":"WA=="}]}))
+        .send()
+        .await?;
+    assert!(!invalid.status().is_success());
+    let accepted = c
+        .post(&upload)
+        .bearer_auth(TOKEN)
+        .json(&json!({"selector":"#chosen","files":[{"name":"chosen.txt","base64":"WA=="}]}))
+        .send()
+        .await?;
+    assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+    let mut req = stream
+        .replacen("http://", "ws://", 1)
+        .into_client_request()?;
+    req.headers_mut()
+        .insert("Authorization", format!("Bearer {TOKEN}").parse()?);
+    let (mut viewer, _) = tokio_tungstenite::connect_async(req).await?;
+    let frame = async |viewer: &mut tokio_tungstenite::WebSocketStream<_>| -> Result<u64> {
+        let packet = tokio::time::timeout(Duration::from_secs(10), viewer.next())
+            .await?
+            .ok_or("stream ended before frame")??;
+        let envelope: Value = serde_json::from_str(packet.to_text()?)?;
+        assert_eq!(envelope["type"], "frame");
+        let png = tokio::time::timeout(Duration::from_secs(10), viewer.next())
+            .await?
+            .ok_or("missing frame bytes")??;
+        assert!(png.is_binary() && png.into_data().starts_with(b"\x89PNG\r\n\x1a\n"));
+        Ok(envelope["sequence"].as_u64().unwrap())
+    };
+    let seq = frame(&mut viewer).await?;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(600), viewer.next())
+            .await
+            .is_err()
+    );
+    viewer
+        .send(Message::Text(
+            json!({"type":"ack","sequence":seq}).to_string().into(),
+        ))
+        .await?;
+    assert_eq!(frame(&mut viewer).await?, seq + 1);
+    viewer.close(None).await?;
     api(c.patch(&one).json(&json!({"clear":"cache"}))).await?;
     title_when(&c, &one, |v| v[3] != initial[3]).await?;
     api(c.patch(&one).json(&json!({"clear":"cookies"}))).await?;

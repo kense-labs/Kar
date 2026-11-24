@@ -122,7 +122,7 @@ impl Grant {
             );
         }
     }
-    fn active(&self) -> bool {
+    pub(super) fn active(&self) -> bool {
         !*self.stop.borrow()
             && self.device.as_ref().is_none_or(DeviceLease::active)
             && self
