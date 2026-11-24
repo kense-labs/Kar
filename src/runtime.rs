@@ -31,6 +31,7 @@ pub struct Runtime {
     pub program: PathBuf,
     pub args: Vec<OsString>,
     pub protocol: Protocol,
+    pub placement: crate::PlacementRequest,
 }
 
 /// How an already open model session reacts to an MCP tools/list_changed notification.
@@ -59,9 +60,35 @@ impl Runtime {
             program: program.into(),
             args: args.iter().map(OsString::from).collect(),
             protocol,
+            placement: Default::default(),
         }
     }
+    /// The executable adapters, including Pi's RPC/SDK subprocesses, each own
+    /// one process per Kar session. A remote API and an attached Morph Console
+    /// do not expose a local per-session process placement.
+    pub fn execution(&self) -> Option<crate::Execution> {
+        match self.protocol {
+            Protocol::Cybion | Protocol::Morph => None,
+            _ => Some(crate::Execution::Process),
+        }
+    }
+
+    pub fn with_placement(&self, placement: crate::PlacementRequest) -> Self {
+        Self {
+            placement,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn session_journal(
+        &self,
+        retained_bytes: Option<usize>,
+    ) -> Result<crate::stream::Journal> {
+        crate::stream::Journal::for_open(retained_bytes, self.placement, self.execution())
+    }
+
     pub async fn open(&self, options: SessionOptions) -> Result<Session> {
+        self.placement.resolve(self.execution())?;
         let (rt, version) = self.selected_with_version(&options).await?;
         rt.open_selected_with_version(options, version.as_deref())
             .await
@@ -74,6 +101,7 @@ impl Runtime {
         options: SessionOptions,
         version: Option<&str>,
     ) -> Result<Session> {
+        self.placement.resolve(self.execution())?;
         if self.protocol == Protocol::Dsh {
             let release = crate::dsh::release(self, &options, version).await?;
             let version = release.to_string();
@@ -115,6 +143,7 @@ impl Runtime {
         options: SessionOptions,
         child: Option<uuid::Uuid>,
     ) -> Result<Session> {
+        self.placement.resolve(self.execution())?;
         self.selected(&options)
             .await?
             .fork_selected(source, through, options, child)
@@ -127,6 +156,7 @@ impl Runtime {
         options: SessionOptions,
         child: Option<uuid::Uuid>,
     ) -> Result<Session> {
+        self.placement.resolve(self.execution())?;
         if source.trim().is_empty()
             || through.is_some_and(|s| s.trim().is_empty())
             || options.resume.is_some()

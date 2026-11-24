@@ -1,0 +1,127 @@
+//! A runtime's requested placement and the placement observed for one session.
+use crate::{Direction, Error, Record, RecordKind, Result};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Execution {
+    Process,
+    InProcess,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlacementRequest {
+    #[default]
+    Auto,
+    Shared,
+    Isolated,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionPlacement {
+    Isolated,
+    Shared,
+    InProcess,
+}
+
+impl PlacementRequest {
+    pub(crate) fn resolve(self, execution: Option<Execution>) -> Result<Option<SessionPlacement>> {
+        match (execution, self) {
+            (Some(Execution::Process), Self::Auto | Self::Isolated) => {
+                Ok(Some(SessionPlacement::Isolated))
+            }
+            (Some(Execution::InProcess), Self::Auto) => Ok(Some(SessionPlacement::InProcess)),
+            (None, Self::Auto) => Ok(None),
+            (Some(Execution::Process), Self::Shared) => Err(Error::Unsupported(
+                "placement: this runtime has no verified shared process implementation".into(),
+            )),
+            (Some(Execution::InProcess), _) => Err(Error::Unsupported(
+                "placement: this runtime executes in the host process".into(),
+            )),
+            (None, _) => Err(Error::Unsupported(
+                "placement: this runtime does not control native process placement".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Opening {
+    Open {
+        request_id: String,
+        placement: PlacementRequest,
+    },
+    Opened {
+        placement: SessionPlacement,
+    },
+}
+
+impl SessionPlacement {
+    /// Read the paired opening records of a live or recorded stream. Older
+    /// recordings and adapters without an execution declaration have no pair.
+    pub fn from_records<'a>(records: impl IntoIterator<Item = &'a Record>) -> Option<Self> {
+        let mut records = records.into_iter();
+        Self::from_pair(records.next()?, records.next()?)
+    }
+
+    pub(crate) fn from_pair(first: &Record, second: &Record) -> Option<Self> {
+        let Opening::Open { request_id, .. } = first.opening.as_ref()? else {
+            return None;
+        };
+        let Opening::Opened { placement } = second.opening.as_ref()? else {
+            return None;
+        };
+        (!request_id.is_empty()
+            && first.agent_path.is_empty()
+            && second.agent_path.is_empty()
+            && first.seq == 0
+            && second.seq == 1
+            && first.stream_id == second.stream_id
+            && first.kind == RecordKind::Request
+            && first.direction == Direction::ToRuntime
+            && second.kind == RecordKind::Response
+            && second.response_to.as_deref() == Some(request_id)
+            && first.session_id == second.session_id)
+            .then_some(*placement)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stream::Journal;
+    #[test]
+    fn paired_opening_is_distinct_from_legacy_or_unrelated_records() {
+        let old = Journal::new(None).unwrap();
+        old.push(
+            Direction::FromRuntime,
+            RecordKind::Frame,
+            None,
+            vec![],
+            serde_json::json!({"type":"ready"}),
+            vec![],
+        );
+        assert_eq!(old.placement(), None);
+        let opened =
+            Journal::for_open(Some(1), PlacementRequest::Auto, Some(Execution::InProcess)).unwrap();
+        opened.bind_root("original");
+        assert_eq!(opened.placement(), Some(SessionPlacement::InProcess));
+        let records = opened.records();
+        let mut wrong = (*records[1]).clone();
+        wrong.response_to = Some("unrelated".into());
+        assert_eq!(
+            SessionPlacement::from_records([records[0].as_ref(), &wrong]),
+            None
+        );
+        assert!(
+            PlacementRequest::Isolated
+                .resolve(Some(Execution::InProcess))
+                .is_err()
+        );
+        assert!(PlacementRequest::Shared.resolve(None).is_err());
+        assert_eq!(PlacementRequest::Auto.resolve(None).unwrap(), None);
+    }
+}

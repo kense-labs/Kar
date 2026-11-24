@@ -58,6 +58,10 @@ export async function exercise() {
             "lost model confirmation evidence");
     }
     await checkRetriesAndAdoption(runtime,harness,open);
+    check(runtime.execution === "in_process" && runtime.placement === "auto", "Pi Durable execution and policy");
+    for (const placement of ["isolated", "shared"]) {
+        await rejects(()=>runtime.withPlacement(placement).open(open), "Pi Durable admitted a process placement");
+    }
     const s = await runtime.open({...open, appendSystemPrompt:"DURABLE-ORIGINAL-RS"});
     const sub = s.subscribe();
     const first = await sub.next();
@@ -133,6 +137,11 @@ export async function exercise() {
     check((await observer.wait(abandoned.id)).status==="done","closing the controller stopped host-owned work");
     await observer.close();
     const resumed = await runtime.open({...open,resume:id,appendSystemPrompt:"DURABLE-CHANGED-RS"});
+    for (const opened of [s,resumed]) {
+        const [request,response]=opened.records();
+        check(opened.placement==="in_process" && request.opening.placement==="auto" && request.seq===0 && response.seq===1 &&
+            response.opening.placement==="in_process" && response.response_to===request.opening.request_id, "Pi Durable opening records");
+    }
     const changed = await resumed.prompt("probe changed instructions","changed-instructions");
     check((await resumed.wait(changed.id)).status==="done","changed-instruction probe failed");
     const fromPrompt = resumed.records().length;

@@ -99,7 +99,7 @@ pub(crate) async fn open(
         json!({"id":"session-title-llm","disabled":true}),
     ];
     let mut web = Web::start(rt, &opts, rows, version).await?;
-    let journal = Journal::new(opts.retained_bytes)?;
+    let journal = rt.session_journal(opts.retained_bytes)?;
     let ready = tokio::time::timeout(
         opts.handshake_timeout,
         negotiate(&mut web, &opts, route, &journal, fork, recover),

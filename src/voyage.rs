@@ -140,7 +140,27 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
         } else {
             None
         },
-        response_to: body["responseTo"].as_str().map(str::to_owned),
+        opening: match (kind, body["kind"].as_str()) {
+            (RecordKind::Request, Some("open")) => Some(crate::Opening::Open {
+                request_id: v["id"]
+                    .as_str()
+                    .ok_or_else(|| Error::Protocol("open record has no request ID".into()))?
+                    .into(),
+                placement: serde_json::from_value(body["placement"].clone())?,
+            }),
+            (RecordKind::Response, Some("opened")) => Some(crate::Opening::Opened {
+                placement: serde_json::from_value(body["placement"].clone())?,
+            }),
+            _ => None,
+        },
+        response_to: body["responseTo"]
+            .as_str()
+            .or_else(|| {
+                (kind == RecordKind::Response)
+                    .then(|| v["requestId"].as_str())
+                    .flatten()
+            })
+            .map(str::to_owned),
         session_id: Some(session_id.into()),
         span_id: v["spanId"].as_str().map(str::to_owned),
         agent_path: serde_json::from_value(v["agentPath"].clone())?,
@@ -320,6 +340,33 @@ fn project(v: &Value) -> Option<Event> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn imported_opening_links_the_actual_placement_and_legacy_keeps_its_first_frame() {
+        let stream = Uuid::new_v4();
+        let record = |kind: &str, body: Value| json!({"kind":kind,"sessionId":"s","receivedAt":1,"agentPath":[],"body":body});
+        let mut first = record("request", json!({"kind":"open","placement":"auto"}));
+        first["direction"] = "toRuntime".into();
+        first["id"] = "opaque-open".into();
+        let mut second = record("response", json!({"kind":"opened","placement":"shared"}));
+        second["requestId"] = "opaque-open".into();
+        let pair = [
+            convert(&first, stream, 0).unwrap(),
+            convert(&second, stream, 1).unwrap(),
+        ];
+        assert_eq!(
+            crate::SessionPlacement::from_records(&pair),
+            Some(crate::SessionPlacement::Shared)
+        );
+        assert_eq!(pair[0].control_request_id(), pair[1].response_to.as_deref());
+        let legacy = convert(
+            &record("frame", json!({"type":"ready","native":{},"events":[]})),
+            stream,
+            0,
+        )
+        .unwrap();
+        assert_eq!(crate::SessionPlacement::from_records([&legacy]), None);
+        assert!(legacy.opening.is_none());
+    }
     #[test]
     fn imported_tool_result_and_pending_request_replay() {
         let header =

@@ -29,6 +29,7 @@ struct Options {
 }
 #[wasm_bindgen]
 pub struct PiDurable {
+    placement: crate::PlacementRequest,
     harness: JsValue,
     models: JsValue,
 }
@@ -49,7 +50,31 @@ impl PiDurable {
     }
     #[wasm_bindgen(constructor)]
     pub fn new(harness: JsValue, models: JsValue) -> PiDurable {
-        PiDurable { harness, models }
+        PiDurable {
+            harness,
+            models,
+            placement: Default::default(),
+        }
+    }
+    #[wasm_bindgen(getter)]
+    pub fn execution(&self) -> String {
+        "in_process".into()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn placement(&self) -> JsResult<JsValue> {
+        js(&serde_json::to_value(self.placement).map_err(|e| error(e.to_string()))?)
+    }
+
+    #[wasm_bindgen(js_name=withPlacement)]
+    pub fn with_placement(&self, request: String) -> JsResult<PiDurable> {
+        let placement =
+            serde_json::from_value(Value::String(request)).map_err(|e| error(e.to_string()))?;
+        Ok(PiDurable {
+            harness: self.harness.clone(),
+            models: self.models.clone(),
+            placement,
+        })
     }
     pub fn models(&self) -> JsResult<JsValue> {
         call(&native::catalog(&self.models)?, "getModels", &[])
@@ -60,7 +85,12 @@ impl PiDurable {
         if options.cwd.is_empty() {
             return Err(error("a Pi Durable workspace is required"));
         }
-        let journal = Journal::new(options.retained_bytes).map_err(|e| error(e.to_string()))?;
+        let journal = Journal::for_open(
+            options.retained_bytes,
+            self.placement,
+            Some(crate::Execution::InProcess),
+        )
+        .map_err(|e| error(e.to_string()))?;
         let conv =
             native::conversation(&self.harness, &native::catalog(&self.models)?, &options).await?;
         let id = get(&conv, "id")?;
@@ -437,6 +467,11 @@ pub struct DurableSession {
 }
 #[wasm_bindgen]
 impl DurableSession {
+    #[wasm_bindgen(getter)]
+    pub fn placement(&self) -> JsResult<JsValue> {
+        js(&serde_json::to_value(self.core.journal.placement())
+            .map_err(|e| error(e.to_string()))?)
+    }
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> String {
         self.core

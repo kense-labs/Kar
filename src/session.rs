@@ -167,7 +167,7 @@ impl Session {
         replay: bool,
         version: Option<&str>,
     ) -> Result<Self> {
-        let journal = Journal::new(options.retained_bytes)?;
+        let journal = runtime.session_journal(options.retained_bytes)?;
         options.settings.validate(runtime.protocol, &runtime.id)?;
         if let Some(reason) =
             crate::options::availability::credential_refusal(runtime.protocol, &runtime.id)
@@ -1361,6 +1361,10 @@ impl Session {
             manual_compaction: self.manual_compaction,
         }
     }
+    pub fn placement(&self) -> Option<crate::SessionPlacement> {
+        self.journal.placement()
+    }
+
     pub fn records(&self) -> Vec<Arc<Record>> {
         self.journal.records()
     }

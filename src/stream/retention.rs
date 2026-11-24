@@ -81,6 +81,7 @@ impl Record {
             kind: self.kind,
             prompt: self.prompt.clone(),
             response_to: self.response_to.clone(),
+            opening: self.opening.clone(),
             session_id: self.session_id.clone(),
             span_id: self.span_id.clone(),
             agent_path: self.agent_path.clone(),

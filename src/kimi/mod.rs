@@ -6,7 +6,7 @@ mod web;
 pub(crate) use projection::{tool_snapshot, turn_outcome};
 pub(crate) use web::{Web as QueryWeb, segment as workspace_segment};
 
-use crate::{Error, Protocol, Result, Runtime, Session, SessionOptions, stream::Journal};
+use crate::{Error, Protocol, Result, Runtime, Session, SessionOptions};
 use reqwest::Method;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -78,7 +78,7 @@ pub(crate) async fn open(
         let mut workspace = None;
         match negotiate(&mut web, &opts, &mut workspace).await {
             Ok(Some((socket, id, initial))) => {
-                let journal = Journal::new(opts.retained_bytes)?;
+                let journal = rt.session_journal(opts.retained_bytes)?;
                 journal.bind_root(&id);
                 let info = json!({"sessionId":id,"protocol":"kap"});
                 let (commands, rx) = tokio::sync::mpsc::channel(64);

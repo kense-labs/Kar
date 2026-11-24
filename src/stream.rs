@@ -45,6 +45,7 @@ pub(crate) struct RecordStamp {
     pub timestamp_ms: u64,
     prompt: Option<PromptIdentity>,
     pub(crate) response_to: Option<String>,
+    opening: Option<crate::Opening>,
 }
 
 impl From<Direction> for RecordStamp {
@@ -53,6 +54,7 @@ impl From<Direction> for RecordStamp {
             direction,
             timestamp_ms: timestamp_ms(),
             response_to: None,
+            opening: None,
             prompt: None,
         }
     }
@@ -430,7 +432,10 @@ pub struct Record {
     pub kind: RecordKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<PromptIdentity>,
-    /// Public control request answered by this native frame.
+    /// Opening metadata belongs to the Kar lifecycle, independently of native wire packets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening: Option<crate::Opening>,
+    /// Public control request answered by this record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_to: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -453,6 +458,21 @@ pub(crate) fn present_json<'de, D: serde::Deserializer<'de>>(
     Value::deserialize(d).map(Some)
 }
 impl Record {
+    /// Identifier used by the paired response to a Kar control request.
+    pub fn control_request_id(&self) -> Option<&str> {
+        if self.kind != RecordKind::Request || self.direction != Direction::ToRuntime {
+            return None;
+        }
+        if let Some(crate::Opening::Open { request_id, .. }) = &self.opening {
+            return Some(request_id);
+        }
+        self.prompt
+            .as_ref()
+            .and_then(|p| p.request_id.as_deref())
+            .or_else(|| self.upstream.as_ref()?.get("id")?.as_str())
+            .or_else(|| self.native.get("id")?.as_str())
+    }
+
     pub fn structured_output(&self) -> Option<&Value> {
         self.events.iter().find_map(|event| match event {
             Event::StructuredOutput { value } => Some(value),
@@ -499,6 +519,47 @@ pub(crate) struct Journal {
     state: Arc<Mutex<State>>,
 }
 impl Journal {
+    pub(crate) fn for_open(
+        retained_bytes: Option<usize>,
+        requested: crate::PlacementRequest,
+        execution: Option<crate::Execution>,
+    ) -> Result<Self> {
+        let placement = requested.resolve(execution)?;
+        let journal = Self::new(retained_bytes)?;
+        if let Some(placement) = placement {
+            let id = Uuid::new_v4().to_string();
+            let mut request = RecordStamp::from(Direction::ToRuntime);
+            request.opening = Some(crate::Opening::Open {
+                request_id: id.clone(),
+                placement: requested,
+            });
+            journal.push(
+                request,
+                RecordKind::Request,
+                None,
+                vec![],
+                Value::Null,
+                vec![],
+            );
+            let mut reply = RecordStamp::from(Direction::Host);
+            reply.opening = Some(crate::Opening::Opened { placement });
+            reply.response_to = Some(id);
+            journal.push(
+                reply,
+                RecordKind::Response,
+                None,
+                vec![],
+                Value::Null,
+                vec![],
+            );
+        }
+        Ok(journal)
+    }
+
+    pub(crate) fn placement(&self) -> Option<crate::SessionPlacement> {
+        let state = self.state.lock().unwrap();
+        crate::SessionPlacement::from_pair(state.records.first()?, state.records.get(1)?)
+    }
     pub fn new(retained_bytes: Option<usize>) -> Result<Self> {
         retention::check_limit(retained_bytes)?;
         Ok(Self {
@@ -796,7 +857,14 @@ impl Journal {
             upstream: None,
             span_id,
             prompt: stamp.prompt,
-            response_to: stamp.response_to,
+            response_to: stamp.response_to.or_else(|| {
+                if stamp.direction == Direction::Host && kind == RecordKind::Response {
+                    native["requestId"].as_str().map(str::to_owned)
+                } else {
+                    None
+                }
+            }),
+            opening: stamp.opening,
             stream_id: self.id,
             seq,
             timestamp_ms: stamp.timestamp_ms,

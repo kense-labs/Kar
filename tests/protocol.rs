@@ -676,12 +676,63 @@ fn rig(protocol: Protocol, mode: ApprovalMode) -> (TempDir, Runtime, SessionOpti
     opts.handshake_timeout = Duration::from_secs(4);
     (dir, runtime, opts)
 }
+fn check_opening(session: &kar::Session, requested: kar::PlacementRequest) {
+    let records = session.records();
+    let first = &records[0];
+    let second = &records[1];
+    assert_eq!((first.seq, second.seq), (0, 1));
+    assert_eq!(
+        (first.kind, first.direction, second.kind),
+        (
+            kar::RecordKind::Request,
+            kar::Direction::ToRuntime,
+            kar::RecordKind::Response
+        )
+    );
+    let Some(kar::Opening::Open {
+        request_id,
+        placement,
+    }) = &first.opening
+    else {
+        panic!("missing opening request")
+    };
+    assert_eq!(*placement, requested);
+    assert_eq!(second.response_to.as_ref(), Some(request_id));
+    assert_eq!(first.control_request_id(), second.response_to.as_deref());
+    assert_eq!(
+        second.opening,
+        Some(kar::Opening::Opened {
+            placement: kar::SessionPlacement::Isolated
+        })
+    );
+    assert_eq!(session.placement(), Some(kar::SessionPlacement::Isolated));
+    assert_eq!(
+        kar::SessionPlacement::from_records(records.iter().map(AsRef::as_ref)),
+        session.placement()
+    );
+    for record in [first, second] {
+        assert_eq!(record.session_id.as_deref(), Some(session.id()));
+        assert!(
+            record.agent_path.is_empty() && record.native.is_null() && record.events.is_empty()
+        );
+    }
+}
 async fn exercise(protocol: Protocol) -> kar::Result<()> {
     let (_dir, r, opts) = rig(protocol, ApprovalMode::Deny);
+    assert_eq!(r.execution(), Some(kar::Execution::Process));
+    assert!(
+        matches!(r.with_placement(kar::PlacementRequest::Shared).open(opts.clone()).await,Err(Error::Unsupported(reason)) if reason.contains("placement"))
+    );
     let session = r.open(opts.clone()).await?;
+    check_opening(&session, kar::PlacementRequest::Auto);
     if protocol == Protocol::Qwen {
         assert_eq!(session.effort().as_deref(), Some("high"));
-        let init = &session.records()[0].native;
+        let records = session.records();
+        let init = &records
+            .iter()
+            .find(|r| r.native.pointer("/request/mcpServers/example").is_some())
+            .expect("native initialize request")
+            .native;
         assert_eq!(
             init.pointer("/request/mcpServers/example/headers/X-Test"),
             Some(&json!("[redacted]"))
@@ -737,7 +788,11 @@ async fn exercise(protocol: Protocol) -> kar::Result<()> {
     while replay.next().await.is_some() {}
     let mut resume = opts;
     resume.resume = Some(id.clone());
-    let next = r.open(resume).await?;
+    let next = r
+        .with_placement(kar::PlacementRequest::Isolated)
+        .open(resume)
+        .await?;
+    check_opening(&next, kar::PlacementRequest::Isolated);
     assert_eq!(id, next.id());
     assert_ne!(next.stream_id(), cursor.stream_id);
     assert!(matches!(
