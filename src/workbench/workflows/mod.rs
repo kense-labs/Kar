@@ -262,9 +262,17 @@ impl Engine {
         Ok(engine)
     }
     fn update<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
+        self.update_checked(|_| Ok(()), |d, ()| f(d))
+    }
+    fn update_checked<A, T>(
+        &self,
+        check: impl FnOnce(&Data) -> Result<A>,
+        f: impl FnOnce(&mut Data, A) -> Result<T>,
+    ) -> Result<T> {
         let mut current = self.db.lock().unwrap();
+        let approved = check(&current)?;
         let mut next = current.clone();
-        let value = f(&mut next)?;
+        let value = f(&mut next, approved)?;
         let parent = self.file.parent().unwrap();
         let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
         serde_json::to_writer(&mut tmp, &next)?;

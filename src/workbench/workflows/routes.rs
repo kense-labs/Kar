@@ -125,35 +125,39 @@ async fn hook(
     call(move || {
         app.project(project)?;
         let e = &app.0.workflows;
-        let run = e.update(|d| {
-            let w = d
-                .workflows
-                .get(&id)
-                .filter(|w| {
-                    w.project == project && matches!(w.definition.schedule, Schedule::Webhook)
-                })
-                .ok_or_else(missing)?
-                .clone();
-            let secret = d.secrets.get(&id).ok_or_else(missing)?;
-            let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-                .expect("HMAC accepts variable length keys");
-            mac.update(&body);
-            mac.verify_slice(&tag).map_err(|_| {
-                io::Error::new(io::ErrorKind::PermissionDenied, "invalid webhook signature")
-            })?;
-            let delivery: Delivery = serde_json::from_slice(&body)
-                .map_err(|e| Error::Refused(format!("invalid webhook delivery: {e}")))?;
-            if delivery.id.trim().is_empty() || delivery.id.len() > 256 {
-                return Err(Error::Refused("invalid delivery identifier".into()));
-            }
-            insert_run(
-                d,
-                &w,
-                Trigger::Webhook(delivery.id),
-                delivery.input,
-                e.clock.now_ms(),
-            )
-        })?;
+        let run = e.update_checked(
+            |d| {
+                let w = d
+                    .workflows
+                    .get(&id)
+                    .filter(|w| {
+                        w.project == project && matches!(w.definition.schedule, Schedule::Webhook)
+                    })
+                    .ok_or_else(missing)?;
+                let secret = d.secrets.get(&id).ok_or_else(missing)?;
+                let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+                    .expect("HMAC accepts variable length keys");
+                mac.update(&body);
+                mac.verify_slice(&tag).map_err(|_| {
+                    io::Error::new(io::ErrorKind::PermissionDenied, "invalid webhook signature")
+                })?;
+                let delivery: Delivery = serde_json::from_slice(&body)
+                    .map_err(|e| Error::Refused(format!("invalid webhook delivery: {e}")))?;
+                if delivery.id.trim().is_empty() || delivery.id.len() > 256 {
+                    return Err(Error::Refused("invalid delivery identifier".into()));
+                }
+                Ok((w.clone(), delivery))
+            },
+            |d, (w, delivery)| {
+                insert_run(
+                    d,
+                    &w,
+                    Trigger::Webhook(delivery.id),
+                    delivery.input,
+                    e.clock.now_ms(),
+                )
+            },
+        )?;
         // A hook credential can trigger this definition, never read workflow state.
         Ok(json!({"run_id":run.id}))
     })

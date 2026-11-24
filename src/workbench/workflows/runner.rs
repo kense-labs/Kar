@@ -9,6 +9,7 @@ use tokio::{
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const MAX_ACTIVE: usize = 16;
 
+#[derive(Clone)]
 enum Outcome {
     Known(bool, Value),
     Unknown(String),
@@ -137,8 +138,12 @@ impl Workbench {
                     Ok(outcome) => outcome,
                     Err(e) => Outcome::Unknown(e.to_string()),
                 };
-                if let Err(e) = app.record_outcome(run.id, attempt.id, outcome) {
+                // A transient persistence error must not replay an already dispatched call.
+                let mut delay = Duration::from_millis(100);
+                while let Err(e) = app.record_outcome(run.id, attempt.id, outcome.clone()) {
                     eprintln!("Kar workflow {} receipt could not be saved: {e}", run.id);
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(30));
                 }
             });
         }
