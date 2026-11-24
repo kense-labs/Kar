@@ -123,7 +123,7 @@ enum Action {
         #[arg(long, default_value_t = 600)]
         timeout: u64,
     },
-    /// Import a kar-voyage/3 recording into a Kar JSONL file.
+    /// Import an oar-voyage/3 or kar-voyage/3 recording into a Kar JSONL file.
     Import { input: PathBuf, output: PathBuf },
     /// Print previously recorded records, optionally after a stream-specific cursor.
     Replay {

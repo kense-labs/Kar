@@ -1,4 +1,4 @@
-//! Import Kar voyage v3 session recordings.
+//! Import OAR and Kar voyage v3 session recordings.
 use crate::{Direction, Error, Event, Outcome, Record, RecordKind, Result};
 use serde::Serialize;
 use serde_json::Value;
@@ -23,9 +23,14 @@ pub fn import(
         .transpose()?
         .ok_or_else(|| Error::Protocol("empty voyage".into()))?;
     let header: Value = serde_json::from_str(&first)?;
-    if header["kind"] != "header" || header["format"] != "kar-voyage/3" {
+    if header["kind"] != "header"
+        || !matches!(
+            header["format"].as_str(),
+            Some("oar-voyage/3" | "kar-voyage/3")
+        )
+    {
         return Err(Error::Protocol(
-            "expected a kar-voyage/3 recording header".into(),
+            "expected an oar-voyage/3 or kar-voyage/3 recording header".into(),
         ));
     }
     let mut summary = VoyageSummary {
@@ -365,7 +370,7 @@ mod tests {
     #[test]
     fn preserves_attribution_unknown_native_data_and_interrupted_captures() {
         let header =
-            json!({"kind":"header","format":"kar-voyage/3","sessionId":"root","runtime":"codex"});
+            json!({"kind":"header","format":"oar-voyage/3","sessionId":"root","runtime":"codex"});
         let native = json!({"kind":"frame","seq":0,"receivedAt":812,"sessionId":"child","agentPath":["tool-1"],"spanId":"turn-9","body":{"type":"custom","native":{"future":"field"},"events":[{"kind":"text_delta","text":"hello"},{"kind":"future_event"}]}});
         let row = json!({"kind":"record","record":native});
         let data = format!("{header}\n{row}\n");
@@ -375,6 +380,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        assert_eq!(summary.header, header);
         assert!(summary.end.is_none());
         let record = &converted[0];
         assert_eq!(record.upstream.as_ref(), Some(&native));
@@ -387,5 +393,18 @@ mod tests {
             }]
         );
         assert!(import(format!("{data}{row}").as_bytes(), |_| Ok(())).is_err());
+        let end = json!({"kind":"end","at":850,"reason":"closed"});
+        let summary = import(format!("{data}{end}").as_bytes(), |_| Ok(())).unwrap();
+        assert_eq!(summary.end, Some(end.clone()));
+        assert_eq!(summary.records, 1);
+        assert!(import(format!("{data}{end}\n{row}").as_bytes(), |_| Ok(())).is_err());
+        for format in ["oar-voyage/2", "oar-voyage/4", "kar-voyage/4"] {
+            let mut invalid = header.clone();
+            invalid["format"] = format.into();
+            assert!(matches!(
+                import(invalid.to_string().as_bytes(), |_| Ok(())),
+                Err(Error::Protocol(_))
+            ));
+        }
     }
 }
