@@ -44,13 +44,16 @@ pub(super) fn select(h: &ChatHistory, args: &Value) -> Result<Uuid> {
         .map(|r| r.id)
         .ok_or_else(|| Error::Refused("thread transfer needs a stable source point".into()))
 }
-pub(super) fn created_by(db: &Catalog, caller: Uuid, target: Uuid) -> bool {
-    db.model_thread_commands.get(&target).is_some_and(|r| {
-        r.source == caller
-            && r.name == "kar_thread_transfer"
-            && r.args["action"] == "fork"
-            && r.result.as_ref().is_some_and(|res| res.is_ok())
-    })
+pub(super) fn fork_project(db: &Catalog, caller: Uuid, target: Uuid) -> Option<Uuid> {
+    db.model_thread_commands
+        .get(&target)
+        .filter(|r| {
+            r.source == caller
+                && r.name == "kar_thread_transfer"
+                && r.args["action"] == "fork"
+                && r.result.as_ref().is_some_and(|r| r.is_ok())
+        })
+        .map(|r| r.project)
 }
 pub(super) fn status(app: &Workbench, c: &Caller, p: Uuid, chat: Uuid) -> Result<Value> {
     let observed: Vec<_> = {
@@ -75,8 +78,8 @@ pub(super) fn status(app: &Workbench, c: &Caller, p: Uuid, chat: Uuid) -> Result
         } else {
             parse(r.args["target_thread_id"].clone())?
         };
-        if !visible(&app.0.catalog.lock().unwrap(), c, r.target)
-            || !visible(&app.0.catalog.lock().unwrap(), c, dest)
+        if !visible(&app.0.catalog.lock().unwrap(), c, p, r.target)
+            || !visible(&app.0.catalog.lock().unwrap(), c, p, dest)
         {
             continue;
         }
@@ -118,7 +121,13 @@ pub(super) async fn apply(app: &Workbench, c: &Caller, id: Uuid, row: &Record) -
             }
             let info = app.binding(p, source)?;
             app.workspace_at(&info.workspace)?;
-            may_run(app, p, row.source, source)?;
+            may_run(
+                app,
+                p,
+                c.grant.as_ref().unwrap().project,
+                row.source,
+                source,
+            )?;
             app.reserve_fork_directory(source, p, turn, id, p, &info.workspace, false)?;
             let child = app
                 .0
@@ -146,7 +155,7 @@ pub(super) async fn apply(app: &Workbench, c: &Caller, id: Uuid, row: &Record) -
                 .target_thread_id
                 .ok_or_else(|| Error::Refused("merge needs a target thread ID".into()))?;
             target(app, c, Some(p), Some(dest), true)?;
-            may_run(app, p, row.source, dest)?;
+            may_run(app, p, c.grant.as_ref().unwrap().project, row.source, dest)?;
             let h = app.0.chats.history(source)?;
             let origin = h
                 .chat

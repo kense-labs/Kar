@@ -279,7 +279,7 @@ pub(super) async fn call(
         let q:Promotion=args(input)?;
         debug_assert_eq!(q.action,"promote_to_steer");
         let (p,t)=super::operations::target(&app,&caller,q.project_id,q.thread_id,true)?;
-        if let Some(g)=&caller.grant {super::operations::may_run(&app,p,g.chat,t)?;}
+        if let Some(g)=&caller.grant {super::operations::may_run(&app,p,g.project,g.chat,t)?;}
         return Ok(json!(super::super::interactions::steer_queued(app,p,t,q.input_id,q.command_id,crate::chat::SteerTarget{turn:q.turn_id,request_id:q.request_id}).await?));
     }
     if super::operations::handles(name) {return super::operations::call(app,caller,name,input).await;}
@@ -396,7 +396,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
         }
         "kar_thread_list" => {
             let a: Threads = args(input)?;
-            let project = project_scope(c, a.project_id)?;
+            let project = super::operations::list_project(app,c,a.project_id)?;
             if let Some(p) = project {
                 app.project(p)?;
             }
@@ -411,7 +411,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
                     item["kind"] == "chat"
                         && row["unavailable"] != true
                         && project.is_none_or(|p| row["project"] == json!(p))
-                        && c.grant.as_ref().is_none_or(|_| serde_json::from_value::<Uuid>(item["id"].clone()).is_ok_and(|t|super::operations::visible(&app.0.catalog.lock().unwrap(),c,t)))
+                        && c.grant.as_ref().is_none_or(|_| serde_json::from_value::<Uuid>(item["id"].clone()).is_ok_and(|t| serde_json::from_value::<Uuid>(row["project"].clone()).is_ok_and(|p|super::operations::visible(&app.0.catalog.lock().unwrap(),c,p,t))))
                         && (a.include_archived || row["archived"] == false)
                         && a.snoozed.is_none_or(|s| row["snoozed"] == s)
                         && a.settled

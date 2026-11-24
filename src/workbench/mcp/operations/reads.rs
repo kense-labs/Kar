@@ -31,7 +31,7 @@ pub(super) async fn call(
             for chat in app
                 .chats(p, false)?
                 .into_iter()
-                .filter(|ch| visible(&app.0.catalog.lock().unwrap(), c, ch.info.id))
+                .filter(|ch| visible(&app.0.catalog.lock().unwrap(), c, p, ch.info.id))
             {
                 let title = chat.metadata.title.as_deref().unwrap_or("");
                 let h = app.0.chats.history(chat.info.id)?;
