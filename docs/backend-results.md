@@ -129,6 +129,15 @@ macOS 同一公共用例通过 Pi 1.6.0、Claude 2.1.330、Qwen 0.28.4、Factory
 
 在提交 `ed1e637`，设置 `KAR_PI_BIN` 后运行 `cargo test --locked --test native_live pi_history:: -- --ignored --nocapture`，四组各通过全部 7 项。macOS 的 `cargo fmt --all -- --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` 通过。
 
+## 原生接收与 Kar 回执写盘之间的恢复
+
+以下运行均使用真实供应商程序、隔离配置和本机模型服务，分别在 macOS 27.2.1 arm64 与 Ubuntu 24.04.5 aarch64 执行。
+
+| 供应商、版本、提交 | 操作及复验命令 | 观察结果 |
+| --- | --- | --- |
+| DSH Web 0.2.2-rc.5，`fe7c6d0` | 设置 `KAR_DSH_BIN`，运行 `cargo test --locked --test dsh_live queue_crash:: -- --ignored --nocapture`。排队三个不同 UUID。锁住 Kar 日志，等待 DSH 原生日志出现第一条的 UUID 且模型已收到请求，分别在原生回复完成和模型仍等待时强杀控制器。 | 每个平台两项均通过。强杀前 Kar 日志字节保持相同，重开前队列为 uncertain、pending、pending。重开原工作区与原生会话后，第一条由 DSH 原生日志补回回执，后两条依序各发送一次。重复三个 UUID 并再次清空队列后，模型请求和原生输入均只含种子输入及最初的三个 UUID。DSH 对运行中被强杀的输入给出 interrupted 原因，Kar 保存为 RuntimeExited 的失败回合。 |
+| Kimi KAP 2.7.2-botiverse.1，`f3e4587` | 设置 `KAR_KIMI_BIN`，运行 `cargo test --locked --test kimi_live kap_tool_turn_replay -- --ignored --nocapture`。把 Kar 日志重建到 Begin，分别保留原 UUID 或换成新 UUID，两组使用相同文本和真实 KAP 会话历史。 | 每个平台的匹配组都恢复了原生回合 ID、已发送状态、完整回复和工具结果。异 UUID 组保留 interrupted 和未确认状态。两组均未新增模型请求。各平台两个 SSE 客户端分别从第 17 和第 5 条事件断线，最终都收到全部 32 条。此项采用日志前缀重建，未在此切点强杀 Kimi。 |
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。

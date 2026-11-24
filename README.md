@@ -306,6 +306,8 @@ kar chat resume --chat "$CHAT_ID"
 
 Claude 持久化聊天把这个 UUID 一起发给原生进程。重启时，Rust 控制器在原工作区和会话里核对 UUID 与消息正文，找到唯一匹配的原生输入后将投递状态补为 `sent`。客户端从聊天事件流收到这次状态更新。若丢失的是模型回复的结束事件，回合仍显示为 `interrupted`。历史输入缺少匹配 UUID 时保留 `uncertain`。
 
+Kimi KAP 恢复时会核对原生主会话中发起回合的输入 UUID。即使 Kar 在写入发送回执和原生回合 ID 前退出，只要 Kimi 留下唯一匹配的输入记录，Kar 就能补记已发送；有完整原生终态时，还会补回回复和工具结果。同文不同 UUID 的输入保留待确认状态。
+
 Claude 的 `queued` 和 `started` 回执会保存到当前回合的 `native_input_receipt`。原生会话识别出已用过的 UUID 时，队列显示 `duplicate`，这一回合以 `invalid_request` 结束。原生进程在开始前取消输入时，队列显示 `cancelled`，回合显示 `aborted`。控制器会继续处理下一条待发输入。已用 Claude Code 2.1.322、2.1.330 和本地模型服务验证。两个 HTTP 客户端在断线重连后看到相同回执。重复 UUID 和开始前取消都没有产生额外模型请求，换用新 UUID 的相同文本正常投递一次。
 
 Claude 可以在输入排队期间或两轮对话之间处理后台通知。这段回复和工具调用可通过 `history.notifications`、聊天 SSE 和 `ChatReplica::notifications()` 查看。后台通知自己的结束事件只更新那条通知。回合保存 Claude 结束事件的原生 UUID，控制器重启后再次收到同一个结束事件时会跳过，下一条输入仍等待自己的结果。如果 Claude 在同一个工具循环里开始处理排队的输入，通知的 `joined_input` 会记录该输入 UUID。
