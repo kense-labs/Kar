@@ -222,6 +222,7 @@ impl Transcript {
                         id,
                         text,
                         status: crate::SteerStatus::Accepted,
+                        request_id: None,
                     }),
             );
         }

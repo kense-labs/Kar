@@ -140,6 +140,7 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
         } else {
             None
         },
+        response_to: body["responseTo"].as_str().map(str::to_owned),
         session_id: Some(session_id.into()),
         span_id: v["spanId"].as_str().map(str::to_owned),
         agent_path: serde_json::from_value(v["agentPath"].clone())?,
@@ -371,7 +372,7 @@ mod tests {
     fn preserves_attribution_unknown_native_data_and_interrupted_captures() {
         let header =
             json!({"kind":"header","format":"oar-voyage/3","sessionId":"root","runtime":"codex"});
-        let native = json!({"kind":"frame","seq":0,"receivedAt":812,"sessionId":"child","agentPath":["tool-1"],"spanId":"turn-9","body":{"type":"custom","native":{"future":"field"},"events":[{"kind":"text_delta","text":"hello"},{"kind":"future_event"}]}});
+        let native = json!({"kind":"frame","seq":0,"receivedAt":812,"sessionId":"child","agentPath":["tool-1"],"spanId":"turn-9","body":{"type":"custom","responseTo":"opaque-attempt","native":{"future":"field"},"events":[{"kind":"text_delta","text":"hello"},{"kind":"future_event"}]}});
         let row = json!({"kind":"record","record":native});
         let data = format!("{header}\n{row}\n");
         let mut converted = vec![];
@@ -384,6 +385,7 @@ mod tests {
         assert!(summary.end.is_none());
         let record = &converted[0];
         assert_eq!(record.upstream.as_ref(), Some(&native));
+        assert_eq!(record.response_to.as_deref(), Some("opaque-attempt"));
         assert_eq!(record.agent_path, ["tool-1"]);
         assert_eq!(record.session_id.as_deref(), Some("child"));
         assert_eq!(

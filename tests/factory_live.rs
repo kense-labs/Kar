@@ -2,6 +2,8 @@
 mod busy_prompt;
 #[path = "support/declaration.rs"]
 mod declaration;
+#[path = "support/mid_turn_steer.rs"]
+mod mid_turn_steer;
 
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command};
@@ -472,7 +474,7 @@ async fn native_control_receipts_and_settings() {
     tokio::time::timeout(Duration::from_secs(15), f.model.held.notified())
         .await
         .unwrap();
-    session.steer("FACTORY_DISCARD").await.unwrap();
+    mid_turn_steer::check(&session, "FACTORY_DISCARD").await;
     session.abort().await.unwrap();
     let outcome = tokio::time::timeout(Duration::from_secs(15), held.wait())
         .await

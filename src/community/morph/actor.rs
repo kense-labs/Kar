@@ -430,8 +430,11 @@ impl Actor {
                     .ok_or_else(|| Error::Refused("input is not queued".into()));
                 let _ = ack.send(result);
             }
-            Command::Steer(input, ack) => {
-                let _ = ack.send(self.steer(input.text).await);
+            Command::Steer(input_id, input, ack) => {
+                let request = self.journal.steer_request(input_id, &input, &[]);
+                let result = self.steer(input.text).await;
+                self.journal.steer_decision(request, &result, &[]);
+                let _ = ack.send(result);
             }
             Command::Abort(ack) => {
                 let result = match self.tasks.front() {

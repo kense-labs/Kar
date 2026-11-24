@@ -44,6 +44,7 @@ pub(crate) struct RecordStamp {
     pub direction: Direction,
     pub timestamp_ms: u64,
     prompt: Option<PromptIdentity>,
+    pub(crate) response_to: Option<String>,
 }
 
 impl From<Direction> for RecordStamp {
@@ -51,6 +52,7 @@ impl From<Direction> for RecordStamp {
         Self {
             direction,
             timestamp_ms: timestamp_ms(),
+            response_to: None,
             prompt: None,
         }
     }
@@ -104,8 +106,10 @@ pub enum SteerStatus {
     Submitted,
     /// The native input is waiting for a model step.
     Queued,
-    /// Grok echoed this input from its session actor. Model consumption is unreported.
+    /// The runtime acknowledged this input without confirming model consumption.
     Received,
+    /// A native extension consumed the steer without creating a model input.
+    Handled,
     Accepted,
     /// The original loop ended before the runtime consumed this input.
     FollowUp,
@@ -408,6 +412,9 @@ pub struct Record {
     pub kind: RecordKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<PromptIdentity>,
+    /// Public control request answered by this native frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_to: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -562,6 +569,41 @@ impl Journal {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn steer_request(
+        &self,
+        input_id: Uuid,
+        input: &crate::input::Input,
+        secrets: &[String],
+    ) -> Uuid {
+        let mut body = serde_json::json!({"type":"steer","inputId":input_id,"input":input.text,"imageCount":input.images.len()});
+        crate::transport::redact(&mut body, secrets);
+        self.control_request(body)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn steer_decision<T>(&self, request: Uuid, result: &Result<T>, secrets: &[String]) {
+        match result {
+            Ok(_) => self.control_decision(request, None),
+            Err(Error::Refused(reason))
+                if matches!(
+                    reason.as_str(),
+                    "no active turn"
+                        | "no active DSH turn"
+                        | "runtime has not acknowledged this turn"
+                ) =>
+            {
+                self.control_decision(request, Some(("no_active_turn", reason)))
+            }
+            Err(Error::Unsupported(_)) => self.control_decision(
+                request,
+                Some((
+                    "unsupported",
+                    "runtime does not support this steering operation",
+                )),
+            ),
+            Err(error) => self.prompt_error(request, error, secrets),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn reject_idle_control(
         &self,
         mut body: Value,
@@ -668,6 +710,7 @@ impl Journal {
             upstream: None,
             span_id,
             prompt: stamp.prompt,
+            response_to: stamp.response_to,
             stream_id: self.id,
             seq,
             timestamp_ms: stamp.timestamp_ms,

@@ -112,7 +112,7 @@ pub(crate) enum Command {
     Withdraw(uuid::Uuid, Reply<()>),
     Abort(Reply<Value>),
     StopTask(String, Reply<Value>),
-    Steer(crate::input::Input, Reply<Value>),
+    Steer(uuid::Uuid, crate::input::Input, Reply<Value>),
     Respond(Value, HostAnswer, Reply<()>),
     Close(Reply<()>),
 }
@@ -156,6 +156,7 @@ impl SteeringReceipt {
         method: &str,
         params: &Value,
         owner: Option<uuid::Uuid>,
+        intent: RpcIntent,
         secrets: &[String],
     ) -> Option<Self> {
         if method == INTERJECT {
@@ -167,21 +168,24 @@ impl SteeringReceipt {
                 text,
             });
         }
-        if !matches!(
-            method,
-            wire::opencode::STEER | OPENCODE_V1_STEER | ANTIGRAVITY_STEER
-        ) {
-            return None;
-        }
-        let mut text = params["prompt"]
-            .as_array()?
-            .iter()
-            .find_map(|block| block["text"].as_str())
-            .unwrap_or_default()
-            .to_owned();
+        let mut text = match method {
+            "steer" if matches!(intent, RpcIntent::Steer { .. }) => {
+                params["message"].as_str()?.to_owned()
+            }
+            wire::opencode::STEER | OPENCODE_V1_STEER | ANTIGRAVITY_STEER => params["prompt"]
+                .as_array()?
+                .iter()
+                .find_map(|block| block["text"].as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            _ => return None,
+        };
         redact_text(&mut text, secrets);
         Some(Self {
-            id: uuid::Uuid::new_v4(),
+            id: match intent {
+                RpcIntent::Steer { input_id, .. } => input_id,
+                _ => uuid::Uuid::new_v4(),
+            },
             owner,
             text,
         })
@@ -195,6 +199,15 @@ impl SteeringReceipt {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum RpcIntent {
+    Control,
+    Prompt,
+    Steer {
+        input_id: uuid::Uuid,
+        request: uuid::Uuid,
+    },
+}
 struct Pending {
     open: Option<crate::opening::OpenStep>,
     claude_interrupt: Option<uuid::Uuid>,
@@ -202,7 +215,7 @@ struct Pending {
     reply: Option<Reply<Value>>,
     prompt_ack: Option<Reply<()>>,
     prompt_request: Option<uuid::Uuid>,
-    input: bool,
+    steer_request: Option<uuid::Uuid>,
     starts_turn: bool,
     steer: Option<SteeringReceipt>,
 }
@@ -564,9 +577,9 @@ impl Actor {
         method: &str,
         params: Value,
         reply: Option<Reply<Value>>,
-        input: bool,
-        starts_turn: bool,
+        intent: RpcIntent,
     ) -> Result<()> {
+        let starts_turn = matches!(intent, RpcIntent::Prompt);
         if method == "initialize"
             && let Some(children) = &mut self.opencode
         {
@@ -589,10 +602,10 @@ impl Actor {
         let steer = SteeringReceipt::for_request(
             method,
             &params,
-            self.turn
-                .as_ref()
-                .and_then(|t| t.chat_input)
+            self.pi_independent
+                .or_else(|| self.turn.as_ref().and_then(|t| t.chat_input))
                 .or_else(|| self.grok_owner()),
+            intent,
             &self.secrets,
         );
         if method == INTERJECT
@@ -614,6 +627,10 @@ impl Actor {
                     None
                 },
                 method: method.to_owned(),
+                steer_request: match intent {
+                    RpcIntent::Steer { request, .. } => Some(request),
+                    _ => None,
+                },
                 reply,
                 prompt_ack: None,
                 prompt_request: if starts_turn
@@ -623,7 +640,6 @@ impl Actor {
                 } else {
                     None
                 },
-                input,
                 starts_turn,
                 steer,
             },
@@ -668,15 +684,22 @@ impl Actor {
         self.write_packet(
             packet,
             RecordKind::Request,
-            matches!(
-                method,
-                "thread/compact/start"
-                    | "compact"
-                    | "droid.compact_session"
-                    | GROK_COMPACT
-                    | OPENCODE_COMPACT
-            )
-            .then(|| vec![Event::ManualCompactionRequested]),
+            if self.protocol == Protocol::Pi && method == "steer" {
+                self.pending
+                    .get(&id)
+                    .and_then(|p| p.steer.as_ref())
+                    .map(|s| vec![s.event(crate::SteerStatus::Submitted)])
+            } else {
+                matches!(
+                    method,
+                    "thread/compact/start"
+                        | "compact"
+                        | "droid.compact_session"
+                        | GROK_COMPACT
+                        | OPENCODE_COMPACT
+                )
+                .then(|| vec![Event::ManualCompactionRequested])
+            },
         )
         .await
     }
@@ -740,8 +763,7 @@ impl Actor {
                     "droid.add_user_message",
                     prompt.factory(id),
                     None,
-                    true,
-                    true,
+                    RpcIntent::Prompt,
                 )
                 .await?;
             }
@@ -750,7 +772,8 @@ impl Actor {
                 if let Some(schema) = &self.output_schema {
                     args["outputSchema"] = Value::Object(schema.clone());
                 }
-                self.rpc("turn/start", args, None, true, true).await?;
+                self.rpc("turn/start", args, None, RpcIntent::Prompt)
+                    .await?;
             }
             Protocol::Acp => {
                 self.acp_failures.start();
@@ -761,7 +784,8 @@ impl Actor {
                 if let Some(schema) = &self.output_schema {
                     args["_meta"]["outputSchema"] = Value::Object(schema.clone());
                 }
-                self.rpc("session/prompt", args, None, true, true).await?;
+                self.rpc("session/prompt", args, None, RpcIntent::Prompt)
+                    .await?;
             }
             Protocol::Qoder => {
                 self.write(
@@ -778,7 +802,10 @@ impl Actor {
                 );
                 self.write(msg, RecordKind::Request).await?;
             }
-            Protocol::Pi => self.rpc("prompt", prompt.pi(), None, true, true).await?,
+            Protocol::Pi => {
+                self.rpc("prompt", prompt.pi(), None, RpcIntent::Prompt)
+                    .await?
+            }
         }
         if !matches!(self.protocol, Protocol::Pi | Protocol::Factory) {
             self.journal.control_decision(request, None);
@@ -790,8 +817,7 @@ impl Actor {
             "turn/interrupt",
             json!({"threadId":self.session(),"turnId":turn}),
             Some(tx),
-            false,
-            false,
+            RpcIntent::Control,
         )
         .await?;
         if let Some(guard) = &mut self.codex_processes {
@@ -869,7 +895,8 @@ impl Actor {
                     .await?;
                     let _ = raw.send(Ok(Value::Null));
                 } else {
-                    self.rpc(method, params, Some(raw), false, false).await?;
+                    self.rpc(method, params, Some(raw), RpcIntent::Control)
+                        .await?;
                 }
                 let request = self
                     .journal
@@ -898,7 +925,8 @@ impl Actor {
                     self.context_waiters.entry(id).or_default().push(tx);
                     return Ok(true);
                 }
-                self.rpc(&method, params, Some(tx), false, false).await?;
+                self.rpc(&method, params, Some(tx), RpcIntent::Control)
+                    .await?;
                 self.pending
                     .get_mut(&self.next)
                     .expect("RPC was queued")
@@ -915,8 +943,7 @@ impl Actor {
                             "turn/interrupt",
                             json!({"threadId":task,"turnId":turn}),
                             Some(tx),
-                            false,
-                            false,
+                            RpcIntent::Control,
                         )
                         .await?
                     }
@@ -925,8 +952,13 @@ impl Actor {
                     }
                 },
                 Protocol::Claude | Protocol::Qoder => {
-                    self.rpc("stop_task", json!({"task_id":task}), Some(tx), false, false)
-                        .await?
+                    self.rpc(
+                        "stop_task",
+                        json!({"task_id":task}),
+                        Some(tx),
+                        RpcIntent::Control,
+                    )
+                    .await?
                 }
                 _ => {
                     let _ = tx.send(Err(Error::Unsupported(
@@ -1060,20 +1092,9 @@ impl Actor {
                 self.journal.control_decision(request, None);
                 let _ = tx.send(Ok(()));
             }
-            Command::Steer(_, tx) if self.manual_compaction.is_some() => {
-                let _ = tx.send(Err(Error::Busy));
-            }
             Command::Abort(tx) if self.idle_for_interrupt() => {
                 let error = self.journal.reject_idle_control(
                     json!({"type":"abort"}),
-                    "no active turn",
-                    &self.secrets,
-                );
-                let _ = tx.send(Err(error));
-            }
-            Command::Steer(input, tx) if self.idle_for_interrupt() => {
-                let error = self.journal.reject_idle_control(
-                    json!({"type":"steer","input":input.text,"imageCount":input.images.len()}),
                     "no active turn",
                     &self.secrets,
                 );
@@ -1136,14 +1157,22 @@ impl Actor {
                     } else {
                         json!({})
                     };
-                    self.rpc("interrupt", params, Some(tx), false, false)
+                    self.rpc("interrupt", params, Some(tx), RpcIntent::Control)
                         .await?
                 }
                 Protocol::Factory => {
-                    self.rpc("droid.interrupt_session", json!({}), Some(tx), false, false)
+                    self.rpc(
+                        "droid.interrupt_session",
+                        json!({}),
+                        Some(tx),
+                        RpcIntent::Control,
+                    )
+                    .await?
+                }
+                Protocol::Pi => {
+                    self.rpc("abort", json!({}), Some(tx), RpcIntent::Control)
                         .await?
                 }
-                Protocol::Pi => self.rpc("abort", json!({}), Some(tx), false, false).await?,
                 Protocol::Acp => {
                     let cancel = json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":id}});
                     if self.end_turn_processes
@@ -1185,108 +1214,128 @@ impl Actor {
                     let _ = tx.send(Ok(Value::Null));
                 }
             },
-            Command::Steer(message, tx) => match self.protocol {
+            Command::Steer(input, message, tx) => self.steer(input, message, tx).await?,
+        }
+        Ok(true)
+    }
+    async fn steer(
+        &mut self,
+        input_id: uuid::Uuid,
+        message: crate::input::Input,
+        tx: Reply<Value>,
+    ) -> Result<()> {
+        let request = self
+            .journal
+            .steer_request(input_id, &message, &self.secrets);
+        let intent = RpcIntent::Steer { input_id, request };
+        let id = self.session();
+        let result = if self.manual_compaction.is_some() {
+            Err(Error::Busy)
+        } else if self.idle_for_interrupt() {
+            Err(Error::Refused("no active turn".into()))
+        } else {
+            match self.protocol {
                 Protocol::Claude => {
-                    let Some(owner) = self
+                    if let Some(owner) = self
                         .claude_notifications
                         .id()
                         .or_else(|| self.turn.as_ref()?.claude_input.as_ref().map(|i| i.id))
-                    else {
-                        let _ = tx.send(Err(Error::Refused("no active turn".into())));
-                        return Ok(true);
-                    };
-                    let input = uuid::Uuid::new_v4();
-                    let packet = message.stream_user(Protocol::Claude, id.as_deref(), input);
-                    let mut text = message.text;
-                    redact_text(&mut text, &self.secrets);
-                    self.claude_steering.submit(input, owner, text);
-                    self.write(packet, RecordKind::Request).await?;
-                    let _ = tx.send(Ok(Value::Null));
+                    {
+                        let packet = message.stream_user(Protocol::Claude, id.as_deref(), input_id);
+                        let mut text = message.text;
+                        redact_text(&mut text, &self.secrets);
+                        self.claude_steering.submit(input_id, owner, text);
+                        self.write(packet, RecordKind::Request)
+                            .await
+                            .map(|()| Value::Null)
+                    } else {
+                        Err(Error::Refused("no active turn".into()))
+                    }
                 }
                 Protocol::Acp => {
                     let mode = self.identity.lock().unwrap().acp_steering;
                     let params = json!({"sessionId":id,"prompt":message.blocks(Protocol::Acp)});
                     match mode {
+                        Some(Steering::GrokInterject)
+                            if self.grok.as_ref().is_some_and(GrokTurns::aborting)
+                                || self.turn.as_ref().is_some_and(|t| t.aborted) =>
+                        {
+                            Err(Error::Refused("no active turn".into()))
+                        }
                         Some(Steering::GrokInterject) => {
-                            if self.turn.as_ref().is_some_and(|t| t.aborted)
-                                || self.grok.as_ref().is_some_and(GrokTurns::aborting)
-                            {
-                                let _ = tx.send(Err(Error::Refused("no active turn".into())));
-                                return Ok(true);
-                            }
-                            let mut packet = json!({"sessionId":id,"text":message.text,"interjectionId":uuid::Uuid::new_v4()});
+                            let mut packet = json!({"sessionId":id,"text":message.text,"interjectionId":input_id});
                             if !message.images.is_empty() {
                                 packet["content"] = params["prompt"].clone();
                             }
-                            self.rpc(INTERJECT, packet, Some(tx), false, false).await?;
+                            return self.rpc(INTERJECT, packet, Some(tx), intent).await;
                         }
                         Some(Steering::OpenCodeExtension) => {
-                            self.rpc(wire::opencode::STEER, params, Some(tx), false, false)
-                                .await?;
+                            return self
+                                .rpc(wire::opencode::STEER, params, Some(tx), intent)
+                                .await;
+                        }
+                        Some(Steering::SupersedingPrompt)
+                            if self.turn.as_ref().is_some_and(|t| t.aborted) =>
+                        {
+                            Err(Error::Refused("no active turn".into()))
                         }
                         Some(mode @ (Steering::ConcurrentPrompt | Steering::SupersedingPrompt)) => {
                             let method = if mode == Steering::SupersedingPrompt {
-                                if self.turn.as_ref().is_some_and(|t| t.aborted) {
-                                    let _ = tx.send(Err(Error::Refused("no active turn".into())));
-                                    return Ok(true);
-                                }
                                 ANTIGRAVITY_STEER
                             } else {
                                 OPENCODE_V1_STEER
                             };
-                            self.rpc(method, params, None, false, false).await?;
-                            let _ = tx.send(Ok(Value::Null));
+                            self.rpc(method, params, None, intent)
+                                .await
+                                .map(|()| Value::Null)
                         }
-                        None => {
-                            let _ = tx
-                                .send(Err(Error::Unsupported("steering on this transport".into())));
-                        }
+                        None => Err(Error::Unsupported("steering on this transport".into())),
                     }
                 }
                 Protocol::Factory => {
-                    let params = message.factory(uuid::Uuid::new_v4());
-                    self.rpc("droid.add_user_message", params, Some(tx), false, false)
-                        .await?;
-                }
-                Protocol::Qoder => {
-                    let result = if self.manual_compaction.is_some() {
-                        Err(Error::Busy)
-                    } else if self.turn.is_none() {
-                        Err(Error::Refused("no active turn".into()))
-                    } else {
-                        self.write(
-                            crate::qoder::input(id.as_deref(), &message.text),
-                            RecordKind::Request,
+                    return self
+                        .rpc(
+                            "droid.add_user_message",
+                            message.factory(input_id),
+                            Some(tx),
+                            intent,
                         )
-                        .await?;
-                        Ok(Value::Null)
-                    };
-                    let _ = tx.send(result);
+                        .await;
                 }
+                Protocol::Qoder if self.turn.is_some() => self
+                    .write(
+                        crate::qoder::input(id.as_deref(), &message.text),
+                        RecordKind::Request,
+                    )
+                    .await
+                    .map(|()| Value::Null),
+                Protocol::Qoder => Err(Error::Refused("no active turn".into())),
                 Protocol::Codex => {
-                    let Some(turn_id) = self
+                    if let Some(turn_id) = self
                         .turn
                         .as_ref()
-                        .and_then(|t| t.native.clone())
-                        .or_else(|| self.observed_root_turn().map(str::to_owned))
-                    else {
-                        let _ = tx.send(Err(Error::Refused(
-                            "runtime has not acknowledged this turn".into(),
-                        )));
-                        return Ok(true);
-                    };
-                    self.rpc("turn/steer",json!({"threadId":id,"expectedTurnId":turn_id,"input":message.blocks(Protocol::Codex)}),Some(tx),false,false).await?;
+                        .and_then(|t| t.native.as_deref())
+                        .or_else(|| self.observed_root_turn())
+                    {
+                        return self.rpc("turn/steer",json!({"threadId":id,"expectedTurnId":turn_id,"input":message.blocks(Protocol::Codex)}),Some(tx),intent).await;
+                    }
+                    Err(Error::Refused(
+                        "runtime has not acknowledged this turn".into(),
+                    ))
                 }
-                Protocol::Pi => {
-                    self.rpc("steer", message.pi(), Some(tx), false, false)
-                        .await?
-                }
-                _ => {
-                    let _ = tx.send(Err(Error::Unsupported("steering on this transport".into())));
-                }
-            },
-        }
-        Ok(true)
+                Protocol::Pi => return self.rpc("steer", message.pi(), Some(tx), intent).await,
+                _ => Err(Error::Unsupported("steering on this transport".into())),
+            }
+        };
+        self.journal.steer_decision(request, &result, &self.secrets);
+        // A failed write may have reached the process in part. Stop this transport
+        // after publishing the decision, as for a failed RPC write.
+        let transport = match &result {
+            Ok(_) | Err(Error::Busy | Error::Refused(_) | Error::Unsupported(_)) => Ok(()),
+            Err(error) => Err(Error::Closed(error.to_string())),
+        };
+        let _ = tx.send(result);
+        transport
     }
     async fn receive(&mut self, v: Value, context: Option<crate::ContextUsage>) -> Result<()> {
         if self.protocol == Protocol::Factory
@@ -1363,7 +1412,7 @@ impl Actor {
         mut v: Value,
         context: Option<crate::ContextUsage>,
     ) -> Result<()> {
-        let received = RecordStamp::from(Direction::FromRuntime);
+        let mut received = RecordStamp::from(Direction::FromRuntime);
         let grok_turn = self
             .grok
             .as_ref()
@@ -1438,7 +1487,38 @@ impl Actor {
         {
             return Ok(());
         }
+        if let Some(id) = number
+            && let Some(pending) = self.pending.get(&id)
+            && (pending.prompt_request.is_some() || pending.steer_request.is_some())
+        {
+            let exact_id = match self.protocol {
+                Protocol::Codex | Protocol::Acp => v["id"].as_u64() == Some(id),
+                _ => v["id"].as_str() == Some(id.to_string().as_str()),
+            };
+            // Pi also echoes the command. Preserve unrelated public input frames
+            // without consuming an attempt or exposing a private query's payload.
+            if !exact_id || (self.protocol == Protocol::Pi && v["command"] != pending.method) {
+                if self.protocol == Protocol::Pi
+                    && matches!(v["command"].as_str(), Some("prompt" | "steer"))
+                {
+                    self.record(received, RecordKind::Frame, v, vec![], vec![]);
+                }
+                return Ok(());
+            }
+            if self.protocol == Protocol::Pi && !v["success"].is_boolean() {
+                self.record(received, RecordKind::Frame, v, vec![], vec![]);
+                return Err(Error::Protocol(
+                    "Pi input reply omitted its success flag".into(),
+                ));
+            }
+        }
         let response = number.and_then(|id| self.pending.remove(&id));
+        if let Some(request) = response
+            .as_ref()
+            .and_then(|p| p.steer_request.or(p.prompt_request))
+        {
+            received.response_to = Some(request.to_string());
+        }
         if response.is_none() && number.is_some_and(|id| self.private_list_ids.contains(&id)) {
             return Ok(());
         }
@@ -1935,14 +2015,23 @@ impl Actor {
         let mut prompt_ack = None;
         let mut prompt_decision = None;
         if let Some(p) = response {
-            let mut result =
-                if p.method == crate::cursor_models::LIST && v["error"]["code"] == -32601 {
-                    Err(Error::Unsupported(
-                        "Cursor does not implement its parameterized model catalog".into(),
-                    ))
-                } else {
-                    open_error.map_or_else(|| wire::result(self.protocol, &v), Err)
-                };
+            let mut result = if p.method == crate::cursor_models::LIST
+                && v["error"]["code"] == -32601
+            {
+                Err(Error::Unsupported(
+                    "Cursor does not implement its parameterized model catalog".into(),
+                ))
+            } else if self.protocol == Protocol::Pi && p.method == "steer" && v["success"] == false
+            {
+                Err(Error::Refused(
+                    v["error"]
+                        .as_str()
+                        .unwrap_or("Pi refused the steer")
+                        .to_owned(),
+                ))
+            } else {
+                open_error.map_or_else(|| wire::result(self.protocol, &v), Err)
+            };
             let supersedes = self.identity.lock().unwrap().acp_steering
                 == Some(Steering::SupersedingPrompt)
                 && (p.method == ANTIGRAVITY_STEER
@@ -1960,6 +2049,18 @@ impl Actor {
                     .refused(request_id, v["error"]["code"].as_i64());
             if let Some(steer) = p.steer {
                 match (&result, p.method.as_str()) {
+                    (Ok(data), "steer") if self.protocol == Protocol::Pi => {
+                        let status = match data["disposition"].as_str() {
+                            Some("handled") => crate::SteerStatus::Handled,
+                            Some("queued") => crate::SteerStatus::Queued,
+                            Some("started") => crate::SteerStatus::Accepted,
+                            _ => crate::SteerStatus::Received,
+                        };
+                        events.push(steer.event(status));
+                    }
+                    (Err(_), "steer") if self.protocol == Protocol::Pi => {
+                        events.push(steer.event(crate::SteerStatus::Refused))
+                    }
                     (_, INTERJECT) => {
                         let status = crate::grok::turns::interjection_reply(&mut result);
                         // An echo may already have resolved and removed this interjection.
@@ -2172,7 +2273,7 @@ impl Actor {
                     }
                     outcome_error = end.publish(&mut events);
                 }
-            } else if p.input
+            } else if p.starts_turn
                 && !(self.protocol == Protocol::Pi && p.prompt_request.is_some())
                 && let Err(e) = &result
             {
@@ -2200,7 +2301,7 @@ impl Actor {
                 }
             }
             if let Some(tx) = p.reply {
-                reply = Some((tx, result));
+                reply = Some((tx, result, p.steer_request));
             }
         }
         let reported_turn = v
@@ -2522,12 +2623,16 @@ impl Actor {
                 .as_mut()
                 .is_some_and(|t| std::mem::take(&mut t.aborted))
         {
-            self.rpc("abort", json!({}), None, false, false).await?;
+            self.rpc("abort", json!({}), None, RpcIntent::Control)
+                .await?;
         }
         if let Some((tx, result)) = prompt_ack {
             let _ = tx.send(result);
         }
-        if let Some((tx, result)) = reply {
+        if let Some((tx, result, request)) = reply {
+            if let Some(request) = request {
+                self.journal.steer_decision(request, &result, &self.secrets);
+            }
             let _ = tx.send(result);
         }
         if let Some((id, method)) = cursor_notice {
@@ -2855,7 +2960,12 @@ impl Actor {
         for receipt in self
             .pending
             .values()
-            .filter(|p| matches!(p.method.as_str(), ANTIGRAVITY_STEER | OPENCODE_V1_STEER))
+            .filter(|p| {
+                matches!(
+                    p.method.as_str(),
+                    ANTIGRAVITY_STEER | OPENCODE_V1_STEER | "steer"
+                )
+            })
             .filter_map(|p| p.steer.as_ref())
         {
             self.record(
@@ -2919,6 +3029,15 @@ impl Actor {
             .secrets
             .iter()
             .fold(reason, |msg, key| msg.replace(key, "[redacted]"));
+        let closed = Error::Closed(reason.clone());
+        for p in self.pending.values() {
+            if let Some(request) = p
+                .prompt_request
+                .or(p.steer_request.filter(|_| p.reply.is_some()))
+            {
+                self.journal.prompt_error(request, &closed, &self.secrets);
+            }
+        }
         let mut exit = crate::process::exit_body(&status, &reason);
         if let Some((id, _)) = &self.close_ack {
             exit["requestId"] = id.to_string().into();
@@ -2935,6 +3054,9 @@ impl Actor {
         self.finish(Err(Error::Closed(reason.clone())));
         for p in self.pending.into_values() {
             if let Some(tx) = p.reply {
+                let _ = tx.send(Err(Error::Closed(reason.clone())));
+            }
+            if let Some(tx) = p.prompt_ack {
                 let _ = tx.send(Err(Error::Closed(reason.clone())));
             }
         }

@@ -668,20 +668,18 @@ impl Actor {
                 };
                 Self::ack(ack, result)?;
             }
-            Command::Steer(input, ack) => {
+            Command::Steer(input_id, input, ack) => {
+                let request = self.journal.steer_request(input_id, &input, &self.secrets);
                 let r = if self.compacting.is_some() {
                     Err(Error::Busy)
                 } else if self.busy() {
-                    self.submit(input, Uuid::new_v4(), None, false)
+                    self.submit(input, input_id, None, false)
                         .await
                         .map(|_| Value::Null)
                 } else {
-                    Err(self.journal.reject_idle_control(
-                        json!({"type":"steer","input":input.text,"imageCount":input.images.len()}),
-                        "no active DSH turn",
-                        &self.secrets,
-                    ))
+                    Err(Error::Refused("no active DSH turn".into()))
                 };
+                self.journal.steer_decision(request, &r, &self.secrets);
                 Self::ack(ack, r)?;
             }
             Command::Queue(id, text, ack, done) => {

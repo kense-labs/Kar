@@ -26,6 +26,10 @@ pub enum AgentStatus {
         released: bool,
     },
     Running {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
         since_seq: u64,
         since_ms: u64,
         last_event_ms: u64,
@@ -111,6 +115,7 @@ impl SessionSnapshot {
     }
 }
 struct Run {
+    prompt: Option<crate::PromptIdentity>,
     // Pi does not assign a native span ID to independent extension activity.
     independent: Option<uuid::Uuid>,
     span: Option<String>,
@@ -216,12 +221,16 @@ impl SessionReducer {
     }
     fn start(&mut self, r: &Record) {
         if let Some(i) = self.run_index(r) {
+            if r.prompt.is_some() {
+                self.runs[i].prompt.clone_from(&r.prompt);
+            }
             if self.runs[i].span.is_none() {
                 self.runs[i].span = r.span_id.clone();
             }
             return;
         }
         self.runs.push(Run {
+            prompt: r.prompt.clone(),
             independent: Self::independent(r),
             span: r.span_id.clone(),
             since_seq: r.seq,
@@ -423,6 +432,8 @@ impl SessionReducer {
         if root && (!r.events.is_empty() || legacy.is_some()) {
             if let Some((since_seq, since_ms)) = self.compacting {
                 self.snapshot.status = AgentStatus::Running {
+                    input_id: None,
+                    request_id: None,
                     since_seq,
                     since_ms,
                     last_event_ms: r.timestamp_ms,
@@ -438,6 +449,8 @@ impl SessionReducer {
                 .map_or_else(
                     || match self.queued.values().min() {
                         Some(&(seq, ms)) => AgentStatus::Running {
+                            input_id: None,
+                            request_id: None,
                             since_seq: seq,
                             since_ms: ms,
                             last_event_ms: r.timestamp_ms,
@@ -449,6 +462,8 @@ impl SessionReducer {
                         },
                     },
                     |t| AgentStatus::Running {
+                        input_id: t.prompt.as_ref().map(|p| p.input_id.clone()),
+                        request_id: t.prompt.as_ref().and_then(|p| p.request_id.clone()),
                         since_seq: t.since_seq,
                         since_ms: t.since_ms,
                         last_event_ms: t.last_event_ms,

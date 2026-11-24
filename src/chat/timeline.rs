@@ -172,6 +172,7 @@ impl ChatTurn {
                     id,
                     text,
                     status: crate::SteerStatus::Accepted,
+                    ..
                 } => {
                     if accepted
                         .insert(id.to_string(), (text.as_str(), false))
@@ -466,7 +467,9 @@ impl ChatTurn {
                     self.native_result_id = Some(*id);
                     self.native_result_inputs.clone_from(inputs);
                 }
-                Edit::SteeringInput { id, text, status } => {
+                Edit::SteeringInput {
+                    id, text, status, ..
+                } => {
                     self.steered_inputs.insert(*id, *status);
                     self.text(&frame.source, Role::User, Some(&id.to_string()), text, true);
                 }
@@ -928,6 +931,8 @@ pub enum Edit {
     },
     SteeringInput {
         id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
         text: String,
         status: crate::SteerStatus,
     },
@@ -1162,6 +1167,7 @@ impl MessageIds {
                 } => {
                     edits.push(Edit::SteeringInput {
                         id: *input_id,
+                        request_id: r.response_to.clone(),
                         text: text.clone(),
                         status: *status,
                     });

@@ -54,9 +54,18 @@ pub struct ChatInfo {
 }
 impl ChatInfo {
     fn tracks_steering_receipts(&self) -> bool {
-        self.protocol == Protocol::Claude
+        matches!(self.protocol, Protocol::Claude | Protocol::Pi)
             || (self.protocol == Protocol::Acp
                 && matches!(self.runtime.as_str(), "antigravity" | "opencode" | "grok"))
+    }
+    fn awaits_steering_receipt(&self, status: crate::SteerStatus) -> bool {
+        // Pi's queued disposition is already a native receipt. Only a submitted
+        // call can lose its acknowledgement when the controller exits.
+        if self.protocol == Protocol::Pi {
+            status == crate::SteerStatus::Submitted
+        } else {
+            status.is_waiting()
+        }
     }
     fn checkpoint_store(&self) -> Uuid {
         self.forked_from
@@ -604,6 +613,20 @@ impl ChatSession {
     /// Send a follow-up into the running native turn.
     pub async fn steer(&self, text: impl Into<String>) -> Result<()> {
         self.sender.session.steer(text).await
+    }
+    pub async fn steer_with_id(&self, id: Uuid, text: impl Into<String>) -> Result<()> {
+        self.sender.session.steer_with_id(id, text).await
+    }
+    pub async fn steer_images_with_id(
+        &self,
+        id: Uuid,
+        text: impl Into<String>,
+        images: Vec<crate::InputImage>,
+    ) -> Result<()> {
+        self.sender
+            .session
+            .steer_images_with_id(id, text, images)
+            .await
     }
     pub async fn steer_images(
         &self,

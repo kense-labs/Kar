@@ -254,7 +254,11 @@ impl State {
                 .turns
                 .iter()
                 .chain(self.notifications.iter().map(|n| &n.activity))
-                .any(|t| t.steered_inputs.values().any(|s| s.is_waiting()))
+                .any(|t| {
+                    t.steered_inputs
+                        .values()
+                        .any(|s| self.info.awaits_steering_receipt(*s))
+                })
     }
     pub(super) fn unconfirm_steering(&mut self) {
         if self.info.tracks_steering_receipts() {
@@ -263,7 +267,11 @@ impl State {
                 .iter_mut()
                 .chain(self.notifications.iter_mut().map(|n| &mut n.activity))
             {
-                for status in turn.steered_inputs.values_mut().filter(|s| s.is_waiting()) {
+                for status in turn
+                    .steered_inputs
+                    .values_mut()
+                    .filter(|s| self.info.awaits_steering_receipt(**s))
+                {
                     *status = crate::SteerStatus::Unconfirmed;
                 }
             }
@@ -674,7 +682,7 @@ impl State {
                         && (child || known_tools || steering_update))
                         || (self.info.runtime == "cursor" && (child || known_tools))
                         || (self.info.protocol == Protocol::Claude && steering_update)
-                        || (self.info.runtime == "grok" && steering_update
+                        || ((self.info.runtime == "grok" || self.info.protocol == Protocol::Pi) && steering_update
                             && frame.edits.iter().any(|e| matches!(e, super::ChatEdit::SteeringInput {id, ..} if turn.steered_inputs.contains_key(id))));
                     let late_followup_child =
                         turn.steered_from.is_some() && !frame.source.path.is_empty();
@@ -1452,7 +1460,9 @@ impl Log {
                 self.ids
                     .frame(self.state.info.protocol, &self.state.info.native_id, r)
         {
-            if self.state.info.protocol == Protocol::Claude && self.state.find(id).is_none() {
+            if matches!(self.state.info.protocol, Protocol::Claude | Protocol::Pi)
+                && self.state.find(id).is_none()
+            {
                 self.commit(ChatUpdate::Notification {
                     id,
                     at: r.timestamp_ms,

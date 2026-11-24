@@ -1531,10 +1531,23 @@ impl Session {
         Ok(Delivery::Queued { input_id, turn })
     }
     pub async fn steer(&self, text: impl Into<String>) -> Result<()> {
-        self.steer_images(text, Vec::new()).await
+        self.steer_with_id(Uuid::new_v4(), text).await
+    }
+    /// Send a mid-turn input with a caller-supplied identity for observers.
+    pub async fn steer_with_id(&self, id: Uuid, text: impl Into<String>) -> Result<()> {
+        self.steer_images_with_id(id, text, Vec::new()).await
     }
     pub async fn steer_images(
         &self,
+        text: impl Into<String>,
+        images: Vec<crate::InputImage>,
+    ) -> Result<()> {
+        self.steer_images_with_id(Uuid::new_v4(), text, images)
+            .await
+    }
+    pub async fn steer_images_with_id(
+        &self,
+        id: Uuid,
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<()> {
@@ -1548,7 +1561,9 @@ impl Session {
             images,
         };
         crate::input::check_text(&input.text, self.text_limit)?;
-        self.call(|tx| Command::Steer(input, tx)).await.map(drop)
+        self.call(|tx| Command::Steer(id, input, tx))
+            .await
+            .map(drop)
     }
     pub fn tasks(&self) -> Vec<crate::NativeTask> {
         self.snapshot().tasks

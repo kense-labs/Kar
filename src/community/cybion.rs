@@ -639,7 +639,8 @@ impl ThreadActor {
                     .ok_or_else(|| Error::Refused("input is not queued".into()));
                 let _ = ack.send(result);
             }
-            Command::Steer(input, ack) => {
+            Command::Steer(input_id, input, ack) => {
+                let request = self.journal.steer_request(input_id, &input, &[]);
                 let answer = if self.turn.is_some() {
                     self.submit(input, None).await
                 } else {
@@ -654,6 +655,7 @@ impl ThreadActor {
                     active.quiet = 0;
                     active.due = Instant::now();
                 }
+                self.journal.steer_decision(request, &answer, &[]);
                 let _ = ack.send(answer);
             }
             Command::Abort(ack) => {

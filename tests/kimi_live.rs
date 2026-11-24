@@ -2,6 +2,8 @@
 mod busy_prompt;
 #[path = "support/declaration.rs"]
 mod declaration;
+#[path = "support/mid_turn_steer.rs"]
+mod mid_turn_steer;
 #[path = "support/sse.rs"]
 mod sse;
 
@@ -566,7 +568,7 @@ async fn exercise(kap: bool) {
         .await
         .unwrap();
     busy_prompt::check(&controls, held.input_id()).await;
-    controls.steer("KAP_STEER").await.unwrap();
+    mid_turn_steer::check(&controls, "KAP_STEER").await;
     let (_, queued) = controls.queue("KAP_FIFO").await.unwrap();
     assert!(matches!(
         controls.start_compaction().await,

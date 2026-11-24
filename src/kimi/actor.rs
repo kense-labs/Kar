@@ -580,16 +580,18 @@ impl Actor {
                 };
                 let _ = ack.send(res);
             }
-            Command::Steer(input, ack) => {
+            Command::Steer(input_id, input, ack) => {
+                let request = self.journal.steer_request(input_id, &input, &self.secrets);
                 let res = if self.compaction.is_some() {
                     Err(Error::Busy)
                 } else if self.projection.active().is_none() && self.turn.is_none() {
                     Err(Error::Refused("no active turn".into()))
                 } else {
-                    self.submit(input, Uuid::new_v4(), None)
+                    self.submit(input, input_id, None)
                         .await
                         .map(|_| Value::Null)
                 };
+                self.journal.steer_decision(request, &res, &self.secrets);
                 Self::acknowledge_input(ack, res)?;
             }
             Command::Abort(ack) => {

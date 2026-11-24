@@ -538,6 +538,9 @@ fn peer(protocol: &str) {
                 ),
                 Some("prompt") => {
                     emit(json!({"type":"response","id":req,"command":"prompt","success":true}));
+                    if v["message"] == "hold steer" {
+                        continue;
+                    }
                     if v["message"] == "two dialogs" {
                         emit(
                             json!({"type":"extension_ui_request","id":"expired","method":"select","title":"Which?","options":["A","B"],"timeout":30}),
@@ -553,6 +556,28 @@ fn peer(protocol: &str) {
                     emit(
                         json!({"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop"}]}),
                     );
+                }
+                Some("steer") => {
+                    // None of these lookalikes confirms this steer.
+                    let id = req.as_str().unwrap().parse::<u64>().unwrap();
+                    for (id, command) in [
+                        (json!(id), "steer"),
+                        (json!(format!("0{id}")), "steer"),
+                        (req.clone(), "prompt"),
+                    ] {
+                        emit(
+                            json!({"type":"response","id":id,"command":command,"success":true,"data":{"disposition":"handled"}}),
+                        );
+                    }
+                    if v["message"] == "missing success" {
+                        emit(
+                            json!({"type":"response","id":req,"command":"steer","data":{"disposition":"handled"}}),
+                        );
+                    } else {
+                        emit(
+                            json!({"type":"response","id":req,"command":"steer","success":false,"error":"extension refused steer"}),
+                        );
+                    }
                 }
                 Some("extension_ui_response") => {
                     assert_eq!(
@@ -870,6 +895,56 @@ async fn failures() -> kar::Result<()> {
                 .iter()
                 .any(|e| matches!(e, Event::Exited { .. }))
         );
+    }
+    Ok(())
+}
+async fn pi_steer_reply_identity() -> kar::Result<()> {
+    let (_dir, rt, opts) = rig(Protocol::Pi, ApprovalMode::Host);
+    let session = rt.open(opts).await?;
+    let _turn = session.prompt("hold steer").await?;
+    for (text, status) in [
+        ("refuse", kar::SteerStatus::Refused),
+        ("missing success", kar::SteerStatus::Unconfirmed),
+    ] {
+        let from = session.records().len();
+        let id = uuid::Uuid::new_v4();
+        let result = session.steer_with_id(id, text).await;
+        if status == kar::SteerStatus::Refused {
+            assert!(
+                matches!(result, Err(Error::Refused(ref reason)) if reason == "extension refused steer")
+            );
+        } else {
+            assert!(result.is_err());
+        }
+        let rows = session.records();
+        assert_eq!(
+            rows[from..]
+                .iter()
+                .filter(|r| r.native["data"]["disposition"] == "handled"
+                    && r.native["success"] == true
+                    && r.response_to.is_none()
+                    && r.events.is_empty())
+                .count(),
+            3
+        );
+        let receipts: Vec<_> = rows
+            .iter()
+            .flat_map(|r| &r.events)
+            .filter_map(|e| match e {
+                Event::SteeringInput {
+                    input_id, status, ..
+                } if *input_id == id => Some(*status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(receipts, [kar::SteerStatus::Submitted, status]);
+        let request = rows
+            .iter()
+            .find(|r| r.native["inputId"] == id.to_string())
+            .unwrap();
+        assert!(rows.iter().any(
+            |r| r.native["requestId"] == request.native["id"] && r.native["type"] == "rejected"
+        ));
     }
     Ok(())
 }
@@ -1376,6 +1451,10 @@ async fn main() {
         .unwrap()
         .unwrap();
     opening::run().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(6), pi_steer_reply_identity())
+        .await
+        .unwrap()
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(6), pi_question_timeout())
         .await
         .unwrap()

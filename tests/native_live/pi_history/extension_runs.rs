@@ -36,6 +36,11 @@ async fn setup() -> (Fixture, kar::Runtime) {
             }});
             pi.on('input', async event => {{
                 if (event.text === 'HANDLE') return {{ action: 'handled' }};
+                if (event.text === 'LATE_HANDLE') {{
+                    writeFileSync({entered}, '');
+                    while (!existsSync({gate})) await delay(5);
+                    return {{ action: 'handled' }};
+                }}
                 if (event.text === '{HELD}-A') compete = true;
                 if (event.text === 'queued B') {{ appendFileSync({hooks}, 'B'); await delay(180); }}
                 return {{ action: 'continue' }};
@@ -197,6 +202,8 @@ async fn clients_replay_independent_activity_without_attaching_it_to_the_command
     right_rows.push(serde_json::to_value(&first).unwrap());
     assert!(right.apply(first).unwrap());
     drop(b);
+    let steering = Uuid::new_v4();
+    chat.steer_with_id(steering, "HANDLE").await.unwrap();
     let cut = store.feed_snapshot(id).unwrap().cursor;
     while left.cursor() != cut {
         let event = a.next().await;
@@ -207,6 +214,15 @@ async fn clients_replay_independent_activity_without_attaching_it_to_the_command
     assert_eq!(left.notifications()[0].activity.status, TurnStatus::Running);
     assert_ne!(left.notifications()[0].activity.id, command);
     assert!(left.notifications()[0].joined_input.is_none());
+    assert_eq!(
+        left.notifications()[0]
+            .activity
+            .steered_inputs
+            .get(&steering),
+        Some(&kar::SteerStatus::Handled)
+    );
+    assert!(left.turns()[0].steered_inputs.is_empty());
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
     drop(a);
     let next = Uuid::new_v4();
     chat.enqueue(next, "queue after native activity").unwrap();
@@ -257,6 +273,22 @@ async fn clients_replay_independent_activity_without_attaching_it_to_the_command
             ..
         }
     )));
+    let receipts = rows
+        .iter()
+        .flat_map(|row| {
+            row["update"]["frame"]["edits"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .filter(|edit| edit["id"] == steering.to_string() && edit["status"] == "handled")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        receipts.len(),
+        1,
+        "expected one durable native handled steer"
+    );
+    assert!(Uuid::parse_str(receipts[0]["request_id"].as_str().unwrap()).is_ok());
     let [notice] = left.notifications() else {
         panic!("expected single independent model run")
     };
@@ -576,4 +608,121 @@ async fn handled_command_preserves_native_extension_error_without_a_model_turn()
                 && r.native.to_string().contains("PROBE_HANDLER_FAILED"))
     );
     s.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires real KAR_PI_BIN; checks the native handled receipt for a mid-turn steer"]
+async fn handled_steer_preserves_the_running_prompt() {
+    let (f, rt) = setup().await;
+    let s = rt.open(f.options.clone()).await.unwrap();
+    let original_id = Uuid::new_v4();
+    let original = s.prompt_with_id(original_id, HELD).await.unwrap();
+    wait_for(|| f.options.cwd.join("requested").exists()).await;
+    let original_request = s
+        .records()
+        .iter()
+        .find_map(|r| r.prompt.as_ref()?.request_id.clone())
+        .unwrap();
+    let steer_id = Uuid::new_v4();
+    let mut attempts = std::collections::HashSet::new();
+    for _ in 0..2 {
+        let from = s.records().len();
+        s.steer_with_id(steer_id, "HANDLE").await.unwrap();
+        let rows = s.records();
+        let rows = &rows[from..];
+        let request = rows
+            .iter()
+            .find(|r| r.native["type"] == "steer" && r.native["input"] == "HANDLE")
+            .expect("missing public mid-turn steer request");
+        assert_eq!(request.native["inputId"], steer_id.to_string());
+        let attempt = request.native["id"].as_str().unwrap();
+        assert!(attempts.insert(attempt.to_owned()));
+        let response = rows
+            .iter()
+            .find(|r| r.native["requestId"] == attempt && r.native["type"] == "accepted")
+            .unwrap();
+        let native = rows
+            .iter()
+            .find(|r| {
+                r.response_to.as_deref() == Some(attempt)
+                    && r.native["command"] == "steer"
+                    && r.native["data"]["disposition"] == "handled"
+            })
+            .unwrap();
+        assert!(native.events.iter().any(|e| matches!(e, Event::SteeringInput { input_id, chat_turn: Some(owner), status: kar::SteerStatus::Handled, .. } if *input_id == steer_id && *owner == original_id)));
+        assert!(request.seq < native.seq && native.seq < response.seq);
+    }
+    let status = serde_json::to_value(s.status()).unwrap();
+    assert_eq!(status["kind"], "running");
+    assert_eq!(status["input_id"], original_id.to_string());
+    assert_eq!(status["request_id"], original_request);
+    assert!(matches!(
+        s.prompt("cannot overtake a handled steer").await,
+        Err(kar::Error::Busy)
+    ));
+    assert_eq!(ends(&s), 0);
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    fs::write(f.options.cwd.join("release"), "").unwrap();
+    assert_eq!(original.wait().await.unwrap(), Outcome::Completed);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires real KAR_PI_BIN; the extension answers after the model completes"]
+async fn late_steer_receipt_remains_on_the_completed_chat_turn() {
+    let (f, rt) = setup().await;
+    let store = ChatStore::open(f.temp.path().join("chats")).unwrap();
+    let chat = store
+        .create("pi", Some(&rt.program), f.options.clone())
+        .await
+        .unwrap();
+    let turn = Uuid::new_v4();
+    let input = Uuid::new_v4();
+    let gate = async {
+        wait_for(|| f.options.cwd.join("handler-entered").exists()).await;
+        fs::write(f.options.cwd.join("release"), "").unwrap();
+        wait_for(|| chat.history().unwrap().turns[0].status == TurnStatus::Completed).await;
+        let id = chat.info().id;
+        let at = store.feed_snapshot(id).unwrap();
+        assert_eq!(
+            at.history.turns[0].steered_inputs.get(&input),
+            Some(&kar::SteerStatus::Submitted)
+        );
+        let copy = interrupted_copy(
+            &f.temp.path().join("chats"),
+            &f.temp.path().join("lost-controller"),
+            id,
+            at.cursor,
+        );
+        let recovered = copy.feed_snapshot(id).unwrap();
+        assert_eq!(recovered.history.turns[0].status, TurnStatus::Completed);
+        assert_eq!(
+            recovered.history.turns[0].steered_inputs.get(&input),
+            Some(&kar::SteerStatus::Unconfirmed)
+        );
+        assert_eq!(copy.feed_snapshot(id).unwrap().cursor, recovered.cursor);
+        fs::write(f.options.cwd.join("handler-release"), "").unwrap();
+    };
+    let steer = async {
+        wait_for(|| f.options.cwd.join("requested").is_file()).await;
+        chat.steer_with_id(input, "LATE_HANDLE").await.unwrap();
+    };
+    let (sent, (), ()) = tokio::join!(chat.send(turn, HELD), gate, steer);
+    assert_eq!(sent.unwrap().status, TurnStatus::Completed);
+    let later = chat
+        .send(Uuid::new_v4(), "after late receipt")
+        .await
+        .unwrap();
+    assert_eq!(later.status, TurnStatus::Completed);
+    assert!(later.steered_inputs.is_empty());
+    let id = chat.info().id;
+    chat.close().await.unwrap();
+    let saved = store.history(id).unwrap();
+    assert_eq!(
+        saved.turns[0].steered_inputs.get(&input),
+        Some(&kar::SteerStatus::Handled)
+    );
+    assert_eq!(saved.turns[0].items.iter().filter(|item| matches!(&item.item, Item::Message {role:Role::User, text,..} if text == "LATE_HANDLE")).count(), 1);
+    assert!(saved.notifications.is_empty());
+    assert_eq!(f.calls.lock().unwrap().len(), 2);
 }

@@ -267,7 +267,7 @@ impl ChatFeed {
             if let Some(event) = self.ready.pop_front() {
                 if self.info.tracks_steering_receipts()
                     && let ChatUpdate::Frame { frame, .. } | ChatUpdate::Notification { frame, .. } = &event.update
-                    && frame.edits.iter().any(|e| matches!(e, super::ChatEdit::SteeringInput { status, .. } if status.is_waiting())) {
+                    && frame.edits.iter().any(|e| matches!(e, super::ChatEdit::SteeringInput { status, .. } if self.info.awaits_steering_receipt(*status))) {
                     self.may_have_steering = true;
                 }
                 match &event.update {
