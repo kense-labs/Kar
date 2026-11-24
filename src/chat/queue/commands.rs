@@ -55,6 +55,7 @@ impl Inbox {
                 e.id == id
                     && state.find(id).is_none()
                     && !e.withdrawn
+                    && e.refusal.is_none()
                     && e.promotion.as_ref().is_none_or(|p| p.returned_to_queue)
             })
             .ok_or_else(|| Error::Refused("input is no longer queued".into()))

@@ -47,11 +47,15 @@ pub struct QueuedInput {
     pub text: String,
     pub status: InputStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promotion: Option<QueuePromotion>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct Entry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refusal: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     attachments: Vec<super::Attachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,6 +100,7 @@ impl Entry {
             Some(t) if t.status == TurnStatus::Running => InputStatus::Sending,
             Some(_) => InputStatus::Uncertain,
             None if self.withdrawn => InputStatus::Withdrawn,
+            None if self.refusal.is_some() => InputStatus::Refused,
             None if crate::input::check_text(
                 &self.text,
                 crate::input::text_limit(&info.runtime),
@@ -113,6 +118,7 @@ impl Entry {
             id: self.id,
             text: self.text.clone(),
             status: self.status(state),
+            refusal: self.refusal.clone(),
             promotion: self.promotion.clone(),
         }
     }
@@ -126,6 +132,8 @@ struct Inbox {
     held: bool,
     #[serde(default)]
     promotions: std::collections::BTreeMap<Uuid, (Uuid, SteerTarget)>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    returned_promotions: std::collections::BTreeMap<Uuid, QueuedInput>,
     #[serde(default)]
     released: Option<Uuid>,
     #[serde(default)]
@@ -145,6 +153,7 @@ impl ChatStore {
                     entries: vec![],
                     held: false,
                     promotions: Default::default(),
+                    returned_promotions: Default::default(),
                     released: None,
                     commands: Default::default(),
                 });
@@ -262,6 +271,7 @@ impl ChatStore {
                 crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
             }
             let entry = Entry {
+                refusal: None,
                 attachments,
                 initial_attachments: None,
                 initial_text: None,
@@ -279,6 +289,9 @@ impl ChatStore {
                 .iter_mut()
                 .find(|e| e.id == id)
                 .ok_or_else(|| Error::Refused("unknown queued input".into()))?;
+            if entry.refusal.is_some() {
+                return Err(Error::Refused("input was already refused".into()));
+            }
             if turn.is_some()
                 || entry
                     .promotion
@@ -373,6 +386,9 @@ impl Admission {
             if entry.withdrawn {
                 return Err(Error::Refused("input was withdrawn".into()));
             }
+            if let Some(reason) = &entry.refusal {
+                return Err(Error::Refused(reason.clone()));
+            }
         }
         if inbox.held
             && inbox.entries.iter().any(|e| e.id == self.id)
@@ -415,6 +431,34 @@ impl ChatSession {
     }
 }
 impl Sender {
+    // Check the same head while holding the lock used by editors and native admission.
+    // A concurrent edit or hold leaves the new queue untouched for the next iteration.
+    fn refuse_queue_head(
+        &self,
+        id: Uuid,
+        text: &str,
+        attachments: &[super::Attachment],
+        reason: &str,
+    ) -> Result<()> {
+        let _lock = self.store.inbox_lock(self.info.id)?;
+        let log = self.sink.0.lock().unwrap();
+        log.healthy()?;
+        let mut inbox = self.store.read_inbox(&self.info)?;
+        if inbox
+            .next(&log.state)
+            .is_some_and(|e| e.id == id && e.text == text && e.attachments == attachments)
+        {
+            let entry = inbox
+                .entries
+                .iter_mut()
+                .find(|e| e.id == id)
+                .expect("selected queue head");
+            entry.refusal = Some(reason.to_owned());
+            self.store.save_inbox(&inbox)?;
+        }
+        Ok(())
+    }
+
     async fn pump_one(&self) -> Result<bool> {
         let inbox = self.store.read_inbox(&self.info)?;
         let next = {
@@ -427,6 +471,23 @@ impl Sender {
         let Some((id, text, attachments)) = next else {
             return Ok(false);
         };
+        if text.is_empty() && attachments.is_empty() {
+            self.refuse_queue_head(id, &text, &attachments, crate::input::EMPTY_INPUT)?;
+            return Ok(true);
+        }
+        if attachments
+            .iter()
+            .any(|a| a.kind == super::AttachmentKind::Image)
+            && !self.session.capabilities().image_input
+        {
+            self.refuse_queue_head(
+                id,
+                &text,
+                &attachments,
+                "this provider does not accept images",
+            )?;
+            return Ok(true);
+        }
         match self.run_turn(id, text.clone(), attachments.clone()).await {
             Ok(_) => Ok(true),
             Err(error) => {

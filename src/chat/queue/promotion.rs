@@ -101,6 +101,18 @@ impl ChatStore {
                     "queue promotion ID belongs to a different request".into(),
                 ));
             }
+            if let Some(receipt) = inbox.returned_promotions.get(&cmd) {
+                return Ok(Claim::Prior(receipt.clone()));
+            }
+            if !entry
+                .promotion
+                .as_ref()
+                .is_some_and(|p| p.command_id == cmd)
+            {
+                return Err(Error::Refused(
+                    "historical promotion receipt unavailable".into(),
+                ));
+            }
             return Ok(Claim::Prior(entry.receipt(&state)));
         }
         if !online || state.active() != Some(target.turn) {
@@ -115,6 +127,12 @@ impl ChatStore {
             return Err(Error::Refused("only a pending input can be steered".into()));
         }
         let payload = self.attached_input(chat, entry.text.clone(), &entry.attachments)?;
+        if let Some(previous) = entry.promotion.as_ref().filter(|p| p.returned_to_queue) {
+            inbox
+                .returned_promotions
+                .entry(previous.command_id)
+                .or_insert_with(|| entry.receipt(&state));
+        }
         entry.promotion = Some(QueuePromotion {
             command_id: cmd,
             target,
@@ -165,6 +183,13 @@ impl ChatStore {
             }
         }
         let receipt = entry.receipt(&state);
+        if receipt
+            .promotion
+            .as_ref()
+            .is_some_and(|p| p.returned_to_queue)
+        {
+            inbox.returned_promotions.insert(cmd, receipt.clone());
+        }
         self.save_inbox(&inbox)?;
         Ok(receipt)
     }

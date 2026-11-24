@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::{fs, time::Duration};
 use uuid::Uuid;
 
-const IMG:&[u8]=include_bytes!("../../crates/kar-documents/tests/pixel.png");
+const IMG: &[u8] = include_bytes!("../../crates/kar-documents/tests/pixel.png");
 
 #[tokio::main]
 pub(crate) async fn run() {
@@ -76,6 +76,8 @@ async fn scenario() {
         .unwrap();
     let next = Uuid::new_v4();
     let last = Uuid::new_v4();
+    let empty = Uuid::new_v4();
+    offline.enqueue(chat, empty, "").unwrap();
     offline.enqueue(chat, next, "first pending").unwrap();
     offline.enqueue(chat, last, "second pending").unwrap();
     let withdrawn = Uuid::new_v4();
@@ -85,6 +87,12 @@ async fn scenario() {
     offline.withdraw(chat, withdrawn).unwrap();
     let (mut server, url) = serve(&state, &work, &native).await;
     wait(url.clone(), client.clone(), 3).await;
+    let invalid = ok(client
+        .post(format!("{url}{path}/queue"))
+        .json(&json!({"id":empty,"text":""})))
+    .await;
+    assert_eq!(invalid["status"], "refused");
+    assert!(invalid["refusal"].as_str().unwrap().contains("empty input"));
     let retry = ok(client
         .post(format!("{url}{path}/queue"))
         .json(&json!({"id":next,"text":"first pending"})))
