@@ -248,6 +248,83 @@ async fn http_scenarios() {
         1
     );
 
+    let management = format!("{base}/projects/{p}/workflows/{hook}");
+    let rotate = || host.post(format!("{management}/webhook/rotate"));
+    let first_path = ok(rotate()).await["path"].as_str().unwrap().to_owned();
+    let second_path = ok(rotate()).await["path"].as_str().unwrap().to_owned();
+    assert_ne!(first_path, second_path);
+    let signed_at = |path: &str, key: &str| {
+        remote
+            .post(format!("{base}{path}?access_token=hide&kind=issue"))
+            .header("content-type", "application/json")
+            .header("x-kar-signature", key)
+            .body(body.clone())
+    };
+    assert_eq!(
+        signed_at(&first_path, &tag(&body))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        signed_at(&second_path, &tag(b"wrong"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(ok(signed_at(&second_path, &tag(&body))).await, first);
+    let logged = ok(host.get(format!("{management}/deliveries?accept_any_outcome=true"))).await;
+    let attempts = logged["deliveries"].as_array().unwrap();
+    assert_eq!(attempts.len(), 4);
+    assert_eq!(attempts[0]["outcome"], "duplicate");
+    assert_eq!(attempts[1]["outcome"], "rejected_signature");
+    assert_eq!(attempts[1]["signature_verified"], false);
+    let record = attempts[0]["id"].as_str().unwrap().to_owned();
+    let detail = ok(host.get(format!(
+        "{management}/deliveries/{record}?accept_any_outcome=true"
+    )))
+    .await;
+    assert_eq!(
+        detail["delivery"]["headers"]["x-kar-signature"],
+        "[redacted]"
+    );
+    assert_eq!(
+        detail["delivery"]["query"],
+        "access_token=[redacted]&kind=issue"
+    );
+    assert_eq!(detail["delivery"]["body_bytes"], body.len());
+    let visible = ok(host.get(format!("{management}/deliveries"))).await;
+    assert_eq!(visible["deliveries"].as_array().unwrap().len(), 2);
+    let other = save(
+        &host,
+        &base,
+        p,
+        json!({"type":"manual"}),
+        json!([{"type":"ask","question":"another?"}]),
+    )
+    .await;
+    assert_eq!(
+        host.get(format!(
+            "{base}/projects/{p}/workflows/{other}/deliveries/{record}?accept_any_outcome=true"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    child.kill().await.unwrap();
+    (child, base) = server::serve(&state, &root, &native).await;
+    let after = ok(host.get(format!(
+        "{base}/projects/{p}/workflows/{hook}/deliveries/{record}?accept_any_outcome=true"
+    )))
+    .await;
+    assert_eq!(after, detail);
+    assert_eq!(fs::read(root.join("hooks")).unwrap(), b"H");
     let def = save(
         &host,
         &base,

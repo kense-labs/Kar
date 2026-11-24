@@ -3,6 +3,7 @@
 mod routes;
 mod runner;
 mod schedule;
+mod webhook;
 pub(super) use routes::{hooks, routes};
 pub use schedule::Schedule;
 
@@ -214,6 +215,10 @@ pub enum Action {
 struct Data {
     workflows: BTreeMap<Uuid, Workflow>,
     secrets: BTreeMap<Uuid, String>,
+    #[serde(default)]
+    webhook_tokens: BTreeMap<Uuid, String>,
+    #[serde(default)]
+    deliveries: BTreeMap<Uuid, Vec<webhook::Receipt>>,
     runs: BTreeMap<Uuid, Run>,
     actions: BTreeMap<Uuid, (Uuid, Action)>,
 }
@@ -371,11 +376,11 @@ impl Workbench {
                     }
                     d.secrets.insert(id, secret);
                 }
-                if !d.secrets.contains_key(&id) {
-                    return Err(Error::Refused("webhook requires a signing secret".into()));
-                }
+                // Token-only hooks are reachable after the owner issues a URL.
+                // The permanent URL always requires an explicit signing secret.
             } else {
                 d.secrets.remove(&id);
+                d.webhook_tokens.remove(&id);
             }
             let w = Workflow {
                 project,
