@@ -68,10 +68,8 @@ pub(crate) fn agent() {
                     continue;
                 }
                 let source = v["params"]["threadId"].as_str().unwrap();
-                assert_eq!(
-                    fs::read_to_string(database.join(source)).unwrap(),
-                    cwd.to_str().unwrap()
-                );
+                let parent_cwd = fs::read_to_string(database.join(source)).unwrap();
+                assert_eq!(v["params"]["cwd"].as_str(), cwd.to_str());
                 let anchor = v["params"]["lastTurnId"].as_str().unwrap();
                 session = Uuid::new_v4().to_string();
                 fs::write(database.join(&session), cwd.to_str().unwrap()).unwrap();
@@ -84,7 +82,12 @@ pub(crate) fn agent() {
                     "{session}"
                 )
                 .unwrap();
-                reply(json!({"thread":{"id":session,"turns":[{"id":anchor}]}}));
+                let reported = if std::env::var_os("FIXTURE_FORK_WRONG_CWD").is_some() {
+                    parent_cwd.as_str()
+                } else {
+                    cwd.to_str().unwrap()
+                };
+                reply(json!({"cwd":reported,"thread":{"id":session,"turns":[{"id":anchor}]}}));
             }
             Some("thread/resume") => {
                 session = v["params"]["threadId"].as_str().unwrap().into();
@@ -118,7 +121,7 @@ pub(crate) fn agent() {
                     .ok()
                     .map(|b| serde_json::from_slice(&b).unwrap())
                     .unwrap_or(json!([]));
-                reply(json!({"thread":{"id":session,"turns":turns}}));
+                reply(json!({"cwd":cwd,"thread":{"id":session,"turns":turns}}));
             }
             Some("thread/compact/start") => {
                 let mode = fs::read_to_string(database.join("compact-mode")).unwrap_or_default();
@@ -192,7 +195,7 @@ pub(crate) fn agent() {
                         }
                         fs::write("shared", text).unwrap();
                     }
-                    "shared-next" => fs::write("shared", text).unwrap(),
+                    "shared-next" | "shared-child" => fs::write("shared", text).unwrap(),
                     "edit-one" => {
                         fs::write("staged.txt", b"first").unwrap();
                         fs::write("binary", [0, 255, 6]).unwrap();

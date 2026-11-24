@@ -337,7 +337,7 @@ impl ChatStore {
         let _workspace = self.workspace_lease(&log.state.info.workspace)?;
         let _pin = log.state.info.pin_worktree()?;
         self.require_no_pending_fork(log.state.info.id)?;
-        self.restore_leased(log, target, dry_run, false)
+        self.restore_leased(log, target, dry_run, false, None)
     }
     /// The caller holds the workspace lease across validation, the native fork and publication.
     pub(in crate::chat) fn restore_leased(
@@ -346,6 +346,7 @@ impl ChatStore {
         target: CheckpointPoint,
         dry_run: bool,
         exact: bool,
+        destination_base: Option<&str>,
     ) -> Result<RollbackReport> {
         let work = log.state.info.workspace.clone();
         if log.state.restoring.is_some_and(|p| p != target) {
@@ -355,7 +356,39 @@ impl ChatStore {
         }
         ancestry(&log.state, Some(target))?;
         let repo = gix::open(self.odb_path(log.state.info.checkpoint_store())).map_err(err)?;
-        let (plan, mut conflicts) = plan(&log.state, &repo, target)?;
+        let expected = if exact {
+            let checkpoint = log
+                .state
+                .find(target.turn)
+                .and_then(|t| t.checkpoint.as_ref())
+                .unwrap();
+            let tree = if target.before {
+                &checkpoint.before_tree
+            } else {
+                checkpoint.after_tree.as_ref().unwrap()
+            };
+            Some(tree_files(&read_tree(&repo, tree)?)?)
+        } else {
+            None
+        };
+        let (plan, mut conflicts) =
+            if let (Some(base), Some(expected)) = (destination_base, &expected) {
+                let baseline = tree_files(&read_tree(&repo, base)?)?;
+                let mut plan = Plan::new();
+                for change in changes(&baseline, expected) {
+                    if protected(&change.path) {
+                        return Err(err("unsafe path in fork checkpoint"));
+                    }
+                    let pair = (
+                        baseline.get(&change.path).copied(),
+                        expected.get(&change.path).copied(),
+                    );
+                    plan.insert(change.path, pair);
+                }
+                (plan, BTreeSet::new())
+            } else {
+                plan(&log.state, &repo, target)?
+            };
         let mut files = vec![];
         let mut pending = vec![];
         for (path, &(from, to)) in &plan {
@@ -400,27 +433,13 @@ impl ChatStore {
             files,
             applied: false,
         };
-        let expected = if exact {
-            let checkpoint = log
-                .state
-                .find(target.turn)
-                .and_then(|t| t.checkpoint.as_ref())
-                .unwrap();
-            let tree = if target.before {
-                &checkpoint.before_tree
-            } else {
-                checkpoint.after_tree.as_ref().unwrap()
-            };
-            let expected = tree_files(&read_tree(&repo, tree)?)?;
+        if let Some(expected) = &expected {
             report.conflicts.extend(
-                changes(&self.live_files(&repo, &work)?, &expected)
+                changes(&self.live_files(&repo, &work)?, expected)
                     .into_iter()
                     .filter(|file| !plan.contains_key(&file.path)),
             );
-            Some(expected)
-        } else {
-            None
-        };
+        }
         if dry_run || !report.conflicts.is_empty() {
             return Ok(report);
         }

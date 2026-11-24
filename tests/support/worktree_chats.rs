@@ -96,6 +96,83 @@ pub(super) fn run() {
         .unwrap()
         .stage(&["shared".into()])
         .unwrap();
+    let dest = repo
+        .create_worktree(Uuid::new_v4(), &base.join("forked"), "forked", "HEAD")
+        .unwrap();
+    let fork = |path: &Path| {
+        let mut cmd = cli(&base);
+        cmd.args(["fork", first, "--chat", &ai, "--worktree"])
+            .arg(path);
+        cmd
+    };
+    let sentinel = dest.path.join("keep");
+    fs::write(&sentinel, "mine").unwrap();
+    let refused = fork(&dest.path).output().unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("local changes"));
+    assert_eq!(fs::read(&sentinel).unwrap(), b"mine");
+    fs::remove_file(sentinel).unwrap();
+    let refused = fork(&dest.path)
+        .env("FIXTURE_FORK_WRONG_CWD", "1")
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("did not confirm"));
+    assert_eq!(fs::read(dest.path.join("shared")).unwrap(), b"base");
+
+    let mut host = fork(&dest.path)
+        .env("FIXTURE_PAUSE_BRANCH", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let db = base.join("native");
+    let published = db.join("awaiting-publication");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !published.is_file() {
+        assert!(host.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    host.kill().unwrap();
+    host.wait().unwrap();
+    let issued = fs::read(db.join("forks")).unwrap();
+    let origin = run(&["history", "--chat", &ai]);
+    assert_eq!(origin["pending_fork"]["turn"], first);
+    assert_eq!(fs::read(a.path.join("shared")).unwrap(), b"shared-next");
+    assert_eq!(fs::read(dest.path.join("shared")).unwrap(), b"shared-A");
+    assert_eq!(git(&dest.path, &["show", ":shared"]), "base");
+    let wrong = fork(&b.path).output().unwrap();
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("original worktree"));
+    run(&[
+        "resume",
+        "--chat",
+        &ai,
+        "parent continued while child was pending",
+    ]);
+    // Even without the destination argument a fresh Kar process resumes the staged fork.
+    let forked = run(&["fork", first, "--chat", &ai]);
+    let fork_id = forked["chat"]["id"].as_str().unwrap();
+    assert_eq!(fs::read(db.join("forks")).unwrap(), issued);
+    assert_eq!(
+        forked["chat"]["native_id"],
+        fs::read_to_string(published).unwrap()
+    );
+    assert_eq!(forked["chat"]["forked_from"]["native_source"], an);
+    assert_eq!(forked["chat"]["worktree_id"], dest.id.to_string());
+    assert_eq!(forked["chat"]["workspace"].as_str(), dest.path.to_str());
+    assert_eq!(forked["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(forked["turns"][0]["id"], first);
+    std::thread::scope(|s| {
+        let parent = s.spawn(|| run(&["resume", "--chat", &ai, "shared-next"]));
+        run(&["resume", "--chat", fork_id, "shared-child"]);
+        parent.join().unwrap();
+    });
+    assert_eq!(fs::read(a.path.join("shared")).unwrap(), b"shared-next");
+    assert_eq!(fs::read(dest.path.join("shared")).unwrap(), b"shared-child");
+    assert_eq!(git(&a.path, &["show", ":shared"]), "shared-next");
+    assert_eq!(git(&dest.path, &["show", ":shared"]), "base");
+
     run(&["rollback", first, "--chat", &ai]);
     assert_eq!(git(&a.path, &["show", ":shared"]), "shared-next");
     let child = run(&["fork", first, "--chat", &ai]);

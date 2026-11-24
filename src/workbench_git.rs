@@ -111,6 +111,10 @@ impl Repository {
         })
     }
 
+    pub(crate) fn same_repository(&self, other: &Self) -> bool {
+        self.common == other.common
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }

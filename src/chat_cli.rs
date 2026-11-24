@@ -122,6 +122,9 @@ enum Action {
     /// Restore a turn's workspace and continue from its native model context in a new chat.
     Fork {
         turn: Uuid,
+        /// Restore the selected turn into a separate Kar-managed linked checkout.
+        #[arg(long)]
+        worktree: Option<PathBuf>,
         #[arg(long)]
         chat: Option<Uuid>,
         #[command(flatten)]
@@ -482,8 +485,16 @@ impl Chat {
             Action::Fork {
                 turn,
                 chat,
+                worktree,
                 message,
-            } => (store.fork_at(selected(&store, chat)?, turn).await?, message),
+            } => {
+                let source = selected(&store, chat)?;
+                let branch = match worktree {
+                    Some(path) => store.fork_at_in_worktree(source, turn, path).await?,
+                    None => store.fork_at(source, turn).await?,
+                };
+                (branch, message)
+            }
             Action::Changes { turn, chat } => {
                 let history = store.history(selected(&store, chat)?)?;
                 let cp = history

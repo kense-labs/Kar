@@ -243,29 +243,57 @@ impl ChatStore {
             }
             (files, tree.id)
         } else {
-            let files = self.scan(&chat.workspace, |bytes| {
-                Ok(repo.write_blob(bytes).map_err(err)?.detach())
-            })?;
-            let mut tree = repo
-                .edit_tree(ObjectId::empty_tree(repo.object_hash()))
-                .map_err(err)?;
-            for (relative, leaf) in &files {
-                tree.upsert(
-                    gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative))
-                        .as_ref(),
-                    leaf.mode,
-                    leaf.id,
-                )
-                .map_err(err)?;
-            }
-            let id = tree.write().map_err(err)?.detach();
-            (files, id)
+            self.write_workspace_tree(&repo, &chat.workspace)?
         };
         Self::pin_tree(&repo, chat, point, id)?;
         Ok(Capture {
             tree: id.to_string(),
             files,
         })
+    }
+    fn write_workspace_tree(
+        &self,
+        repo: &gix::Repository,
+        workspace: &Path,
+    ) -> Result<(Files, ObjectId)> {
+        let files = self.scan(workspace, |bytes| {
+            Ok(repo.write_blob(bytes).map_err(err)?.detach())
+        })?;
+        let mut tree = repo
+            .edit_tree(ObjectId::empty_tree(repo.object_hash()))
+            .map_err(err)?;
+        for (relative, leaf) in &files {
+            tree.upsert(
+                gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative)).as_ref(),
+                leaf.mode,
+                leaf.id,
+            )
+            .map_err(err)?;
+        }
+        let id = tree.write().map_err(err)?.detach();
+        Ok((files, id))
+    }
+
+    pub(super) fn fork_baseline(&self, parent: &ChatInfo, workspace: &Path) -> Result<String> {
+        let repo = gix::open(self.odb_path(parent.checkpoint_store())).map_err(err)?;
+        let (_, tree) = self.write_workspace_tree(&repo, workspace)?;
+        Ok(tree.to_string())
+    }
+    pub(super) fn pin_fork_baseline(
+        &self,
+        parent: &ChatInfo,
+        child: Uuid,
+        tree: &str,
+    ) -> Result<()> {
+        let repo = gix::open(self.odb_path(parent.checkpoint_store())).map_err(err)?;
+        repo.reference(
+            format!("refs/kar/chats/{child}/fork-base"),
+            ObjectId::from_hex(tree.as_bytes()).map_err(err)?,
+            gix::refs::transaction::PreviousValue::Any,
+            "Kar fork destination baseline",
+        )
+        .map_err(err)?;
+        Ok(())
     }
     pub(super) fn saved_capture(&self, chat: &ChatInfo, id: &str) -> Result<Capture> {
         let repo = gix::open(self.odb_path(chat.checkpoint_store())).map_err(err)?;

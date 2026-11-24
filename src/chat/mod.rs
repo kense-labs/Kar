@@ -9,7 +9,7 @@ pub use http_feed::HttpChatFeed;
 pub use log::ChatUpdate;
 pub use timeline::{Edit as ChatEdit, Frame as ChatFrame, MorphProgress};
 mod fork;
-pub use fork::ForkOrigin;
+pub use fork::{ForkOrigin, ForkWorktreeBase};
 mod import;
 pub use checkpoint::{ChangeKind, Checkpoint, CheckpointPoint, FileChange, RollbackReport};
 mod log;

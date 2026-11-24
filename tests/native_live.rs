@@ -2738,6 +2738,54 @@ wire_api = "responses"
                 && body.contains("orange-original")
         }));
     }
+    if managed_checkout {
+        let checkout = kar::workbench_git::Repository::open(&workspace)
+            .unwrap()
+            .create_worktree(
+                uuid::Uuid::new_v4(),
+                &base.join("independent"),
+                "independent",
+                "HEAD",
+            )
+            .unwrap();
+        let fork = run(vec![
+            "fork".into(),
+            first_turn.clone(),
+            "--chat".into(),
+            id.to_string(),
+            "--worktree".into(),
+            checkout.path.to_str().unwrap().into(),
+        ])
+        .await;
+        let child = fork["chat"]["id"].as_str().unwrap();
+        assert_ne!(fork["chat"]["native_id"], native);
+        assert_eq!(fork["chat"]["worktree_id"], checkout.id.to_string());
+        assert_eq!(fork["turns"].as_array().unwrap().len(), 1);
+        run(vec![
+            "resume".into(),
+            "amber-independent".into(),
+            "--chat".into(),
+            child.into(),
+        ])
+        .await;
+        assert_eq!(
+            std::fs::read(checkout.path.join("version")).unwrap(),
+            b"orange"
+        );
+        assert_eq!(std::fs::read(workspace.join("version")).unwrap(), b"blue");
+        assert_eq!(history.history(id).unwrap().turns.len(), 2);
+        let requests = log.lock().unwrap();
+        let request = requests
+            .iter()
+            .map(Value::to_string)
+            .find(|v| v.contains("amber-independent"))
+            .unwrap();
+        assert!(
+            request.contains("orange-original")
+                && !request.contains("blue-continuation")
+                && !request.contains("blue-answer-only")
+        );
+    }
     let fork = run(vec![
         "fork".into(),
         first_turn.clone(),

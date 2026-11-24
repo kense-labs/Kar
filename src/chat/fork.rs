@@ -1,3 +1,4 @@
+mod worktree;
 use super::{ChatInfo, ChatSession, ChatStore, CheckpointPoint, Sink, TurnStatus, log};
 use crate::{Error, Protocol, Result, Session, SessionOptions};
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,16 @@ pub struct ForkOrigin {
     pub native_source: String,
     pub anchor: String,
     pub checkpoint_store: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_base: Option<ForkWorktreeBase>,
+}
+
+/// Git checkout and immutable preimage used to resume a partially applied independent fork.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ForkWorktreeBase {
+    pub tree: String,
+    pub head: String,
+    pub branch: String,
 }
 
 impl ChatStore {
@@ -35,7 +46,10 @@ impl ChatStore {
             .ok_or_else(|| Error::Protocol("invalid staged fork".into()))
     }
     pub(super) fn require_no_pending_fork(&self, source: Uuid) -> Result<()> {
-        if let Some(f) = self.pending_fork(source)? {
+        if let Some(f) = self
+            .pending_fork(source)?
+            .filter(|f| f.worktree_base.is_none())
+        {
             return Err(Error::Refused(format!(
                 "finish the pending fork: kar chat fork {} --chat {source}",
                 f.turn
@@ -56,8 +70,25 @@ impl ChatStore {
         let log = self.open_controller(source).await?;
         let mut opts = log.state.info.options();
         configure(&mut opts);
-        self.fork_from(Sink(Arc::new(Mutex::new(log))), turn, opts)
+        self.fork_from(Sink(Arc::new(Mutex::new(log))), turn, opts, None)
             .await
+    }
+    /// Fork files and native context into a linked checkout previously created by Kar.
+    pub async fn fork_at_in_worktree(
+        &self,
+        source: Uuid,
+        turn: Uuid,
+        checkout: impl Into<PathBuf>,
+    ) -> Result<ChatSession> {
+        let log = self.open_controller(source).await?;
+        let opts = log.state.info.options();
+        self.fork_from(
+            Sink(Arc::new(Mutex::new(log))),
+            turn,
+            opts,
+            Some(checkout.into()),
+        )
+        .await
     }
     pub(super) async fn open_saved(
         state: &log::State,
@@ -119,6 +150,14 @@ impl ChatStore {
             session.close().await?;
             return Err(Error::Protocol("provider resumed a different chat".into()));
         }
+        if rt.protocol == Protocol::Codex
+            && info
+                .forked_from
+                .as_ref()
+                .is_some_and(|f| f.worktree_base.is_some())
+        {
+            worktree::confirm(&session, &info.workspace).await?;
+        }
         Ok(session)
     }
     async fn fork_from(
@@ -126,10 +165,11 @@ impl ChatStore {
         source: Sink,
         turn: Uuid,
         opts: SessionOptions,
+        checkout: Option<PathBuf>,
     ) -> Result<ChatSession> {
         crate::stream::retention::check_limit(opts.retained_bytes)?;
         let store = self.clone();
-        tokio::spawn(async move { store.run_fork(source, turn, opts).await })
+        tokio::spawn(async move { store.run_fork(source, turn, opts, checkout).await })
             .await
             .map_err(|e| Error::Closed(e.to_string()))?
     }
@@ -138,6 +178,7 @@ impl ChatStore {
         source: Sink,
         turn: Uuid,
         mut opts: SessionOptions,
+        checkout: Option<PathBuf>,
     ) -> Result<ChatSession> {
         let parent = {
             let log = source.0.lock().unwrap();
@@ -162,12 +203,36 @@ impl ChatStore {
             )));
         }
         let stage = self.fork_stage(parent.id);
-        let workspace = Self::workspace_lease_for(&parent.workspace, Some(&stage))?;
+        let read_stage = || match File::open(&stage) {
+            Ok(file) => log::staged_info(file).map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        };
+        let staged_info = read_stage()?;
+        let staged_checkout = staged_info.as_ref().filter(|i| {
+            i.forked_from
+                .as_ref()
+                .is_some_and(|f| f.worktree_base.is_some())
+        });
+        let destination = checkout
+            .as_deref()
+            .or_else(|| staged_checkout.map(|i| i.workspace.as_path()))
+            .map(|path| worktree::Destination::open(&parent, path, &mut opts).map(Arc::new))
+            .transpose()?;
+        let _parent_lease = if destination.is_some() {
+            Some(self.workspace_lease(&parent.workspace)?)
+        } else {
+            None
+        };
+        let workspace = Self::workspace_lease_for(&opts.cwd, Some(&stage))?;
+        if staged_info.as_ref().map(|info| info.id) != read_stage()?.map(|info| info.id) {
+            return Err(Error::Busy);
+        }
         let target = CheckpointPoint {
             turn,
             before: false,
         };
-        let staged = stage.try_exists()?;
+        let staged = staged_info.is_some();
         let mut prefix = {
             let log = source.0.lock().unwrap();
             log.healthy()?;
@@ -241,8 +306,18 @@ impl ChatStore {
             .first()
             .and_then(|i| i.source.session_id.clone())
             .ok_or_else(|| Error::Protocol("turn lacks its native session identity".into()))?;
-        let saved = if staged {
-            let info = log::staged_info(File::open(&stage)?)?;
+        let saved = if let Some(info) = staged_info {
+            if destination.as_ref().map(|d| (d.id, d.workspace.as_path()))
+                != info
+                    .forked_from
+                    .as_ref()
+                    .and_then(|f| f.worktree_base.as_ref())
+                    .and_then(|_| info.worktree_id.map(|id| (id, info.workspace.as_path())))
+            {
+                return Err(Error::Refused(
+                    "retry the pending fork in its original worktree".into(),
+                ));
+            }
             if !info.forked_from.as_ref().is_some_and(|f| {
                 f.chat == parent.id
                     && f.turn == turn
@@ -260,7 +335,18 @@ impl ChatStore {
             }
             info
         } else {
-            self.fork_restore(&source, target, true).await?;
+            let child_id = Uuid::new_v4();
+            let worktree_base = if let Some(dest) = &destination {
+                let (dest, store, parent) = (dest.clone(), self.clone(), parent.clone());
+                Some(
+                    tokio::task::spawn_blocking(move || dest.baseline(&store, &parent))
+                        .await
+                        .map_err(|e| Error::Closed(e.to_string()))??,
+                )
+            } else {
+                self.fork_restore(&source, target, true).await?;
+                None
+            };
             if cut.fork_anchor.is_none()
                 && parent.protocol == Protocol::Pi
                 && cut.status == TurnStatus::Completed
@@ -285,6 +371,12 @@ impl ChatStore {
                     .await?;
                 (session, anchor)
             };
+            if let Some(dest) = &destination {
+                worktree::confirm(&branch, &dest.workspace).await?;
+            }
+            if let Some(base) = &worktree_base {
+                self.pin_fork_baseline(&parent, child_id, &base.tree)?;
+            }
             cut.fork_anchor = Some(anchor.clone());
             let origin = ForkOrigin {
                 chat: parent.id,
@@ -292,9 +384,12 @@ impl ChatStore {
                 native_source,
                 anchor,
                 checkpoint_store: parent.checkpoint_store(),
+                worktree_base,
             };
             let child = ChatInfo {
-                id: Uuid::new_v4(),
+                id: child_id,
+                workspace: opts.cwd.clone(),
+                worktree_id: destination.as_ref().map(|d| d.id).or(parent.worktree_id),
                 native_id: branch.id().into(),
                 created_ms: super::now(),
                 model: opts.model.clone(),
@@ -319,11 +414,35 @@ impl ChatStore {
         if self.path(saved.id).try_exists()? {
             return Err(Error::Refused("fork destination already exists".into()));
         }
-        let log = Self::load_log(&stage, saved.id, lease)?;
-        if let Err(error) = self.fork_restore(&source, target, false).await {
+        let mut log = Self::load_log(&stage, saved.id, lease)?;
+        let (log, restored) = if let (Some(dest), Some(base)) = (
+            &destination,
+            saved
+                .forked_from
+                .as_ref()
+                .and_then(|f| f.worktree_base.as_ref()),
+        ) {
+            let (dest, store, base) = (dest.clone(), self.clone(), base.clone());
+            tokio::task::spawn_blocking(move || {
+                let result = dest.verify(&base).and_then(|_| {
+                    store
+                        .restore_leased(&mut log, target, false, true, Some(&base.tree))
+                        .and_then(worktree::no_conflicts)
+                });
+                (log, result)
+            })
+            .await
+            .map_err(|e| Error::Closed(e.to_string()))?
+        } else {
+            (log, self.fork_restore(&source, target, false).await)
+        };
+        if let Err(error) = restored {
             // A local edit between the preflight and the native handshake may veto a
             // fresh fork. No restore started in that case, so the parent stays usable.
-            if !staged && source.0.lock().unwrap().state.restoring.is_none() {
+            if !staged
+                && log.state.restoring.is_none()
+                && source.0.lock().unwrap().state.restoring.is_none()
+            {
                 drop(log);
                 fs::remove_file(&stage)?;
                 #[cfg(unix)]
@@ -333,6 +452,34 @@ impl ChatStore {
         }
         // Launch in the restored checkout so workspace-derived instructions are loaded there.
         let session = Self::open_saved(&log.state, opts.before_chat_attach()?).await?;
+        if let Some(dest) = &destination {
+            // A provider can take time to reopen. Check directory contents and branch again
+            // before making the child visible to another client.
+            let dest = dest.clone();
+            let info = saved.clone();
+            let store = self.clone();
+            let expected = log
+                .state
+                .find(target.turn)
+                .and_then(|t| t.checkpoint.as_ref())
+                .and_then(|cp| cp.after_tree.clone())
+                .ok_or_else(|| Error::Protocol("missing staged fork checkpoint".into()))?;
+            let verified = tokio::task::spawn_blocking(move || {
+                let base = info
+                    .forked_from
+                    .as_ref()
+                    .and_then(|f| f.worktree_base.as_ref())
+                    .ok_or_else(|| Error::Protocol("missing staged fork baseline".into()))?;
+                dest.verify(base)?;
+                store.capture(&info, target, Some(&expected)).map(|_| ())
+            })
+            .await
+            .map_err(|e| Error::Closed(e.to_string()))?;
+            if let Err(e) = verified {
+                session.close().await?;
+                return Err(e);
+            }
+        }
         let child = ChatSession::bind(session, log, self.clone(), opts)?;
         fs::rename(stage, self.path(saved.id))?;
         #[cfg(unix)]
@@ -350,22 +497,11 @@ impl ChatStore {
         let sink = source.clone();
         let report = tokio::task::spawn_blocking(move || {
             let mut log = sink.0.lock().unwrap();
-            store.restore_leased(&mut log, target, preview, true)
+            store.restore_leased(&mut log, target, preview, true, None)
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;
-        if !report.conflicts.is_empty() {
-            return Err(Error::Refused(format!(
-                "workspace conflicts: {}",
-                report
-                    .conflicts
-                    .iter()
-                    .map(|f| f.path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
-        }
-        Ok(())
+        worktree::no_conflicts(report)
     }
 }
 impl ChatSession {
@@ -373,7 +509,22 @@ impl ChatSession {
     pub async fn fork_at(&self, turn: Uuid) -> Result<ChatSession> {
         self.sender
             .store
-            .fork_from(self.sender.sink.clone(), turn, self.launch.clone())
+            .fork_from(self.sender.sink.clone(), turn, self.launch.clone(), None)
+            .await
+    }
+    pub async fn fork_at_in_worktree(
+        &self,
+        turn: Uuid,
+        checkout: impl Into<PathBuf>,
+    ) -> Result<ChatSession> {
+        self.sender
+            .store
+            .fork_from(
+                self.sender.sink.clone(),
+                turn,
+                self.launch.clone(),
+                Some(checkout.into()),
+            )
             .await
     }
 }
