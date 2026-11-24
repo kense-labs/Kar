@@ -1,0 +1,377 @@
+//! Compile now; the unified macOS run executes the CLI, process restarts, and a
+//! Codex protocol peer (the latter is not evidence of a live provider result).
+#[path = "support/codex_chat_peer.rs"]
+mod codex_chat_peer;
+#[path = "support/workbench_server.rs"]
+mod server;
+
+use hmac::{Hmac, KeyInit, Mac};
+use kar::{
+    chat::ChatStore,
+    workbench::{
+        Workbench,
+        workflows::{Clock, Definition, Schedule, Status, Step},
+    },
+};
+use reqwest::{Client, StatusCode};
+use serde_json::{Value, json};
+use server::json as ok;
+use std::{
+    fs,
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicI64, Ordering},
+    },
+    time::Duration,
+};
+use uuid::Uuid;
+
+struct ManualClock(AtomicI64);
+impl Clock for ManualClock {
+    fn now_ms(&self) -> i64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+fn definition(schedule: Schedule) -> Definition {
+    Definition {
+        name: "fixture".into(),
+        enabled: true,
+        schedule,
+        steps: vec![Step::Ask {
+            question: "Proceed?".into(),
+        }],
+    }
+}
+fn ms(stamp: &str) -> i64 {
+    stamp.parse::<jiff::Timestamp>().unwrap().as_millisecond()
+}
+
+async fn scheduling() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let db = temp.path().join("store");
+    let t = ms("2025-01-06T08:59:00Z"); // Monday, before 09:00 UTC.
+    let clock = Arc::new(ManualClock(AtomicI64::new(t)));
+    let open = || {
+        Workbench::open_with_workflow_clock(
+            ChatStore::open(&db).unwrap(),
+            std::slice::from_ref(&root),
+            clock.clone(),
+        )
+        .unwrap()
+    };
+    let app = open();
+    let project = app.register(&root, "project").unwrap().id;
+    let other_root = root.join("second");
+    fs::create_dir(&other_root).unwrap();
+    let other = app.register(&other_root, "second").unwrap().id;
+    let once = Uuid::new_v4();
+    let every = Uuid::new_v4();
+    let daily = Uuid::new_v4();
+    let within = Uuid::new_v4();
+    let fixed = |time: &str| Schedule::FixedTime {
+        time: time.into(),
+        weekdays: vec![1],
+        zone: Some("UTC".into()),
+    };
+    for (id, schedule, next) in [
+        (once, Schedule::Once { at_ms: t + 60_000 }, t + 60_000),
+        (every, Schedule::Interval { every_ms: 60_000 }, t + 60_000),
+        (daily, fixed("09:00"), t + 60_000),
+        (within, fixed("09:01"), t + 120_000),
+    ] {
+        assert_eq!(
+            app.save_workflow(project, id, definition(schedule), None)
+                .unwrap()
+                .next_ms,
+            Some(next)
+        );
+    }
+    // Manual delivery and its retry before the one-off instant leave it scheduled.
+    let op = Uuid::new_v4();
+    let manual = app
+        .trigger_workflow(project, once, op, json!("one"))
+        .unwrap();
+    assert_eq!(
+        app.trigger_workflow(project, once, op, json!("one"))
+            .unwrap()
+            .id,
+        manual.id
+    );
+    assert!(
+        app.trigger_workflow(project, once, op, json!("different"))
+            .is_err()
+    );
+    assert!(app.workflow_run(other, manual.id).is_err());
+    drop(app);
+    clock.0.store(t + 12 * 60_000, Ordering::SeqCst);
+    let app = open();
+    let barrier = Arc::new(Barrier::new(2));
+    let mut workers = Vec::new();
+    for _ in 0..2 {
+        let app = app.clone();
+        let barrier = barrier.clone();
+        workers.push(tokio::task::spawn_blocking(move || {
+            barrier.wait();
+            app.tick_workflows().unwrap()
+        }));
+    }
+    let mut count = 0;
+    for worker in workers {
+        count += worker.await.unwrap();
+    }
+    assert_eq!(count, 3); // once, one coalesced interval and daily exactly ten minutes late.
+    let defs = app.workflows(project).unwrap();
+    let find = |id| defs.iter().find(|d| d.id == id).unwrap();
+    assert_eq!(find(once).next_ms, None);
+    assert_eq!(find(every).next_ms, Some(t + 13 * 60_000));
+    assert_eq!(find(daily).last_missed_ms, Some(t + 60_000));
+    assert_eq!(find(daily).next_ms, Some(ms("2025-01-13T09:00:00Z")));
+    for (id, n) in [(once, 2), (every, 1), (daily, 0), (within, 1)] {
+        let runs = app.workflow_runs(project, id).unwrap();
+        assert_eq!(runs.len(), n);
+        assert!(runs.iter().all(|r| r.status == Status::Asking));
+    }
+    assert_eq!(app.tick_workflows().unwrap(), 0);
+    let ny = Schedule::FixedTime {
+        time: "09:00".into(),
+        weekdays: vec![],
+        zone: Some("America/New_York".into()),
+    };
+    assert_eq!(
+        ny.next_after(ms("2025-03-08T14:01:00Z")).unwrap(),
+        Some(ms("2025-03-09T13:00:00Z"))
+    );
+}
+
+const SECRET: &str = "kar-fixture-webhook-key";
+fn tag(body: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut mac = Hmac::<sha2_mac::Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+    mac.update(body);
+    let mut tag = "sha256=".to_owned();
+    for b in mac.finalize().into_bytes() {
+        write!(tag, "{b:02x}").unwrap();
+    }
+    tag
+}
+
+async fn wait(host: &Client, base: &str, p: &str, id: &str, status: &str) -> Value {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let run = ok(host.get(format!("{base}/projects/{p}/workflow-runs/{id}"))).await;
+            if run["status"] == status {
+                return run;
+            }
+            if run["status"] == "failed"
+                || run["status"] == "reconcile"
+                || run["status"] == "cancelled"
+                || run["status"] == "completed"
+            {
+                panic!("unexpected workflow result while waiting for {status}: {run}");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap()
+}
+async fn save(host: &Client, base: &str, p: &str, schedule: Value, steps: Value) -> Uuid {
+    let id = Uuid::new_v4();
+    let def=ok(host.put(format!("{base}/projects/{p}/workflows/{id}")).json(&json!({"name":"pipeline","enabled":true,"schedule":schedule,"steps":steps,"webhook_secret":SECRET}))).await;
+    assert!(def.get("webhook_secret").is_none());
+    id
+}
+async fn start(host: &Client, base: &str, p: &str, id: Uuid) -> String {
+    ok(host
+        .post(format!("{base}/projects/{p}/workflows/{id}/runs"))
+        .json(&json!({"operation":Uuid::new_v4(),"input":{"repo":"test"}})))
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+async fn action(host: &Client, base: &str, p: &str, id: &str, body: &Value) -> Value {
+    ok(host
+        .post(format!("{base}/projects/{p}/workflow-runs/{id}/actions"))
+        .json(body))
+    .await
+}
+
+async fn http_scenarios() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("work");
+    let state = dir.path().join("state");
+    let native = dir.path().join("native");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&native).unwrap();
+    let host = server::client();
+    let remote = Client::new();
+    let (mut child, mut base) = server::serve(&state, &root, &native).await;
+    let project = ok(host
+        .post(format!("{base}/projects"))
+        .json(&json!({"name":"fixture","root":root})))
+    .await;
+    let p = project["id"].as_str().unwrap();
+    let hook=save(&host,&base,p,json!({"type":"webhook"}),json!([{"type":"script","command":"test -z \"$KAR_WORKBENCH_TOKEN\" && printf H >> hooks"}])).await;
+    let url = format!("{base}/hooks/workflows/{p}/{hook}");
+    let body = serde_json::to_vec(&json!({"id":"event-1","input":{"message":"signed"}})).unwrap();
+    let post = |signature: &str| {
+        remote
+            .post(&url)
+            .header("x-kar-signature", signature)
+            .body(body.clone())
+    };
+    assert_eq!(
+        post(&tag(b"tampered")).send().await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert!(!root.join("hooks").exists());
+    let (first, duplicate) = tokio::join!(ok(post(&tag(&body))), ok(post(&tag(&body))));
+    assert_eq!(first, duplicate);
+    wait(
+        &host,
+        &base,
+        p,
+        first["run_id"].as_str().unwrap(),
+        "completed",
+    )
+    .await;
+    assert_eq!(fs::read(root.join("hooks")).unwrap(), b"H");
+    assert_eq!(
+        ok(host.get(format!("{base}/projects/{p}/workflows/{hook}/runs")))
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let def = save(
+        &host,
+        &base,
+        p,
+        json!({"type":"manual"}),
+        json!([
+            {"type":"script","command":"printf start >> first; printf hello"},
+            {"type":"agent","runtime":"codex","model":null,"prompt":"Reply to the workflow input."},
+            {"type":"ask","question":"Publish?"},
+            {"type":"wait","duration_ms":4000},
+            {"type":"script","command":"cat > context.json; printf end >> last"}
+        ]),
+    )
+    .await;
+    let id = start(&host, &base, p, def).await;
+    let ask = wait(&host, &base, p, &id, "asking").await;
+    assert_eq!(ask["cursor"], 2);
+    assert_eq!(ask["receipts"][0]["result"]["stdout"]["text"], "hello");
+    assert!(
+        ask["receipts"][1]["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("haha")
+    );
+    let chat = ask["receipts"][1]["attempt"]["chat"].as_str().unwrap();
+    let snap = ok(host.get(format!("{base}/projects/{p}/chats/{chat}/snapshot"))).await;
+    assert!(
+        snap.to_string()
+            .contains(ask["receipts"][1]["attempt"]["id"].as_str().unwrap())
+    );
+    child.kill().await.unwrap();
+    (child, base) = server::serve(&state, &root, &native).await;
+    let same = wait(&host, &base, p, &id, "asking").await;
+    assert_eq!(same["attempt"], ask["attempt"]);
+    let answer = json!({"type":"answer","operation":Uuid::new_v4(),"attempt":ask["attempt"]["id"],"answer":"approved"});
+    action(&host, &base, p, &id, &answer).await;
+    let sleeping = wait(&host, &base, p, &id, "waiting").await;
+    child.kill().await.unwrap();
+    (child, base) = server::serve(&state, &root, &native).await;
+    action(&host, &base, p, &id, &answer).await;
+    let end = wait(&host, &base, p, &id, "completed").await;
+    assert_eq!(end["receipts"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        end["receipts"][3]["attempt"]["id"],
+        sleeping["attempt"]["id"]
+    );
+    let context: Value =
+        serde_json::from_slice(&fs::read(root.join("context.json")).unwrap()).unwrap();
+    assert_eq!(context["receipts"][2]["result"], "approved");
+    assert_eq!(fs::read(root.join("first")).unwrap(), b"start");
+    assert_eq!(fs::read(root.join("last")).unwrap(), b"end");
+
+    let fail = save(
+        &host,
+        &base,
+        p,
+        json!({"type":"manual"}),
+        json!([{"type":"script","command":"printf R >> retries; test -e allow"}]),
+    )
+    .await;
+    let rid = start(&host, &base, p, fail).await;
+    let failed = wait(&host, &base, p, &rid, "failed").await;
+    fs::write(root.join("allow"), []).unwrap();
+    let retry = json!({"type":"retry","operation":Uuid::new_v4(),"attempt":failed["receipts"][0]["attempt"]["id"]});
+    action(&host, &base, p, &rid, &retry).await;
+    action(&host, &base, p, &rid, &retry).await;
+    let retried = wait(&host, &base, p, &rid, "completed").await;
+    assert_eq!(retried["receipts"].as_array().unwrap().len(), 2);
+    assert_eq!(fs::read(root.join("retries")).unwrap(), b"RR");
+
+    let uncertain=save(&host,&base,p,json!({"type":"manual"}),json!([{"type":"script","command":"printf U >> effects; while [ ! -f release ]; do sleep 0.05; done"},{"type":"ask","question":"Continue?"}])).await;
+    let uid = start(&host, &base, p, uncertain).await;
+    while !root.join("effects").exists() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    child.kill().await.unwrap();
+    fs::write(root.join("release"), []).unwrap();
+    (child, base) = server::serve(&state, &root, &native).await;
+    let orphan = wait(&host, &base, p, &uid, "reconcile").await;
+    let attempt = &orphan["attempt"]["id"];
+    let url = format!("{base}/projects/{p}/workflow-runs/{uid}/actions");
+    assert_eq!(
+        host.post(url)
+            .json(&json!({"type":"retry","operation":Uuid::new_v4(),"attempt":attempt}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let confirm = json!({"type":"reconcile","operation":Uuid::new_v4(),"attempt":attempt,"succeeded":true,"evidence":"checked effect file","result":"published"});
+    action(&host, &base, p, &uid, &confirm).await;
+    let next = wait(&host, &base, p, &uid, "asking").await;
+    assert_eq!(next["cursor"], 1);
+    assert_eq!(
+        next["receipts"][0]["result"]["evidence"],
+        "checked effect file"
+    );
+    action(
+        &host,
+        &base,
+        p,
+        &uid,
+        &json!({"type":"cancel","operation":Uuid::new_v4()}),
+    )
+    .await;
+    child.kill().await.unwrap();
+    (child, base) = server::serve(&state, &root, &native).await;
+    wait(&host, &base, p, &uid, "cancelled").await;
+    assert_eq!(fs::read(root.join("effects")).unwrap(), b"U");
+    child.kill().await.unwrap();
+}
+
+fn main() {
+    match std::env::args().nth(1).as_deref() {
+        Some("app-server") => codex_chat_peer::agent(),
+        Some("--version") => println!("codex 0.169.0"),
+        _ => tokio::runtime::Runtime::new().unwrap().block_on(async {
+            tokio::time::timeout(Duration::from_secs(120), async {
+                scheduling().await;
+                http_scenarios().await;
+            })
+            .await
+            .unwrap();
+        }),
+    }
+}

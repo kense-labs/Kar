@@ -98,6 +98,11 @@ name = "workbench_handoff"
 path = "tests/workbench_handoff.rs"
 harness = false
 
+[[test]]
+name = "workbench_workflows"
+path = "tests/workbench_workflows.rs"
+harness = false
+
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["signal", "process", "feature", "fs", "user"] }
 
