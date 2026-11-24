@@ -1,5 +1,7 @@
 //! Project-bound durable workflows. An attempt is committed before an external call.
 //! Only a receipt, or explicit reconciliation, allows that step to advance.
+mod mailbox;
+pub(in crate::workbench) use mailbox::Message;
 mod routes;
 mod runner;
 mod schedule;
@@ -48,6 +50,7 @@ pub enum Step {
     Ask {
         question: String,
     },
+    WaitSignal {channel:String},
     Wait {
         duration_ms: i64,
     },
@@ -71,6 +74,7 @@ impl Definition {
                 Step::Agent {
                     runtime, prompt, ..
                 } => !bounded(runtime) || !bounded(prompt),
+                Step::WaitSignal { channel } => !mailbox::valid_key(channel),
                 Step::Ask { question } => !bounded(question),
                 Step::Wait { duration_ms } => *duration_ms < 0 || *duration_ms > 365 * 86400000i64,
             })
@@ -168,6 +172,7 @@ impl Run {
                 self.wake_at_ms = Some(now.saturating_add(*duration_ms));
             }
             Step::Ask { .. } => self.status = Status::Asking,
+            Step::WaitSignal { .. } => self.status = Status::Waiting,
             _ => self.status = Status::Running,
         }
         attempt
@@ -222,6 +227,8 @@ pub enum Action {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Data {
+    #[serde(default)]
+    mailbox:mailbox::Mailbox,
     #[serde(default)]
     revision: u64,
     #[serde(default)]
@@ -536,6 +543,7 @@ impl Workbench {
             authorize()?;
             let r = d.runs.get_mut(&id).ok_or_else(missing)?;
             same_project(project, r.project)?;
+            if d.mailbox.commands.contains_key(&operation){return Err(Error::Refused("workflow command already used".into()));}
             if let Some((run, old)) = d.actions.get(&operation) {
                 if *run != id || *old != action {
                     return Err(Error::Refused("operation identifier already used".into()));
@@ -545,7 +553,7 @@ impl Workbench {
             let active = r.attempt.as_ref().map(|a| a.id);
             match &action {
                 Action::Answer { attempt, answer }
-                    if r.status == Status::Asking && active == Some(*attempt) =>
+                    if (r.status == Status::Asking || r.status==Status::Waiting && matches!(r.steps.get(r.cursor),Some(Step::WaitSignal{..}))) && active == Some(*attempt) =>
                 {
                     r.finish(true, answer.clone(), now)
                 }

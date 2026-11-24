@@ -165,6 +165,7 @@ fn cancel_deferred(runs: &mut std::collections::BTreeMap<Uuid, super::Run>, work
 }
 pub(super) fn erase_workflow(db: &mut Data, id: Uuid) {
     db.workflows.remove(&id);
+    db.mailbox.remove(id);
     db.secrets.remove(&id);
     db.webhook_tokens.remove(&id);
     db.webhook_rules.remove(&id);

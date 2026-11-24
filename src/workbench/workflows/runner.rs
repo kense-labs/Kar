@@ -68,7 +68,7 @@ impl Workbench {
                     advance(r)
                         && (remaining > 0
                             || r.status == Status::Waiting
-                            || matches!(r.steps[r.cursor], Step::Ask { .. } | Step::Wait { .. }))
+                            || matches!(r.steps[r.cursor], Step::Ask { .. } | Step::Wait { .. } | Step::WaitSignal{..}))
                 })
             {
                 return Ok(0);
@@ -124,6 +124,7 @@ impl Workbench {
                     run.webhook_due_ms = None;
                     run.webhook_templates = None;
                     run.begin(now);
+                    d.mailbox.consume(run,now);
                     if external {
                         remaining -= 1;
                         jobs.push(run.clone());

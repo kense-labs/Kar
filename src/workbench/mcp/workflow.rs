@@ -2,13 +2,27 @@
 use super::*;
 use crate::{
     Error, Result,
-    workbench::workflows::{Action, Status},
+    workbench::workflows::{Action, Message, Status},
 };
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Operation {
+    Store {
+        key: Option<String>,
+        cursor: Option<usize>,
+        limit: Option<usize>,
+    },
+    StoreSet {
+        key: String,
+        value: Value,
+        command_id: Uuid,
+    },
+    StoreDelete {
+        key: String,
+        command_id: Uuid,
+    },
     Definitions {
         cursor: Option<usize>,
         limit: Option<usize>,
@@ -42,9 +56,11 @@ enum Operation {
         attempt_id: Uuid,
     },
     Signal {
-        run_id: Uuid,
+        run_id: Option<Uuid>,
+        attempt_id: Option<Uuid>,
+        workflow_id: Option<Uuid>,
+        channel: Option<String>,
         command_id: Uuid,
-        attempt_id: Uuid,
         value: Value,
     },
     Reconcile {
@@ -120,19 +136,63 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
             },
         ),
         Operation::Cancel { run_id, command_id } => mutate(run_id, command_id, Action::Cancel),
-        Operation::Signal {
-            run_id,
-            command_id,
-            attempt_id,
-            value,
-        } => mutate(
-            run_id,
-            command_id,
-            Action::Answer {
-                attempt: attempt_id,
-                answer: value,
-            },
+        Operation::Store { key, cursor, limit } => toolkit::page(
+            app.stored_workflow_values(project, key.as_deref().unwrap_or(""))?,
+            "entries",
+            cursor.unwrap_or(0),
+            limit,
         ),
+        Operation::StoreSet {
+            key,
+            value,
+            command_id,
+        } => app.workflow_message(project, command_id, Message::Set { key, value }, || {
+            authorize(true)
+        }),
+        Operation::StoreDelete { key, command_id } => {
+            app.workflow_message(project, command_id, Message::Delete { key }, || {
+                authorize(true)
+            })
+        }
+        Operation::Signal {
+            run_id: Some(run),
+            attempt_id: Some(attempt),
+            workflow_id: None,
+            channel: None,
+            command_id,
+            value,
+        } => {
+            let mut result = mutate(
+                run,
+                command_id,
+                Action::Answer {
+                    attempt,
+                    answer: value,
+                },
+            )?;
+            result["delivery"] = "delivered".into();
+            Ok(result)
+        }
+        Operation::Signal {
+            run_id: None,
+            attempt_id: None,
+            workflow_id: Some(workflow),
+            channel: Some(channel),
+            command_id,
+            value,
+        } => app.workflow_message(
+            project,
+            command_id,
+            Message::Signal {
+                workflow,
+                channel,
+                value,
+            },
+            || authorize(true),
+        ),
+        Operation::Signal { .. } => Err(Error::Refused(
+            "signal requires a run and attempt or a workflow and channel".into(),
+        )),
         Operation::Reconcile {
             run_id,
             command_id,

@@ -109,12 +109,12 @@ fn tools(caller: &Caller) -> Vec<Tool> {
         }
     }
     if let Some(policy) = caller.policy.as_ref().filter(|p| p.reads_workflows()) {
-        let mut actions = vec!["definitions","list","read","questions","hooks"];
-        if !caller.plan && policy.writes_workflows() { actions.extend(["start","resume","cancel","signal","reconcile"]); }
+        let mut actions = vec!["definitions","list","read","questions","hooks","store"];
+        if !caller.plan && policy.writes_workflows() { actions.extend(["start","resume","cancel","signal","reconcile","store_set","store_delete"]); }
         tools.push(Tool {
             name:"kar_workflow",
             description:"Inspect durable project workflows and runs. Start a saved workflow, retry a failed step, answer a question, reconcile an interrupted attempt or cancel. Reuse command_id on retries.",
-            properties:json!({"project_id":id,"thread_id":id,"action":{"enum":actions},"workflow_id":id,"run_id":id,"command_id":id,"attempt_id":id,"input":{},"value":{},"succeeded":{"type":"boolean"},"evidence":{"type":"string"},"status":{"enum":["ready","running","asking","waiting","reconcile","failed","cancelled","completed"]},"cursor":cursor,"limit":limit}),
+            properties:json!({"project_id":id,"thread_id":id,"action":{"enum":actions},"workflow_id":id,"run_id":id,"key":{"type":"string"},"channel":{"type":"string"},"command_id":id,"attempt_id":id,"input":{},"value":{},"succeeded":{"type":"boolean"},"evidence":{"type":"string"},"status":{"enum":["ready","running","asking","waiting","reconcile","failed","cancelled","completed"]},"cursor":cursor,"limit":limit}),
             required:&["action"],
         });
     }
