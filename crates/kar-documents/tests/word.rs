@@ -126,3 +126,15 @@ fn retry_of_prefix_preserving_replacement_does_not_duplicate_the_suffix() -> Res
     assert_eq!(current.paragraphs()[0].text, "项目甲完成");
     Ok(())
 }
+
+#[test]
+fn retry_after_independent_text_edit_preserves_the_single_suffix() -> Result<()> {
+    let mut base = Document::new();
+    base.insert_text(Selection::default(), "项目完成，日期待定。", None);
+    let mut current = Document::new();
+    current.insert_text(Selection::default(), "项目甲完成，日期周五。", None);
+    let op = edit(&base, 0, "项目", "项目甲");
+    assert_eq!(op.apply(&base, &mut current)?, Outcome::Unchanged);
+    assert_eq!(current.paragraphs()[0].text, "项目甲完成，日期周五。");
+    Ok(())
+}

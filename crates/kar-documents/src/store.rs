@@ -56,6 +56,10 @@ pub struct Receipt {
     pub revision: u64,
     pub status: Status,
     pub conflict: Option<Conflict>,
+    /// For conflicts this is the original pending dispute. Another failed
+    /// resolution has its own event cursor but keeps the same conflict ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict_id: Option<u64>,
     /// Cursor of the conflict successfully settled by this command.
     pub resolves: Option<u64>,
 }
@@ -134,6 +138,7 @@ impl Manifest {
         match record {
             Some(record)
                 if record.receipt.status == Status::Conflict
+                    && record.receipt.conflict_id.unwrap_or(cursor) == cursor
                     && !self
                         .records
                         .iter()
@@ -277,8 +282,10 @@ impl DocumentStore {
                 self.record_external(&mut m, &live)?;
                 let r = &mut pending.record.receipt;
                 r.status = Status::Conflict;
+                let original_conflict = r.resolves;
                 r.revision = m.head();
                 r.cursor = m.next_cursor();
+                r.conflict_id = Some(original_conflict.unwrap_or(r.cursor));
                 r.resolves = None;
                 r.conflict = Some(Conflict {
                     target: m
@@ -325,6 +332,7 @@ impl DocumentStore {
                 revision: m.head(),
                 status: Status::External,
                 conflict: None,
+                conflict_id: None,
                 resolves: None,
             },
         });
@@ -577,6 +585,13 @@ impl DocumentStore {
             operation_id: Some(command.operation_id.clone()),
             base_revision: command.base_revision,
             revision: m.head() + u64::from(candidate.is_some()),
+            conflict_id: conflict.as_ref().map(|_| {
+                if let Action::Resolve { conflict, .. } = &command.action {
+                    *conflict
+                } else {
+                    m.next_cursor()
+                }
+            }),
             status,
             conflict,
             resolves,

@@ -64,12 +64,8 @@ impl WordEdit {
             )
         })?;
         let text = &current.paragraphs()[index].text;
-        if &old.text != text {
-            let mut proposed = old.text.clone();
-            proposed.replace_range(self.range.clone(), &self.replacement);
-            if &proposed == text {
-                return Ok(Outcome::Unchanged);
-            }
+        if crate::text::already_present(&old.text, text, self.range.clone(), &self.replacement) {
+            return Ok(Outcome::Unchanged);
         }
         let mapped = map_range(&old.text, text, self.range.clone()).ok_or_else(|| {
             change.conflict(Some(text), &label, "text", "overlapping text changes")
@@ -77,7 +73,8 @@ impl WordEdit {
         let value = text[mapped.clone()].to_owned();
         let outcome = change.compare_at(Some(&value), &label, "text", comparison)?;
         if outcome == Outcome::Applied {
-            replace_word_text(current, index, mapped, &value, &self.replacement)?;
+            replace_word_text(current, index, mapped, &value, &self.replacement)
+                .map_err(|e| change.conflict(Some(&value), &label, "text", &e.to_string()))?;
         }
         Ok(outcome)
     }
@@ -141,37 +138,7 @@ fn map_paragraph(base: &Document, current: &Document, index: usize) -> Option<us
 // Translate through one changed span, narrowing it on scalar boundaries.
 // For an overlap only compare a selection whose two boundaries still map.
 fn map_range(base: &str, current: &str, range: Range<usize>) -> Option<Range<usize>> {
-    if base == current {
-        return Some(range);
-    }
-    let prefix: usize = base
-        .chars()
-        .zip(current.chars())
-        .take_while(|(a, b)| a == b)
-        .map(|(a, _)| a.len_utf8())
-        .sum();
-    let suffix: usize = base[prefix..]
-        .chars()
-        .rev()
-        .zip(current[prefix..].chars().rev())
-        .take_while(|(a, b)| a == b)
-        .map(|(a, _)| a.len_utf8())
-        .sum();
-    let old_end = base.len() - suffix;
-    let new_end = current.len() - suffix;
-    if range.is_empty() && range.start == prefix && prefix == old_end {
-        return Some(prefix..new_end);
-    }
-    if range.end <= prefix {
-        return Some(range);
-    }
-    if range.start >= old_end {
-        return Some(new_end + (range.start - old_end)..new_end + (range.end - old_end));
-    }
-    if range.start <= prefix && range.end >= old_end {
-        return Some(range.start..new_end + (range.end - old_end));
-    }
-    None
+    crate::text::translated(base, current, range)
 }
 
 /// Direct OOXML run formatting. A None value inherits from the style.
@@ -275,11 +242,22 @@ impl WordStyleEdit {
                 anchor: docs_engine::Position::new(i, range.start),
                 head: docs_engine::Position::new(i, range.end),
             };
-            current.format(sel, |r| match self.property {
+            let applied = current.format(sel, |r| match self.property {
                 WordStyle::Bold => r.bold = self.change.proposed,
                 WordStyle::Italic => r.italic = self.change.proposed,
                 WordStyle::Underline => r.underline = self.change.proposed,
             });
+            if !applied {
+                return Err(self
+                    .change
+                    .conflict(
+                        value.as_ref(),
+                        &label,
+                        name,
+                        "Kantor could not format this range",
+                    )
+                    .into());
+            }
         }
         Ok(result)
     }

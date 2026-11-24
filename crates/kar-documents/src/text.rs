@@ -62,7 +62,7 @@ fn changes(base: &str, current: &str) -> Vec<(Range<usize>, Range<usize>)> {
     spans
 }
 
-fn translated(base: &str, current: &str, range: Range<usize>) -> Option<Range<usize>> {
+pub(crate) fn translated(base: &str, current: &str, range: Range<usize>) -> Option<Range<usize>> {
     if base == current {
         return Some(range);
     }
@@ -96,6 +96,34 @@ fn translated(base: &str, current: &str, range: Range<usize>) -> Option<Range<us
     Some(offset(range.start, true)?..offset(range.end, false)?)
 }
 
+/// Detect an equivalent replacement even when it extends the selection and
+/// other edits have subsequently changed another part of the text.
+pub(crate) fn already_present(base: &str, current: &str, range: Range<usize>, value: &str) -> bool {
+    if base.get(range.clone()) == Some(value) {
+        return true;
+    }
+    if base == current {
+        return false;
+    }
+    let mut expected = base.to_owned();
+    expected.replace_range(range.clone(), value);
+    if expected == current {
+        return true;
+    }
+    if !translated(&expected, current, range.start..range.start + value.len())
+        .and_then(|r| current.get(r))
+        .is_some_and(|v| v == value)
+    {
+        return false;
+    }
+    let actual = changes(base, current);
+    changes(base, &expected).into_iter().all(|(before, after)| {
+        actual
+            .iter()
+            .any(|(old, new)| old == &before && current[new.clone()] == expected[after.clone()])
+    })
+}
+
 impl TextEdit {
     pub fn between(base: &str, proposal: &str) -> Vec<Self> {
         changes(base, proposal)
@@ -116,9 +144,7 @@ impl TextEdit {
         let original = base
             .get(self.range.clone())
             .context("invalid UTF-8 range in base text")?;
-        let mut expected = base.to_owned();
-        expected.replace_range(self.range.clone(), &self.replacement);
-        if current == &expected {
+        if already_present(base, current, self.range.clone(), &self.replacement) {
             return Ok(Outcome::Unchanged);
         }
         let change = Change {
