@@ -31,6 +31,7 @@ mod thread_find;
 mod thread_state;
 pub use thread_state::Metadata as ChatMetadata;
 pub mod workflows;
+mod voice;
 pub use search::{Hit, SearchKind};
 
 use crate::{
@@ -124,6 +125,7 @@ struct Inner {
     pump: chat_controls::QueuePump,
     access: access::AccessStore,
     devices: devices::Service,
+    voice: voice::Service,
     documents: documents::Documents,
     terminal_preview: terminal_preview::TerminalPreview,
     task_folders: task_folders::Store,
@@ -194,6 +196,7 @@ impl Workbench {
         let access = access::AccessStore::open(&state)?;
         let devices = devices::Service::open(&state)?;
         let (checkpoints, completed) = std::sync::mpsc::channel();
+        let voice = voice::Service::open(&state)?;
         let app = Self(Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
             let service = weak.clone();
             let chats = chats.with_repository_scopes(Arc::new(move |chat| {
@@ -224,6 +227,7 @@ impl Workbench {
                 access,
                 state,
                 devices,
+                voice,
                 documents: Default::default(),
                 _lease: lease,
                 controllers: Default::default(),

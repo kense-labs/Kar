@@ -102,7 +102,25 @@ pub(super) fn cases() -> Vec<Case> {
     }
     cases.push(scenario("kar-documents","office-engine-and-store",&["--manifest-path","crates/kar-documents/Cargo.toml"],
         "actual .docx, .xlsx and .pptx fixtures, pinned Kantor engines, local document store and HTTP clients"));
+    cases.push(scenario(
+        "workbench_voice",
+        "voice-cloud-protocol",
+        &["--test", "workbench_voice", "cloud_protocol_and_errors_through_workbench", "--", "--exact"],
+        "real Kar HTTP, loopback provider protocol fixtures, no remote account or model",
+    ));
     for (target, test, requires, env) in [
+        (
+            "workbench_voice",
+            "installed_local_model_transcribes_audio",
+            "host-installed transcribe-cli 0.4.1, pinned GGUF and an actual mono 16 kHz PCM16 WAV with a known phrase",
+            &["KAR_VOICE_ENGINE","KAR_VOICE_TEST_MODEL","KAR_VOICE_TEST_MODEL_ID","KAR_VOICE_TEST_WAV","KAR_VOICE_TEST_EXPECT"][..],
+        ),
+        (
+            "workbench_voice",
+            "configured_cloud_transcribes_audio",
+            "operator-selected WAV sent to the configured paid provider, plus KAR_VOICE_TEST_MODEL_ID for OpenRouter",
+            &["KAR_VOICE_TEST_PROVIDER","KAR_VOICE_TEST_KEY","KAR_VOICE_TEST_WAV","KAR_VOICE_TEST_EXPECT"][..],
+        ),
         (
             "workbench_coediting",
             "native_document_edit::actual_codex_merges_a_native_file_edit_with_a_concurrent_owner_save",
