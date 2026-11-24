@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod chat_cli;
+mod git_cli;
 mod mcp;
 mod providers_cli;
 use clap::{Args, Parser, Subcommand};
@@ -49,6 +50,8 @@ impl WorkspaceInventory {
 enum Action {
     /// Save, reopen and continue chats in their original workspaces.
     Chat(chat_cli::Chat),
+    /// Manage repositories and independent chat worktrees.
+    Git(git_cli::Git),
     /// Report installed executables, versions and pre-open session capabilities.
     List {
         /// Only inspect this runtime.
@@ -373,6 +376,7 @@ fn json_line(value: &impl serde::Serialize, mut out: impl Write) -> Result<()> {
 async fn execute(command: Action) -> Result<()> {
     match command {
         Action::Chat(chat) => chat.run().await?,
+        Action::Git(git) => git.run()?,
         Action::Mcp {
             cwd,
             runtimes: ids,

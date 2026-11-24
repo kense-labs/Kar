@@ -71,6 +71,8 @@ pub mod chat;
 pub mod observe;
 mod tasks;
 mod usage;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod workbench_git;
 pub use usage::{
     AgentTokens, CacheWriteByTtl, SessionUsage, TokenReading, TokenTotals, UsageSnapshot,
 };

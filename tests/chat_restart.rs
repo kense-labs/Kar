@@ -177,6 +177,24 @@ fn agent() {
             Some("turn/start") => {
                 let text = v.pointer("/params/input/0/text").unwrap().as_str().unwrap();
                 match text {
+                    "shared-A" | "shared-B" => {
+                        fs::write(database.join(text), []).unwrap();
+                        let other = if text == "shared-A" {
+                            "shared-B"
+                        } else {
+                            "shared-A"
+                        };
+                        let deadline = Instant::now() + Duration::from_secs(10);
+                        while !database.join(other).is_file() {
+                            assert!(
+                                Instant::now() < deadline,
+                                "parallel chat did not reach its turn"
+                            );
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        fs::write("shared", text).unwrap();
+                    }
+                    "shared-next" => fs::write("shared", text).unwrap(),
                     "edit-one" => {
                         fs::write("staged.txt", b"first").unwrap();
                         fs::write("binary", [0, 255, 6]).unwrap();
@@ -2244,6 +2262,8 @@ async fn manual_compaction_replay() {
 mod cursor_children;
 #[path = "support/cursor_interactions.rs"]
 mod cursor_interactions;
+#[path = "support/worktree_chats.rs"]
+mod worktree_chats;
 fn main() {
     if std::env::var_os("KAR_TEST_CURSOR_ACP").is_some() {
         cursor_children::peer();
@@ -2281,6 +2301,7 @@ fn main() {
     legacy_recording();
     checkpoints();
     linked_checkout();
+    worktree_chats::run();
     coordinated_fork();
     fork_from_open_session();
     reopen_after_disconnected_writer_and_history_probe();

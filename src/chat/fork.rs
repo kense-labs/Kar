@@ -140,6 +140,7 @@ impl ChatStore {
         mut opts: SessionOptions,
     ) -> Result<ChatSession> {
         let parent = source.0.lock().unwrap().state.info.clone();
+        let _pin = parent.pin_worktree()?;
         opts.cwd = parent.workspace.clone();
         opts.resume = None;
         let opencode = parent.protocol == Protocol::Acp && parent.runtime == "opencode";
@@ -155,7 +156,7 @@ impl ChatStore {
             )));
         }
         let stage = self.fork_stage(parent.id);
-        let workspace = self.workspace_lease_for(&parent.workspace, Some(&stage))?;
+        let workspace = Self::workspace_lease_for(&parent.workspace, Some(&stage))?;
         let target = CheckpointPoint {
             turn,
             before: false,

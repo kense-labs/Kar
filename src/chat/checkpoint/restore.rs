@@ -334,6 +334,7 @@ impl ChatStore {
             return Err(crate::Error::Busy);
         }
         let _workspace = self.workspace_lease(&log.state.info.workspace)?;
+        let _pin = log.state.info.pin_worktree()?;
         self.require_no_pending_fork(log.state.info.id)?;
         self.restore_leased(log, target, dry_run, false)
     }
