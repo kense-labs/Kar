@@ -47,3 +47,13 @@ cargo run --locked --manifest-path crates/kar-documents/Cargo.toml -- --file /pa
 The process prints the loopback address and path of a local bearer token. Clients send the token in the Authorization header. A single service serves one working file. It accepts JSON commands at `POST /operations`, reports the head at `GET /state` and returns exact file bytes at `GET /revisions/{revision}`. `GET /events?after=12&wait_ms=25000` waits for the next receipt and can resume from the same cursor after a service restart. A property conflict returns HTTP 409 with the persisted receipt. The local bearer token grants access to the document. The author field identifies the contributor supplied by that client.
 
 The `http_clients` integration test is prepared for final acceptance. It starts a real service subprocess, connects two independent TCP clients, submits simultaneous edits, waits on a subscription, loses a response, stops and restarts the process, resumes and settles a conflict. It has only been compiled in this implementation phase.
+
+## Text and native-file proposals
+
+The same service accepts UTF-8 `.txt`, `.md` and `.markdown`. `DocumentEdits::Text` carries byte ranges in the base snapshot. The line and Unicode scalar diff preserves unchanged line endings, BOM and Markdown content.
+
+A native editor writes its complete candidate to an isolated file and uploads the bytes to `POST /proposals` (up to 128 MiB per request). `GET /proposals/{sha256}` retrieves the exact staged bytes, including an unresolved proposal after restart. A normal `save` command references the returned SHA-256, operation ID, author and base revision. A current-revision save uses the validated proposed file. A stale Office save derives paragraph, cell or shape changes, replays them against the base, and checks every uncompressed ZIP part against the candidate before merging. Unknown or lossy changes return a conflict containing the file references. A manual-file resolution references a staged whole document reviewed against the current revision.
+
+A current-revision `grid` command records each managed row/column insertion or deletion. Stale cell and formula edits replay this history before publication. Unknown external workbook structure remains a conflict.
+
+The macOS target check compiled the text/native-file scenarios in `native_files`. Execution is pending consolidated acceptance.

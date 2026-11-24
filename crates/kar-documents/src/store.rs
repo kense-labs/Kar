@@ -23,6 +23,8 @@ pub struct Command {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
     Edit { edits: OfficeEdits },
+    Save { sha256: String },
+    Grid { change: crate::GridChange },
     Resolve { conflict: u64, decision: Decision },
 }
 
@@ -32,6 +34,7 @@ pub enum Decision {
     KeepCurrent,
     AdoptProposed,
     Manual { edits: OfficeEdits },
+    ManualFile { sha256: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,12 +87,18 @@ pub enum Rejection {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Revision {
+    #[serde(default)]
+    grid: Option<crate::GridChange>,
     digest: String,
     external: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Pending {
+    #[serde(default)]
+    grid: Option<crate::GridChange>,
+    #[serde(default)]
+    layout_unknown: bool,
     candidate: String,
     record: Record,
 }
@@ -180,6 +189,7 @@ impl DocumentStore {
                 document,
                 file: store.file.clone(),
                 revisions: vec![Revision {
+                    grid: None,
                     digest,
                     external: false,
                 }],
@@ -199,10 +209,11 @@ impl DocumentStore {
             .map(str::to_ascii_lowercase)
             .as_deref()
         {
+            Some("txt" | "md" | "markdown") => Ok(OfficeEdits::Text(vec![])),
             Some("docx") => Ok(OfficeEdits::Word(vec![])),
             Some("xlsx") => Ok(OfficeEdits::Excel(vec![])),
             Some("pptx") => Ok(OfficeEdits::Slides(vec![])),
-            _ => bail!("expected a docx, xlsx or pptx working file"),
+            _ => bail!("expected a txt, md, markdown, docx, xlsx or pptx working file"),
         }
     }
 
@@ -211,6 +222,14 @@ impl DocumentStore {
             &self.dir.join("manifest.json"),
             &serde_json::to_vec(manifest)?,
         )
+    }
+
+    /// Stage a native editor's complete proposed file without touching the working file.
+    pub fn stage(&mut self, bytes: &[u8]) -> Result<String> {
+        self.put_blob(bytes)
+    }
+    pub fn proposal(&mut self, sha256: &str) -> Result<Vec<u8>> {
+        self.blob(sha256)
     }
 
     fn put_blob(&self, bytes: &[u8]) -> Result<String> {
@@ -250,8 +269,9 @@ impl DocumentStore {
                     atomic_write(&self.file, &candidate)?;
                 }
                 m.revisions.push(Revision {
+                    grid: pending.grid,
                     digest: pending.candidate,
-                    external: false,
+                    external: pending.layout_unknown,
                 });
             } else {
                 self.record_external(&mut m, &live)?;
@@ -285,10 +305,14 @@ impl DocumentStore {
 
     fn record_external(&self, m: &mut Manifest, bytes: &[u8]) -> Result<()> {
         let parent = m.head();
+        let previous = self.blob(&m.revision(parent)?.digest)?;
+        let layout_unknown =
+            crate::file_proposal::extract(&self.empty_edits()?, &previous, bytes).is_err();
         let digest = self.put_blob(bytes)?;
         m.revisions.push(Revision {
+            grid: None,
             digest,
-            external: true,
+            external: layout_unknown,
         });
         m.records.push(Record {
             command: None,
@@ -356,11 +380,99 @@ impl DocumentStore {
         if matches!(edits, OfficeEdits::Excel(_)) && external {
             return crate::prepare(&before, &current, edits);
         }
-        prepare_staged(&before, &current, edits, &[], comparison, !external)
+        let history: Vec<_> = m.revisions[base as usize + 1..]
+            .iter()
+            .filter_map(|r| r.grid)
+            .collect();
+        let result = prepare_staged(&before, &current, edits, &history, comparison, !external);
+        if result.as_ref().is_err_and(|e| !e.is::<Conflict>())
+            && crate::prepare(&before, &before, edits).is_ok()
+        {
+            return Err(Conflict {
+                target: self
+                    .file
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                property: "file".into(),
+                reason: format!(
+                    "cannot apply proposal losslessly on the latest revision: {}",
+                    result.unwrap_err()
+                ),
+                base: json!(m.revision(base)?.digest),
+                current: Some(json!(m.revision(m.head())?.digest)),
+                proposed: serde_json::to_value(edits)?,
+            }
+            .into());
+        }
+        result
+    }
+
+    fn process_file(
+        &self,
+        m: &Manifest,
+        base: u64,
+        digest: &str,
+        mode: Comparison,
+    ) -> Result<Option<Vec<u8>>> {
+        let base_digest = &m.revision(base)?.digest;
+        let current_digest = &m.revision(m.head())?.digest;
+        let before = self.blob(base_digest)?;
+        let proposed = self.blob(digest)?;
+        let format = self.empty_edits()?;
+        let file_conflict = |reason: String| {
+            anyhow::Error::new(Conflict {
+                target: self
+                    .file
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                property: "file".into(),
+                reason,
+                base: json!(base_digest),
+                current: Some(json!(current_digest)),
+                proposed: json!(digest),
+            })
+        };
+        if digest == current_digest || digest == base_digest {
+            return Ok(None);
+        }
+        if base_digest == current_digest {
+            crate::file_proposal::validate(&format, &proposed)
+                .map_err(|e| file_conflict(format!("invalid proposed file: {e}")))?;
+            return Ok(Some(proposed));
+        }
+        let edits = crate::file_proposal::extract(&format, &before, &proposed)
+            .map_err(|e| file_conflict(format!("cannot reproduce entire native proposal: {e}")))?;
+        self.process_edits(m, base, &edits, mode).map_err(|e| {
+            if e.is::<Conflict>() {
+                e
+            } else {
+                file_conflict(format!("cannot merge native proposal: {e}"))
+            }
+        })
     }
 
     fn candidate(&self, m: &Manifest, command: &Command) -> Result<Option<Vec<u8>>> {
         match &command.action {
+            Action::Grid { change } => {
+                ensure!(
+                    matches!(self.empty_edits()?, OfficeEdits::Excel(_)),
+                    "grid command requires a workbook"
+                );
+                ensure!(
+                    command.base_revision == m.head(),
+                    "worksheet structure changed; review revision {}",
+                    m.head()
+                );
+                let current = self.blob(&m.revision(m.head())?.digest)?;
+                Ok(Some(crate::grid_history::apply_grid(&current, *change)?))
+            }
+            Action::Save { sha256 } => {
+                self.process_file(m, command.base_revision, sha256, Comparison::Current)
+            }
             Action::Edit { edits } => {
                 self.process_edits(m, command.base_revision, edits, Comparison::Current)
             }
@@ -375,6 +487,9 @@ impl DocumentStore {
                 }
                 match decision {
                     Decision::KeepCurrent => Ok(None),
+                    Decision::ManualFile { sha256 } => {
+                        self.process_file(m, command.base_revision, sha256, Comparison::Current)
+                    }
                     Decision::Manual { edits } => {
                         self.process_edits(m, command.base_revision, edits, Comparison::Current)
                     }
@@ -384,6 +499,16 @@ impl DocumentStore {
                             .as_ref()
                             .context("conflict has no proposal")?;
                         match &original.action {
+                            Action::Save { sha256 }
+                            | Action::Resolve {
+                                decision: Decision::ManualFile { sha256 },
+                                ..
+                            } => self.process_file(
+                                m,
+                                original.base_revision,
+                                sha256,
+                                Comparison::Adopt,
+                            ),
                             Action::Edit { edits } => self.process_edits(
                                 m,
                                 original.base_revision,
@@ -456,12 +581,38 @@ impl DocumentStore {
             conflict,
             resolves,
         };
+        let grid = if let Action::Grid { change } = &command.action {
+            Some(*change)
+        } else {
+            None
+        };
         let record = Record {
             command: Some(command),
             receipt: receipt.clone(),
         };
         if let Some(bytes) = candidate {
+            // Managed selection edits preserve paragraph/cell identities. A
+            // whole-file publication may also have inserted or removed them.
+            let whole_file = matches!(
+                record.command.as_ref().map(|c| &c.action),
+                Some(
+                    Action::Save { .. }
+                        | Action::Resolve {
+                            decision: Decision::ManualFile { .. } | Decision::AdoptProposed,
+                            ..
+                        }
+                )
+            );
+            let layout_unknown = whole_file
+                && crate::file_proposal::extract(
+                    &self.empty_edits()?,
+                    &self.blob(&m.revision(m.head())?.digest)?,
+                    &bytes,
+                )
+                .is_err();
             let pending = Pending {
+                grid,
+                layout_unknown,
                 candidate: self.put_blob(&bytes)?,
                 record,
             };

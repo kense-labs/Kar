@@ -5,6 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
+zip = { version = "9", default-features = false, features = ["deflate"] }
+similar = "2.7"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.4"
@@ -26,5 +28,4 @@ ironcalc = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3f
 ironcalc_base = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
 
 [dev-dependencies]
-zip = { version = "9", default-features = false, features = ["deflate"] }
 roxmltree = "0.21"

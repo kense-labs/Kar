@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use axum::{
     Json, Router,
+    body::Bytes,
+    extract::DefaultBodyLimit,
     extract::{Path, Query, Request, State},
     http::{StatusCode, header},
     middleware::{self, Next},
@@ -92,6 +94,15 @@ async fn snapshot(State(app): State<App>, Path(rev): Path<u64>) -> Result<Respon
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response())
 }
 
+async fn stage(State(app): State<App>, bytes: Bytes) -> Result<Json<serde_json::Value>, Failure> {
+    let digest = app.run(move |s| s.stage(&bytes)).await?;
+    Ok(Json(json!({"sha256":digest})))
+}
+async fn proposal(State(app): State<App>, Path(digest): Path<String>) -> Result<Response, Failure> {
+    let bytes = app.run(move |s| s.proposal(&digest)).await?;
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response())
+}
+
 async fn submit(
     State(app): State<App>,
     Json(command): Json<Command>,
@@ -176,6 +187,11 @@ async fn main() -> Result<()> {
     let (changed, _) = watch::channel(0);
     let app = Router::new()
         .route("/state", get(state))
+        .route(
+            "/proposals",
+            post(stage).layer(DefaultBodyLimit::max(128 * 1024 * 1024)),
+        )
+        .route("/proposals/{digest}", get(proposal))
         .route("/revisions/{revision}", get(snapshot))
         .route("/events", get(events))
         .route("/operations", post(submit))

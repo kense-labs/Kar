@@ -15,6 +15,7 @@ use tempfile::tempdir;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum OfficeEdits {
+    Text(Vec<crate::text::TextEdit>),
     Word(Vec<WordEdit>),
     Excel(Vec<(Cell, CellEdit)>),
     Slides(Vec<(Object, ObjectEdit)>),
@@ -61,8 +62,18 @@ pub(crate) fn prepare_staged(
         matches!(edits, OfficeEdits::Excel(_)) || history.is_empty(),
         "grid history supplied for a non-spreadsheet edit"
     );
+    if let OfficeEdits::Text(ops) = edits {
+        let base = std::str::from_utf8(base)?;
+        let original = std::str::from_utf8(current)?;
+        let mut candidate = original.to_owned();
+        for op in ops {
+            op.apply(base, &mut candidate, comparison)?;
+        }
+        return Ok((candidate != original).then(|| candidate.into_bytes()));
+    }
     let dir = tempdir()?;
     let ext = match edits {
+        OfficeEdits::Text(_) => unreachable!(),
         OfficeEdits::Word(_) => "docx",
         OfficeEdits::Excel(_) => "xlsx",
         OfficeEdits::Slides(_) => "pptx",
@@ -73,6 +84,7 @@ pub(crate) fn prepare_staged(
     fs::write(&candidate, current)?;
     let mut changed = false;
     match edits {
+        OfficeEdits::Text(_) => unreachable!(),
         OfficeEdits::Word(ops) => {
             let base = Document::open(&before)?;
             let mut model = Document::open(&candidate)?;

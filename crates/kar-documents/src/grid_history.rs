@@ -141,3 +141,22 @@ pub(crate) fn merge_excel(
     }
     Ok(changed)
 }
+
+pub(crate) fn apply_grid(bytes: &[u8], change: GridChange) -> Result<Vec<u8>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("workbook.xlsx");
+    std::fs::write(&path, bytes)?;
+    let mut workbook = Workbook::open(&path)?;
+    ensure!(
+        !workbook.has_macros(),
+        "an XLSX save would remove workbook macros"
+    );
+    change.replay(&mut workbook)?;
+    workbook.save()?;
+    ensure!(
+        workbook.save_notes().is_empty(),
+        "lossy workbook save: {}",
+        workbook.save_notes().join(", ")
+    );
+    Ok(std::fs::read(path)?)
+}
