@@ -1,5 +1,6 @@
 mod image_input;
 mod qwen;
+pub(crate) mod reachability;
 
 use crate::options::mcp_capabilities::McpSupport;
 use crate::{
@@ -1278,10 +1279,16 @@ impl Session {
         f: impl FnOnce(oneshot::Sender<Result<T>>) -> Command,
     ) -> Result<T> {
         let (tx, rx) = oneshot::channel();
-        self.commands
-            .send(f(tx))
-            .await
-            .map_err(|_| Error::Closed("runtime stopped".into()))?;
+        let command = f(tx);
+        let reject = |cmd: &Command| {
+            cmd.reject_unreachable(&self.journal, self.protocol, &self.preflight_secrets)
+        };
+        if let Some(error) = reject(&command) {
+            return Err(error);
+        }
+        self.commands.send(command).await.map_err(|error| {
+            reject(&error.0).unwrap_or_else(|| Error::Closed("runtime stopped".into()))
+        })?;
         let reply = match timeout {
             Some(limit) => tokio::time::timeout(limit, rx)
                 .await
@@ -1975,10 +1982,14 @@ impl Session {
             capture.close();
         }
         if self.journal.is_closed() {
+            self.journal.dispose_after_exit();
             return Ok(());
         }
         match self.call(Command::Close).await {
-            Err(Error::Closed(_)) if self.journal.is_closed() => Ok(()),
+            Err(Error::Closed(_)) if self.journal.is_closed() => {
+                self.journal.dispose_after_exit();
+                Ok(())
+            }
             result => result,
         }
     }

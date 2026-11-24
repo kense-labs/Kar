@@ -1,5 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod queue;
+#[cfg(not(target_arch = "wasm32"))]
+mod reachability;
 pub(crate) mod retention;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -586,6 +588,8 @@ struct State {
     queries: Option<crate::observe::SessionReducer>,
     records: Vec<Arc<Record>>,
     closed: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    reachability: reachability::Reachability,
     observers: Vec<mpsc::UnboundedSender<Arc<Record>>>,
     sizes: VecDeque<(usize, usize)>,
     bytes: usize,
@@ -652,6 +656,8 @@ impl Journal {
                 queries: None,
                 records: vec![],
                 closed: false,
+                #[cfg(not(target_arch = "wasm32"))]
+                reachability: reachability::Reachability::default(),
                 observers: Vec::new(),
                 sizes: VecDeque::new(),
                 bytes: 0,
@@ -732,46 +738,6 @@ impl Journal {
             vec![],
         );
     }
-    /// A host-local validation decision and its request must survive or lose a
-    /// race with close together. Neither frame represents native dispatch.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn refused_input(
-        &self,
-        stamp: RecordStamp,
-        body: Value,
-        id: Uuid,
-        code: &str,
-        reason: &str,
-    ) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
-        if state.closed {
-            return Err(Error::Closed("runtime stopped".into()));
-        }
-        self.append_locked(
-            &mut state,
-            stamp,
-            RecordKind::Request,
-            None,
-            vec![],
-            None,
-            body,
-            vec![],
-        );
-        let response =
-            serde_json::json!({"type":"rejected","requestId":id,"code":code,"reason":reason});
-        self.append_locked(
-            &mut state,
-            Direction::Host.into(),
-            RecordKind::Response,
-            None,
-            vec![],
-            None,
-            response,
-            vec![],
-        );
-        Ok(())
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn steer_request(
         &self,
@@ -850,7 +816,14 @@ impl Journal {
                 Event::Exited { reason },
             );
         } else {
-            self.host_event(Event::Exited { reason });
+            self.push(
+                Direction::Host,
+                RecordKind::Response,
+                None,
+                vec![],
+                crate::process::exit_body(status, &reason),
+                vec![Event::Exited { reason }],
+            );
         }
     }
     pub(crate) fn host_event(&self, event: Event) {
@@ -933,6 +906,11 @@ impl Journal {
             native
         };
         let session_id = session_id.or_else(|| s.root.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        if agent_path.is_empty() && s.root == session_id {
+            s.reachability
+                .observe(kind, stamp.direction, &native, &events);
+        }
         let record = Arc::new(Record {
             elided: false,
             upstream: None,
@@ -1035,9 +1013,10 @@ impl Journal {
             Some(_) => return Err(Error::InvalidCursor),
             None => 0,
         };
-        Ok(Self::subscribe_from(&mut s, next, tx, live))
+        Ok(self.subscribe_from(&mut s, next, tx, live))
     }
     fn subscribe_from(
+        &self,
         s: &mut State,
         next: usize,
         tx: mpsc::UnboundedSender<Arc<Record>>,
@@ -1047,7 +1026,12 @@ impl Journal {
         if !s.closed {
             s.observers.push(tx);
         }
-        Subscription { history, live }
+        Subscription {
+            history,
+            live,
+            journal: Arc::downgrade(&self.state),
+            next,
+        }
     }
     pub fn events(&self, cursor: Option<&EventCursor>) -> Result<EventSubscription> {
         let mut s = self.state.lock().unwrap();
@@ -1064,7 +1048,7 @@ impl Journal {
         };
         let (tx, rx) = mpsc::unbounded_channel();
         Ok(EventSubscription {
-            records: Self::subscribe_from(&mut s, seq, tx, rx),
+            records: self.subscribe_from(&mut s, seq, tx, rx),
             current: None,
             index,
         })
@@ -1139,6 +1123,8 @@ impl Journal {
     }
 }
 pub struct Subscription {
+    journal: std::sync::Weak<Mutex<State>>,
+    next: usize,
     history: VecDeque<Arc<Record>>,
     live: mpsc::UnboundedReceiver<Arc<Record>>,
 }
@@ -1188,17 +1174,38 @@ pub(crate) fn timestamp_ms() -> u64 {
     js_sys::Date::now() as u64
 }
 impl Subscription {
+    // Existing readers reach EOF when the runtime closes. A later control
+    // decision can still be read at its exact cursor from the retained journal.
+    fn finish_read(&mut self, record: Option<Arc<Record>>) -> Option<Arc<Record>> {
+        let r = record.or_else(|| {
+            let journal = self.journal.upgrade()?;
+            let state = journal.lock().unwrap();
+            if !state.closed {
+                return None;
+            }
+            state.records.get(self.next).cloned()
+        })?;
+        self.next = r.seq as usize + 1;
+        Some(r)
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn try_next(&mut self) -> Option<Arc<Record>> {
-        self.history
-            .pop_front()
-            .or_else(|| self.live.try_recv().ok())
+        let record = match self.history.pop_front() {
+            Some(record) => Some(record),
+            None => match self.live.try_recv() {
+                Ok(record) => Some(record),
+                Err(mpsc::error::TryRecvError::Empty) => return None,
+                Err(mpsc::error::TryRecvError::Disconnected) => None,
+            },
+        };
+        self.finish_read(record)
     }
     pub async fn next(&mut self) -> Option<Arc<Record>> {
-        if let Some(record) = self.history.pop_front() {
-            return Some(record);
-        }
-        self.live.recv().await
+        let record = match self.history.pop_front() {
+            Some(record) => Some(record),
+            None => self.live.recv().await,
+        };
+        self.finish_read(record)
     }
 }
 

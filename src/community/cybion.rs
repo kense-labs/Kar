@@ -808,5 +808,12 @@ impl ThreadActor {
                 }
             }
         }
+        crate::session::reachability::reject_pending(
+            &mut inbox,
+            &self.journal,
+            crate::Protocol::Cybion,
+            &[],
+        )
+        .await;
     }
 }

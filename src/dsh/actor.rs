@@ -820,6 +820,13 @@ impl Actor {
         self.journal
             .process_exited(close.as_ref().map(|(id, _)| *id), reason, &status);
         self.journal.close();
+        crate::session::reachability::reject_pending(
+            &mut rx,
+            &self.journal,
+            Protocol::Dsh,
+            &self.secrets,
+        )
+        .await;
         if let Some((_, tx)) = close {
             let _ = tx.send(status.map(|_| ()).map_err(Error::from));
         }

@@ -39,11 +39,37 @@ pub(crate) async fn check(session: &Session, expected: &str) -> kar::Result<()> 
     }
     assert!(answer.seq > dispose.seq);
     assert_eq!(answer.session_id, dispose.session_id);
+    let late = session
+        .submit_prompt(None, "after dispose", Vec::new())
+        .await?;
+    let kar::PromptDecision::Rejected {
+        receipt,
+        error: Error::Closed(_),
+    } = late
+    else {
+        panic!("closed session must return a recorded refusal")
+    };
+    let code = if expected == "exited" {
+        "runtime_exited"
+    } else {
+        "disposed"
+    };
+    assert_eq!(receipt.response.native["code"], code);
+    assert_eq!(
+        receipt.request.control_request_id(),
+        receipt.response.control_response_to()
+    );
+    let after = session.records();
+    assert_eq!(after.len(), records.len() + 2);
+    assert_eq!(receipt.request.seq, records.len() as u64);
     assert!(matches!(
-        session.prompt("after dispose").await,
+        session.withdraw(uuid::Uuid::new_v4()).await,
         Err(Error::Closed(_))
     ));
+    let withdrawn = session.records();
+    assert_eq!(withdrawn[after.len()].native["type"], "withdraw");
+    assert_eq!(withdrawn[after.len() + 1].native["code"], code);
     session.close().await?;
-    assert_eq!(session.records().len(), records.len());
+    assert_eq!(session.records().len(), withdrawn.len());
     Ok(())
 }

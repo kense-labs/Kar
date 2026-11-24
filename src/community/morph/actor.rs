@@ -547,6 +547,13 @@ impl Actor {
             self.journal.host_event(Event::Exited { reason });
         }
         self.journal.close();
+        crate::session::reachability::reject_pending(
+            &mut commands,
+            &self.journal,
+            crate::Protocol::Morph,
+            &[],
+        )
+        .await;
         if let Some((_, ack)) = ack {
             let _ = ack.send(stopped.map(|_| ()).map_err(Error::from));
         }

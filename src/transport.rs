@@ -3213,6 +3213,13 @@ impl Actor {
             let _ = input.done.send(Err(Error::Closed(reason.clone())));
         }
         self.journal.close();
+        crate::session::reachability::reject_pending(
+            &mut commands,
+            &self.journal,
+            self.protocol,
+            &self.secrets,
+        )
+        .await;
         if let Some((_, tx)) = self.close_ack {
             let _ = tx.send(status.map(|_| ()).map_err(Error::from));
         }
