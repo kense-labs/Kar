@@ -142,6 +142,7 @@ struct Queued {
 struct Turn {
     input_receipt: Option<crate::InputReceipt>,
     prompt_request: uuid::Uuid,
+    image_submission: Option<crate::ImageSubmission>,
     process_baseline: Option<crate::resources::turn::Baseline>,
     chat_input: Option<uuid::Uuid>,
     claude_input: Option<wire::claude_input::Input>,
@@ -432,8 +433,12 @@ impl Actor {
             && let Some(turn) = &self.turn
             && let Some(id) = turn.chat_input
         {
-            stamp =
-                stamp.with_prompt_request(id, self.protocol == Protocol::Pi, turn.prompt_request);
+            stamp = stamp.with_prompt_request(
+                id,
+                self.protocol == Protocol::Pi,
+                turn.prompt_request,
+                turn.image_submission.clone(),
+            );
         }
         let direction = stamp.direction;
         let session = self.source(&v).or_else(|| self.session());
@@ -749,6 +754,11 @@ impl Actor {
         self.turn = Some(Turn {
             input_receipt: None,
             prompt_request: request,
+            image_submission: crate::ImageSubmission::loaded(
+                &prompt.text,
+                &prompt.images,
+                &self.secrets,
+            ),
             process_baseline: None,
             chat_input: Some(input_id),
             claude_input: (self.protocol == Protocol::Claude)

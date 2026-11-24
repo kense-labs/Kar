@@ -1,3 +1,5 @@
+mod image_input;
+
 use crate::options::mcp_capabilities::McpSupport;
 use crate::{
     Cursor, Error, Outcome, Protocol, Record, Result, Runtime, SessionOptions, Subscription,
@@ -90,6 +92,7 @@ pub struct Session {
     cwd: std::path::PathBuf,
     commands: mpsc::Sender<Command>,
     journal: Journal,
+    preflight_secrets: Arc<Vec<String>>,
     id: String,
     protocol: Protocol,
     info: Value,
@@ -117,12 +120,14 @@ impl Session {
         id: String,
         info: Value,
     ) -> Self {
+        let preflight_secrets = Arc::new(crate::options::session_secrets(&options));
         Self {
             mcp: McpSupport::new(protocol, "", None),
             native_memory: None,
             cwd: options.cwd,
             commands,
             journal,
+            preflight_secrets,
             id,
             info,
             protocol,
@@ -538,6 +543,7 @@ impl Session {
         }
         let process_root = crate::resources::Root::new(child_process.id(), None);
         let native_memory = memory.as_ref().and_then(|m| m.effective);
+        let preflight_secrets = Arc::new(secrets.clone());
         let commands = Actor::start(
             runtime,
             &options,
@@ -555,6 +561,7 @@ impl Session {
             secrets,
         );
         let mut session = Self {
+            preflight_secrets,
             mcp,
             native_memory,
             cwd: cwd.clone(),
@@ -1462,12 +1469,9 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<Turn> {
-        if !images.is_empty() && !self.image_input {
-            return Err(Error::Unsupported(
-                "runtime does not advertise image input".into(),
-            ));
-        }
-        self.start_prompt(id, text.into(), images, None).await
+        let text = text.into();
+        self.check_input("prompt", id, &text, &images)?;
+        self.start_prompt(id, text, images, None).await
     }
     pub(crate) async fn start_prompt(
         &self,
@@ -1496,6 +1500,7 @@ impl Session {
         let id = Uuid::new_v4();
         let (done, receiver) = oneshot::channel();
         let text = text.into();
+        self.check_input("queue", id, &text, &[])?;
         crate::input::check_text(&text, self.text_limit)?;
         self.call(|tx| Command::Queue(id, text, tx, done)).await?;
         Ok((
@@ -1550,15 +1555,11 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<()> {
-        if !images.is_empty() && (!self.image_input || !self.capabilities().steering) {
-            return Err(Error::Unsupported(
-                "runtime does not support image steering".into(),
-            ));
-        }
         let input = crate::input::Input {
             text: text.into(),
             images,
         };
+        self.check_input("steer", id, &input.text, &input.images)?;
         crate::input::check_text(&input.text, self.text_limit)?;
         self.call(|tx| Command::Steer(id, input, tx))
             .await

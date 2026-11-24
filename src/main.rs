@@ -639,15 +639,20 @@ async fn execute(command: Action) -> Result<()> {
                 }
                 Result::Ok(())
             });
-            let images = images
-                .iter()
-                .map(|path| kar::InputImage::read(path))
-                .collect::<Result<Vec<_>>>()?;
-            let turn = session.prompt_images(prompt, images).await?;
-            let outcome = tokio::select! {
-                result=turn.wait()=>result,
-                signal=tokio::signal::ctrl_c()=>{signal?;let _=tokio::time::timeout(Duration::from_secs(1),session.abort()).await;Ok(Outcome::Aborted)},
-                _=tokio::time::sleep(Duration::from_secs(timeout))=>{let _=tokio::time::timeout(Duration::from_secs(1),session.abort()).await;Err(Error::Timeout("turn".into()))},
+            let outcome = match session.prompt_image_paths(prompt, &images).await {
+                Err(error) => Err(error),
+                Ok(turn) => tokio::select! {
+                    result = turn.wait() => result,
+                    signal = tokio::signal::ctrl_c() => {
+                        signal?;
+                        let _ = tokio::time::timeout(Duration::from_secs(1), session.abort()).await;
+                        Ok(Outcome::Aborted)
+                    },
+                    _ = tokio::time::sleep(Duration::from_secs(timeout)) => {
+                        let _ = tokio::time::timeout(Duration::from_secs(1), session.abort()).await;
+                        Err(Error::Timeout("turn".into()))
+                    },
+                },
             };
             let close = session.close().await;
             output.await.map_err(|e| Error::Protocol(e.to_string()))??;

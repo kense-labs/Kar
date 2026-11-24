@@ -119,9 +119,9 @@ pub use runtime::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use session::{Capabilities, Delivery, Session, Turn, TurnReport};
 pub use stream::{
-    Cursor, Direction, Event, EventCursor, EventSubscription, InputReceipt, McpStartupStatus,
-    ObservedEvent, Outcome, ProcessCleanupResult, PromptIdentity, Record, RecordKind, SteerStatus,
-    Subscription, TurnProcessCleanup,
+    Cursor, Direction, Event, EventCursor, EventSubscription, ImageReference, ImageSubmission,
+    InputReceipt, McpStartupStatus, ObservedEvent, Outcome, ProcessCleanupResult, PromptIdentity,
+    Record, RecordKind, SteerStatus, Subscription, TurnProcessCleanup,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

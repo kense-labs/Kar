@@ -1,6 +1,8 @@
 use kar::forms::{IssueCode, ModelEntry, ModelListing, ValidationContext, config_form};
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::Command};
+#[path = "support/image_input.rs"]
+mod image_input;
 
 #[test]
 #[ignore = "requires the official Grok CLI with the ACP model listing extension"]
@@ -63,7 +65,7 @@ fn isolated_grok_lists_models_for_the_runtime_form_without_a_chat() {
     );
 }
 
-const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGNQDGyjKWIYtWDUglELRi0YtWDUglELRi0YtWDUglELhooFANhz4C4rw+sCAAAAAElFTkSuQmCC";
+use image_input::PNG;
 
 #[tokio::test]
 #[ignore = "requires KAR_GROK_BIN; a local chat-completions model observes the image bytes"]
@@ -81,9 +83,7 @@ async fn native_image_reaches_the_model() {
         Json(body): Json<Value>,
     ) -> Response {
         let main = body["messages"].to_string().contains("KAR_GROK_IMAGE");
-        if main {
-            requests.lock().unwrap().push(body["messages"].clone());
-        }
+        requests.lock().unwrap().push(body["messages"].clone());
         let text = if main {
             "GROK_IMAGE_RECEIVED"
         } else {
@@ -137,9 +137,28 @@ async fn native_image_reaches_the_model() {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         let session = rt.open(opts).await.unwrap();
         assert!(session.capabilities().image_input);
+        image_input::empty_controls(&session).await;
+        let path = temp.path().join(".").join("grok image.png");
+        std::fs::write(&path, STANDARD.decode(PNG).unwrap()).unwrap();
+        for (name, code) in [
+            ("missing.png", "error"),
+            ("notes.txt", "unsupported"),
+            ("broken.png", "unsupported"),
+        ] {
+            let invalid = temp.path().join(name);
+            if name == "broken.png" {
+                std::fs::write(&invalid, b"plain text").unwrap();
+            }
+            image_input::refused_files(&session, "what is this?", &[path.clone(), invalid], code)
+                .await;
+        }
+        assert!(requests.lock().unwrap().iter().all(|messages| {
+            let messages = messages.to_string();
+            !messages.contains("what is this?") && !messages.contains(PNG)
+        }));
         let image = kar::InputImage::from_bytes(&STANDARD.decode(PNG).unwrap()).unwrap();
         let turn = session
-            .prompt_images("KAR_GROK_IMAGE", vec![image.clone()])
+            .prompt_images("KAR_GROK_IMAGE", vec![image])
             .await
             .unwrap()
             .report()
@@ -153,7 +172,7 @@ async fn native_image_reaches_the_model() {
             calls.len()
         };
         let image_only = session
-            .prompt_images("", vec![image])
+            .prompt_image_paths("", std::slice::from_ref(&path))
             .await
             .unwrap()
             .report()
@@ -172,6 +191,22 @@ async fn native_image_reaches_the_model() {
         let prompt = sent.native["params"]["prompt"].as_array().unwrap();
         assert_eq!(prompt.len(), 1);
         assert_eq!(prompt[0]["type"], "image");
+        let identity = sent.prompt.as_ref().unwrap();
+        assert_eq!(
+            serde_json::to_value(identity.submission.as_ref().unwrap()).unwrap(),
+            json!({"input":"","images":[{"path":path}]})
+        );
+        assert!(!serde_json::to_string(sent.as_ref()).unwrap().contains(PNG));
+        let mut legacy = serde_json::to_value(sent.as_ref()).unwrap();
+        legacy["prompt"]
+            .as_object_mut()
+            .unwrap()
+            .remove("submission");
+        let before_image_paths: kar::Record = serde_json::from_value(legacy).unwrap();
+        assert!(before_image_paths.prompt.unwrap().submission.is_none());
+        assert!(session.records().iter().any(|r| r.seq > sent.seq
+            && r.native["type"] == "accepted"
+            && r.native["requestId"].as_str() == identity.request_id.as_deref()));
         session.close().await.unwrap();
     })
     .await

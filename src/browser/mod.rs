@@ -349,7 +349,7 @@ impl Core {
         let mut stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         if let Some(id) = &request_id {
             if mode == "reject" {
-                stamp = stamp.with_prompt_request(id, false, control);
+                stamp = stamp.with_prompt_request(id, false, control, None);
             }
             body["requestId"] = id.as_str().into();
         }

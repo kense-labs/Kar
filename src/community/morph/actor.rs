@@ -99,7 +99,7 @@ impl Actor {
         self.record(
             None,
             if let Some(id) = input_id {
-                stamp.with_prompt_request(id, false, request)
+                stamp.with_prompt_request(id, false, request, None)
             } else {
                 stamp
             },

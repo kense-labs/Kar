@@ -65,6 +65,22 @@ pub struct PromptIdentity {
     pub request_id: Option<String>,
     pub input_id: String,
     pub native_admission: bool,
+    /// Original text and image references of an input with attachments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission: Option<ImageSubmission>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageSubmission {
+    pub input: String,
+    pub images: Vec<ImageReference>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageReference {
+    /// Absent for a caller-provided in-memory image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 impl RecordStamp {
@@ -73,11 +89,13 @@ impl RecordStamp {
         input_id: impl ToString,
         native_admission: bool,
         request: Uuid,
+        submission: Option<ImageSubmission>,
     ) -> Self {
         self.prompt = Some(PromptIdentity {
             request_id: Some(request.to_string()),
             input_id: input_id.to_string(),
             native_admission,
+            submission,
         });
         self
     }
@@ -517,7 +535,12 @@ impl Journal {
         let mut body = serde_json::json!({"control":"prompt", "input":input.text, "imageCount":input.images.len()});
         crate::transport::redact(&mut body, secrets);
         self.push(
-            RecordStamp::from(Direction::ToRuntime).with_prompt_request(input_id, native, request),
+            RecordStamp::from(Direction::ToRuntime).with_prompt_request(
+                input_id,
+                native,
+                request,
+                ImageSubmission::loaded(&input.text, &input.images, secrets),
+            ),
             RecordKind::Request,
             None,
             vec![],
@@ -566,6 +589,45 @@ impl Journal {
             body,
             vec![],
         );
+    }
+    /// A host-local validation decision and its request must survive or lose a
+    /// race with close together. Neither frame represents native dispatch.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn refused_input(
+        &self,
+        stamp: RecordStamp,
+        body: Value,
+        id: Uuid,
+        code: &str,
+        reason: &str,
+    ) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if state.closed {
+            return Err(Error::Closed("runtime stopped".into()));
+        }
+        self.append_locked(
+            &mut state,
+            stamp,
+            RecordKind::Request,
+            None,
+            vec![],
+            None,
+            body,
+            vec![],
+        );
+        let response =
+            serde_json::json!({"type":"rejected","requestId":id,"code":code,"reason":reason});
+        self.append_locked(
+            &mut state,
+            Direction::Host.into(),
+            RecordKind::Response,
+            None,
+            vec![],
+            None,
+            response,
+            vec![],
+        );
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -692,8 +754,42 @@ impl Journal {
         if s.closed {
             return None;
         }
+        Some(self.append_locked(
+            &mut s,
+            direction.into(),
+            kind,
+            session_id,
+            agent_path,
+            span_id,
+            native,
+            events,
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn append_locked(
+        &self,
+        s: &mut State,
+        stamp: RecordStamp,
+        kind: RecordKind,
+        session_id: Option<String>,
+        agent_path: Vec<String>,
+        span_id: Option<String>,
+        native: Value,
+        events: Vec<Event>,
+    ) -> Arc<Record> {
         let seq = s.records.len() as u64;
-        let stamp = direction.into();
+        #[cfg(not(target_arch = "wasm32"))]
+        let native = {
+            let mut native = native;
+            if stamp
+                .prompt
+                .as_ref()
+                .is_some_and(|p| p.submission.is_some())
+            {
+                crate::input::omit_image_bytes(&mut native);
+            }
+            native
+        };
         let session_id = session_id.or_else(|| s.root.clone());
         let record = Arc::new(Record {
             elided: false,
@@ -722,7 +818,7 @@ impl Journal {
             .retain(|observer| observer.send(record.clone()).is_ok());
         s.records.push(record.clone());
         s.trim_history();
-        Some(record)
+        record
     }
     pub fn is_closed(&self) -> bool {
         self.state.lock().unwrap().closed

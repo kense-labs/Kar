@@ -4,6 +4,8 @@ mod abort_turn;
 mod busy_prompt;
 #[path = "support/declaration.rs"]
 mod declaration;
+#[path = "support/image_input.rs"]
+mod image_input;
 
 #[cfg(unix)]
 #[path = "qwen_live/queue_crash.rs"]
@@ -120,6 +122,68 @@ async fn fixture() -> Fixture {
         #[cfg(unix)]
         release,
     }
+}
+
+#[tokio::test]
+#[ignore = "requires real Qwen Code with an isolated home and a loopback model"]
+async fn images_travel_with_input() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let f = fixture().await;
+    let path = f.dir.path().join(".").join("qwen image.png");
+    std::fs::write(&path, STANDARD.decode(image_input::PNG).unwrap()).unwrap();
+    let rt = runtime("qwen").unwrap();
+    let session = rt.open(f.opts.clone()).await.unwrap();
+    assert!(!session.capabilities().image_input);
+    image_input::empty_controls(&session).await;
+    for text in ["what is this?", ""] {
+        image_input::refused_files(&session, text, std::slice::from_ref(&path), "unsupported")
+            .await;
+    }
+    assert!(f.requests.lock().unwrap().is_empty());
+    let record = f.dir.path().join("image-refusal.jsonl");
+    let cli = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+        .envs(&f.opts.env)
+        .args(["run", "qwen", "what is this?", "--json", "--bin"])
+        .arg(&rt.program)
+        .arg("--cwd")
+        .arg(&f.opts.cwd)
+        .arg("--image")
+        .arg(&path)
+        .arg("--record")
+        .arg(&record)
+        .output()
+        .await
+        .unwrap();
+    assert!(!cli.status.success());
+    let logged = std::fs::read_to_string(record).unwrap();
+    assert_eq!(logged.as_bytes(), &cli.stdout);
+    let rows: Vec<kar::Record> = logged
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let refused = rows
+        .iter()
+        .find(|r| r.native["code"] == "unsupported")
+        .unwrap();
+    let attempt = rows
+        .iter()
+        .find(|r| r.native["id"] == refused.native["requestId"])
+        .unwrap();
+    assert_eq!(attempt.native["images"], json!([{"path":path}]));
+    assert!(!logged.contains(image_input::PNG));
+    assert!(f.requests.lock().unwrap().is_empty());
+    assert_eq!(
+        session
+            .prompt("ordinary input after image refusal")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        Outcome::Completed
+    );
+    session.close().await.unwrap();
+    f.http.abort();
 }
 
 #[tokio::test]

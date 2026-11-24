@@ -168,7 +168,12 @@ impl Actor {
             if steer {
                 stamp
             } else {
-                stamp.with_prompt_request(id, false, request)
+                stamp.with_prompt_request(
+                    id,
+                    false,
+                    request,
+                    crate::ImageSubmission::loaded(&input.text, &input.images, &self.secrets),
+                )
             },
             RecordKind::Request,
             public,

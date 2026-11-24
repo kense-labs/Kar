@@ -361,7 +361,12 @@ impl ThreadActor {
         let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
         self.record(
             if let Some(id) = id {
-                stamp.with_prompt_request(id, false, request)
+                stamp.with_prompt_request(
+                    id,
+                    false,
+                    request,
+                    crate::ImageSubmission::loaded(&input.text, &input.images, &[]),
+                )
             } else {
                 stamp
             },

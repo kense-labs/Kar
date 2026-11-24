@@ -1,7 +1,43 @@
 use crate::{Error, Protocol, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub(crate) const EMPTY_INPUT: &str = "empty input: give text or images";
+
+/// Remove image bytes from a public copy of a native prompt, after dispatch.
+pub(crate) fn omit_image_bytes(packet: &mut Value) {
+    match packet {
+        Value::Object(obj) => {
+            if matches!(
+                obj.get("type").and_then(Value::as_str),
+                Some("image" | "base64")
+            ) {
+                obj.remove("data");
+                if let Some(source) = obj.get_mut("source").and_then(Value::as_object_mut) {
+                    source.remove("data");
+                }
+                if obj
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|u| u.starts_with("data:image/"))
+                {
+                    obj.remove("url");
+                }
+            }
+            if let Some(images) = obj.get_mut("images").and_then(Value::as_array_mut) {
+                for image in images {
+                    if image.as_str().is_some_and(|u| u.starts_with("data:image/")) {
+                        *image = Value::Null;
+                    }
+                }
+            }
+            obj.values_mut().for_each(omit_image_bytes);
+        }
+        Value::Array(items) => items.iter_mut().for_each(omit_image_bytes),
+        _ => {}
+    }
+}
 
 pub(crate) fn text_limit(runtime: &str) -> Option<usize> {
     // Antigravity can silently truncate a larger UTF-8 prompt in its native worker.
@@ -25,6 +61,7 @@ pub struct InputImage {
     mime: &'static str,
     data: String,
     uri: Option<url::Url>,
+    path: Option<PathBuf>,
 }
 impl InputImage {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
@@ -45,10 +82,12 @@ impl InputImage {
             mime,
             data: STANDARD.encode(bytes),
             uri: None,
+            path: None,
         })
     }
     pub fn read(path: &Path) -> Result<Self> {
         let mut image = Self::from_bytes(&std::fs::read(path)?)?;
+        image.path = Some(path.to_owned());
         image.uri = std::path::absolute(path)
             .ok()
             .and_then(|p| url::Url::from_file_path(p).ok());
@@ -82,6 +121,32 @@ impl InputImage {
     }
     pub(crate) fn data_url(&self) -> String {
         format!("data:{};base64,{}", self.mime, self.data)
+    }
+}
+
+impl crate::ImageSubmission {
+    pub(crate) fn new<'a>(
+        text: &str,
+        paths: impl Iterator<Item = Option<&'a Path>>,
+        secrets: &[String],
+    ) -> Self {
+        let mut input = text.to_owned();
+        crate::transport::redact_text(&mut input, secrets);
+        let images = paths
+            .map(|path| crate::ImageReference {
+                path: path.map(|p| {
+                    let mut path = p.to_string_lossy().into_owned();
+                    crate::transport::redact_text(&mut path, secrets);
+                    path
+                }),
+            })
+            .collect();
+        Self { input, images }
+    }
+
+    pub(crate) fn loaded(text: &str, images: &[InputImage], secrets: &[String]) -> Option<Self> {
+        (!images.is_empty())
+            .then(|| Self::new(text, images.iter().map(|i| i.path.as_deref()), secrets))
     }
 }
 #[derive(Clone, Debug)]

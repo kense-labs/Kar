@@ -131,6 +131,11 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
                     request_id: v["id"].as_str().map(str::to_owned),
                     input_id: input_id.into(),
                     native_admission: body["admission"] == "native",
+                    submission: if body["images"].is_array() {
+                        serde_json::from_value(body.clone()).ok()
+                    } else {
+                        None
+                    },
                 })
         } else {
             None
