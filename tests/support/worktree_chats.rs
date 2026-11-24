@@ -8,6 +8,45 @@ use std::{
 };
 use uuid::Uuid;
 
+#[tokio::main(flavor = "current_thread")]
+pub(super) async fn fork_with_id() {
+    let mut args = std::env::args().skip(2);
+    let base = std::path::PathBuf::from(args.next().unwrap());
+    let source = args.next().unwrap().parse().unwrap();
+    let turn = args.next().unwrap().parse().unwrap();
+    let child = args.next().unwrap().parse().unwrap();
+    let checkout = args.next().map(std::path::PathBuf::from);
+    let store = kar::chat::ChatStore::open(base.join("store")).unwrap();
+    match store
+        .fork_at_with_id_configured(source, turn, child, checkout, |opts| {
+            opts.env.insert(
+                "FIXTURE_NATIVE_DB".into(),
+                base.join("native").into_os_string(),
+            );
+            opts.remove_env("KAR_WORKBENCH_TOKEN").unwrap();
+        })
+        .await
+    {
+        Ok(history) => println!("{}", serde_json::to_string(&history).unwrap()),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn keyed(base: &Path, source: &str, turn: &str, child: Uuid, checkout: Option<&Path>) -> Command {
+    let mut cmd = Command::new(std::env::current_exe().unwrap());
+    cmd.arg("fork-with-id")
+        .arg(base)
+        .args([source, turn])
+        .arg(child.to_string());
+    if let Some(path) = checkout {
+        cmd.arg(path);
+    }
+    cmd
+}
+
 pub(super) fn run() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();
@@ -120,7 +159,8 @@ pub(super) fn run() {
     assert!(String::from_utf8_lossy(&refused.stderr).contains("did not confirm"));
     assert_eq!(fs::read(dest.path.join("shared")).unwrap(), b"base");
 
-    let mut host = fork(&dest.path)
+    let requested = Uuid::new_v4();
+    let mut host = keyed(&base, &ai, first, requested, Some(&dest.path))
         .env("FIXTURE_PAUSE_BRANCH", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -150,8 +190,33 @@ pub(super) fn run() {
         &ai,
         "parent continued while child was pending",
     ]);
-    // Even without the destination argument a fresh Kar process resumes the staged fork.
-    let forked = run(&["fork", first, "--chat", &ai]);
+    let wrong = keyed(&base, &ai, first, requested, None).output().unwrap();
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("different source, turn or worktree"));
+    let wrong_id = keyed(&base, &ai, first, Uuid::new_v4(), Some(&dest.path))
+        .output()
+        .unwrap();
+    assert!(!wrong_id.status.success());
+    let forked = success(
+        keyed(&base, &ai, first, requested, Some(&dest.path))
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(forked["chat"]["id"], requested.to_string());
+    let replay = success(
+        keyed(&base, &ai, first, requested, Some(&dest.path))
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(forked["chat"], replay["chat"]);
+    assert_eq!(forked["turns"], replay["turns"]);
+    assert!(
+        replay["chat"]["unset_env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "KAR_WORKBENCH_TOKEN")
+    );
     let fork_id = forked["chat"]["id"].as_str().unwrap();
     assert_eq!(fs::read(db.join("forks")).unwrap(), issued);
     assert_eq!(
@@ -185,6 +250,53 @@ pub(super) fn run() {
     assert_eq!(git(&b.path, &["show", ":shared"]), "shared-B");
     assert_eq!(fs::read(b.path.join("shared")).unwrap(), b"shared-B");
     assert_eq!(fs::read(main.join("shared")).unwrap(), b"base");
+    // The same request semantics apply to an in-place child. A different source or turn
+    // cannot claim its UUID, even when the destination checkout is identical.
+    let in_place = Uuid::new_v4();
+    let parent = success(keyed(&base, &ai, first, in_place, None).output().unwrap());
+    let calls = fs::read(db.join("forks")).unwrap();
+    let replay = success(keyed(&base, &ai, first, in_place, None).output().unwrap());
+    assert_eq!(parent["chat"]["id"], in_place.to_string());
+    assert_eq!(parent["chat"]["native_id"], replay["chat"]["native_id"]);
+    assert!(
+        !keyed(&base, &bi, first, in_place, None)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        !keyed(&base, &ai, &Uuid::new_v4().to_string(), in_place, None)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert_eq!(fs::read(db.join("forks")).unwrap(), calls);
+
+    // Crash after the native method was received but before its opaque child identity
+    // was returned. A fresh controller must not call the provider for this UUID again.
+    let uncertain = Uuid::new_v4();
+    let gate = db.join("hold-native-fork");
+    fs::write(&gate, []).unwrap();
+    let entered = db.join("entered-native-fork");
+    let mut host = keyed(&base, &ai, first, uncertain, None)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !entered.exists() {
+        assert!(host.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    host.kill().unwrap();
+    host.wait().unwrap();
+    let retry = keyed(&base, &ai, first, uncertain, None).output().unwrap();
+    assert!(!retry.status.success());
+    assert!(String::from_utf8_lossy(&retry.stderr).contains("unconfirmed after interruption"));
+    assert_eq!(fs::read(db.join("forks")).unwrap(), calls);
+    fs::remove_file(gate).unwrap();
 
     // An idle, attached chat pins its checkout. The JSON snapshot is its readiness signal.
     let mut attached = cli(&base)

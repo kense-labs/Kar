@@ -11,6 +11,10 @@ pub(super) struct Destination {
 }
 
 impl Destination {
+    pub fn root(&self) -> &Path {
+        self.repo.root()
+    }
+
     pub fn open(parent: &ChatInfo, requested: &Path, opts: &mut SessionOptions) -> Result<Self> {
         if parent.protocol != Protocol::Codex {
             return Err(Error::Unsupported(format!(

@@ -1933,6 +1933,10 @@ fn main() {
         workbench_queue::run();
         return;
     }
+    if std::env::args().nth(1).as_deref() == Some("fork-with-id") {
+        worktree_chats::fork_with_id();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("workbench-projects") {
         workbench_projects::run();
         return;

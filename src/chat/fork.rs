@@ -1,6 +1,8 @@
+mod request;
 mod worktree;
 use super::{ChatInfo, ChatSession, ChatStore, CheckpointPoint, Sink, TurnStatus, log};
 use crate::{Error, Protocol, Result, Session, SessionOptions};
+use request::Request;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -90,6 +92,64 @@ impl ChatStore {
         )
         .await
     }
+    /// Return the child history for a stable public request, including replays after publication.
+    pub async fn fork_at_with_id(
+        &self,
+        source: Uuid,
+        turn: Uuid,
+        child_id: Uuid,
+        worktree: Option<PathBuf>,
+    ) -> Result<super::ChatHistory> {
+        self.fork_at_with_id_configured(source, turn, child_id, worktree, |_| {})
+            .await
+    }
+
+    pub async fn fork_at_with_id_configured(
+        &self,
+        source: Uuid,
+        turn: Uuid,
+        child_id: Uuid,
+        worktree: Option<PathBuf>,
+        configure: impl FnOnce(&mut SessionOptions),
+    ) -> Result<super::ChatHistory> {
+        let path = worktree.as_deref();
+        if source == child_id {
+            return Err(Error::Refused(
+                "fork source and child UUID must differ".into(),
+            ));
+        }
+        if let Some(published) = Request::published(self, source, turn, child_id, path)? {
+            return Ok(published);
+        }
+        let lease = self.lease(child_id, true)?;
+        match lease.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Request::while_busy(self, source, turn, child_id, path);
+            }
+            Err(fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
+        if let Some(published) = Request::published(self, source, turn, child_id, path)? {
+            return Ok(published);
+        }
+        let request = Request::claim(self, source, turn, child_id, path, lease)?;
+        let log = self.open_controller(source).await?;
+        let mut opts = log.state.info.options();
+        configure(&mut opts);
+        crate::stream::retention::check_limit(opts.retained_bytes)?;
+        let source = Sink(Arc::new(Mutex::new(log)));
+        let store = self.clone();
+        // Closing the HTTP stream does not cancel native dispatch, publication, or release.
+        tokio::spawn(async move {
+            let child = store
+                .run_fork(source, turn, opts, worktree, Some(request))
+                .await?;
+            child.close().await?;
+            store.history(child_id)
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?
+    }
     pub(super) async fn open_saved(
         state: &log::State,
         mut opts: SessionOptions,
@@ -169,7 +229,7 @@ impl ChatStore {
     ) -> Result<ChatSession> {
         crate::stream::retention::check_limit(opts.retained_bytes)?;
         let store = self.clone();
-        tokio::spawn(async move { store.run_fork(source, turn, opts, checkout).await })
+        tokio::spawn(async move { store.run_fork(source, turn, opts, checkout, None).await })
             .await
             .map_err(|e| Error::Closed(e.to_string()))?
     }
@@ -179,6 +239,7 @@ impl ChatStore {
         turn: Uuid,
         mut opts: SessionOptions,
         checkout: Option<PathBuf>,
+        request: Option<Request>,
     ) -> Result<ChatSession> {
         let parent = {
             let log = source.0.lock().unwrap();
@@ -209,10 +270,19 @@ impl ChatStore {
             Err(e) => Err(e.into()),
         };
         let staged_info = read_stage()?;
+        let stable = request.is_some();
+        if let (Some(staged), Some(request)) = (&staged_info, &request)
+            && staged.id != request.id
+        {
+            return Err(Error::Refused(
+                "a different child UUID is pending for this chat".into(),
+            ));
+        }
         let staged_checkout = staged_info.as_ref().filter(|i| {
-            i.forked_from
-                .as_ref()
-                .is_some_and(|f| f.worktree_base.is_some())
+            !stable
+                && i.forked_from
+                    .as_ref()
+                    .is_some_and(|f| f.worktree_base.is_some())
         });
         let destination = checkout
             .as_deref()
@@ -335,7 +405,7 @@ impl ChatStore {
             }
             info
         } else {
-            let child_id = Uuid::new_v4();
+            let child_id = request.as_ref().map(|r| r.id).unwrap_or_else(Uuid::new_v4);
             let worktree_base = if let Some(dest) = &destination {
                 let (dest, store, parent) = (dest.clone(), self.clone(), parent.clone());
                 Some(
@@ -359,21 +429,40 @@ impl ChatStore {
                 .map_err(|e| Error::Closed(e.to_string()))??;
             }
             let rt = parent.launch_runtime(&opts).await?;
-            let (branch, anchor) = if opencode && cut.fork_anchor.is_none() {
-                use crate::providers::opencode_fork::{self, Target};
-                opencode_fork::open(&rt, opts.clone(), &native_source, Target::Turn(cut)).await?
-            } else {
-                let anchor = cut.fork_anchor.clone().ok_or_else(|| {
-                    Error::Unsupported("selected turn has no native fork anchor".into())
-                })?;
-                let session = rt
-                    .fork_selected(&native_source, Some(&anchor), opts.clone(), None)
-                    .await?;
-                (session, anchor)
-            };
-            if let Some(dest) = &destination {
-                worktree::confirm(&branch, &dest.workspace).await?;
+            if cut.fork_anchor.is_none() && !opencode {
+                return Err(Error::Unsupported(
+                    "selected turn has no native fork anchor".into(),
+                ));
             }
+            if let Some(r) = &request {
+                r.begin(parent.id, turn, destination.as_deref())?;
+            }
+            let opened = async {
+                let (branch, anchor) = if let Some(anchor) = cut.fork_anchor.clone() {
+                    let session = rt
+                        .fork_selected(&native_source, Some(&anchor), opts.clone(), None)
+                        .await?;
+                    (session, anchor)
+                } else {
+                    use crate::providers::opencode_fork::{self, Target};
+                    opencode_fork::open(&rt, opts.clone(), &native_source, Target::Turn(cut))
+                        .await?
+                };
+                if let Some(dest) = &destination {
+                    worktree::confirm(&branch, &dest.workspace).await?;
+                }
+                Ok::<_, Error>((branch, anchor))
+            }
+            .await;
+            let (branch, anchor) = match opened {
+                Ok(result) => result,
+                Err(error) => {
+                    if let Some(r) = &request {
+                        r.record_error()?;
+                    }
+                    return Err(error);
+                }
+            };
             if let Some(base) = &worktree_base {
                 self.pin_fork_baseline(&parent, child_id, &base.tree)?;
             }
@@ -409,8 +498,13 @@ impl ChatStore {
             branch.close().await?;
             child
         };
-        let lease = self.lease(saved.id, true)?;
-        lease.try_lock().map_err(std::io::Error::from)?;
+        let lease = if let Some(request) = request {
+            request.lease
+        } else {
+            let lease = self.lease(saved.id, true)?;
+            lease.try_lock().map_err(std::io::Error::from)?;
+            lease
+        };
         if self.path(saved.id).try_exists()? {
             return Err(Error::Refused("fork destination already exists".into()));
         }
@@ -440,6 +534,7 @@ impl ChatStore {
             // A local edit between the preflight and the native handshake may veto a
             // fresh fork. No restore started in that case, so the parent stays usable.
             if !staged
+                && !stable
                 && log.state.restoring.is_none()
                 && source.0.lock().unwrap().state.restoring.is_none()
             {
