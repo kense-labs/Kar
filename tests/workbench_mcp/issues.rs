@@ -207,6 +207,11 @@ pub(super) async fn exercise(
             true
         );
     }
+    let guide=server::json(make("kar_pull_request",json!({"action":"read_guide","number":19}))).await;
+    assert_eq!(guide["result"]["structuredContent"]["current_head_sha"],"abc");
+    assert!(guide["result"]["structuredContent"]["guide"].is_null());
+    let off=server::json(make("kar_pull_request",json!({"action":"write_guides","command_id":Uuid::new_v4(),"numbers":[19]}))).await;
+    assert!(denied(&off));
     let watch=json!({"action":"watch","command_id":Uuid::new_v4(),"number":19,"until":"merged"});
     let first=server::json(make("kar_pull_request",watch.clone())).await;
     assert_eq!(first["result"]["structuredContent"]["watching"],true);

@@ -28,6 +28,8 @@ pub(in crate::workbench) struct Policy {
     #[serde(default)]
     workflow_reads: bool,
     #[serde(default)]
+    pub(in crate::workbench) review_guides:Option<forge::guides::Settings>,
+    #[serde(default)]
     pub(super) thread_tools:Option<super::operations::Scope>,
     #[serde(default)]
     pull_reads:bool,
@@ -59,6 +61,8 @@ struct Configure {
     issue_writes: bool,
     #[serde(default)]
     workflow_reads: bool,
+    #[serde(default)]
+    pub(in crate::workbench) review_guides:Option<forge::guides::Settings>,
     #[serde(default)]
     pub(super) thread_tools:Option<super::operations::Scope>,
     #[serde(default)]
@@ -139,6 +143,7 @@ async fn configure(
     let pull_repository=if cfg.pull_reads || cfg.pull_writes && cfg.mode==Mode::Execute {Some(forge::model::pull_repository(app.clone(),p).await?)}else{None};
     if let Some(s)=&cfg.thread_tools {s.validate(&app,p)?;}
     let policy = Policy {
+        review_guides:cfg.review_guides,
         thread_tools:cfg.thread_tools,
         pull_repository,pull_reads:cfg.pull_reads,pull_writes:cfg.pull_writes,
         worktree_directory,

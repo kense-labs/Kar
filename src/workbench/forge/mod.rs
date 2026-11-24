@@ -24,6 +24,7 @@ pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<Stri
         .ok_or_else(|| ForgeError::bad("forge returned no default branch"))
 }
 pub(in crate::workbench) mod watches;
+pub(in crate::workbench) mod guides;
 mod routing;
 pub(in crate::workbench) mod signals;
 pub(in crate::workbench) mod signin;
@@ -224,6 +225,10 @@ type Reply<T> = Result<Json<T>, ForgeError>;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct ForgeState {
+    #[serde(default)]
+    guides:BTreeMap<String,guides::Saved>,
+    #[serde(default)]
+    guide_commands:BTreeMap<Uuid,guides::Command>,
     #[serde(default)]
     watches:BTreeMap<Uuid,watches::Watch>,
     #[serde(default)]

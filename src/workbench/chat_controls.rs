@@ -137,6 +137,7 @@ impl Workbench {
             let mut recovered=self.0.pump.recovered_workspaces.lock().unwrap();
             if !*recovered {
                 super::mcp::worktree::recover_queue_reservations(self)?;
+                super::forge::guides::recover(self)?;
                 super::mcp::collaboration_tools::environment::cards::recover(self)?;
                 super::mcp::collaboration_tools::environment::secrets::clean(&self.0.state)?;
                 *recovered=true;

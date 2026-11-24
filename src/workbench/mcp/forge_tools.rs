@@ -42,14 +42,15 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         tools.push(Tool{name,description:"List this thread's linked objects. Link or unlink one number or an atomic batch in the granted repository using a stable command_id.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"number":{"type":"integer","minimum":1},"numbers":{"type":"array","items":{"type":"integer","minimum":1}},"command_id":id}),required:&["action"]});
     }
     if p.reads_pulls() {
-        let mut acts = vec!["list", "read", "threads", "thread_comments","watch_status"];
+        let mut acts = vec!["list", "read", "threads", "thread_comments","watch_status","read_guide"];
         if p.writes_pulls() && !c.plan {
             acts.extend([
                 "create", "review", "reply", "resolve", "update", "merge", "comment","watch","unwatch",
             ]);
         }
+        if !c.plan && p.writes_pulls() && p.review_guides.is_some(){acts.push("write_guides");}
         let string = json!({"type":"string"});
-        tools.push(Tool{name:PULL,description:"Use this chat's granted pull-request repository. Read and review changes, open a pull for an existing branch, reply to a review thread or resolve it. Reuse command_id for mutations.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"command_id":id,"number":{"type":"integer","minimum":1},"until":{"enum":["checks","merged"]},"cursor":string,"review_thread_id":string,"head":string,"head_repository":string,"base":string,"title":string,"body":string,"verdict":{"enum":["comment","approve","request-changes"]},"comments":{"type":"array","items":{"type":"object"}},"resolved":{"type":"boolean"},"ready":{"type":"boolean"},"auto":{"type":"boolean"},"expected_head_sha":string,"method":{"enum":["merge","squash","rebase"]},"state":{"enum":["open","closed"]},"add_labels":{"type":"array","items":string},"remove_labels":{"type":"array","items":string},"request_reviewers":{"type":"array","items":string}}),required:&["action"]});
+        tools.push(Tool{name:PULL,description:"Use this chat's granted pull-request repository. Read and review changes, open a pull for an existing branch, reply to a review thread or resolve it. Reuse command_id for mutations.",properties:json!({"project_id":id,"thread_id":id,"action":{"enum":acts},"command_id":id,"number":{"type":"integer","minimum":1},"until":{"enum":["checks","merged"]},"numbers":{"type":"array","maxItems":20,"items":{"type":"integer","minimum":1}},"cursor":string,"review_thread_id":string,"head":string,"head_repository":string,"base":string,"title":string,"body":string,"verdict":{"enum":["comment","approve","request-changes"]},"comments":{"type":"array","items":{"type":"object"}},"resolved":{"type":"boolean"},"ready":{"type":"boolean"},"auto":{"type":"boolean"},"expected_head_sha":string,"method":{"enum":["merge","squash","rebase"]},"state":{"enum":["open","closed"]},"add_labels":{"type":"array","items":string},"remove_labels":{"type":"array","items":string},"request_reviewers":{"type":"array","items":string}}),required:&["action"]});
     }
     if p.reads_pulls() {
         let acts = if !c.plan && p.writes_pulls() {
@@ -89,7 +90,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
         .to_owned();
     let write = !matches!(
         action.as_str(),
-        "list" | "read" | "threads" | "thread_comments" | "checks" | "logs" | "watch_status"
+        "list" | "read" | "threads" | "thread_comments" | "checks" | "logs" | "watch_status" | "read_guide"
     );
     let p = c.policy.ok_or_else(denied)?;
     let grant = c.grant.ok_or_else(denied)?;
@@ -102,6 +103,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
     if !allowed || write && c.plan {
         return Err(denied());
     }
+    let guide_settings=p.review_guides.clone();
     let scope = (kind == Kind::Issue)
         .then(|| p.issue_scope.clone())
         .flatten();
@@ -127,6 +129,17 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(|_| forge::ForgeError::bad("invalid command ID"))?;
+            if name==PULL && action=="read_guide"{
+                #[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Read{number:u64}
+                let q:Read=serde_json::from_value(input).map_err(|e|forge::ForgeError::bad(e.to_string()))?;
+                if id.is_some(){return Err(forge::ForgeError::bad("reading a guide takes no command ID"));}
+                return forge::guides::read(app,project,q.number,authorize).await;
+            }
+            if name==PULL && action=="write_guides"{
+                #[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Batch{numbers:Vec<u64>}
+                let q:Batch=serde_json::from_value(input).map_err(|e|forge::ForgeError::bad(e.to_string()))?;
+                return forge::guides::write(app,project,chat,id.ok_or_else(||forge::ForgeError::bad("guide generation requires command ID"))?,q.numbers,guide_settings.ok_or_else(||forge::ForgeError::bad("review guides are disabled"))?,authorize).await;
+            }
             if name==PULL && matches!(action.as_str(),"watch"|"unwatch"|"watch_status"){
                 #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct WatchRequest{number:u64,until:Option<forge::watches::Until>}
                 let q:WatchRequest=serde_json::from_value(input).map_err(|e|forge::ForgeError::bad(e.to_string()))?;
