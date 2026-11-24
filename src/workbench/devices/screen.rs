@@ -44,8 +44,9 @@ impl Screens {
                 if !visible {
                     break;
                 }
+                let capture = inner.devices.capture(&device).await;
                 drop(inner);
-                match remote::at(device.ssh.as_ref(), native::screenshot(&device)).await {
+                match capture {
                     Ok(png) => {
                         tx.send_replace(Frame::Png(Bytes::from(png)));
                     }
@@ -63,10 +64,10 @@ impl Screens {
 }
 #[derive(Deserialize)]
 pub(super) struct View {
-    project: Uuid,
-    chat: Uuid,
-    device_id: String,
-    host_id: Option<String>,
+    pub(super) project: Uuid,
+    pub(super) chat: Uuid,
+    pub(super) device_id: String,
+    pub(super) host_id: Option<String>,
 }
 pub(super) async fn stream(State(app): State<Workbench>, Query(q): Query<View>) -> Reply<Response> {
     app.binding(q.project, q.chat)?;
@@ -139,7 +140,7 @@ pub(super) async fn stream(State(app): State<Workbench>, Query(q): Query<View>) 
     )
         .into_response())
 }
-async fn active(app: &Workbench, id: Uuid, q: &View) -> bool {
+pub(super) async fn active(app: &Workbench, id: Uuid, q: &View) -> bool {
     if app.archived(q.chat) || app.binding(q.project, q.chat).is_err() {
         return false;
     }

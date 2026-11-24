@@ -146,20 +146,18 @@ async fn use_device(weak: WeakApp, headers: HeaderMap, op: Operation) -> Respons
         Ok(match op {
             Operation::Screenshot => (
                 [(axum::http::header::CONTENT_TYPE, "image/png")],
-                remote::at(d.ssh.as_ref(), native::screenshot(&d)).await?,
+                svc.capture(&d).await?,
             )
                 .into_response(),
-            Operation::Detail => {
-                Json(remote::at(d.ssh.as_ref(), actions::detail(&d)).await?).into_response()
-            }
+            Operation::Detail => Json(svc.detail(&d).await?).into_response(),
             Operation::Action(q) => {
                 if q.get("device_id").is_some() || q.get("host_id").is_some() {
                     return Err(Error::Refused(
                         "agent action targets its bound device".into(),
                     ));
                 }
-                remote::at(d.ssh.as_ref(), actions::apply(&d, &q)).await?;
-                Json(remote::at(d.ssh.as_ref(), actions::detail(&d)).await?).into_response()
+                svc.apply(&d, &q).await?;
+                Json(svc.detail(&d).await?).into_response()
             }
         })
     }

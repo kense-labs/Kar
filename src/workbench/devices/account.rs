@@ -44,7 +44,7 @@ pub(super) struct Expo {
 fn nonempty(s: Option<String>) -> Option<String> {
     s.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
-fn login() -> Option<String> {
+pub(super) fn login() -> Option<String> {
     let path = PathBuf::from(std::env::var_os("EXPO_HOME").unwrap_or_else(|| {
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(".expo")
@@ -61,12 +61,27 @@ fn login() -> Option<String> {
         .as_str()
         .map(str::to_owned)
 }
-pub(super) async fn eas(Json(q): Json<Expo>) -> Reply<Json<Value>> {
+pub(super) async fn eas(State(app): State<Workbench>, Json(q): Json<Expo>) -> Reply<Json<Value>> {
     let request = client()?.post("https://api.expo.dev/graphql");
+    let saved = if let Some(id) = &q.host_id {
+        let s = app.0.devices.live.lock().await;
+        Some(
+            s.settings
+                .cloud_hosts
+                .iter()
+                .find(|h| h.id == *id && h.kind == cloud::Provider::Expo)
+                .ok_or_else(|| bad("unknown Expo host"))?
+                .token
+                .clone(),
+        )
+        .flatten()
+    } else {
+        None
+    };
     let (request, source) = if let Some(token) = nonempty(q.access_token) {
         (request.bearer_auth(token), "settings")
-    } else if q.host_id.is_some() {
-        return Err(bad("no saved Expo credential for this host").into());
+    } else if let Some(token) = nonempty(saved) {
+        (request.bearer_auth(token), "settings")
     } else if let Some(token) = nonempty(std::env::var("EXPO_TOKEN").ok()) {
         (request.bearer_auth(token), "env")
     } else if let Some(secret) = nonempty(login()) {
@@ -109,7 +124,10 @@ pub(super) struct Gateway {
     agent_token: Option<String>,
     host_id: Option<String>,
 }
-pub(super) async fn simlock(Json(q): Json<Gateway>) -> Reply<Json<Value>> {
+pub(super) async fn simlock(
+    State(app): State<Workbench>,
+    Json(q): Json<Gateway>,
+) -> Reply<Json<Value>> {
     let machine = std::env::var("AGENT_DEVICE_DAEMON_BASE_URL")
         .ok()
         .and_then(|s| {
@@ -117,7 +135,21 @@ pub(super) async fn simlock(Json(q): Json<Gateway>) -> Reply<Json<Value>> {
                 .strip_suffix("/v1/agent-device")
                 .map(str::to_string)
         });
+    let saved = if let Some(id) = &q.host_id {
+        let s = app.0.devices.live.lock().await;
+        Some(
+            s.settings
+                .cloud_hosts
+                .iter()
+                .find(|h| h.id == *id && h.kind == cloud::Provider::Simlock)
+                .cloned()
+                .ok_or_else(|| bad("unknown Simlock host"))?,
+        )
+    } else {
+        None
+    };
     let gateway = nonempty(q.gateway_url)
+        .or_else(|| saved.as_ref().and_then(|h| h.gateway_url.clone()))
         .or_else(|| machine.clone())
         .ok_or_else(|| bad("no Simlock gateway configured"))?;
     let gateway = gateway.trim_end_matches('/');
@@ -135,8 +167,16 @@ pub(super) async fn simlock(Json(q): Json<Gateway>) -> Reply<Json<Value>> {
     }
     let (token, source) = if let Some(token) = nonempty(q.agent_token) {
         (token, "entered")
-    } else if q.host_id.is_some() {
-        return Err(bad("no saved Simlock credential for this host").into());
+    } else if let Some(token) = saved
+        .as_ref()
+        .filter(|h| {
+            h.gateway_url
+                .as_deref()
+                .is_some_and(|u| u.trim_end_matches('/') == gateway)
+        })
+        .and_then(|h| nonempty(h.token.clone()))
+    {
+        (token, "settings")
     } else if machine.as_deref() == Some(gateway) {
         (
             nonempty(std::env::var("AGENT_DEVICE_DAEMON_AUTH_TOKEN").ok())
