@@ -578,7 +578,7 @@ let session = kar::runtime("codex").unwrap().open(options).await?;
 
 `host.set_tools(...)` 原子替换工具列表，并向每条已连接的 MCP 事件流推送 `notifications/tools/list_changed`。进行中的调用继续使用原处理函数。模型何时看到新列表由运行时决定，可通过 `runtime.mcp_tools_list_changed()` 查询。Grok 会等待当前会话报告宿主服务就绪再返回。Codex 把宿主服务列为必需项，支持分会话报告的版本还可通过 `session.snapshot().mcp_startup` 查看各服务最新状态。服务监听回环地址，重启宿主后需要重新注册处理函数，并向恢复的会话提供新地址和令牌。
 
-前端可以从 `session.capabilities().mcp_transports` 读取已确认的传输类型。缺省表示当前版本或连接尚未验证，空列表表示不支持。DSH 报告 stdio。已识别的 Qwen Code 0.26.0 之前的版本只接受 stdio，配置 HTTP 工具会在启动前返回错误。Pi 配置会话级 MCP 并完成 SDK 工具注册后报告 stdio 和 HTTP。Factory Droid 1.17.2 已验证新建会话调用 HTTP 工具、在原会话恢复后调用 stdio 工具，两次结果均回到模型。通过安装探测确定 Factory 版本时会报告相应的传输类型。Codex 的 `mcp_startup` 能力说明首个模型请求可能在部分服务仍在启动时发出，服务的实时状态可从快照读取。
+前端可以从 `session.capabilities().mcp_transports` 读取已确认的传输类型。缺省表示当前版本或连接尚未验证，空列表表示不支持。DSH 报告 stdio。已识别的 Qwen Code 0.26.0 之前的版本只接受 stdio，配置 HTTP 工具会在启动前返回错误。Pi 配置会话级 MCP 并完成 SDK 工具注册后报告 stdio 和 HTTP。Factory Droid 1.12.1 和 1.17.2 已验证新建会话调用 HTTP 工具、在原会话恢复后调用 stdio 工具，两次结果均回到模型。通过安装探测确定 Factory 版本时会报告相应的传输类型。Codex 的 `mcp_startup` 能力说明首个模型请求可能在部分服务仍在启动时发出，服务的实时状态可从快照读取。
 
 当前 Rust 通过 RPC 驱动 Pi 原生进程，请求观测和会话级 MCP 使用 Pi SDK 的 Node 宿主。浏览器接入 Pi Durable，Cursor 使用 CLI 的 ACP。Pi 和 Cursor 的进程内 SDK 模式尚未完整支持。
 

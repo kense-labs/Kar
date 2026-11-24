@@ -631,6 +631,12 @@ async fn concurrent_question_answers_reconcile_on_reconnect() {
     let mut b = ChatReplica::from_snapshot(f.store.feed_snapshot(id).unwrap());
     let mut feed = f.store.follow(id, Some(a.cursor())).unwrap();
     let send = chat.send(Uuid::new_v4(), "FACTORY_QUESTION");
+    let version = std::process::Command::new(&f.runtime.program)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(version.status.success());
+    let version = String::from_utf8(version.stdout).unwrap();
     let respond = async {
         while a.pending_requests().is_empty() {
             a.apply(feed.recv().await.unwrap()).unwrap();
@@ -639,10 +645,13 @@ async fn concurrent_question_answers_reconcile_on_reconnect() {
         assert_eq!(req.method, "droid.ask_user");
         let fields = req.question_form().unwrap().fields;
         assert_eq!(fields[0].id, "1");
-        assert_eq!(
-            fields[0].description.as_deref(),
-            Some("Choose accent colors.")
-        );
+        let context = req.body["questions"][0]["context"].as_str();
+        assert_eq!(fields[0].description.as_deref(), context);
+        match version.trim() {
+            "1.12.1" => assert_eq!(context, None),
+            "1.17.2" => assert_eq!(context, Some("Choose accent colors.")),
+            _ => {}
+        }
         assert_eq!(fields[0].kind, kar::FieldKind::MultiSelect);
         assert_eq!(fields[1].id, "2");
         assert!(fields[1].allow_other);
@@ -749,10 +758,7 @@ async fn native_mcp_transports_on_create_and_resume() {
         .await
         .unwrap();
     declaration::check(&declared, opened.capabilities());
-    assert_eq!(
-        opened.capabilities().mcp_transports,
-        Some([kar::McpTransport::Stdio, kar::McpTransport::Http].as_slice())
-    );
+    let advertised = opened.capabilities().mcp_transports;
     let id = opened.info().id;
     let mut current = Some(opened);
     for (prompt, receipt) in [
@@ -805,6 +811,10 @@ async fn native_mcp_transports_on_create_and_resume() {
         );
         chat.close().await.unwrap();
     }
+    assert_eq!(
+        advertised,
+        Some([kar::McpTransport::Stdio, kar::McpTransport::Http].as_slice())
+    );
     host.close().await;
 }
 

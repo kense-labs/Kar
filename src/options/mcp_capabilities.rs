@@ -33,7 +33,7 @@ impl McpSupport {
             |major, minor, patch| release.is_some_and(|v| v >= &Version::new(major, minor, patch));
         let transports = match protocol {
             Protocol::Codex | Protocol::Claude | Protocol::Qoder | Protocol::KimiKap => Some(BOTH),
-            Protocol::Factory if at_least(1, 17, 2) => Some(BOTH),
+            Protocol::Factory if at_least(1, 12, 1) => Some(BOTH),
             Protocol::Dsh => Some(STDIO),
             Protocol::Cybion | Protocol::Morph => Some([].as_slice()),
             Protocol::Qwen if at_least(0, 26, 0) => Some(BOTH),
