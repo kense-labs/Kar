@@ -67,3 +67,9 @@ ACP 条目对应 [T3 工作台处理函数](https://github.com/pingdotgg/t3code/
 | 以工作台模型身份启动、恢复或取消持久工作流 | 工作流工具按操作分派到工作流服务 | Kar 有持久工作流服务，当前模型工具缺少这组调用。让已授权模型启动测试流程，读回 run ID，再分别验证恢复、取消和重连后的结果。 |
 
 对应 [T3 Issue 工具](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/issues/handlers.ts#L163)、[T3 工作树工具](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/worktree/handlers.ts#L13)、[T3 工作流工具](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/toolkits/workflow/handlers.ts#L52) 及 [Kar 的模型工具注册和调用分派](../src/workbench/mcp/toolkit.rs)。这些是原清单 MCP 工具组内进一步核实的操作，与前文的 Issue 创建及评论共用同一功能组。
+
+### 同一聊天内回到早先回合
+
+T3 的回滚请求可以选择只回退对话。供应商支持时，服务端在当前工作台聊天上回退模型上下文，保留回滚审计记录。选择恢复文件时才调用检查点恢复。Kar 的工作台回滚请求接受回合、回合前后位置和预演选项，执行文件恢复。要按选定回合继续旧上下文，Kar 已有分叉路径，子聊天有单独的聊天 ID。此次核对没有找到保留原聊天 ID、只回退模型上下文的操作。[T3 回滚处理](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/orchestration-v2/CheckpointRollbackService.ts#L415) · [Kar 工作台回滚与分叉](../src/workbench/chat_controls.rs) · [Kar 工作区恢复](../src/chat/checkpoint/restore.rs)
+
+复验时在三轮中分别写入唯一标记，记录聊天 ID、事件游标和文件内容。选择回到第二轮且保留文件，从同一聊天继续提问。检查模型输入是否排除第三轮，客户端是否仍使用原聊天 ID，文件是否逐字节保持，以及审计记录是否能说明回滚。独立子聊天测试仍按原分叉清单执行。
