@@ -1,5 +1,7 @@
 //! Owner-only, process-scoped ACP authentication. Interactive output stays in memory.
 mod flow;
+mod builtin;
+use axum::http::HeaderMap;
 use super::*;
 use crate::account::AccountWire;
 pub(in crate::workbench) use flow::Jobs;
@@ -13,7 +15,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 pub(super) fn routes() -> Router<Workbench> {
-    Router::new()
+    Router::new().merge(builtin::routes())
         .route(
             "/projects/{project}/acp-registry/{runtime}/auth/methods",
             get(methods),
@@ -170,19 +172,21 @@ struct Login {
 async fn login(
     State(app): State<Workbench>,
     Param((p, id)): Param<(Uuid, String)>,
+    headers:HeaderMap,
     Json(input): Json<Login>,
 ) -> Reply {
-    start(&app, p, id, Some(input))
+    start(&app, p, id, Some(input), flow::client(&headers)?)
 }
-async fn logout(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String)>) -> Reply {
-    start(&app, p, id, None)
+async fn logout(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String)>, headers:HeaderMap) -> Reply {
+    start(&app, p, id, None, flow::client(&headers)?)
 }
-fn start(app: &Workbench, p: Uuid, id: String, login: Option<Login>) -> Reply {
+fn start(app: &Workbench, p: Uuid, id: String, login: Option<Login>, client:Option<String>) -> Reply {
     let (rt, opts) = context(app, p, &id)?;
     let path = credentials(&app.0.chats, &id);
     let program = rt.program.clone();
-    app.0.acp_auth.start(p, id, &program, move |io| async move {
-        authenticate(rt, opts, path, login, io).await
+    app.0.acp_auth.start(p, id, &program, client, move |io| async move {
+        authenticate(rt, opts, path, login, io).await?;
+        Ok(json!({"status":"complete"}))
     })
 }
 async fn forget(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String)>) -> Reply {

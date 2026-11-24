@@ -6,6 +6,7 @@ use std::future::Future;
 
 struct Job {
     project: Uuid,
+    client: Option<String>,
     runtime: String,
     program: PathBuf,
     born: Instant,
@@ -21,10 +22,17 @@ impl Drop for Job {
 #[derive(Default)]
 pub(in crate::workbench) struct Jobs(Mutex<HashMap<Uuid, Job>>);
 impl Jobs {
-    pub(super) fn start<F, Fut>(&self, p: Uuid, id: String, program: &Path, run: F) -> Reply
+    pub(super) fn start<F, Fut>(
+        &self,
+        p: Uuid,
+        id: String,
+        program: &Path,
+        client: Option<String>,
+        run: F,
+    ) -> Reply
     where
         F: FnOnce(Interaction) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<()>> + Send + 'static,
+        Fut: Future<Output = Result<Value>> + Send + 'static,
     {
         let mut jobs = self.0.lock().unwrap();
         jobs.retain(|_, j| j.born.elapsed() < Duration::from_secs(1800));
@@ -53,7 +61,7 @@ impl Jobs {
                 rx,
             };
             let status = match tokio::time::timeout(Duration::from_secs(600), run(io)).await {
-                Ok(Ok(())) => json!({"status":"complete"}),
+                Ok(Ok(result)) => result,
                 Ok(Err(e)) => json!({"status":"failed","reason":e.to_string()}),
                 Err(_) => json!({"status":"failed","reason":"ACP authentication timed out"}),
             };
@@ -63,6 +71,7 @@ impl Jobs {
             flow,
             Job {
                 project: p,
+                client,
                 runtime: id,
                 program: program.into(),
                 born: Instant::now(),
@@ -85,14 +94,38 @@ impl Jobs {
     }
 }
 type Key = (Uuid, String, Uuid);
-fn job<'a>(jobs: &'a HashMap<Uuid, Job>, key: &Key) -> Result<&'a Job> {
+/// The client generates an independent random secret for its window and never places it in a URL.
+pub(super) fn client(headers: &HeaderMap) -> Result<Option<String>> {
+    let Some(v) = headers.get("kar-auth-client") else {
+        return Ok(None);
+    };
+    let v = v.to_str().map_err(|_| bad("invalid sign-in client key"))?;
+    if !(32..=128).contains(&v.len())
+        || !v
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return Err(bad("invalid sign-in client key"));
+    }
+    Ok(Some(crate::workbench::access::digest(v)))
+}
+fn job<'a>(jobs: &'a HashMap<Uuid, Job>, key: &Key, headers: &HeaderMap) -> Result<&'a Job> {
+    let client = client(headers)?;
     jobs.get(&key.2)
-        .filter(|j| j.project == key.0 && j.runtime == key.1)
+        .filter(|j| {
+            j.project == key.0
+                && j.runtime == key.1
+                && j.client.as_ref().is_none_or(|c| Some(c) == client.as_ref())
+        })
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown ACP sign-in flow").into())
 }
-pub(super) async fn status(State(app): State<Workbench>, Param(key): Param<Key>) -> Reply {
+pub(super) async fn status(
+    State(app): State<Workbench>,
+    Param(key): Param<Key>,
+    headers: HeaderMap,
+) -> Reply {
     let jobs = app.0.acp_auth.0.lock().unwrap();
-    let current = job(&jobs, &key)?.state.borrow().clone();
+    let current = job(&jobs, &key, &headers)?.state.borrow().clone();
     Ok(Json(current))
 }
 #[derive(Deserialize)]
@@ -118,10 +151,11 @@ impl Answer {
 pub(super) async fn respond(
     State(app): State<Workbench>,
     Param(key): Param<Key>,
+    headers: HeaderMap,
     Json(a): Json<Answer>,
 ) -> Reply {
     let jobs = app.0.acp_auth.0.lock().unwrap();
-    let current = job(&jobs, &key)?;
+    let current = job(&jobs, &key, &headers)?;
     let state = current.state.borrow();
     let kind = match &a {
         Answer::Browser { .. } => "browser",
@@ -144,9 +178,13 @@ pub(super) async fn respond(
     current.answer.try_send(a).map_err(|_| Error::Busy)?;
     Ok(Json(json!({"accepted":true})))
 }
-pub(super) async fn cancel(State(app): State<Workbench>, Param(key): Param<Key>) -> Reply {
+pub(super) async fn cancel(
+    State(app): State<Workbench>,
+    Param(key): Param<Key>,
+    headers: HeaderMap,
+) -> Reply {
     let mut jobs = app.0.acp_auth.0.lock().unwrap();
-    job(&jobs, &key)?;
+    job(&jobs, &key, &headers)?;
     jobs.remove(&key.2);
     Ok(Json(json!({"removed":true})))
 }

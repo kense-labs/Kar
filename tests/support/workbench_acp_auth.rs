@@ -131,6 +131,18 @@ async fn logout(client: &Client, auth: &str) {
     .await;
 }
 pub(super) async fn exercise(client: &Client, base: &str, p: &str, exe: &Path, token: &str) {
+    let mut secret_headers=reqwest::header::HeaderMap::new();
+    secret_headers.insert(reqwest::header::AUTHORIZATION,"Bearer kar-workbench-fixture".parse().unwrap());
+    secret_headers.insert("kar-auth-client",uuid::Uuid::new_v4().simple().to_string().parse().unwrap());
+    let scoped_client=Client::builder().default_headers(secret_headers).build().unwrap();
+    let account=format!("{base}/projects/{p}/accounts/codex");
+    let methods=server::json(client.get(format!("{account}/methods"))).await;
+    assert_eq!(methods,json!({"runtime":"codex","login":true,"logout":true,"quota":true}));
+    assert_eq!(client.post(format!("{account}/login")).send().await.unwrap().status(),StatusCode::BAD_REQUEST);
+    let unsupported=server::json(client.get(format!("{base}/projects/{p}/accounts/fx/quota"))).await;
+    assert_eq!(unsupported["kind"],"unsupported");
+    let other=client;
+    let client=&scoped_client;
     let input = json!({"source":"local","name":"Authentication fixture","command_path":exe,"command_args":["auth-fixture"],"auth_method_id":"auto"});
     let profile = server::json(
         client
@@ -161,6 +173,8 @@ pub(super) async fn exercise(client: &Client, base: &str, p: &str, exe: &Path, t
     );
     for accept in [false, true] {
         let f = initiate(client, &auth, "web", json!({})).await;
+        assert_eq!(other.get(&f).send().await.unwrap().status(),StatusCode::NOT_FOUND);
+        assert_eq!(other.delete(&f).send().await.unwrap().status(),StatusCode::NOT_FOUND);
         let state = wait(client, &f, "browser").await;
         assert_eq!(state["url"], "https://example.org/login");
         assert_eq!(
