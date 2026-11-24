@@ -49,6 +49,7 @@ struct Host {
     server: Option<tokio::process::Child>,
     base: String,
     project: String,
+    worktree: Uuid,
 }
 impl Host {
     async fn new() -> (Self, forge::Peer) {
@@ -79,6 +80,7 @@ impl Host {
             server: None,
             base: String::new(),
             project: String::new(),
+            worktree: Uuid::new_v4(),
         };
         f.start().await;
         let client = server::client();
@@ -92,7 +94,7 @@ impl Host {
             project["id"].as_str().unwrap()
         );
         let head = git(&bare, &["rev-parse", "refs/heads/feature"]);
-        let id = Uuid::new_v4();
+        let id = f.worktree;
         let req = json!({"id":id,"head":head,"directory":f.workspace});
         let managed = ok(client.post(format!("{source}/worktree")).json(&req)).await;
         assert_eq!(managed["id"], id.to_string());
@@ -126,6 +128,8 @@ impl Host {
             ("KAR_CODEX_BIN", codex.as_os_str()),
             ("KAR_QWEN_BIN", qwen.as_os_str()),
             ("KAR_HANDOFF_FIXTURE", self.native.as_os_str()),
+            ("KAR_HANDOFF_REAL_CODEX", OsStr::new("")),
+            ("KAR_HANDOFF_REAL_QWEN", OsStr::new("")),
             ("KAR_FORGE_CONFIG", self.config.as_os_str()),
             ("KAR_FIXTURE_FORGE_TOKEN", OsStr::new("fixture-only")),
             ("GIT_ALLOW_PROTOCOL", OsStr::new("file")),
@@ -556,7 +560,37 @@ async fn scenario() {
     assert_eq!(left.turns(), right.turns());
     assert_eq!(left.turns().last().unwrap().id, continued);
     assert_eq!(left.chat().workspace, host.workspace);
+    assert_eq!(left.chat().worktree_id, Some(host.worktree));
+    let projects = ok(second.get(format!("{}/projects", host.base))).await;
+    assert!(
+        projects
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["id"] == host.project && p["root"] == host.workspace.to_str().unwrap())
+    );
     let calls = wire(&host.native);
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|v| v["text"] == "collect evidence")
+            .count(),
+        1
+    );
+    assert_eq!(
+        git(
+            &host.bare(),
+            &["rev-parse", &format!("refs/heads/{branch}")]
+        ),
+        head
+    );
+    assert_eq!(
+        git(
+            &host.bare(),
+            &["rev-list", "--count", &format!("main..{branch}")]
+        ),
+        "2"
+    );
     let last = calls.last().unwrap();
     assert_eq!(last["session"], switched["target"]["native_id"]);
     assert_eq!(last["cwd"], host.workspace.to_str().unwrap());
@@ -570,7 +604,7 @@ async fn scenario() {
         1
     );
     assert_eq!(calls.iter().filter(|x| x["runtime"] == "qwen").count(), 3);
-    let proof = json!({"mode":"protocol peers and local bare Git remote","project":host.project,"chat":id,"native_target":left.chat().native_id,"turns":left.turns().len(),"cursor":right.cursor(),"pty":pty,"preview_url_issued":grant["url"].is_string(),"markdown_revision":md["native"]["revision"],"markdown_resolution":resolution["resolves"],"office":office,"head":head,"pull":pr["number"],"reviewed":review["reviewed"],"workflow":w,"run":run["run_id"],"script_executions":1,"accepted_proposal":guest_proposal["id"]});
+    let proof = json!({"mode":"protocol peers and local bare Git remote","project":host.project,"worktree":host.worktree,"branch":branch,"source_pull":1,"issue":7,"chat":id,"native_source":opened["chat"]["info"]["native_id"],"native_target":left.chat().native_id,"turns":left.turns().len(),"cursor":right.cursor(),"pty":pty,"preview_grant":grant["id"],"markdown_revision":md["native"]["revision"],"markdown_resolution":resolution["resolves"],"office":office,"head":head,"pull":pr["number"],"reviewed":review["reviewed"],"source_tool_calls":1,"native_document_edits":1,"native_target_inputs":3,"created_remote_pulls":1,"workflow":w,"run":run["run_id"],"script_executions":1,"accepted_proposal":guest_proposal["id"]});
     let listings = ok(second.get(format!("{scope}/previews"))).await;
     assert!(
         listings

@@ -89,6 +89,7 @@ impl Fixture {
             .kill_on_drop(true);
         for name in ["codex", "qwen"] {
             let key = format!("KAR_{}_BIN", name.to_ascii_uppercase());
+            cmd.env_remove(format!("KAR_HANDOFF_REAL_{}", name.to_ascii_uppercase()));
             if self.live {
                 let real = PathBuf::from(
                     std::env::var_os(&key)

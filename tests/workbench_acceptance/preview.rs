@@ -11,8 +11,20 @@ pub fn service() {
         socket.local_addr().unwrap().port().to_string(),
     )
     .unwrap();
-    for connection in socket.incoming() {
-        let mut stream = connection.unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let started = std::time::Instant::now();
+    while Path::new(".kar-preview-port").exists() && started.elapsed() < Duration::from_secs(210) {
+        let mut stream = match socket.accept() {
+            Ok((s, _)) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(30));
+                continue;
+            }
+            Err(_) => break,
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
         let reader = std::io::BufReader::new(stream.try_clone().unwrap());
         for line in reader.lines() {
             if line.is_err() || line.unwrap().is_empty() {

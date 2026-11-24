@@ -226,6 +226,7 @@ pub fn child() -> bool {
     assert!(std::env::var_os("KAR_HANDOFF_FIXTURE").is_some());
     if let Some(real) =
         std::env::var_os(format!("KAR_HANDOFF_REAL_{}", runtime.to_ascii_uppercase()))
+            .filter(|s| !s.is_empty())
     {
         proxy(runtime, Path::new(&real));
     }
