@@ -43,12 +43,19 @@ pub(in crate::workbench) fn peer_request(
     method: reqwest::Method,
     segments: &[&str],
 ) -> Result<reqwest::RequestBuilder> {
+    bound_peer_request(app,id,None,method,segments)
+}
+pub(in crate::workbench) fn peer_identity(db:&Catalog,id:Uuid)->Result<Uuid>{
+    db.environment.links.get(&id).map(|p|p.request_id).ok_or_else(||bad("unknown environment link"))
+}
+pub(in crate::workbench) fn bound_peer_request(app:&Workbench,id:Uuid,expected:Option<Uuid>,method:reqwest::Method,segments:&[&str])->Result<reqwest::RequestBuilder>{
     let db = app.0.catalog.lock().unwrap();
     let p = db
         .environment
         .links
         .get(&id)
         .ok_or_else(|| bad("unknown environment link"))?;
+    if expected.is_some_and(|id|p.request_id!=id){return Err(bad("remote environment pairing changed"));}
     let mut url = origin(&p.origin)?;
     if segments
         .iter()

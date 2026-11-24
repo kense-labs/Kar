@@ -82,7 +82,10 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
             &["task_id"],
         );
         if write {
-            let task = json!({"task":string,"title":string,"runtime":string,"model":string,"isolation":{"enum":["shared","worktree"]},"branch":string,"requested_output_schema":{"type":"object"}});
+            let mut task = json!({"task":string,"title":string,"runtime":string,"model":string,"isolation":{"enum":["shared","worktree"]},"branch":string,"requested_output_schema":{"type":"object"}});
+            if !scope.unwrap().remote_projects.is_empty(){
+                task["remote"]=json!({"type":"object","properties":{"environment_id":id,"project_id":id},"required":["environment_id","project_id"],"additionalProperties":false});
+            }
             let mut one = task.clone();
             one["command_id"] = id.clone();
             add(
@@ -143,6 +146,7 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, req: Value) -> R
     }
 }
 pub(super) use tasks::owned;
+pub(in crate::workbench) use tasks::peer_routes;
 pub(in crate::workbench) use tasks::{Task, recover};
 pub(in crate::workbench) fn scheduled_execution(
     app: &Workbench,

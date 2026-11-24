@@ -1,4 +1,9 @@
 use super::*;
+mod peer;
+pub(in crate::workbench) use peer::routes as peer_routes;
+#[derive(Clone,Serialize,Deserialize,PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Remote {environment_id:Uuid,project_id:Uuid}
 use crate::chat::{InputStatus, Item, Role, TurnStatus};
 use std::path::PathBuf;
 
@@ -6,6 +11,7 @@ use std::path::PathBuf;
 #[serde(deny_unknown_fields)]
 struct Spec {
     task: String,
+    remote:Option<Remote>,
     title: Option<String>,
     runtime: Option<String>,
     model: Option<String>,
@@ -42,6 +48,10 @@ pub(in crate::workbench) struct Task {
     summary: Option<String>,
     output: Option<Value>,
     delivered: bool,
+    #[serde(default)] inbound_device:Option<Uuid>,
+    #[serde(default)] remote_chat:Option<Uuid>,
+    #[serde(default)] remote_link:Option<Uuid>,
+    #[serde(default)] next_peer_poll_ms:i64,
 }
 impl Task {
     fn input(&self) -> Uuid {
@@ -57,13 +67,13 @@ impl Task {
         )
     }
     fn view(&self) -> Value {
-        json!({"task_id":self.id,"thread_id":self.id,"parent_thread_id":self.parent,"project_id":self.project,"input_id":self.input(),"work_state":self.phase,"summary":self.summary,"structured_output":self.output,"delivered":self.delivered})
+        json!({"task_id":self.id,"thread_id":if self.spec.remote.is_some(){self.remote_chat}else{Some(self.id)},"remote":self.spec.remote,"parent_thread_id":self.parent,"project_id":self.project,"input_id":self.input(),"work_state":self.phase,"summary":self.summary,"structured_output":self.output,"delivered":self.delivered})
     }
 }
 pub(in crate::workbench::mcp) fn owned(db: &Catalog, parent: Uuid, child: Uuid) -> Option<Uuid> {
     db.model_tasks
         .get(&child)
-        .filter(|t| t.parent == parent && t.phase != Phase::Admitted && t.phase != Phase::Opening)
+        .filter(|t| t.parent == parent && t.spec.remote.is_none() && t.inbound_device.is_none() && t.phase != Phase::Admitted && t.phase != Phase::Opening)
         .map(|t| t.project)
 }
 fn exists(app: &Workbench, id: Uuid) -> Result<bool> {
@@ -91,18 +101,22 @@ fn change(app: &Workbench, id: Uuid, f: impl FnOnce(&mut Task)) -> Result<Task> 
             .ok_or_else(|| refused("unknown task"))?;
         let cancelling = t.phase == Phase::Cancelling;
         f(t);
-        if cancelling && t.phase != Phase::Cancelled {
+        if cancelling && !matches!(t.phase,Phase::Cancelled|Phase::Unconfirmed) {
             t.phase = Phase::Cancelling;
         }
         Ok(t.clone())
     })
 }
 fn still_granted(app: &Workbench, t: &Task) -> Result<()> {
+    if let Some(device)=t.inbound_device {
+        if app.0.access.peer_task_template(device,t.project)!=Some(t.parent){return Err(refused("remote delegation permission was revoked"));}
+        return Ok(());
+    }
     let db = app.0.catalog.lock().unwrap();
     let policy = Policy::current(&db, t.project, t.parent)
         .filter(|p| p.executes())
         .ok_or_else(|| refused("delegation grant was revoked"))?;
-    if !scope(policy).is_some_and(|s| s.delegate)
+    if !scope(policy).is_some_and(|s| s.delegate && t.spec.remote.as_ref().is_none_or(|r|s.remote_projects.get(&r.environment_id).is_some_and(|ps|ps.contains(&r.project_id))))
         || t.directory
             .as_deref()
             .is_some_and(|d| policy.worktree_directory() != Some(d))
@@ -144,6 +158,11 @@ fn launch(app: Workbench, id: Uuid) {
     });
 }
 async fn progress(app: &Workbench, t: Task) -> Result<()> {
+    if t.inbound_device.is_some() && !t.terminal() && t.phase!=Phase::Cancelling && still_granted(app,&t).is_err(){
+        let cancelled=change(app,t.id,|r|r.phase=Phase::Cancelling)?;
+        return cancel_one(app,&cancelled).await;
+    }
+    if t.phase == Phase::Cancelling && t.spec.remote.is_some(){return peer::advance(app,&t).await;}
     if t.phase == Phase::Cancelling {
         return cancel_one(app, &t).await;
     }
@@ -155,7 +174,7 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
                 serde_json::to_string(&t.phase)?,
                 t.summary.as_deref().unwrap_or("")
             );
-            if !app.archived(t.parent) && still_granted(app, &t).is_ok() {
+            if t.inbound_device.is_none() && !app.archived(t.parent) && still_granted(app, &t).is_ok() {
                 app.0.chats.enqueue(t.parent, t.wake(), msg)?;
                 app.wake_queue();
             }
@@ -163,11 +182,13 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
         }
         return Ok(());
     }
+    if t.spec.remote.is_some(){return peer::advance(app,&t).await;}
     if matches!(t.phase, Phase::Opening | Phase::Admitted) {
         still_granted(app, &t)?;
         let live = app.binding(t.project, t.parent)?;
         let scope = Policy::current(&app.0.catalog.lock().unwrap(), t.project, t.parent)
             .and_then(|p| p.thread_tools.clone())
+            .or_else(||t.inbound_device.map(|_|operations::Scope::default()))
             .ok_or_else(|| refused("missing delegation permission"))?;
         let (runtime, model) = child_model(
             &live,
@@ -280,7 +301,7 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
         .unwrap()
         .model_tasks
         .values()
-        .filter(|r| r.parent == t.id)
+        .filter(|r| r.parent == t.id && r.inbound_device.is_none())
         .cloned()
         .collect();
     let inbox = if children.is_empty() {
@@ -409,7 +430,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
                     let mut parents = vec![t.id];
                     while let Some(p) = parents.pop() {
                         for r in db.model_tasks.values_mut().filter(|r| {
-                            r.parent == p && !r.terminal() && r.phase != Phase::Cancelling
+                            r.parent == p && r.inbound_device.is_none() && !r.terminal() && r.phase != Phase::Cancelling
                         }) {
                             r.phase = Phase::Cancelling;
                             parents.push(r.id);
@@ -448,8 +469,12 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
             spec.runtime.as_deref(),
             spec.model.as_deref(),
         )?;
+        if let Some(r)=&spec.remote{
+            if !scope.remote_projects.get(&r.environment_id).is_some_and(|ps|ps.contains(&r.project_id)){return Err(refused("remote project is outside the delegation grant"));}
+        }
         let directory = match spec.isolation.as_deref().unwrap_or("shared") {
             "shared" if spec.branch.is_none() => None,
+            "worktree" if spec.remote.is_some()=>None,
             "worktree" => Some(
                 policy
                     .worktree_directory()
@@ -459,6 +484,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
             _ => return Err(refused("invalid isolation or branch")),
         };
         let id = cmd;
+        let remote_link=spec.remote.as_ref().map(|r|super::super::collaboration_tools::environment::peer_identity(&app.0.catalog.lock().unwrap(),r.environment_id)).transpose()?;
         let task = Task {
             id,
             project: p,
@@ -474,6 +500,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
             summary: None,
             output: None,
             delivered: false,
+            inbound_device:None,remote_chat:None,remote_link,next_peer_poll_ms:0,
         };
         let saved = app.update(|db| {
             authorize(db, c, false, true)?;

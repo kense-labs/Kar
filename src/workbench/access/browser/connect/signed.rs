@@ -248,7 +248,7 @@ async fn answer(
                 s.pending.retain(|_,v|v.until>now());
                 let rec=s.pending.entry(thumb.clone()).or_insert_with(||Pending{id:Uuid::new_v4(),until});rec.until=until;
             }
-            let grant=Grant{id:Uuid::new_v4(),cloud:Some(Binding{link:l.id,thumb:thumb.clone()}),until,scopes:l.scopes.clone(),label:"Kar Connect device".into(),access:None,peer:false};
+            let grant=Grant{id:Uuid::new_v4(),cloud:Some(Binding{link:l.id,thumb:thumb.clone()}),until,scopes:l.scopes.clone(),label:"Kar Connect device".into(),access:None,peer:false,peer_tasks:Default::default()};
             db.environment.grants.retain(|_,g|g.until>now());db.environment.grants.insert(digest(&raw),grant);
             reply["credential"]=raw.clone().into();reply["clientProofKeyThumbprint"]=thumb.into();reply["exp"]=(until/1000).into();
             json!({"credential":raw,"expiresAt":date(until)})

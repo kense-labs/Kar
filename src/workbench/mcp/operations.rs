@@ -13,6 +13,7 @@ use toolkit::Tool;
 pub(super) struct Scope {
     pub(super) write: bool,
     pub(super) delegate:bool,
+    pub(super) remote_projects:BTreeMap<Uuid,BTreeSet<Uuid>>,
     pub(super) schedule:bool,
     project_wide: bool,
     targets: BTreeSet<Uuid>,
@@ -21,6 +22,9 @@ pub(super) struct Scope {
 }
 impl Scope {
     pub(super) fn validate(&self, app: &Workbench, p: Uuid) -> Result<()> {
+        if !self.remote_projects.is_empty() && (!self.delegate || self.remote_projects.len()>32 || self.remote_projects.values().any(|set|set.is_empty()||set.len()>64)){
+            return Err(Error::Refused("remote projects must be explicitly scoped to a delegation grant".into()));
+        }
         for target in &self.targets {
             app.binding(p, *target)?;
         }
