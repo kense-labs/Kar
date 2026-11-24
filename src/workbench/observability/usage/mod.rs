@@ -1,5 +1,6 @@
 //! Local usage reports. Only normalized counters and provider identities enter the on-disk index.
 mod aggregation;
+mod databases;
 mod pricing;
 mod records;
 mod scans;
@@ -65,6 +66,8 @@ impl Totals {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Entry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_meta: Option<databases::antigravity::Identity>,
     timestamp: i64,
     provider: String,
     model: String,

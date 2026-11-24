@@ -47,7 +47,7 @@ fn home_dir(var: &str, default: PathBuf) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or(default)
 }
-fn roots(chat: PathBuf) -> Vec<(&'static str, PathBuf)> {
+fn roots(chat: PathBuf) -> Result<Vec<(&'static str, PathBuf)>> {
     let mut dirs = vec![("kar", chat)];
     if let Some(home) = std::env::home_dir() {
         let codex = home_dir("CODEX_HOME", home.join(".codex"));
@@ -71,18 +71,75 @@ fn roots(chat: PathBuf) -> Vec<(&'static str, PathBuf)> {
             dirs.push(("muse", PathBuf::from(home).join("sessions")));
         }
     }
-    dirs
+    if let Some(home) = std::env::home_dir() {
+        let mut add = |format, var: &str, default: Vec<PathBuf>| {
+            let configured = std::env::var(var)
+                .ok()
+                .into_iter()
+                .flat_map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| {
+                            s.strip_prefix("~/")
+                                .map_or_else(|| PathBuf::from(s), |p| home.join(p))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            for dir in if configured.is_empty() {
+                default
+            } else {
+                configured
+            } {
+                let conversations = dir.join("conversations");
+                let dir = if format == "antigravity" && conversations.is_dir() {
+                    conversations
+                } else {
+                    dir
+                };
+                dirs.push((format, dir));
+            }
+        };
+        let xdg = home_dir("XDG_DATA_HOME", home.join(".local/share"));
+        add("opencode", "OPENCODE_DATA_DIR", vec![xdg.join("opencode")]);
+        let ag = [
+            "antigravity",
+            "antigravity-cli",
+            "antigravity-ide",
+            "antigravity-backup",
+        ]
+        .map(|s| home.join(".gemini").join(s));
+        add(
+            "antigravity",
+            "ANTIGRAVITY_DATA_DIR",
+            ag.into_iter()
+                .chain([home.join(".config/antigravity")])
+                .collect(),
+        );
+    }
+    if std::env::var_os("KAR_AGENT_SESSION_CONFIG").is_some_and(|s| !s.is_empty()) {
+        dirs.retain(|(r, _)| !matches!(*r, "pi" | "claude" | "codex"));
+    }
+    for instance in crate::provider_instance::configured()? {
+        let kind = instance.runtime.runtime();
+        dirs.push((kind, instance.sessions));
+        if kind == "codex" {
+            dirs.push((kind, instance.home.join("archived_sessions")));
+        }
+    }
+    Ok(dirs)
 }
 #[cfg(unix)]
-fn identity(m: &Metadata) -> String {
+pub(super) fn identity(m: &Metadata) -> String {
     use std::os::unix::fs::MetadataExt;
     format!("{}:{}", m.dev(), m.ino())
 }
 #[cfg(not(unix))]
-fn identity(m: &Metadata) -> String {
+pub(super) fn identity(m: &Metadata) -> String {
     format!("{:?}", m.created().ok())
 }
-fn signature(m: &Metadata) -> String {
+pub(super) fn signature(m: &Metadata) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -140,6 +197,9 @@ fn read_file(
     format: &str,
     old: Option<&Arc<FileUsage>>,
 ) -> io::Result<(Arc<FileUsage>, bool)> {
+    if matches!(format, "antigravity" | "opencode") {
+        return read_native_file(path, root, format, old);
+    }
     let mut file = File::open(path)?;
     let meta = file.metadata()?;
     let id = identity(&meta);
@@ -207,6 +267,48 @@ fn read_file(
     result.signature = sig;
     Ok((Arc::new(result), false))
 }
+fn read_native_file(
+    path: &Path,
+    root: &Path,
+    format: &str,
+    old: Option<&Arc<FileUsage>>,
+) -> io::Result<(Arc<FileUsage>, bool)> {
+    let db = path.extension().is_some_and(|s| s == "db");
+    let fingerprint = || {
+        if db {
+            databases::fingerprint(path)
+        } else {
+            let m = fs::symlink_metadata(path)?;
+            Ok(format!("{}/{}", identity(&m), signature(&m)))
+        }
+    };
+    let sig = fingerprint()?;
+    if let Some(old) = old.filter(|f| f.root == root && f.format == format && f.signature == sig) {
+        return Ok((old.clone(), true));
+    }
+    let entries = if db {
+        databases::read(path, format)?
+    } else {
+        databases::legacy(path)?
+    };
+    if fingerprint()? != sig {
+        return Err(io::Error::other("usage store changed during read; retry"));
+    }
+    Ok((
+        Arc::new(FileUsage {
+            root: root.into(),
+            format: format.into(),
+            entries,
+            parser: Default::default(),
+            signature: sig,
+            identity: String::new(),
+            offset: 0,
+            guard: vec![],
+            malformed: 0,
+        }),
+        false,
+    ))
+}
 fn scan(root: &Path, format: &str, files: &mut BTreeMap<PathBuf, Arc<FileUsage>>) -> Source {
     let mut report = source(root, format);
     let mut pending = vec![root.to_owned()];
@@ -241,7 +343,12 @@ fn scan(root: &Path, format: &str, files: &mut BTreeMap<PathBuf, Arc<FileUsage>>
             };
             let path = e.path();
             if kind.is_dir() {
-                if format != "kar" {
+                let legacy = root.join("storage/message");
+                if format != "kar"
+                    && (format != "opencode"
+                        || legacy.starts_with(&path)
+                        || path.starts_with(&legacy))
+                {
                     pending.push(path);
                 }
                 continue;
@@ -250,6 +357,26 @@ fn scan(root: &Path, format: &str, files: &mut BTreeMap<PathBuf, Arc<FileUsage>>
                 continue;
             }
             let matched = match format {
+                "opencode" => {
+                    if path.parent() == Some(root) {
+                        let name = e.file_name();
+                        let name = name.to_string_lossy();
+                        name == "opencode.db"
+                            || name
+                                .strip_prefix("opencode-")
+                                .and_then(|s| s.strip_suffix(".db"))
+                                .is_some_and(|s| {
+                                    !s.is_empty()
+                                        && s.bytes().all(|b| {
+                                            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')
+                                        })
+                                })
+                    } else {
+                        path.starts_with(root.join("storage/message"))
+                            && path.extension().is_some_and(|s| s == "json")
+                    }
+                }
+                "antigravity" => path.extension().is_some_and(|s| s == "db"),
                 "kar" => path.extension().is_some_and(|e| e == "karchat"),
                 "grok" => e.file_name() == "updates.jsonl",
                 "muse" => e.file_name() == "session.jsonl",
@@ -300,7 +427,7 @@ pub(super) fn read(
     });
     let mut sources = vec![];
     let mut changed = false;
-    let roots: BTreeSet<_> = roots(chat)
+    let roots: BTreeSet<_> = roots(chat)?
         .into_iter()
         .map(|(f, p)| (f, fs::canonicalize(&p).unwrap_or(p)))
         .collect();

@@ -49,7 +49,13 @@ pub(super) async fn run() {
     let claude_home = home.join(".claude");
     let codex_home = home.join(".codex");
     let pi_home = home.join(".pi/agent");
+    let opencode = home.join("opencode");
+    let antigravity = home.join("antigravity");
     let env = [
+        ("OPENCODE_DATA_DIR", opencode.as_os_str()),
+        ("ANTIGRAVITY_DATA_DIR", antigravity.as_os_str()),
+        ("KAR_AGENT_SESSION_CONFIG", "".as_ref()),
+        ("KAR_PI_AGENT_DIR", pi_home.as_os_str()),
         ("HOME", home.as_os_str()),
         ("KAR_USAGE_RATES_URL", price_url.as_ref()),
         ("CLAUDE_CONFIG_DIR", claude_home.as_os_str()),
@@ -131,6 +137,146 @@ pub(super) async fn run() {
         json(http.post(format!("{url}/usage/rates/refresh"))).await["known_models"],
         1
     );
+    native_databases(&opencode, &antigravity);
+    let with_db = json(http.post(format!("{url}/usage/summary")).json(&request)).await;
+    let buckets = with_db["buckets"].as_array().unwrap();
+    let row = buckets
+        .iter()
+        .find(|r| r["provider"] == "opencode")
+        .unwrap();
+    assert_eq!(row["records"], 2, "{with_db}");
+    assert_eq!(row["sessions"], 2);
+    assert_eq!(row["totals"]["output"], 8);
+    assert_eq!(row["cost_usd"], 0.25);
+    let row = buckets
+        .iter()
+        .find(|r| r["provider"] == "antigravity")
+        .unwrap();
+    assert_eq!(row["records"], 1, "{with_db}");
+    assert_eq!(row["model"], "claude-sonnet-4");
+    assert_eq!(row["totals"]["output"], 6);
+    assert_eq!(row["totals"]["reasoning"], 4);
     server.kill().await.unwrap();
     server.wait().await.unwrap();
+}
+
+fn native_databases(opencode: &Path, antigravity: &Path) {
+    use sqlite_core::{
+        Value as S,
+        rebuild::{RecoveredTable, build_recovered_db_tables},
+    };
+    use uuid::Uuid;
+    fn table(name: &str, cols: &[&str], rows: Vec<Vec<S>>) -> RecoveredTable {
+        RecoveredTable {
+            name: name.into(),
+            columns: cols.iter().map(|s| s.to_string()).collect(),
+            rows,
+        }
+    }
+    let text = |s: &str| S::Text(s.to_owned());
+    let legacy = opencode.join("storage/message/s");
+    fs::create_dir_all(&legacy).unwrap();
+    fs::create_dir_all(antigravity).unwrap();
+    let time = "2025-11-02T05:23:00Z"
+        .parse::<jiff::Timestamp>()
+        .unwrap()
+        .as_millisecond();
+    let message = json!({"role":"assistant","modelID":"metered","tokens":{"input":12,"output":3,"reasoning":1},"time":{"created":time},"cost":0.125});
+    let rows = [
+        ("parent", "a", 1, time),
+        ("fork", "copy", 1, time),
+        ("fork", "b", 2, time + 2000),
+    ]
+    .into_iter()
+    .map(|(session, id, seq, at)| {
+        let mut data = message.clone();
+        data["time"]["created"] = json!(at);
+        vec![
+            text(session),
+            text(id),
+            S::Integer(seq),
+            S::Integer(at),
+            text("assistant"),
+            text(&data.to_string()),
+        ]
+    })
+    .collect();
+    let messages = table(
+        "session_message",
+        &["session_id", "id", "seq", "time_created", "type", "data"],
+        rows,
+    );
+    let forks = table(
+        "session_v2",
+        &["id", "fork_session_id", "fork_boundary", "time_created"],
+        vec![vec![
+            text("fork"),
+            text("parent"),
+            text(r#"{"type":"through","messageID":"a"}"#),
+            S::Integer(time + 1000),
+        ]],
+    );
+    fs::write(
+        opencode.join("opencode.db"),
+        build_recovered_db_tables(&[messages, forks]),
+    )
+    .unwrap();
+    let mut copy = message;
+    copy["id"] = json!("a");
+    copy["sessionID"] = json!("parent");
+    fs::write(legacy.join("old.json"), serde_json::to_vec(&copy).unwrap()).unwrap();
+    fn var(mut v: u64) -> Vec<u8> {
+        let mut a = vec![];
+        while v >= 128 {
+            a.push((v as u8 & 127) | 128);
+            v >>= 7;
+        }
+        a.push(v as u8);
+        a
+    }
+    fn int(k: u64, v: u64) -> Vec<u8> {
+        [var(k << 3), var(v)].concat()
+    }
+    fn field(k: u64, b: &[u8]) -> Vec<u8> {
+        [var((k << 3) | 2), var(b.len() as u64), b.to_vec()].concat()
+    }
+    let request = Uuid::new_v4().to_string();
+    let info = [
+        int(1, 281),
+        int(2, 10),
+        int(3, 2),
+        int(9, 4),
+        int(10, 2),
+        field(11, request.as_bytes()),
+    ]
+    .concat();
+    let meta = field(
+        1,
+        &[
+            int(3, 281),
+            field(4, &info),
+            field(9, &field(4, &int(1, time as u64 / 1000))),
+        ]
+        .concat(),
+    );
+    let generation = table(
+        "gen_metadata",
+        &["idx", "data"],
+        vec![vec![S::Integer(1), S::Blob(meta)]],
+    );
+    let step = [
+        field(9, &info),
+        field(24, &[int(1, 281), field(12, b"Claude 4 Sonnet")].concat()),
+    ]
+    .concat();
+    let steps = table(
+        "steps",
+        &["idx", "metadata"],
+        vec![vec![S::Integer(1), S::Blob(step)]],
+    );
+    fs::write(
+        antigravity.join("native.db"),
+        build_recovered_db_tables(&[generation, steps]),
+    )
+    .unwrap();
 }

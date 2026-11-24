@@ -139,8 +139,14 @@ pub(super) fn build(
     }
     let mut records: BTreeMap<(String, String), (usize, &Entry, Totals, Option<f64>, u64)> =
         BTreeMap::new();
+    let ag = databases::antigravity::merged(&s.files);
     for (path, f) in &s.files {
-        for (i, e) in f.entries.iter().enumerate() {
+        let entries = if f.format == "antigravity" {
+            ag.get(path).map(Vec::as_slice).unwrap_or_default()
+        } else {
+            &f.entries
+        };
+        for (i, e) in entries.iter().enumerate() {
             if (f.format == "kar" && native.contains(&(&e.provider, &e.session)))
                 || q.model_filter.as_ref().is_some_and(|f| {
                     f.include

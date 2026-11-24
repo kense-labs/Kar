@@ -13,4 +13,8 @@
 
 macOS 编译命令为 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo check --locked --tests`。集中复验命令为 `cargo test --locked --test chat_restart -- workbench-usage` 与 `cargo test --locked --lib kar_usage_is_scoped_by_open_child_and_handoff`。HTTP 用例使用专用 HOME、原生格式样例与本地费率表，覆盖秋季夏令时回拨的两个独立小时、折算和申报、重复内容块与请求回执、尾段补全、筛选、未定价、删除后重启、刷新下限。该组尚未执行；供应商真实账单与公开费率源连通性需另行采证。
 
-OpenCode 的数据库和旧消息文件、Antigravity 每会话数据库及 Cursor 账号历史有独立读取契约。仅有 Kar 聊天的计数不能替代这些来源的验收。
+OpenCode 的两个数据库表（message、session_message）与 storage/message 旧记录通过 OPENCODE_DATA_DIR 或 XDG_DATA_HOME 发现，数据库与旧文件按原生消息 ID 去重，v2 分叉另按父会话、序号、创建时间和 through/before 边界消除复制。导入 OpenCode 费用时 reasoning 计入输出，只有网关的免费模型将零费用视为申报。Antigravity 使用 ANTIGRAVITY_DATA_DIR 或本机默认安装目录，读取 gen_metadata、steps 和 trajectory_metadata_blob 的原生 protobuf，合并重试和跨数据库的多键关联，保留可信度更高的模型及时间。Kar 多实例配置也可提供 Codex、Claude、Pi 用量目录。
+
+这两类数据库均使用现有纯 Rust sqlite-core 读取活跃表和已提交 WAL。数据库无 WAL 时按页读，遍历消息表一次只解码一张叶页。存在 WAL 时使用内存快照，主库上限 512 MiB、WAL 上限 128 MiB，超过上限或扫描期间发生写入时来源显示 partial，保留该来源上次可读的计量。集中 HTTP 用例新增 Rust 写入的真实 SQLite 文件，覆盖层级分叉/旧 JSON 去重、每模型申报额、Antigravity 两个表同一轮合并、回退到带时间的原生记录。这是原生格式样例；用户账号账单留待独立验证。
+
+Cursor 的账号历史另有远端读取契约。
