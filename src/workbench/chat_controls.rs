@@ -160,6 +160,7 @@ impl Workbench {
                 .chats
                 .resume_with(id, |opts| {
                     opts.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
+                    opts.prompt_suggestions = self.suggestion_source(id);
                 })
                 .await?;
             self.controller(id).publish(&session);

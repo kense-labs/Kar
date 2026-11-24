@@ -58,7 +58,13 @@ impl Workbench {
             if let Some(source) = owner.take() {
                 source.close().await?;
             }
-            let (receipt, next) = app.0.chats.handoff(chat, request).await?;
+            let (receipt, next) = app
+                .0
+                .chats
+                .handoff(chat, request, |opts| {
+                    opts.prompt_suggestions = app.suggestion_source(chat);
+                })
+                .await?;
             if let Some(session) = &next {
                 controller.publish(session);
             }

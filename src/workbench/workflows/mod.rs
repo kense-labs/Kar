@@ -249,6 +249,13 @@ pub(super) struct Engine {
     changed: watch::Sender<()>,
 }
 impl Engine {
+    pub(super) fn owns_agent_chat(&self, chat: Uuid) -> bool {
+        self.db.lock().unwrap().runs.values().any(|run| {
+            run.attempt.iter().chain(run.receipts.iter().map(|r| &r.attempt))
+                .any(|attempt| attempt.chat == Some(chat))
+        })
+    }
+
     pub(super) fn open(state: &Path, clock: Arc<dyn Clock>) -> Result<Self> {
         let file = state.join("workflows.json");
         let db = match File::open(&file) {

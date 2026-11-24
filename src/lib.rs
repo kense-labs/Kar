@@ -83,6 +83,10 @@ mod usage;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod workbench;
 #[cfg(not(target_arch = "wasm32"))]
+mod prompt_suggestions;
+#[cfg(not(target_arch = "wasm32"))]
+pub use prompt_suggestions::{PromptSuggestion, PromptSuggestionSource, PromptSuggestions};
+#[cfg(not(target_arch = "wasm32"))]
 pub mod workbench_git;
 pub use usage::{
     AgentTokens, CacheWriteByTtl, SessionUsage, TokenReading, TokenTotals, UsageSnapshot,

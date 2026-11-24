@@ -14,6 +14,7 @@ mod git_actions;
 mod handoff;
 mod http;
 mod interactions;
+mod suggestions;
 mod project_lifecycle;
 mod search;
 mod shell;
@@ -53,6 +54,8 @@ pub struct Project {
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
     #[serde(default)]
+    prompt_suggestions: bool,
+    #[serde(default)]
     assets: assets::Registry,
     #[serde(default)]
     thread_state: thread_state::Store,
@@ -90,6 +93,7 @@ impl Controller {
 
 struct Inner {
     shell: shell::Service,
+    suggestions: crate::PromptSuggestions,
     observability: observability::Service,
     chats: ChatStore,
     roots: Vec<Root>,
@@ -181,6 +185,7 @@ impl Workbench {
             }));
             Inner {
                 shell,
+                suggestions: crate::PromptSuggestions::new(catalog.prompt_suggestions),
                 observability: observability::Service::open(&state),
                 workflows,
                 terminal_preview,
@@ -257,6 +262,12 @@ impl Workbench {
         tmp.as_file().sync_all()?;
         tmp.persist(self.0.state.join("projects.json"))
             .map_err(|e| e.error)?;
+        if saved.prompt_suggestions != next.prompt_suggestions {
+            self.0.suggestions.set_enabled(next.prompt_suggestions);
+        }
+        for chat in next.archived.difference(&saved.archived) {
+            self.0.suggestions.detach(*chat);
+        }
         *saved = next;
         self.0.shell.changed();
         #[cfg(unix)]
@@ -415,6 +426,7 @@ impl Workbench {
         }
         let mut opts = SessionOptions::new(cwd);
         opts.remove_env("KAR_WORKBENCH_TOKEN")?;
+        opts.prompt_suggestions = self.suggestion_source(id);
         opts.model = model;
         opts.approvals = approvals;
         opts.settings = settings;

@@ -21,6 +21,8 @@ mod pi_history;
 mod pre_cancelled_compaction;
 #[path = "support/public_readbacks.rs"]
 mod public_readbacks;
+#[path = "native_live/prompt_suggestions.rs"]
+mod prompt_suggestions;
 #[path = "native_live/resume_prompts.rs"]
 mod resume_prompts;
 #[path = "support/sse.rs"]
@@ -97,6 +99,9 @@ fn respond_observed(
     reader.read_exact(&mut body)?;
     let mut reply_text = "rust-wire-ok";
     let request: Value = serde_json::from_slice(&body).unwrap_or_default();
+    if body.windows(b"KAR-NEXT-PROMPT-PROBE".len()).any(|p| p == b"KAR-NEXT-PROMPT-PROBE") {
+        reply_text = "Run the calculator tests";
+    }
     observe(&path, &request);
     let last = request
         .get("messages")

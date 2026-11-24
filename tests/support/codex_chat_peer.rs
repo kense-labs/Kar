@@ -17,6 +17,7 @@ pub(crate) fn agent() {
     let cwd = std::env::current_dir().unwrap();
     let database = PathBuf::from(std::env::var_os("FIXTURE_NATIVE_DB").unwrap());
     let mut session = String::new();
+    let mut late_sample: Option<Value> = None;
     let mut input = std::io::stdin().lock();
     let mut line = String::new();
     loop {
@@ -127,6 +128,26 @@ pub(crate) fn agent() {
                     .unwrap_or(json!([]));
                 reply(json!({"cwd":cwd,"thread":{"id":session,"turns":turns}}));
             }
+            Some("thread/sample") => {
+                assert_eq!(v["params"]["threadId"], session);
+                assert_eq!(v["params"]["effort"], "low");
+                assert!(v["params"]["prompt"].as_str().unwrap().contains("Do not use tools"));
+                let turn = v["params"]["expectedTurnId"].as_str().unwrap();
+                let mode = fs::read_to_string(database.join("sample-mode")).unwrap();
+                let mut calls = OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(database.join("samples"))
+                    .unwrap();
+                writeln!(calls,"{turn}").unwrap();
+                let value = json!({"sourceTurnId":turn,"text":format!("  suggested {mode}  ")});
+                match mode.as_str() {
+                    "late" => late_sample = Some(json!({"id":v["id"],"result":value})),
+                    "wrong" => reply(json!({"sourceTurnId":"other","text":"unrelated"})),
+                    "unsupported" => emit(json!({"id":v["id"],"error":{"code":-32601,"message":"method not found"}})),
+                    _ => reply(value),
+                }
+            }
             Some("thread/read") => {
                 assert_eq!(v["params"]["threadId"], session);
                 assert_eq!(v["params"]["includeTurns"], true);
@@ -220,6 +241,9 @@ pub(crate) fn agent() {
                 }
             }
             Some("turn/start") => {
+                if let Some(stale) = late_sample.take() {
+                    emit(stale);
+                }
                 let text = v.pointer("/params/input/0/text").unwrap().as_str().unwrap();
                 if text == "edited A" {
                     assert_eq!(

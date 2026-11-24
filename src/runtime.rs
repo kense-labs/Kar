@@ -413,6 +413,8 @@ pub struct SessionOptions {
     /// resume; Kar keeps them out of saved chat configuration and recordings.
     pub launch_args: Vec<String>,
     pub settings: crate::SessionSettings,
+    /// Optional volatile destination for next prompts from this controller's root user turns.
+    pub prompt_suggestions: Option<crate::PromptSuggestionSource>,
     pub mcp_servers: BTreeMap<String, crate::McpServer>,
     pub env: BTreeMap<OsString, OsString>,
     /// Names removed from the inherited environment. Explicit `env` values take precedence.
@@ -458,6 +460,7 @@ impl SessionOptions {
             model: None,
             launch_args: Vec::new(),
             settings: Default::default(),
+            prompt_suggestions: None,
             mcp_servers: BTreeMap::new(),
             env: BTreeMap::new(),
             unset_env: Default::default(),

@@ -3,6 +3,8 @@ mod codex_processes;
 mod codex_queue;
 mod codex_steering;
 mod interrupt_timeout;
+mod suggestions;
+use suggestions::private_suggestion;
 use crate::grok::turns::{INTERJECT, Turns as GrokTurns};
 use crate::interaction::sensitive_field;
 use crate::stream::RecordStamp;
@@ -318,6 +320,7 @@ pub(crate) struct Actor {
     grok_interjections: HashMap<uuid::Uuid, (SteeringReceipt, crate::SteerStatus)>,
     codex_quota: wire::failure::CodexQuota,
     codex_queue: codex_queue::NativeQueue,
+    suggestions: Option<crate::prompt_suggestions::Native>,
     codex_steering: codex_steering::Inputs,
     codex_processes: Option<codex_processes::Guard>,
     interrupt_timeout: interrupt_timeout::InterruptTimeout,
@@ -416,6 +419,11 @@ impl Actor {
             end_turn_processes: options.settings.end_turn_processes_on_abort,
             codex_quota: Default::default(),
             codex_queue: Default::default(),
+            suggestions: options
+                .prompt_suggestions
+                .clone()
+                .filter(|_| matches!(runtime.protocol, Protocol::Claude | Protocol::Codex))
+                .map(crate::prompt_suggestions::Native::open),
             codex_steering: Default::default(),
             interrupt_timeout: Default::default(),
             codex_processes: (runtime.protocol == Protocol::Codex
@@ -598,6 +606,9 @@ impl Actor {
         tokio::time::timeout(Duration::from_secs(10), stdin.write_all(&bytes))
             .await
             .map_err(|_| Error::Timeout("writing to agent".into()))??;
+        if self.suggestions.is_some() && private_suggestion(&packet) {
+            return Ok(());
+        }
         if (self.protocol == Protocol::Acp && packet["method"] == "session/list")
             || (self.protocol == Protocol::Pi && packet["type"] == "get_entries")
         {
@@ -687,6 +698,12 @@ impl Actor {
         reply: Option<Reply<Value>>,
         intent: RpcIntent,
     ) -> Result<()> {
+        let mut params = params;
+        if self.protocol == Protocol::Claude && method == "initialize"
+            && self.suggestions.as_mut().is_some_and(|s| s.initialize_claude())
+        {
+            params["promptSuggestions"] = true.into();
+        }
         let starts_turn = matches!(intent, RpcIntent::Prompt);
         if method == "initialize"
             && let Some(children) = &mut self.opencode
@@ -869,6 +886,10 @@ impl Actor {
         done: Reply<crate::TurnReport>,
     ) -> Result<()> {
         let id = self.session();
+        if let Some(suggestions) = &mut self.suggestions {
+            suggestions.start(Some(input_id));
+        }
+        self.configure_prompt_suggestions().await?;
         self.claude_errors.clear();
         let request = prompt.request_id;
         self.turn = Some(Turn {
@@ -1672,6 +1693,9 @@ impl Actor {
         mut v: Value,
         context: Option<crate::ContextUsage>,
     ) -> Result<()> {
+        if self.suggestion_frame(&v) {
+            return Ok(());
+        }
         let mut received = RecordStamp::from(Direction::FromRuntime);
         let grok_turn = self
             .grok
@@ -2674,6 +2698,9 @@ impl Actor {
             && self.protocol == Protocol::Codex
             && let Some((id, request)) = self.codex_queue.notice(&v, &mut events)
         {
+            if let Some(suggestions) = &mut self.suggestions {
+                suggestions.start(Some(id));
+            }
             received = received.with_prompt_request(id, false, request, None);
             received.response_to = Some(request.to_string());
         }
@@ -2945,6 +2972,21 @@ impl Actor {
                 received = received.with_frame_type(method);
             }
         }
+        let sample = if is_root && self.suggestions.is_some() {
+            let active = if queued_turn {
+                self.codex_queue.active(reported_turn).map(|(id, _)| id)
+            } else {
+                self.turn.as_ref().filter(|_| current_turn).and_then(|t| t.chat_input)
+            };
+            self.next_prompt_sample(
+                &v,
+                active,
+                &events,
+                outcome.as_ref().filter(|_| outcome_error.is_none()),
+            )
+        } else {
+            None
+        };
         let queue_input = reported_turn
             .filter(|_| queued_turn)
             .and_then(|turn| self.codex_queue.collect(turn, &events));
@@ -3027,6 +3069,10 @@ impl Actor {
                 .is_some_and(|t| std::mem::take(&mut t.aborted))
         {
             self.rpc("abort", json!({}), None, RpcIntent::Control)
+                .await?;
+        }
+        if let Some(packet) = sample {
+            self.write_packet(packet, RecordKind::Request, Some(Vec::new()))
                 .await?;
         }
         if let Some((tx, result)) = prompt_ack {
@@ -3367,6 +3413,9 @@ impl Actor {
             let deadline = self.pi_deadlines.values().map(|(at, _)| *at).min();
             let interrupt = self.interrupt_timeout.deadline();
             tokio::select! {
+                () = crate::prompt_suggestions::Native::changed(&mut self.suggestions) => {
+                    if let Err(e) = self.configure_prompt_suggestions().await { break e.to_string() }
+                }
                 () = async { if let Some(at)=interrupt { tokio::time::sleep_until(at).await; } else { std::future::pending::<()>().await; } } => {
                     for id in self.interrupt_timeout.take() {
                         if let Some(mut pending)=self.pending.remove(&id)

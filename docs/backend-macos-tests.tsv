@@ -15,6 +15,7 @@ claude	native_live	actual_claude_turn_and_resume	KAR_CLAUDE_BIN	requires an inst
 claude	native_live	actual_claude_waits_for_host_approval	KAR_CLAUDE_BIN	requires a Claude Code binary; sends a tool request from a loopback fixture
 claude	native_live	claude_history::replay_native_blocks_after_controller_crash	KAR_CLAUDE_BIN	real Claude Code, isolated native transcript, local model and two HTTP clients
 claude	native_live	resume_prompts::claude_prompt_persistence	KAR_CLAUDE_BIN	requires Claude Code with a loopback model
+claude	native_live	prompt_suggestions::claude_emits_a_next_prompt_for_the_completed_root_turn	KAR_CLAUDE_BIN	requires native Claude Code initialize promptSuggestions and prompt_suggestion events; isolated home, loopback Anthropic model
 claude	setup_cli	claude	KAR_CLAUDE_BIN	vendor-managed macOS Claude Code native or npm installation with updates enabled and its configured stable/latest feed reachable; verifies read-only check and unchanged executable identity/version
 claude	skill_inventory_live	claude	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
 claude	skill_inventory_live	claude_commands_mcp_and_tools	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
@@ -33,6 +34,7 @@ codex	native_live	actual_codex_turn_and_resume	KAR_CODEX_BIN	requires an install
 codex	native_live	codex_queue::native_queue_receipt_idle_interruption_and_restart_of_admission	KAR_CODEX_BIN	requires installed Codex 0.169.0 with thread/queue/add and a loopback Responses API provider
 codex	native_live	codex_startup::per_server_startup_precedes_the_first_model_request	KAR_CODEX_BIN	requires held HTTP and failing stdio MCP services with real Codex and a loopback model
 codex	native_live	resume_prompts::codex_prompt_persistence	KAR_CODEX_BIN	requires Codex CLI with a loopback model
+codex	native_live	prompt_suggestions::codex_samples_the_completed_native_turn	KAR_CODEX_BIN	requires installed Codex app-server supporting thread/sample; isolated home, loopback Responses API
 codex	setup_cli	codex	KAR_CODEX_BIN	vendor-managed macOS Codex CLI with updates.status in doctor --json (0.158.0+); official version feed reachable; verifies read-only check and unchanged executable identity/version
 codex	skill_inventory_live	codex	KAR_CODEX_BIN	requires KAR_CODEX_BIN
 codex	skill_inventory_live	codex_mcp_and_tools	KAR_CODEX_BIN	requires KAR_CODEX_BIN; isolated profile and a local Rust stdio MCP server

@@ -371,6 +371,7 @@ impl super::ChatStore {
         &self,
         id: Uuid,
         request: HandoffRequest,
+        configure: impl FnOnce(&mut crate::SessionOptions),
     ) -> Result<(Handoff, Option<super::ChatSession>)> {
         let mut log = self.open_controller(id).await?;
         if let Some(existing) = log
@@ -411,7 +412,7 @@ impl super::ChatStore {
             )?;
             self.prepare_handoff(&mut log, h)?;
         }
-        self.finish_handoff(log, |_| {}).await
+        self.finish_handoff(log, configure).await
     }
 
     pub(super) async fn finish_handoff(
