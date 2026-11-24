@@ -8,6 +8,9 @@ use std::{num::NonZeroU64, path::PathBuf, time::Duration};
 pub(super) struct WorkspaceInventory {
     /// Choose one runtime, or use all (the default) to inspect every installation.
     runtime: Option<String>,
+    /// Print one JSON array of attributed reports, including failures.
+    #[arg(long)]
+    json: bool,
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
     #[arg(long, requires = "runtime")]
@@ -41,7 +44,7 @@ impl Kind {
                 let result = self.query(rt, options).await?;
                 Ok(json!({"id":rt.id,"inventory":result}))
             } else {
-                Ok(json!({"id":rt.id,"installation":installation}))
+                Ok(json!({"id":rt.id,"installation":installation,"inventory":null}))
             }
         };
         if let Some(timeout) = options.timeout {
@@ -66,19 +69,24 @@ impl WorkspaceInventory {
         if self.runtime.as_deref() == Some("all") && self.bin.is_some() {
             return Err(Error::Refused("--bin requires a single runtime".into()));
         }
-        if let Some(id) = self.runtime.filter(|id| id != "all") {
+        let providers: Vec<_> = if let Some(id) = self.runtime.filter(|id| id != "all") {
             let mut rt = runtime(&id)?;
             if let Some(bin) = self.bin {
                 rt.program = bin;
             }
-            return json_line(&kind.query(&rt, &options).await?, std::io::stdout());
-        }
-        let providers: Vec<_> = runtimes()
-            .into_iter()
-            .chain([runtime("morph")?, runtime("cybion")?])
-            .collect();
+            if !self.json {
+                return json_line(&kind.query(&rt, &options).await?, std::io::stdout());
+            }
+            vec![rt]
+        } else {
+            runtimes()
+                .into_iter()
+                .chain([runtime("morph")?, runtime("cybion")?])
+                .collect()
+        };
         let reads = providers.iter().map(|rt| kind.row(rt, &options));
         let mut failed = false;
+        let mut array = Vec::new();
         for (rt, result) in providers
             .iter()
             .zip(futures_util::future::join_all(reads).await)
@@ -90,7 +98,14 @@ impl WorkspaceInventory {
                     json!({"id":rt.id,"error":error.to_string()})
                 }
             };
-            json_line(&row, std::io::stdout())?;
+            if self.json {
+                array.push(row);
+            } else {
+                json_line(&row, std::io::stdout())?;
+            }
+        }
+        if self.json {
+            json_line(&array, std::io::stdout())?;
         }
         if failed {
             return Err(Error::Refused("one or more inventory reads failed".into()));

@@ -5,7 +5,7 @@ use std::{
     process::{Command, Output},
 };
 
-fn query(root: &Path, kind: &str, runtime: &str, stall: bool) -> Output {
+fn query(root: &Path, kind: &str, runtime: &str, stall: bool, array: bool) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_kar"));
     cmd.args([kind, runtime, "--cwd"])
         .arg(root)
@@ -26,6 +26,9 @@ fn query(root: &Path, kind: &str, runtime: &str, stall: bool) -> Output {
             format!("KAR_{}_BIN", provider.id.to_ascii_uppercase()),
             binary,
         );
+    }
+    if array {
+        cmd.arg("--json");
     }
     if stall {
         cmd.env("KAR_STALL_INVENTORY", "1");
@@ -51,7 +54,7 @@ pub(super) fn exercise() {
         fs::copy(std::env::current_exe().unwrap(), cwd.join(id)).unwrap();
     }
     for kind in ["skills", "commands", "mcp-servers", "tools"] {
-        let all = query(&cwd, kind, "all", false);
+        let all = query(&cwd, kind, "all", false, false);
         assert!(
             all.status.success(),
             "{}",
@@ -61,8 +64,17 @@ pub(super) fn exercise() {
         assert_eq!(reports.len(), kar::runtimes().len() + 2);
         assert_eq!(row(&reports, "pi")["installation"]["kind"], "missing");
         for id in ["claude", "codex"] {
-            let single = query(&cwd, kind, id, false);
+            let single = query(&cwd, kind, id, false, false);
             assert!(single.status.success());
+            let single_array = query(&cwd, kind, id, false, true);
+            assert!(single_array.status.success());
+            let array: Vec<Value> = serde_json::from_slice(&single_array.stdout).unwrap();
+            assert_eq!(array.len(), 1);
+            assert_eq!(array[0]["id"], id);
+            assert_eq!(
+                array[0]["inventory"]["kind"],
+                row(&reports, id)["inventory"]["kind"]
+            );
             let mut want = serde_json::from_slice::<Value>(&single.stdout).unwrap();
             let mut actual = row(&reports, id)["inventory"].clone();
             if id == "codex" && kind == "commands" {
@@ -81,9 +93,10 @@ pub(super) fn exercise() {
             row(&reports, "codex")["inventory"]["items"],
             row(&reports, "claude")["inventory"]["items"]
         );
-        let delayed = query(&cwd, kind, "all", true);
+        let delayed = query(&cwd, kind, "all", true, true);
         assert_eq!(delayed.status.code(), Some(1));
-        let partial = rows(&delayed);
+        let partial: Vec<Value> = serde_json::from_slice(&delayed.stdout).unwrap();
+        assert_eq!(row(&partial, "pi").get("inventory"), Some(&Value::Null));
         assert_eq!(partial.len(), reports.len());
         assert!(
             row(&partial, "claude")["error"]
