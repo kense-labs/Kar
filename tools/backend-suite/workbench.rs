@@ -112,6 +112,43 @@ pub(super) fn cases() -> Vec<Case> {
         case.environment = env.iter().map(|s| s.to_string()).collect();
         cases.push(case);
     }
+    let mut cloud = scenario(
+        "lib",
+        "cloud-device-protocol",
+        &["--lib", "workbench::devices::cloud::tests"],
+        "local HTTP cloud provider protocol fixture",
+    );
+    cloud.libtest = true;
+    cases.push(cloud);
+    for (test, env, conditions) in [
+        (
+            "workbench-simlock-live",
+            &[
+                "KAR_SIMLOCK_LIVE_GATEWAY",
+                "KAR_SIMLOCK_LIVE_TOKEN",
+                "KAR_SIMLOCK_LIVE_CATALOG",
+            ][..],
+            "macOS, dedicated SimLock gateway, credential and device catalog; real cloud device, protocol chat fixture",
+        ),
+        (
+            "workbench-expo-live",
+            &[
+                "KAR_EXPO_LIVE_ALLOW_BILLING",
+                "KAR_EXPO_LIVE_APP",
+                "EXPO_TOKEN",
+            ][..],
+            "macOS, explicitly enabled billable Expo device, dedicated app and authenticated account; real cloud device, protocol chat fixture",
+        ),
+    ] {
+        let mut cloud = scenario(
+            "chat_restart",
+            test,
+            &["--test", "chat_restart", "--", test],
+            conditions,
+        );
+        cloud.environment = env.iter().map(|key| key.to_string()).collect();
+        cases.push(cloud);
+    }
     let mut devices = scenario(
         "chat_restart",
         "workbench-devices-live",
