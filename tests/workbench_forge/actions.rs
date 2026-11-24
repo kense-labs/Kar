@@ -87,7 +87,18 @@ pub(super) async fn review_control(
     let comments = json!({"nodes":db.review_comments,"pageInfo":{"hasNextPage":false}});
     let tid = "thread-1";
     let t = json!({"id":tid,"path":"notes.txt","isResolved":db.resolved,"viewerCanResolve":true,"viewerCanUnresolve":true,"viewerCanReply":true,"pullRequest":{"number":1,"repository":{"nameWithOwner":"team/repo"}},"comments":comments});
-    let data = if q.starts_with("query KarIssueDirectory") {
+    let data = if q.starts_with("query KarFileStats") {
+        let page = v["after"]
+            .as_str()
+            .and_then(|p| p.parse::<usize>().ok())
+            .unwrap_or(0);
+        let nodes = if page == 0 {
+            json!([{"path":"Cargo.lock","additions":10,"deletions":0},{"path":"tests/__mocks__/a.txt","additions":3,"deletions":2},{"path":"Latest.java","additions":4,"deletions":0},{"path":"BillTest.java","additions":2,"deletions":1}])
+        } else {
+            json!([{"path":"CHANGELOG.md","additions":1,"deletions":3},{"path":"requirements-dev.txt","additions":6,"deletions":4}])
+        };
+        json!({"repository":{"pullRequest":{"files":{"nodes":nodes,"pageInfo":{"hasNextPage":v["number"]==9||page==0,"endCursor":(page+1).to_string()}}}}})
+    } else if q.starts_with("query KarIssueDirectory") {
         if q.contains("issueTemplates") {
             json!({"repository":{"issueTemplates":[],"templateDirectory":{"__typename":"Tree","entries":[{"name":"config.yml","object":{"__typename":"Blob","isTruncated":false,"text":"blank_issues_enabled: false"}},{"name":"bug.yml","object":{"__typename":"Blob","isTruncated":false,"text":"name: Bug\ndescription: Report\nlabels: bug, alpha\nbody:\n - type: input\n   attributes:\n     label: Reproduce\n   validations:\n     required: true"}}]}}})
         } else {

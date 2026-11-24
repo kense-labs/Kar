@@ -149,6 +149,18 @@ async fn peer(
             "open".into()
         }
     });
+    if kind == "gitlab"
+        && path == "graphql"
+        && b["query"]
+            .as_str()
+            .is_some_and(|q| q.starts_with("query KarFileStats"))
+    {
+        let iid = b["variables"]["iid"].as_str().unwrap();
+        return Json(json!({"data":{"project":{"mergeRequest":{"diffStats":[{"path":"docs/readme.md","additions":7,"deletions":3}],"diffStatsSummary":{"fileCount":if iid=="2"{1}else{2}}}}}})).into_response();
+    }
+    if kind == "tanstack-source" && path.ends_with("/files") {
+        return Json(json!({"files":[{"path":"docs/readme.md","additions":7,"deletions":3}],"truncated":path.contains("/9/")})).into_response();
+    }
     let resource = if path == repo && method == Method::GET {
         match kind {
             "gitlab" => json!({"id":11,"path_with_namespace":"team/repo"}),
@@ -362,6 +374,17 @@ pub(super) async fn run() {
             .json(&json!({"id":chat,"runtime":"codex"})))
         .await;
         if kind != "linear" {
+            let stats = ok(client.get(format!("{url}/pulls/2/change-breakdown"))).await;
+            if matches!(kind, "gitlab" | "tanstack-source") {
+                assert_eq!(stats["docs"], json!({"additions":7,"deletions":3}));
+                assert!(
+                    ok(client.get(format!("{url}/pulls/9/change-breakdown")))
+                        .await
+                        .is_null()
+                );
+            } else {
+                assert!(stats.is_null(), "{kind}");
+            }
             let ps = ok(client.post(&query).json(&json!({"op":"pulls"}))).await;
             assert_eq!(ps.as_array().unwrap().len(), 1, "{kind}");
             let pr = ok(client.post(&query).json(&json!({"op":"pull","number":2}))).await;

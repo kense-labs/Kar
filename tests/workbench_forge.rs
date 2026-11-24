@@ -263,6 +263,16 @@ async fn scenario() {
     let input = json!({"id":Uuid::new_v4(),"chat":id,"op":"create_pull","head":"feature","base":"main","title":"notes","body":"changes"});
     let pr = ok(a.post(format!("{forge}/operations")).json(&input)).await;
     assert_eq!(pr["number"], 1);
+    let stats = ok(a.get(format!("{forge}/pulls/1/change-breakdown"))).await;
+    assert_eq!(
+        stats,
+        json!({"code":{"additions":10,"deletions":4},"tests":{"additions":2,"deletions":1},"mocks":{"additions":3,"deletions":2},"generated":{"additions":10,"deletions":0},"docs":{"additions":1,"deletions":3}})
+    );
+    assert!(
+        ok(a.get(format!("{forge}/pulls/9/change-breakdown")))
+            .await
+            .is_null()
+    );
     let diff = ok(a.get(format!("{forge}/pulls/1/diff"))).await;
     assert_eq!(diff["files"], json!(["notes.txt"]));
     let patch = ok(a.get(format!("{forge}/pulls/1/diff?path=notes.txt"))).await;
