@@ -50,7 +50,7 @@ pub(in crate::workbench) fn worktrees_from_origin(db: &Catalog) -> bool {
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
-fn prefs(db: &Catalog) -> Value {
+pub(in crate::workbench) fn prefs(db: &Catalog) -> Value {
     let mut result = json!({"default_thread_env_mode":"local","new_worktrees_start_from_origin":true,"enable_provider_update_checks":true,"background_activity":"balanced",
         "source_control_writing_style":{"mode":"repo_conventions","follow_change_request_templates":true,"custom_instructions":""}});
     for (name, value) in &db.environment.preferences {
@@ -59,7 +59,7 @@ fn prefs(db: &Catalog) -> Value {
     result["prompt_suggestions"] = db.prompt_suggestions.into();
     result
 }
-fn descriptor(app: &Workbench) -> Result<Value> {
+pub(in crate::workbench) fn descriptor(app: &Workbench) -> Result<Value> {
     let id = id(app)?;
     Ok(
         json!({"environment_id":id,"label":std::env::var("KAR_ENVIRONMENT_LABEL").unwrap_or_else(|_|"Kar".into()),"server_version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"preferences":prefs(&app.0.catalog.lock().unwrap())}),
@@ -102,11 +102,16 @@ fn validate_patch(patch: &Value) -> Result<&serde_json::Map<String, Value>> {
     Ok(object)
 }
 fn update_prefs(app: &Workbench, c: Option<(&Caller, &Grant)>, patch: Value) -> Result<Value> {
-    let changes = validate_patch(&patch)?;
     app.update(|db| {
         if let Some((caller, grant)) = c {
             check(db, caller, grant)?;
         }
+        apply_prefs(db,&patch)?;
+        Ok(prefs(db))
+    })
+}
+pub(in crate::workbench) fn apply_prefs(db:&mut Catalog,patch:&Value)->Result<()> {
+let changes = validate_patch(patch)?;
         for (key, v) in changes {
             if key == "prompt_suggestions" {
                 db.prompt_suggestions = v.as_bool().unwrap();
@@ -121,8 +126,7 @@ fn update_prefs(app: &Workbench, c: Option<(&Caller, &Grant)>, patch: Value) -> 
                 db.environment.preferences.insert(key.clone(), v.clone());
             }
         }
-        Ok(prefs(db))
-    })
+Ok(())
 }
 async fn read(State(app): State<Workbench>) -> Reply {
     Ok(Json(descriptor(&app)?))

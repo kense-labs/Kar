@@ -243,6 +243,8 @@ fn required(method: &Method, path: &str) -> Option<&'static str> {
     let read = method == Method::GET || method == Method::HEAD;
     let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
     match parts.as_slice() {
+        ["server","config"]|["server","config","events"]|["server","settings"] if read=>Some("orchestration:read"),
+        ["server","settings"|"keybindings"] if !read=>Some("settings:write"),
         ["environment"] | ["projects"] | ["projects", _, "chats"] if read => {
             Some("orchestration:read")
         }

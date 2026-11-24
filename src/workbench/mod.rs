@@ -9,6 +9,7 @@ mod http_content;
 mod background;
 pub use background::BackgroundTasks;
 mod chat_controls;
+mod configuration;
 mod devices;
 mod antigravity_proto;
 mod native_sqlite;
@@ -66,6 +67,7 @@ pub struct Project {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
+    #[serde(default)] server:configuration::Config,
     #[serde(default)]
     environment: mcp::collaboration_tools::environment::Environment,
     #[serde(default)]
@@ -127,6 +129,7 @@ impl Controller {
 }
 
 struct Inner {
+    config_changes:tokio::sync::watch::Sender<u64>,
     relay: relay_client::tunnel::Service,
     acp_registry: acp_registry::Catalog,
     acp_auth: acp_registry::auth::Jobs,
@@ -231,6 +234,7 @@ impl Workbench {
             let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
             Inner {
                 relay: Default::default(),
+                config_changes:tokio::sync::watch::channel(catalog.server.revision).0,
                 acp_registry: Default::default(),
                 acp_auth: Default::default(),
                 mcp: Default::default(),
@@ -312,6 +316,7 @@ impl Workbench {
         let mut saved = self.0.catalog.lock().unwrap();
         let mut next = saved.clone();
         let result = f(&mut next)?;
+        configuration::next_revision(&saved,&mut next);
         let mut tmp = tempfile::NamedTempFile::new_in(&self.0.state)?;
         serde_json::to_writer(&mut tmp, &next)?;
         tmp.as_file().sync_all()?;
@@ -323,7 +328,9 @@ impl Workbench {
         for chat in next.archived.difference(&saved.archived) {
             self.0.suggestions.detach(*chat);
         }
+        let revision=next.server.revision;
         *saved = next;
+        self.0.config_changes.send_if_modified(|n|if *n==revision{false}else{*n=revision;true});
         self.0.shell.changed();
         #[cfg(unix)]
         File::open(&self.0.state)?.sync_all()?;
