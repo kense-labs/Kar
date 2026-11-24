@@ -243,13 +243,13 @@ impl Workbench {
         self.workspace(&p)?;
         let slot = self.controller(id);
         let mut owner = slot.lock().await;
-        match self.0.chats.saved_info(id) {
+        match self.0.chats.initial_info(id) {
             Ok(info)
                 if info.workspace == p.root && info.runtime == runtime && info.model == model =>
             {
                 return Ok(ProjectChat {
                     project,
-                    info,
+                    info: self.0.chats.saved_info(id)?,
                     archived: self.archived(id),
                 });
             }

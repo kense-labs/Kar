@@ -1190,8 +1190,11 @@ impl Log {
         }
         Ok(())
     }
-    pub(super) fn commit(&mut self, row: ChatUpdate) -> Result<()> {
+    pub(super) fn commit(&mut self, mut row: ChatUpdate) -> Result<()> {
         self.healthy()?;
+        if let ChatUpdate::Frame { id, frame } | ChatUpdate::Reconciled { id, frame } = &mut row {
+            self.state.clean_handoff_echo(*id, frame);
+        }
         let result = append(&mut self.file, &row).and_then(|_| self.state.apply(row));
         if let Err(e) = &result {
             self.error = Some(format!("chat journal write: {e}"));
@@ -1330,8 +1333,6 @@ impl Log {
             }
         {
             let id = last.id;
-            let mut frame = frame;
-            self.state.clean_handoff_echo(id, &mut frame);
             self.commit(ChatUpdate::Reconciled { id, frame })?;
         }
         if let Some(id) = self.state.active() {
@@ -1823,11 +1824,10 @@ impl Log {
         {
             self.commit(ChatUpdate::PiInput { id, timestamp_ms })?;
         }
-        if let Some(mut frame) =
-            self.ids
-                .frame(self.state.info.protocol, &self.state.info.native_id, r)
+        if let Some(frame) = self
+            .ids
+            .frame(self.state.info.protocol, &self.state.info.native_id, r)
         {
-            self.state.clean_handoff_echo(id, &mut frame);
             self.commit(ChatUpdate::Frame { id, frame })?;
             if self.state.active().is_none() {
                 if self.state.info.protocol == Protocol::Codex

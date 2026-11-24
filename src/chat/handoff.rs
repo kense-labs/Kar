@@ -95,13 +95,57 @@ impl Handoff {
                 && h.from.runtime == request.runtime
                 && h.from.model == request.model
         });
-        let start = previous.map_or(0, |h| h.through_turn);
+        // Merely making a native session active does not teach it any history.
+        // Only a turn witnessed by the target advances its continuation boundary.
+        let last_input = previous.and_then(|h| {
+            turns.iter().rposition(|turn| {
+                (turn.input_sent
+                    || turn.native_turn_id.is_some()
+                    || turn.status == super::TurnStatus::Completed)
+                    && turn.items.first().is_some_and(|i| {
+                        i.source.path.is_empty()
+                            && i.source.session_id.as_deref() == Some(h.from.native_id.as_str())
+                    })
+            })
+        });
+        let start = last_input.map_or(0, |i| i + 1);
+        let target = previous.filter(|h| {
+            last_input.is_some()
+                || !history.iter().any(|earlier| {
+                    earlier.status == HandoffStatus::Ready
+                        && earlier.target.as_ref().is_some_and(|t| {
+                            t.native_id == h.from.native_id && t.runtime == h.from.runtime
+                        })
+                        && earlier.input.is_none()
+                })
+        });
         let end = turns.len();
         let mut items = Vec::new();
         let mut omitted = 0usize;
         let heading = format!("{INTRO}\nTurns {} through {}.\n", start + 1, end);
         let mut remaining = request.budget_bytes - heading.len() - 80;
+        let mut include = |line: serde_json::Value| {
+            let line = line.to_string();
+            if line.len() < remaining {
+                remaining -= line.len() + 1;
+                items.push(line);
+            } else {
+                omitted += 1;
+            }
+        };
         for (ordinal, t) in turns.iter().enumerate().skip(start).rev() {
+            if let Some(failure) = &t.failure {
+                include(
+                    serde_json::json!({"turn":ordinal+1,"turn_id":t.id,"kind":"failure","text":failure.reason}),
+                );
+            }
+            if let Some(checkpoint) = &t.checkpoint {
+                for change in checkpoint.files.iter().rev() {
+                    include(
+                        serde_json::json!({"turn":ordinal+1,"turn_id":t.id,"kind":"file_change","change":change}),
+                    );
+                }
+            }
             for (index, item) in t.items.iter().enumerate().rev() {
                 let (kind, content) = match &item.item {
                     Item::Message {
@@ -133,13 +177,9 @@ impl Handoff {
                 if content.is_empty() {
                     continue;
                 }
-                let line = serde_json::json!({"turn":ordinal+1,"turn_id":t.id,"item":index,"kind":kind,"text":content}).to_string();
-                if line.len() + 1 <= remaining {
-                    remaining -= line.len() + 1;
-                    items.push(line);
-                } else {
-                    omitted += 1;
-                }
+                include(
+                    serde_json::json!({"turn":ordinal+1,"turn_id":t.id,"item":index,"source":item.source,"kind":kind,"text":content}),
+                );
             }
         }
         items.reverse();
@@ -156,8 +196,8 @@ impl Handoff {
             request,
             status: HandoffStatus::Prepared,
             from: ProviderSession::current(info),
-            target: previous.map(|h| h.from.clone()),
-            resumed_target: previous.is_some(),
+            target: target.map(|h| h.from.clone()),
+            resumed_target: target.is_some(),
             replaced_empty_sessions: Vec::new(),
             from_turn: start + 1,
             through_turn: end,
@@ -234,6 +274,11 @@ impl super::log::State {
         let Some(h) = self.current_handoff().filter(|h| h.input == Some(id)) else {
             return;
         };
+        if !frame.source.path.is_empty()
+            || frame.source.session_id.as_deref() != Some(&self.info.native_id)
+        {
+            return;
+        }
         for edit in &mut frame.edits {
             let text = match edit {
                 super::ChatEdit::Text {
@@ -268,6 +313,10 @@ impl super::ChatStore {
         };
         // Some vendors create the transcript at first input. Replacing an empty
         // fresh target is safe only before Kar has durably admitted any input.
+        if !matches!(&original, Error::Open(e) if matches!(e.as_ref(), crate::OpenError::SessionNotFound { session_id, .. } if session_id == &log.state.info.native_id))
+        {
+            return Err(original);
+        }
         let id = h.request.id;
         let old = log.state.info.native_id.clone();
         let runtime = log.state.info.launch_runtime(opts).await?;
@@ -356,16 +405,19 @@ impl super::ChatStore {
         }
         opts.model = h.request.model.clone();
         configure(&mut opts);
+        opts.remove_env("KAR_WORKBENCH_TOKEN")?;
         opts.cwd = log.state.info.workspace.clone();
         opts.resume = h.target.as_ref().map(|target| target.native_id.clone());
         let opened = async {
-            let mut runtime = crate::runtime(&h.request.runtime)?;
-            if let Some(target) = &h.target {
+            let (runtime, version) = if let Some(target) = &h.target {
                 let mut saved = log.state.info.clone();
                 target.activate(&mut saved);
-                runtime = saved.runtime()?;
-            }
-            let (runtime, version) = runtime.selected_with_version(&opts).await?;
+                (saved.launch_runtime(&opts).await?, None)
+            } else {
+                crate::runtime(&h.request.runtime)?
+                    .selected_with_version(&opts)
+                    .await?
+            };
             let session = runtime
                 .open_selected_with_version(opts.before_chat_attach()?, version.as_deref())
                 .await?;

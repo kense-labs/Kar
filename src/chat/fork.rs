@@ -139,7 +139,13 @@ impl ChatStore {
         turn: Uuid,
         mut opts: SessionOptions,
     ) -> Result<ChatSession> {
-        let parent = source.0.lock().unwrap().state.info.clone();
+        let parent = {
+            let log = source.0.lock().unwrap();
+            if log.state.pending_handoff().is_some() {
+                return Err(Error::Busy);
+            }
+            log.state.info.clone()
+        };
         let _pin = parent.pin_worktree()?;
         opts.cwd = parent.workspace.clone();
         opts.resume = None;

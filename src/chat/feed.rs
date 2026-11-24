@@ -187,16 +187,16 @@ impl ChatStore {
         if cursor.chat != chat || cursor.offset < start || cursor.offset > length {
             return Err(Error::InvalidCursor);
         }
-        if cursor.offset > start {
-            file.seek(SeekFrom::Start(start))?;
-            let prefix = BufReader::new((&mut file).take(cursor.offset - start));
-            log::read_info_changes(prefix, &mut state.info)?;
-        }
         file.seek(SeekFrom::Start(cursor.offset - 1))?;
         let mut last = [0];
         file.read_exact(&mut last)?;
         if last[0] != b'\n' {
             return Err(Error::InvalidCursor);
+        }
+        if cursor.offset > start {
+            file.seek(SeekFrom::Start(start))?;
+            let prefix = BufReader::new((&mut file).take(cursor.offset - start));
+            log::read_info_changes(prefix, &mut state.info)?;
         }
         Ok(ChatFeed {
             store: self.clone(),

@@ -104,13 +104,7 @@ impl ChatStore {
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 return Ok(Inbox {
                     chat: chat.id,
-                    native_id: super::log::parse_header(
-                        &mut std::io::BufReader::new(File::open(self.path(chat.id))?),
-                        Some(chat.id),
-                    )?
-                    .0
-                    .info
-                    .native_id,
+                    native_id: self.initial_info(chat.id)?.native_id,
                     entries: vec![],
                 });
             }
@@ -119,14 +113,7 @@ impl ChatStore {
         let inbox: Inbox = serde_json::from_reader(std::io::BufReader::new(file))?;
         if inbox.chat != chat.id
             || (inbox.native_id != chat.native_id
-                && inbox.native_id
-                    != super::log::parse_header(
-                        &mut std::io::BufReader::new(File::open(self.path(chat.id))?),
-                        Some(chat.id),
-                    )?
-                    .0
-                    .info
-                    .native_id)
+                && inbox.native_id != self.initial_info(chat.id)?.native_id)
         {
             return Err(Error::Protocol(
                 "input queue belongs to a different session".into(),

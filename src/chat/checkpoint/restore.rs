@@ -327,7 +327,8 @@ impl ChatStore {
         dry_run: bool,
     ) -> Result<RollbackReport> {
         if !dry_run
-            && (log.state.compacting()
+            && (log.state.pending_handoff().is_some()
+                || log.state.compacting()
                 || log.state.waiting_steering()
                 || log.state.observing_notifications())
         {

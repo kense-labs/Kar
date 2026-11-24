@@ -222,6 +222,14 @@ impl ChatStore {
     pub(crate) fn directory(&self) -> &Path {
         &self.dir
     }
+    pub(crate) fn initial_info(&self, id: Uuid) -> Result<ChatInfo> {
+        Ok(log::parse_header(
+            &mut std::io::BufReader::new(File::open(self.path(id))?),
+            Some(id),
+        )?
+        .0
+        .info)
+    }
     pub(crate) fn saved_info(&self, id: Uuid) -> Result<ChatInfo> {
         log::info(File::open(self.path(id))?, id)
     }
