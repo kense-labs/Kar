@@ -1,9 +1,21 @@
 //! Read OpenCode's native model catalog without opening an ACP session or persistent daemon.
 use crate::{Error, Result, Runtime, SessionOptions, forms::ModelEntry, process::OwnedProcess};
 use indexmap::IndexMap;
+use regex::Regex;
 use serde::de::IgnoredAny;
 use serde_json::{Map, Value, json, value::RawValue};
-use std::process::Stdio;
+use std::{process::Stdio, sync::LazyLock};
+
+fn release_flag(version: &str) -> Result<&'static str> {
+    // Native development builds can append identifiers outside the SemVer grammar.
+    static RELEASE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(?:opencode\s+)?v?([12])\.[0-9]+\.[0-9]+\S*$").unwrap());
+    match RELEASE.captures(version.trim()).as_ref().map(|m| &m[1]) {
+        Some("1") => Ok("--verbose"),
+        Some("2") => Ok("--standalone"),
+        _ => Err(Error::Protocol("unrecognized OpenCode release line".into())),
+    }
+}
 
 fn model_id(id: &str) -> bool {
     !id.chars().any(char::is_whitespace)
@@ -116,19 +128,12 @@ pub(crate) async fn list(runtime: &Runtime, options: &SessionOptions) -> Result<
             Some(version) => version,
             None => output(&runtime, options, &["--version"]).await?,
         };
-        let version = version.trim();
-        let version = version
-            .strip_prefix("opencode ")
-            .unwrap_or(version)
-            .trim_start_matches('v');
-        let release = semver::Version::parse(version)
-            .map_err(|_| Error::Protocol("unrecognized OpenCode release line".into()))?;
-        match release.major {
-            1 => Ok(legacy(
-                &output(&runtime, options, &["models", "--verbose"]).await?,
-            )),
-            2 => standalone(&output(&runtime, options, &["models", "--standalone"]).await?),
-            _ => Err(Error::Protocol("unrecognized OpenCode release line".into())),
+        let flag = release_flag(&version)?;
+        let stdout = output(&runtime, options, &["models", flag]).await?;
+        if flag == "--verbose" {
+            Ok(legacy(&stdout))
+        } else {
+            standalone(&stdout)
         }
     };
     tokio::time::timeout(options.handshake_timeout, read)
@@ -141,6 +146,11 @@ mod tests {
     use super::*;
     #[test]
     fn native_release_lines_preserve_catalog_evidence() {
+        assert_eq!(release_flag("opencode  v1.19.5dev\n").unwrap(), "--verbose");
+        assert_eq!(release_flag("2.3.2+local").unwrap(), "--standalone");
+        for bad in ["opencode vv2.3.2", "prefix 1.2.3", "3.0.0", "2.3.2 extra"] {
+            assert!(matches!(release_flag(bad), Err(Error::Protocol(_))));
+        }
         let source = "stray\r\nteam/large\r\n{\r\n  \"name\":\" Large \",\r\n  \"providerID\":\"api\",\r\n  \"variants\":{\"max\":{},\"high\":{}}\r\n}\r\napi/plain\r\napi/next\r\n{\r\n  \"name\":\" \"\r\n}\r\n";
         assert_eq!(
             serde_json::to_value(legacy(source)).unwrap(),
