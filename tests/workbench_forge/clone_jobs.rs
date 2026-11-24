@@ -140,5 +140,50 @@ pub(super) async fn run() {
     ok(c.post(format!("{base}/projects/{id}/chats"))
         .json(&json!({"id":Uuid::new_v4(),"runtime":"codex"})))
     .await;
+    // Delete while Git owns a temporary checkout. The in-flight attempt cannot publish afterward.
+    fs::remove_file(gate.join("release")).unwrap();
+    let _ = fs::remove_file(gate.join("active"));
+    let removed = Uuid::new_v4();
+    let unpublished = root.join("unpublished");
+    let creating = json!({"id":removed,"title":"discard me","directory":unpublished,"source":src});
+    ok(c.post(&jobs).json(&creating)).await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !gate.join("active").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fs::write(unpublished.join("user-file"), "keep").unwrap();
+    let mutation =
+        json!({"type":"project.delete","projectId":removed,"commandId":"remove-cloning"});
+    let first = ok(c.post(format!("{base}/projects/mutate")).json(&mutation)).await;
+    assert_eq!(first["deleted"], true);
+    assert_eq!(
+        ok(c.post(format!("{base}/projects/mutate")).json(&mutation)).await,
+        first
+    );
+    let remaining = ok(c.get(&jobs)).await;
+    assert!(
+        remaining
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|j| j["projectId"] != removed.to_string())
+    );
+    assert_eq!(
+        fs::read_to_string(unpublished.join("user-file")).unwrap(),
+        "keep"
+    );
+    assert!(!unpublished.join(".git").exists());
+    assert!(
+        !c.post(&jobs)
+            .json(&creating)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
     proc.kill().await.unwrap();
 }

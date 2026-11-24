@@ -156,14 +156,27 @@ impl Workbench {
                     .filter(|(_, b)| b.project == id)
                     .map(|(chat, _)| *chat)
                     .collect();
-                if !ids.is_empty() && boolean(&input, "force")? != Some(true) {
-                    return Err(bad("project contains chats"));
-                }
+
                 let slots: Vec<_> = ids.iter().map(|i| self.controller(*i)).collect();
                 let mut guards = vec![];
                 for slot in &slots {
                     guards.push(slot.owner.try_lock().map_err(|_| Error::Busy)?);
                 }
+                if boolean(&input, "force")? != Some(true) {
+                    for chat in &ids {
+                        match self.0.chats.initial_info(*chat) {
+                            Ok(_) => return Err(bad("project contains chats")),
+                            Err(Error::Io(e))
+                                if e.kind() == std::io::ErrorKind::NotFound
+                                    && !self.0.chats.fork_claimed(*chat)? => {}
+                            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                                return Err(bad("project contains an unfinished fork"));
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+                crate::workbench::forge::clone_jobs::mark_discarded(&mut c.forge, id);
                 // Retain the ownership tombstones: registering the same directory must never expose deleted chats.
                 c.archived.extend(ids);
                 c.lifecycle.deleted_projects.insert(id);
@@ -201,15 +214,18 @@ impl Workbench {
                     || existing.is_some_and(|old| old.root != p.root)
                 {
                     let mut folders: Vec<Tracked> = match input.get("trackedFolders") {
-                        Some(v) => serde_json::from_value(v.clone())?,
+                        Some(v) => serde_json::from_value(v.clone())
+                            .map_err(|_| bad("invalid tracked folders"))?,
                         None => c.tracked_folders.get(&id).cloned().unwrap_or_default(),
                     };
                     if let Some(raw) = input.get("untrackFolders") {
-                        let paths: BTreeSet<PathBuf> = serde_json::from_value(raw.clone())?;
+                        let paths: BTreeSet<PathBuf> = serde_json::from_value(raw.clone())
+                            .map_err(|_| bad("invalid tracked folders"))?;
                         folders.retain(|f| !paths.contains(&f.path));
                     }
                     if let Some(raw) = input.get("trackFolders") {
-                        let additions: Vec<Tracked> = serde_json::from_value(raw.clone())?;
+                        let additions: Vec<Tracked> = serde_json::from_value(raw.clone())
+                            .map_err(|_| bad("invalid tracked folders"))?;
                         for f in additions {
                             if !folders.iter().any(|e| e.path == f.path) {
                                 folders.push(f);

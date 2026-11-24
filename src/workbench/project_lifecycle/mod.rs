@@ -46,6 +46,12 @@ pub(super) struct State {
     deleted_projects: std::collections::BTreeSet<Uuid>,
 }
 
+impl State {
+    pub(in crate::workbench) fn is_deleted(&self, id: Uuid) -> bool {
+        self.deleted_projects.contains(&id)
+    }
+}
+
 impl Workbench {
     pub(super) fn owns_chat(
         &self,
@@ -250,9 +256,19 @@ async fn mutate(
     App(app): App<Workbench>,
     Json(input): Json<Value>,
 ) -> std::result::Result<Json<Project>, ApiError> {
+    // Finish a committed deletion even if the HTTP client disconnects while the operation is in flight.
+    tokio::spawn(async move { finish_mutation(app, input).await })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?
+}
+async fn finish_mutation(
+    app: Workbench,
+    input: Value,
+) -> std::result::Result<Json<Project>, ApiError> {
     let host = app.clone();
     let result = blocking(move || host.mutate_project(input)).await?;
     if result.metadata.deleted {
+        super::forge::clone_jobs::finish_discard(&app, result.id).await?;
         let ids: Vec<_> = app
             .0
             .catalog

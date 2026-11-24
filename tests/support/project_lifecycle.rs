@@ -1,5 +1,5 @@
 //! Normal HTTP requests against the Kar process. The native Codex peer is a protocol fixture.
-use super::super::workbench_server::{client, json, serve, serve_with_env};
+use super::super::workbench_server::{client, json, serve_with_env};
 use kar::chat::{ChatStore, TurnStatus};
 use serde_json::{Value, json};
 use std::{fs, path::Path, time::Duration};
@@ -87,6 +87,27 @@ pub(super) async fn run() {
     );
     assert_ne!(first["info"]["workspace"], other["info"]["workspace"]);
     fs::write(folder.join("keep"), "original").unwrap();
+    let git = super::super::workbench_fork::git;
+    git(folder, &["init", "-b", "main"]);
+    git(folder, &["add", "keep"]);
+    git(folder, &["commit", "-m", "seed"]);
+    let fork = Uuid::new_v4();
+    let src = format!("{base}/projects/{s}/chats/{first_id}");
+    let turn = json(
+        a.post(format!("{src}/messages"))
+            .json(&json!({"id":Uuid::new_v4(),"text":"Scratch sibling history"})),
+    )
+    .await;
+    let forked = json(
+        a.post(format!("{src}/forks"))
+            .json(&json!({"id":fork,"turn":turn["id"]})),
+    )
+    .await;
+    json(
+        a.put(format!("{base}/projects/{s}/chats/{fork}/archive"))
+            .json(&json!({"archived":true})),
+    )
+    .await;
     let promoted = json(
         a.post(format!("{base}/projects/create-from-thread"))
             .json(&json!({"chat":first_id})),
@@ -104,6 +125,18 @@ pub(super) async fn run() {
     let promoted_id = promoted["id"].as_str().unwrap();
     let moved = json(a.get(format!("{base}/projects/{promoted_id}/chats"))).await;
     assert_eq!(moved[0]["info"]["native_id"], first["info"]["native_id"]);
+    let incl = json(a.get(format!(
+        "{base}/projects/{promoted_id}/chats?include_archived=true"
+    )))
+    .await;
+    assert!(
+        incl.as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["info"]["id"] == fork.to_string()
+                && e["archived"] == true
+                && e["info"]["native_id"] == forked["history"]["chat"]["native_id"])
+    );
     let remaining = json(a.get(format!("{base}/projects/{s}/chats"))).await;
     assert_eq!(remaining.as_array().unwrap().len(), 1);
     let named = json(
@@ -121,7 +154,21 @@ pub(super) async fn run() {
     let offline = ChatStore::open(&state).unwrap();
     let queued = Uuid::new_v4();
     offline.enqueue(id, queued, "old cwd queue").unwrap();
-    let (mut server, base) = serve(&state, &root, &native).await;
+    let (mut server, base) = serve_with_env(
+        &state,
+        &root,
+        &native,
+        &[
+            ("GIT_AUTHOR_NAME", "Kar".as_ref()),
+            ("GIT_COMMITTER_NAME", "Kar".as_ref()),
+            ("GIT_AUTHOR_EMAIL", "fixture@test.invalid".as_ref()),
+            ("GIT_COMMITTER_EMAIL", "fixture@test.invalid".as_ref()),
+            ("GIT_CONFIG_COUNT", "1".as_ref()),
+            ("GIT_CONFIG_KEY_0", "commit.gpgSign".as_ref()),
+            ("GIT_CONFIG_VALUE_0", "false".as_ref()),
+        ],
+    )
+    .await;
     // Do not attach either client. The restart pump alone must publish the native reply.
     loop {
         if offline
@@ -144,6 +191,24 @@ pub(super) async fn run() {
     assert_eq!(matching.len(), 1);
     assert_eq!(matching[0]["cwd"], json!(old));
     assert_eq!(matching[0]["id"], prev["info"]["native_id"]);
+    let again = json(
+        a.post(format!("{base}/projects/create-new"))
+            .json(&json!({"name":"Named Project"})),
+    )
+    .await;
+    assert_ne!(again["root"], named["root"]);
+    assert!(again.get("commit_error").is_none());
+    let tree = std::process::Command::new("git")
+        .arg("-C")
+        .arg(again["root"].as_str().unwrap())
+        .args(["ls-tree", "-r", "--name-only", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(tree.status.success());
+    assert_eq!(
+        String::from_utf8(tree.stdout).unwrap(),
+        "README.md\nassets/icon.svg\n"
+    );
     let mutate = format!("{base}/projects/mutate");
     assert_eq!(adjusted, json(a.post(&mutate).json(&update)).await);
     let del = json!({"type":"project.delete","commandId":"delete","projectId":promoted_id});
@@ -177,5 +242,21 @@ pub(super) async fn run() {
         .unwrap()
         .is_empty()
     );
+    // A failed native startup reserved an ID, but never published a chat or native fork.
+    let rid = reused["id"].as_str().unwrap();
+    assert!(
+        !a.post(format!("{base}/projects/{rid}/chats"))
+            .json(&json!({"runtime":"missing-runtime","id":Uuid::new_v4()}))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let removed = json(a.post(&mutate).json(
+        &json!({"type":"project.delete","commandId":"remove-failed-creation","projectId":rid}),
+    ))
+    .await;
+    assert_eq!(removed["deleted"], true);
     server.kill().await.unwrap();
 }

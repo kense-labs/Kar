@@ -64,7 +64,7 @@ impl ForkRepositoryBase {
     }
 }
 impl ChatStore {
-    pub(super) fn fork_claimed(&self, id: Uuid) -> Result<bool> {
+    pub(crate) fn fork_claimed(&self, id: Uuid) -> Result<bool> {
         Ok(Request::path(self, id).try_exists()?)
     }
 

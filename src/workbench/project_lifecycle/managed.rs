@@ -82,7 +82,10 @@ impl Workbench {
             slug.push_str("project");
         }
         let parent = self.managed_root("projects")?;
-        let root = self.claim_folder(&parent, &slug)?;
+        let stage = tempfile::Builder::new()
+            .prefix(".kar-new-project-")
+            .tempdir_in(&parent)?;
+        let root = stage.path().to_path_buf();
         let ws = self.workspace_at(&root)?;
         let branch = git(&root, &["config", "--get", "init.defaultBranch"])
             .ok()
@@ -132,9 +135,70 @@ impl Workbench {
                         .collect()
                 }
             });
+        let project = self.publish_named(stage, &parent, &slug, name)?;
         Ok(Created {
-            project: self.register(&root, name)?,
+            project,
             commit_error,
+        })
+    }
+
+    fn publish_named(
+        &self,
+        stage: tempfile::TempDir,
+        parent: &Path,
+        slug: &str,
+        title: &str,
+    ) -> Result<Project> {
+        let workspace = self.workspace_at(parent)?;
+        let dir = workspace.parent(Path::new("child"), false)?;
+        let src = stage.path().file_name().ok_or_else(denied)?.to_owned();
+        self.update(|catalog| {
+            for i in 1..=100 {
+                let dest = if i == 1 {
+                    slug.to_owned()
+                } else {
+                    format!("{slug}-{i}")
+                };
+                let root = parent.join(&dest);
+                if catalog.projects.values().any(|p| p.root == root) {
+                    continue;
+                }
+                // Publish the fully prepared repo without overwriting even an empty existing folder.
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                let publish = rustix::fs::renameat_with(
+                    &dir,
+                    &src,
+                    &dir,
+                    dest.as_str(),
+                    rustix::fs::RenameFlags::NOREPLACE,
+                )
+                .map_err(io::Error::from);
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                let publish = match dir.symlink_metadata(&dest) {
+                    Ok(_) => Err(io::ErrorKind::AlreadyExists.into()),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => dir.rename(&src, &dir, &dest),
+                    Err(e) => Err(e),
+                };
+                match publish {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e.into()),
+                }
+                let project = Project {
+                    id: Uuid::new_v4(),
+                    name: title.into(),
+                    root,
+                    metadata: Default::default(),
+                };
+                catalog.projects.insert(project.id, project.clone());
+                return Ok(project);
+            }
+            Err(Error::Refused(
+                "all managed project folder names are in use".into(),
+            ))
+        })
+        .inspect(|_| {
+            let _ = stage.keep();
         })
     }
 
@@ -176,7 +240,18 @@ impl Workbench {
             let mut guards = vec![];
             for (id, slot) in chats.iter().zip(&slots) {
                 guards.push(slot.owner.try_lock().map_err(|_| Error::Busy)?);
-                let h = self.0.chats.history(*id)?;
+                let h = match self.0.chats.history(*id) {
+                    Ok(h) => h,
+                    // A caller may have reserved a directory before native startup failed. Carry this
+                    // unpublished ID to the new owner along with its folder. A staged fork must finish first.
+                    Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
+                        if self.0.chats.fork_claimed(*id)? {
+                            return Err(Error::Busy);
+                        }
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                };
                 if h.turns.iter().any(|t| t.status == TurnStatus::Running)
                     || !h.pending_requests.is_empty()
                     || h.pending_rollback.is_some()

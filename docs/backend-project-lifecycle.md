@@ -6,7 +6,7 @@
 | --- | --- |
 | `POST /projects/mutate` | `type` 取 `project.create`、`project.update` 或 `project.delete`。携带 `commandId` 和 `projectId`。同一命令重取原回执，同 ID 改内容返回错误。标题、物理根、设置、脚本、固定、归档、跟踪目录及增删同事务提交。归档可恢复。 |
 | `POST /projects/ensure-scratch` | 返回带 `id` 和 `root` 的 Scratch 项目。重复取得时 ID 相同。从 Scratch 创建的独立聊天各有单独目录，同目录分叉沿用该目录。 |
-| `POST /projects/create-new` | 发送 `{"name":"My App"}`。用独占 mkdir 选择名字，写 README 和图标、初始化 Git 并尝试首次提交。提交失败时仍返回项目和 `commit_error`，保留暂存文件。 |
+| `POST /projects/create-new` | 发送 `{"name":"My App"}`。在临时目录写 README 和图标、初始化 Git 并尝试首次提交。macOS 以禁止覆盖的原子改名发布，重名自动选择后缀。提交失败时仍返回项目和 `commit_error`，保留暂存文件。 |
 | `POST /projects/create-from-thread` | 发送 `{"chat":"<uuid>"}`。同物理目录里所有 Scratch 聊天连同已归档分叉，以同一目录事务晋升。未完成回合、队列、原生请求或正在修改的会话会阻止晋升。 |
 | `GET /projects/{id}/chats`、`POST /projects/{id}/chats` | 项目改根后新聊天用新根，老聊天保留原目录、原生 ID 和历史。任务工作树也从相同的已存归属识别。重启的队列扫描不依赖客户端先打开会话。 |
 | `project.delete` | 有聊天时须明确给出 `force: true`。删除工作台入口并关闭会话。文件和聊天日志保留。再次注册该路径获得新项目 ID，删除项目的聊天不会出现在新项目。 |
@@ -15,4 +15,6 @@ Kar 在第一个工作台授权根下创建 `Kar/scratch` 和 `Kar/projects`。�
 
 ## 验收
 
-macOS 编译命令为 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo check --locked --tests`。集中复验运行 `cargo test --locked --test chat_restart -- workbench-projects`。其中 `tests/support/project_lifecycle.rs` 走独立 Kar HTTP 服务，检查带重试的目录迁移、重启后无人打开页面时自动投递且只发一次、Scratch 目录隔离、就地晋升、提交失败回执及安全删除后的文件和重新注册可见性。Codex stdio 对端为协议替身。该用例尚待执行。
+macOS 编译命令为 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo check --locked --tests`。集中复验运行 `cargo test --locked --test chat_restart -- workbench-projects`。克隆中的项目删除另由 `cargo test --locked --test workbench_forge` 内的 Git smudge 阻塞场景覆盖，核对取消后无法发布、重复删除及用户已有文件保留。
+
+其中 `tests/support/project_lifecycle.rs` 走独立 Kar HTTP 服务，检查带重试的目录迁移、重启后无人打开页面时自动投递且只发一次、Scratch 目录隔离、同目录归档分叉就地晋升、Git 初次提交成功与失败回执及安全删除后的文件和重新注册可见性。Codex stdio 对端为协议替身。该用例尚待执行。

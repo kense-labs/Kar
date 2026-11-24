@@ -63,6 +63,45 @@ fn next(db: &mut ForgeState) -> crate::Result<u64> {
 fn notify(app: &Workbench) {
     app.0.clones.events.send_modify(|n| *n = n.wrapping_add(1));
 }
+// Invalidate the worker's publication guard in the same transaction as the project tombstone.
+pub(in crate::workbench) fn mark_discarded(db: &mut ForgeState, id: Uuid) {
+    if let Some(job) = db.clones.get_mut(&id) {
+        job.phase = "discarding".into();
+    }
+}
+pub(in crate::workbench) async fn finish_discard(app: &Workbench, id: Uuid) -> crate::Result<()> {
+    let job = app
+        .0
+        .catalog
+        .lock()
+        .unwrap()
+        .forge
+        .clones
+        .get(&id)
+        .filter(|j| j.phase == "discarding")
+        .cloned();
+    let Some(job) = job else {
+        return Ok(());
+    };
+    notify(app);
+    let control = app.0.clones.tasks.lock().unwrap().get(&id).cloned();
+    if let Some(mut control) = control {
+        control.cancel.send_replace(true);
+        let _ = control.done.wait_for(|v| *v).await;
+    }
+    worker::reclaim_stage(app, &job);
+    app.update(|db| {
+        if db
+            .forge
+            .clones
+            .get(&id)
+            .is_some_and(|j| j.phase == "discarding" && j.attempt == job.attempt)
+        {
+            db.forge.clones.remove(&id);
+        }
+        Ok(())
+    })
+}
 pub(in crate::workbench) fn ready(app: &Workbench, id: Uuid) -> crate::Result<()> {
     if app
         .0
@@ -85,6 +124,11 @@ pub(in crate::workbench) fn recover(app: &Workbench) -> crate::Result<()> {
     }
     app.update(|db| {
         for (id, prior) in &jobs {
+            if prior.phase == "discarding" {
+                worker::reclaim_stage(app, prior);
+                db.forge.clones.remove(id);
+                continue;
+            }
             if prior.phase == "done" {
                 db.forge.clones.remove(id);
                 continue;
@@ -149,6 +193,9 @@ fn begin(
         return Err(ForgeError::remote(409, "project clone is already running"));
     }
     let job = app.update(|db| {
+        if db.lifecycle.is_deleted(id) {
+            return Err(Error::Refused("project ID was deleted".into()));
+        }
         if let Some(old) = db.forge.clones.get(&id) {
             if old.phase == "running" || old.phase == "done" || old.input.dest != input.dest {
                 return Err(Error::Busy);
@@ -194,15 +241,12 @@ fn begin(
             ended: None,
             sequence: next(&mut db.forge)?,
         };
-        db.projects.insert(
+        db.projects.entry(id).or_insert_with(|| Project {
             id,
-            Project {
-                id,
-                name: title,
-                root: input.dest,
-                metadata: Default::default(),
-            },
-        );
+            name: title,
+            root: input.dest,
+            metadata: Default::default(),
+        });
         db.forge.clones.insert(id, job.clone());
         Ok(job)
     })?;
@@ -321,7 +365,7 @@ fn snapshots(app: &Workbench) -> Vec<Value> {
         .forge
         .clones
         .values()
-        .filter(|j| app.allowed(&j.input.dest).is_ok())
+        .filter(|j| j.phase != "discarding" && app.allowed(&j.input.dest).is_ok())
         .collect();
     jobs.sort_by_key(|j| j.sequence);
     jobs.into_iter().map(Job::snapshot).collect()

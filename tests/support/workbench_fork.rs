@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command, time::Duration};
 use uuid::Uuid;
 
-fn git(dir: &Path, args: &[&str]) {
+pub(super) fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .current_dir(dir)
         .args([
