@@ -175,6 +175,27 @@ pub(crate) fn env_path(opts: &SessionOptions, name: &str) -> Option<PathBuf> {
 }
 /// Pi takes a file on argv, while callers resume by the native session ID.
 pub(crate) fn pi_file(cwd: &Path, opts: &SessionOptions, id: &str) -> Result<PathBuf> {
+    if let Some(path) = &opts.pi_resume_file {
+        if !path.is_absolute() || path.canonicalize()? != *path || !path.is_file() {
+            return Err(Error::Refused("imported Pi transcript moved".into()));
+        }
+        let mut header = String::new();
+        BufReader::new(std::fs::File::open(path)?.take(64 * 1024)).read_line(&mut header)?;
+        let row: Value = serde_json::from_str(&header)?;
+        if row["type"] != "session"
+            || row["id"] != id
+            || row["cwd"]
+                .as_str()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .as_deref()
+                != Some(cwd)
+        {
+            return Err(Error::Refused(
+                "imported Pi session identity changed".into(),
+            ));
+        }
+        return Ok(path.clone());
+    }
     let agent_dir = instructions::agent_dir(opts, cwd)?;
     let path = cwd.to_string_lossy();
     let slug = path

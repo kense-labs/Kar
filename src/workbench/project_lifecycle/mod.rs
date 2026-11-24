@@ -47,6 +47,19 @@ pub(super) struct State {
 }
 
 impl State {
+    pub(super) fn can_bind_import(&self, project: Uuid, chat: Uuid, cwd: &Path) -> bool {
+        self.owners
+            .get(&chat)
+            .is_none_or(|b| b.project == project && b.cwd == cwd && b.fork.is_none())
+    }
+    pub(super) fn bind_import(&mut self, project: Uuid, chat: Uuid, cwd: PathBuf) {
+        self.owners.entry(chat).or_insert(Binding {
+            project,
+            cwd,
+            fork: None,
+        });
+    }
+
     pub(in crate::workbench) fn is_deleted(&self, id: Uuid) -> bool {
         self.deleted_projects.contains(&id)
     }

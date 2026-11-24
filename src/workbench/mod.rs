@@ -1,5 +1,6 @@
 //! A local workbench that shares Kar's saved chats, their native sessions and event cursors.
 mod access;
+mod agent_sessions;
 mod assets;
 mod chat_controls;
 mod devices;
@@ -56,6 +57,8 @@ struct Catalog {
     forge: forge::ForgeState,
     #[serde(default)]
     git_actions: BTreeMap<Uuid, git_actions::Record>,
+    #[serde(default)]
+    imported_transcripts: BTreeMap<Uuid, BTreeMap<PathBuf, (String, Uuid)>>,
     projects: BTreeMap<Uuid, Project>,
     #[serde(default)]
     lifecycle: project_lifecycle::State,

@@ -12,7 +12,7 @@ pub use log::ChatUpdate;
 pub use timeline::{Edit as ChatEdit, Frame as ChatFrame, MorphProgress};
 mod fork;
 pub use fork::{ForkOrigin, ForkWorktreeBase};
-mod import;
+pub(crate) mod import;
 pub use checkpoint::{
     ChangeKind, Checkpoint, CheckpointPoint, FileChange, RollbackReport, TurnDiff,
 };
@@ -43,6 +43,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatInfo {
     pub id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported: Option<import::native::Origin>,
     pub workspace: PathBuf,
     /// Stable checkout identity for Kar-managed worktrees, including chats in a subdirectory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +91,9 @@ impl ChatInfo {
     }
     fn options(&self) -> SessionOptions {
         let mut opts = SessionOptions::new(&self.workspace);
+        if self.protocol == Protocol::Pi && let Some(origin) = &self.imported && origin.runtime == self.runtime && origin.native_id == self.native_id {
+            opts.pi_resume_file = Some(origin.transcript.clone());
+        }
         opts.model = self.model.clone();
         opts.settings = self.settings.clone();
         if self.protocol == Protocol::KimiKap
@@ -411,6 +416,7 @@ impl ChatStore {
             ));
         }
         let info = ChatInfo {
+            imported: None,
             id,
             workspace: opts.cwd.clone(),
             worktree_id: worktree.as_ref().map(|(id, _)| *id),

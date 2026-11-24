@@ -582,6 +582,7 @@ impl ChatStore {
                 worktree_base,
             };
             let child = ChatInfo {
+                imported: None,
                 id: child_id,
                 workspace: opts.cwd.clone(),
                 worktree_id: destination.as_ref().map(|d| d.id).or(parent.worktree_id),
@@ -767,6 +768,7 @@ mod staged_route_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = ChatStore::open(dir.path().join("store")).unwrap();
         let parent = ChatInfo {
+            imported: None,
             id: Uuid::new_v4(),
             workspace: dir.path().into(),
             worktree_id: None,

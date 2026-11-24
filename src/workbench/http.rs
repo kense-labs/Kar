@@ -85,6 +85,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
             get(handoffs).post(handoff),
         )
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
+        .merge(super::agent_sessions::routes())
         .merge(super::chat_controls::routes())
         .merge(super::thread_find::routes())
         .merge(super::thread_state::routes())

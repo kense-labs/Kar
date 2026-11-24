@@ -39,6 +39,8 @@ pub(super) fn cases() -> Vec<Case> {
             "--test",
             "workbench_handoff",
             "--test",
+            "workbench_agent_sessions",
+            "--test",
             "workbench_acceptance",
         ],
         "macOS, actual Kar, local Git repositories, PTY and Kantor files; provider and hosting protocol fixtures",

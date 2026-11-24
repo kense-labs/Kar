@@ -351,7 +351,7 @@ fn default_host(host: &str) -> Option<(&'static str, String)> {
     };
     Some((kind, base))
 }
-fn remote_identity(remote: &str) -> Result<(String, String), ForgeError> {
+pub(super) fn remote_identity(remote: &str) -> Result<(String, String), ForgeError> {
     let (host, path) = if remote.contains("://") {
         let url = Url::parse(remote).map_err(|_| ForgeError::bad("invalid origin URL"))?;
         if !matches!(url.scheme(), "https" | "http" | "ssh" | "git") {

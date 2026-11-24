@@ -42,6 +42,7 @@ pub enum ChatUpdate {
         id: Uuid,
         reason: String,
     },
+    Imported { turns: Vec<ChatTurn> },
     Inherited {
         turns: Vec<ChatTurn>,
     },
@@ -517,6 +518,17 @@ impl State {
                 notice.activity.apply(&frame, &self.info.native_id);
                 self.seen
                     .insert(frame.cursor.stream_id, frame.cursor.after_seq);
+            }
+            ChatUpdate::Imported { turns } => {
+                if self.info.imported.is_none() || self.stream.is_some() || !self.turns.is_empty() || turns.is_empty() {
+                    return Err(Error::Protocol("misplaced native transcript history".into()));
+                }
+                for (index, turn) in turns.iter().enumerate() {
+                    if turn.status == TurnStatus::Running || turn.items.is_empty() || self.ids.insert(turn.id, index).is_some() {
+                        return Err(Error::Protocol("invalid imported turn".into()));
+                    }
+                }
+                self.turns = turns;
             }
             ChatUpdate::Inherited { turns } => {
                 let origin = self

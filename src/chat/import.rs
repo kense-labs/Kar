@@ -1,3 +1,4 @@
+pub(crate) mod native;
 use super::{ChatInfo, ChatStore, log};
 use crate::{
     ApprovalMode, Direction, Error, Protocol, Record, RecordKind, Result,
@@ -44,6 +45,7 @@ impl ChatStore {
         }
         let worktree = crate::workbench_git::pin_checkout(&workspace)?;
         let info = ChatInfo {
+            imported: None,
             worktree_id: worktree.as_ref().map(|(id, _)| *id),
             forked_from: None,
             id,

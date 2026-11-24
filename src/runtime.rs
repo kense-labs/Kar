@@ -406,6 +406,8 @@ pub struct AcpTimeouts {
 pub struct SessionOptions {
     pub cwd: PathBuf,
     pub resume: Option<String>,
+    /// Exact session file for Pi imports. Its native ID and workspace must match on every reopen.
+    pub pi_resume_file: Option<PathBuf>,
     pub model: Option<String>,
     /// Additional native CLI arguments for this launch. Supply them again on
     /// resume; Kar keeps them out of saved chat configuration and recordings.
@@ -452,6 +454,7 @@ impl SessionOptions {
         Self {
             cwd: cwd.into(),
             resume: None,
+            pi_resume_file: None,
             model: None,
             launch_args: Vec::new(),
             settings: Default::default(),

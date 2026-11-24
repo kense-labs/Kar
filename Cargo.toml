@@ -68,6 +68,8 @@ toml = { version = "0.9", default-features = false, features = ["parse", "std", 
 json_comments = "0.2"
 cap-std = "3"
 cap-fs-ext = "3"
+ruzstd = "0.9.1"
+sqlite-core = "0.12.0"
 
 [[test]]
 name = "protocol"
@@ -159,3 +161,8 @@ path = "tools/backend-public.rs"
 [[example]]
 name = "backend_coverage"
 path = "tools/backend-coverage.rs"
+
+[[test]]
+name = "workbench_agent_sessions"
+path = "tests/workbench_agent_sessions.rs"
+harness = false
