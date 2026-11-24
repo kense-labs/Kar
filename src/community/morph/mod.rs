@@ -123,6 +123,11 @@ impl Morph {
     pub async fn open(&self, mut options: SessionOptions) -> Result<Session> {
         let journal = Journal::new(options.retained_bytes)?;
         options.settings.validate(crate::Protocol::Morph, "morph")?;
+        if !options.launch_args.is_empty() {
+            return Err(Error::Unsupported(
+                "Morph's shared Console owns its launch arguments".into(),
+            ));
+        }
         if !options.env.is_empty()
             || !options.unset_env.is_empty()
             || !options.mcp_servers.is_empty()

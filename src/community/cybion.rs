@@ -101,6 +101,11 @@ impl Cybion {
         effort: Option<&str>,
     ) -> Result<Session> {
         let journal = Journal::new(options.retained_bytes)?;
+        if !options.launch_args.is_empty() {
+            return Err(Error::Unsupported(
+                "Cybion workers own their launch arguments".into(),
+            ));
+        }
         if !options.mcp_servers.is_empty()
             || !options.env.is_empty()
             || !options.unset_env.is_empty()

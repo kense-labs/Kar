@@ -150,6 +150,9 @@ fn declaration(
         d.refused_session_options
             .insert("mcp_server_credentials", reason);
     }
+    if let Some(reason) = crate::options::launch_args::refusal(protocol, id) {
+        d.refused_session_options.insert("launch_args", reason);
+    }
     const COUNTS: ContextUsageCapability = ContextUsageCapability {
         tokens: true,
         context_window: true,
@@ -236,8 +239,6 @@ fn declaration(
             d.task_event_types = Some(&[Agent, Shell]);
             if protocol == Dsh {
                 d.native_session_file = Some(true);
-                d.refused_session_options
-                    .insert("launch_args", "extra DSH launch arguments");
                 d.subagent_results = results(None, Some(ChildText));
             } else {
                 d.subagent_results = results(Some(ParentToolResult), Some(ChildText));

@@ -25,6 +25,8 @@ mod environment;
 mod grok_turns;
 #[path = "protocol/installation.rs"]
 mod installation;
+#[path = "protocol/launch_args.rs"]
+mod launch_args;
 #[path = "protocol/mcp_handoff.rs"]
 mod mcp_handoff;
 #[path = "protocol/opencode_steering.rs"]
@@ -1454,7 +1456,13 @@ async fn manual_compaction_controls() -> kar::Result<()> {
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|a| a == "peer")
+        && let Some(path) = std::env::var_os("KAR_TEST_SESSION_ARGV")
+    {
+        std::fs::write(path, serde_json::to_vec(&args[1..]).unwrap()).unwrap();
+    }
     match args.get(1).map(String::as_str) {
+        Some("launch-args") => return launch_args::run().await.unwrap(),
         Some("claude-mcp-native") => return mcp_handoff::claude().await,
         Some("qoder-mcp-native") => return mcp_handoff::qoder().await,
         Some("stdio-echo-once") => return mcp_handoff::stdio(true),
@@ -1534,6 +1542,7 @@ async fn main() {
         return;
     }
     environment::exercise(&std::env::current_exe().unwrap());
+    launch_args::run().await.unwrap();
     account::exercise().await;
     provider::exercise().await;
     qwen_http_mcp_version().await;

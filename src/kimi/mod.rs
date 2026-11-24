@@ -61,6 +61,7 @@ pub(crate) async fn open(
     allow_acp: bool,
     recover_turn: Option<&crate::chat::ChatTurn>,
 ) -> Result<Session> {
+    crate::options::launch_args::validate(rt, &opts, false)?;
     if opts
         .resume
         .as_deref()

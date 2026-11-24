@@ -184,6 +184,8 @@ DSH 0.2.2-rc.3 起在 macOS 和 Linux 上支持 `--add-dir`。目录按会话加
 
 同一工作区可以为不同聊天设置独立的子进程环境。例如 `kar chat new codex --unset-env HTTP_PROXY --unset-env HTTPS_PROXY` 会移除这个聊天继承的两个代理变量。Rust 调用 `options.remove_env("HTTP_PROXY")?`。随后写入 `options.env` 的显式值优先，空字符串也是一个值。聊天只保存要移除的变量名，重启和分叉都会沿用。临时的环境值由宿主在 `resume_with` 时重新提供。托管在共享远端进程中的 Morph 和 Cybion 会拒绝进程环境设置。
 
+原生进程的额外启动参数通过 `SessionOptions::launch_args` 或可重复的 `--launch-arg` 传入。每个值对应一个 argv 项，包含空格的值也会原样传递。例如 `kar open codex --launch-arg=-c --launch-arg='model_reasoning_effort="low"'`。参数仅作用于本次启动，进程重启后可在 `kar chat resume` 重新提供。Kar 检查各适配器自己管理的协议、身份和权限参数。Pi、DSH、Morph 和 Cybion 会明确拒绝额外参数。
+
 需要结构化输出时，在 `kar run` 或 `kar chat new` 传入 `--output-schema '<JSON 对象>'`，也可以设置 `SessionOptions.settings.output_schema`。Codex 把 schema 传给每次由宿主发起的回合，结果从助手文本读取。Codex 自主目标回合遵循供应商自己的设置。Claude 使用原生 `--json-schema`；Grok ACP 使用原生提示元数据。供应商返回的结构化结果可从 `TurnReport.structured_output`、持久化的 `ChatTurn.structured_output` 和实时事件读取。未返回值和显式 JSON `null` 可以区分。Grok 返回的 schema 校验失败记为 `output_schema`。聊天恢复和队列投递会沿用已保存的 schema。Codex、Claude 已用真实程序验证跨进程恢复，Grok 已在 ACP 协议测试中验证。
 
 ### 恢复会话时的提示词

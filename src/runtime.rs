@@ -102,7 +102,7 @@ impl Runtime {
         version: Option<&str>,
     ) -> Result<Session> {
         self.placement.resolve(self.execution())?;
-        crate::options::launch_args::validate(self, &options.launch_args)?;
+        crate::options::launch_args::validate(self, &options, false)?;
         if self.protocol == Protocol::Dsh {
             let release = crate::dsh::release(self, &options, version).await?;
             let version = release.to_string();
@@ -158,7 +158,7 @@ impl Runtime {
         child: Option<uuid::Uuid>,
     ) -> Result<Session> {
         self.placement.resolve(self.execution())?;
-        crate::options::launch_args::validate(self, &options.launch_args)?;
+        crate::options::launch_args::validate(self, &options, true)?;
         if source.trim().is_empty()
             || through.is_some_and(|s| s.trim().is_empty())
             || options.resume.is_some()

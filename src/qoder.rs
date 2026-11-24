@@ -139,6 +139,7 @@ pub(crate) async fn prepare(
         validate_arg(arg)?;
         args.push(arg.into());
     }
+    args.extend(opts.launch_args.iter().cloned());
     if let Some(mcp) = mcp {
         args.extend(["--mcp-config".into(), path(mcp)?]);
     }
@@ -166,7 +167,7 @@ pub(crate) async fn prepare(
         daemon_args,
     })
 }
-fn validate_arg(arg: &str) -> Result<()> {
+pub(crate) fn validate_arg(arg: &str) -> Result<()> {
     let name = arg.split('=').next().unwrap_or(arg);
     let mut flag = String::new();
     if name.starts_with("--") {

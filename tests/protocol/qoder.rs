@@ -6,6 +6,12 @@ const CREDENTIAL: &str = "only-the-worker-knows-this";
 const PRIVATE_DATA: &str = "private-account-identity";
 
 fn identity(args: &[String]) -> String {
+    assert_eq!(
+        args.iter()
+            .filter(|a| a.as_str() == "--log-level=warn")
+            .count(),
+        1
+    );
     let (flag, id) = args
         .iter()
         .filter_map(|a| a.split_once('='))
@@ -164,6 +170,7 @@ pub(super) async fn sessions() -> kar::Result<()> {
         let dir = tempfile::tempdir()?;
         let runtime = Runtime::new("qoder", std::env::current_exe()?, &[], Protocol::Qoder);
         let mut opts = SessionOptions::new(dir.path());
+        opts.launch_args.push("--log-level=warn".into());
         opts.env
             .insert("KAR_FIXTURE_QODER_VERSION".into(), version.into());
         opts.env

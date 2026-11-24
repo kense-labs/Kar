@@ -232,3 +232,8 @@ Morph 与 Cybion 另以 Rust 测试对端核对控制回执。Pi RPC 的协议�
 | OpenCode · `5c30b90` | macOS arm64 和 Ubuntu arm64 各跑 1.19.5、2.2.7。四组均通过原生已收件、Kar 回执未写入的强杀场景 | 独立查询原生历史，首条输入的原生消息 ID 有别于 Kar 提交的 UUID，恢复后保留待确认。队列继续处理其余两条。原生历史与模型请求均按预期顺序且各一次。两客户端分别重建了 v1 的 32 条和 v2 的 36 条持久事件，含此前的文件读取结果。 |
 
 Qwen 直接重投同一个 UUID 会产生两个模型请求，且原生日志生成不同的用户记录 UUID。这项原生幂等能力的限制另行登记。上述测试保留了 Kar 已发送但回执丢失的证据边界。
+## macOS 会话启动参数，待统一验收
+
+固定上游运行时 `2b15859a13dcc50e8b66cbaee5a007832aa00e08` 的 `contracts/session-options.ts` 声明每次会话可传入 `launchArgs`。Kar 的 Rust 字段为 `SessionOptions::launch_args`。Codex 将参数放在 app-server 的配置与最终 stdio 监听器之间，Grok 将参数放在 stdio 子命令之前，Qoder 对进程和 daemon 两种传输都将参数送给实际 worker。Claude、Factory、CodeBuddy、Qwen、Kimi KAP 对协议或会话身份参数有各自的冲突检查。
+
+macOS 协议复验使用 `cargo test --locked --test protocol -- launch-args`，核对原生协议对端实际收到的参数、参数的会话隔离及冲突拒绝。`cargo test --locked --test protocol` 另含 Qoder 1.1.78 与 1.1.83 两种协议对端的 worker 参数断言。Qwen 实机复验使用 `cargo test --locked --test qwen_live session_launch_arguments_are_per_process -- --ignored`，需要已安装的 Qwen Code 和回环模型。这组变更目前只在 macOS 做过编译检查。

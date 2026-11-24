@@ -184,6 +184,7 @@ impl Session {
         version: Option<&str>,
     ) -> Result<Self> {
         let journal = runtime.session_journal(options.retained_bytes)?;
+        crate::options::launch_args::validate(runtime, &options, fork.is_some())?;
         options.settings.validate(runtime.protocol, &runtime.id)?;
         if let Some(reason) =
             crate::options::availability::credential_refusal(runtime.protocol, &runtime.id)
@@ -236,7 +237,15 @@ impl Session {
             |s| s.command(&options),
         )?;
         let mut pi_mcp = None;
-        if runtime.protocol != Protocol::Qoder {
+        let grok_stdio = runtime.protocol == Protocol::Acp
+            && runtime.id == "grok"
+            && runtime.args.last().is_some_and(|a| a == "stdio");
+        if grok_stdio {
+            process
+                .args(&runtime.args[..runtime.args.len() - 1])
+                .args(&options.launch_args)
+                .arg("stdio");
+        } else if runtime.protocol != Protocol::Qoder {
             process.args(&runtime.args);
         }
         if runtime.protocol == Protocol::Acp
@@ -510,6 +519,17 @@ impl Session {
                 if let Some(model) = &options.model {
                     process.arg("--model").arg(model);
                 }
+            }
+            _ => {}
+        }
+        match runtime.protocol {
+            Protocol::Codex if !options.launch_args.is_empty() => {
+                process
+                    .args(&options.launch_args)
+                    .args(["--listen", "stdio://"]);
+            }
+            Protocol::Claude | Protocol::Factory | Protocol::Acp if !grok_stdio => {
+                process.args(&options.launch_args);
             }
             _ => {}
         }

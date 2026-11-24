@@ -74,24 +74,9 @@ impl Web {
             let arg = arg
                 .to_str()
                 .ok_or_else(|| Error::Unsupported("non-UTF8 Kimi argument".into()))?;
-            if matches!(
-                arg.split('=').next(),
-                Some(
-                    "--json"
-                        | "--host"
-                        | "--port"
-                        | "--open"
-                        | "--no-open"
-                        | "--socket"
-                        | "--remote-control"
-                        | "--rc"
-                        | "--dangerous-bypass-auth"
-                        | "--allow-remote-shutdown"
-                        | "--debug-endpoints"
-                        | "--managed-by"
-                        | "--"
-                )
-            ) {
+            if crate::options::launch_args::KIMI_MANAGED
+                .contains(&arg.split('=').next().unwrap_or(arg))
+            {
                 return Err(Error::Unsupported(
                     "overriding a Kimi Web transport option".into(),
                 ));
@@ -99,6 +84,7 @@ impl Web {
         }
         cmd.args(["web", "--json", "--host", "127.0.0.1", "--port", "0"])
             .args(&rt.args)
+            .args(&opts.launch_args)
             .current_dir(&opts.cwd);
         let home = crate::options::env_path(opts, "KIMI_CODE_HOME")
             .or_else(|| opts.session_home().map(|p| p.join(".kimi-code")))
