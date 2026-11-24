@@ -2,6 +2,7 @@
 mod account_cli;
 mod chat_cli;
 mod git_cli;
+mod device_agent_cli;
 mod inventory_cli;
 use inventory_cli::WorkspaceInventory;
 mod mcp;
@@ -37,6 +38,8 @@ enum Action {
         #[arg(long, default_value_t = 0)]
         port: u16,
     },
+    /// Control the single device a workbench chat granted to its agent.
+    DeviceAgent(device_agent_cli::DeviceAgent),
     /// Manage repositories and independent chat worktrees.
     Git(git_cli::Git),
     /// Report installed executables, versions and pre-open session capabilities.
@@ -446,6 +449,7 @@ async fn execute(command: Action) -> Result<()> {
                 })
                 .await?;
         }
+        Action::DeviceAgent(agent) => agent.run().await?,
         Action::Git(git) => git.run()?,
         Action::Mcp {
             cwd,

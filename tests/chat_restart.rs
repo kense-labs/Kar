@@ -1969,7 +1969,7 @@ fn main() {
         workbench_devices::run(mode.as_deref()==Some("workbench-devices-live"));
         return;
     }
-    if std::env::var_os("KAR_DEVICE_TEST_DIR").is_some() && matches!(mode.as_deref(),Some("simctl"|"devices"|"-s"|"-T"|"-list-avds")){
+    if std::env::var_os("KAR_DEVICE_TEST_DIR").is_some() && matches!(mode.as_deref(),Some("simctl"|"devices"|"-s"|"-T"|"-list-avds"|"--find"|"version"|"-version")){
         workbench_devices::peer(&std::env::args().skip(1).collect::<Vec<_>>());return;
     }
     if std::env::args().nth(1).as_deref() == Some("workbench-requests") {

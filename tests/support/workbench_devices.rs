@@ -40,6 +40,8 @@ pub(super) fn peer(args: &[String]) {
         ["devices", "-l"] => {
             println!("List of devices attached\nserial42 device product:fixture model:fixture")
         }
+        ["--find", "simctl"] => println!("/fixture/simctl"),
+        ["version"] | ["-version"] => println!("fixture 1.0"),
         ["-list-avds"] => {}
         [
             "-s",
@@ -85,7 +87,7 @@ async fn scenario(live: bool) {
     let b = client();
     json(
         a.post(format!("{url}/devices/configure"))
-            .json(&json!({"enabled":true,"onboarding_completed":true})),
+            .json(&json!({"enabled":true,"onboarding_completed":true,"agent_access_enabled":true})),
     )
     .await;
     let listed = json(a.get(format!("{url}/devices?inspect_only=true"))).await;
@@ -122,6 +124,7 @@ async fn scenario(live: bool) {
     .await;
     let p = project["id"].as_str().unwrap();
     let mut chats = vec![];
+    let mut grant_files = vec![];
     for _ in 0..2 {
         let chat = Uuid::new_v4();
         json(
@@ -135,6 +138,21 @@ async fn scenario(live: bool) {
         )
         .await;
         assert_eq!(open["chat"], chat.to_string());
+        let config = PathBuf::from(open["agent_config"].as_str().unwrap());
+        let call = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+            .arg("device-agent")
+            .arg("--config")
+            .arg(&config)
+            .arg("detail")
+            .output()
+            .await
+            .unwrap();
+        assert!(call.status.success());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&call.stdout).unwrap()["device_id"],
+            id
+        );
+        grant_files.push(config);
         chats.push(chat);
     }
     let detail = format!("{url}/devices/detail?device_id={id}");
@@ -170,6 +188,7 @@ async fn scenario(live: bool) {
             .json(&json!({"chat":chats[0],"device_id":id})),
     )
     .await;
+    assert!(!grant_files[0].exists() && grant_files[1].is_file());
     let state1 = json(b.get(format!("{url}/devices"))).await;
     assert_eq!(state1["sessions"].as_array().unwrap().len(), 1);
     if live {

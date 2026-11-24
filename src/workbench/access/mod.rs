@@ -57,7 +57,7 @@ fn now() -> u64 {
         .as_millis() as u64
 }
 
-fn credential() -> crate::Result<String> {
+pub(super) fn credential() -> crate::Result<String> {
     let mut bytes = [0; 32];
     getrandom::fill(&mut bytes).map_err(|e| io::Error::other(e.to_string()))?;
     Ok(encode_secret(&bytes))
@@ -70,7 +70,7 @@ fn encode_secret(bytes: &[u8]) -> String {
     }
     out
 }
-fn digest(secret: &str) -> String {
+pub(super) fn digest(secret: &str) -> String {
     format!("{:x}", Sha256::digest(secret.as_bytes()))
 }
 
@@ -161,7 +161,7 @@ impl AccessStore {
     }
 }
 
-fn bearer(headers: &HeaderMap) -> &str {
+pub(super) fn bearer(headers: &HeaderMap) -> &str {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())

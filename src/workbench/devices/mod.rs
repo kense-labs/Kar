@@ -1,6 +1,7 @@
 //! Host-local device discovery, controls, and per-chat claims.
 mod account;
 mod actions;
+mod agent;
 mod native;
 use super::{Workbench, http::ApiError};
 use crate::{Error, Result};
@@ -63,6 +64,11 @@ impl Device {
 }
 #[derive(Clone, Serialize)]
 struct Session {
+    #[serde(skip)]
+    grant: Option<agent::Grant>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_config: Option<PathBuf>,
+    project: Uuid,
     chat: Uuid,
     host_id: &'static str,
     device_id: String,
@@ -107,9 +113,11 @@ impl Live {
     }
 }
 pub(super) struct Service {
+    agents: agent::AgentServer,
     file: PathBuf,
     live: Mutex<Live>,
     events: watch::Sender<Value>,
+    polling: std::sync::atomic::AtomicBool,
 }
 impl Service {
     pub(super) fn open(path: &Path) -> Result<Self> {
@@ -125,9 +133,11 @@ impl Service {
         };
         let events = watch::channel(live.snapshot()).0;
         Ok(Self {
+            agents: agent::AgentServer::new(path)?,
             file,
             live: Mutex::new(live),
             events,
+            polling: false.into(),
         })
     }
     fn publish(&self, s: &mut Live) -> Value {
@@ -137,7 +147,15 @@ impl Service {
         v
     }
     async fn refresh(&self, s: &mut Live) -> Value {
-        let (ios, android) = tokio::join!(native::ios_list(), native::android_list());
+        let before = s.snapshot();
+        let timeout = std::time::Duration::from_secs(20);
+        let (ios, android) = tokio::join!(
+            tokio::time::timeout(timeout, native::ios_list()),
+            tokio::time::timeout(timeout, native::android_list())
+        );
+        let ios = ios.unwrap_or_else(|_| Err(Error::Refused("Xcode discovery timed out".into())));
+        let android =
+            android.unwrap_or_else(|_| Err(Error::Refused("Android discovery timed out".into())));
         for (platform, result) in [("ios", ios), ("android", android)] {
             match result {
                 Ok(rows) => {
@@ -153,7 +171,11 @@ impl Service {
         s.devices
             .sort_by(|a, b| (a.platform, &a.name, &a.id).cmp(&(b.platform, &b.name, &b.id)));
         s.inspected = true;
-        self.publish(s)
+        if before == s.snapshot() {
+            before
+        } else {
+            self.publish(s)
+        }
     }
     async fn resolve(&self, s: &mut Live, id: &str) -> Result<Device> {
         if !s.settings.enabled {
@@ -207,7 +229,31 @@ async fn configure(State(app): State<Workbench>, Json(q): Json<Configure>) -> Re
     if let Some(b) = q.agent_access_enabled {
         next.agent_access_enabled = b;
     }
+    let mut grants = vec![];
+    if next.enabled && next.agent_access_enabled {
+        for row in &s.sessions {
+            if row.grant.is_none() {
+                grants.push((
+                    row.chat,
+                    row.device_id.clone(),
+                    svc.agents.grant(&app).await?,
+                ));
+            }
+        }
+    }
     svc.save(&next)?;
+    for row in &mut s.sessions {
+        if !next.agent_access_enabled || !next.enabled {
+            row.revoke();
+        } else if let Some(i) = grants
+            .iter()
+            .position(|(chat, d, _)| *chat == row.chat && *d == row.device_id)
+        {
+            let grant = grants.swap_remove(i).2;
+            row.agent_config = Some(grant.file.clone());
+            row.grant = Some(grant);
+        }
+    }
     s.settings = next;
     if !s.settings.enabled {
         s.sessions.clear();
@@ -215,7 +261,12 @@ async fn configure(State(app): State<Workbench>, Json(q): Json<Configure>) -> Re
         s.inspected = false;
         s.errors.clear();
     }
-    Ok(Json(svc.publish(&mut s)))
+    let state = svc.publish(&mut s);
+    Ok(Json(if s.settings.enabled {
+        svc.refresh(&mut s).await
+    } else {
+        state
+    }))
 }
 #[derive(Deserialize)]
 struct List {
@@ -233,13 +284,22 @@ async fn list(State(app): State<Workbench>, Query(q): Query<List>) -> Reply<Json
     }
     let svc = &app.0.devices;
     let mut s = svc.live.lock().await;
-    Ok(Json(
-        if s.settings.enabled || q.inspect_only == Some(true) {
-            svc.refresh(&mut s).await
-        } else {
-            s.snapshot()
-        },
-    ))
+    if q.inspect_only == Some(true) {
+        // Inspection must not start an adb daemon, boot a simulator or install tools.
+        let (xcode, adb, emulator) = tokio::join!(
+            native::text("xcrun", &["--find", "simctl"]),
+            native::text("adb", &["version"]),
+            native::text("emulator", &["-version"])
+        );
+        let mut v = s.snapshot();
+        v["hosts"][0]["tool_inspection"] = json!({"simctl":xcode.ok(),"adb":adb.ok().and_then(|s|s.lines().next().map(str::to_string)),"emulator":emulator.ok().and_then(|s|s.lines().next().map(str::to_string))});
+        return Ok(Json(v));
+    }
+    Ok(Json(if s.settings.enabled {
+        svc.refresh(&mut s).await
+    } else {
+        s.snapshot()
+    }))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -330,15 +390,24 @@ async fn open(State(app): State<Workbench>, Json(q): Json<Open>) -> Reply<Json<S
         }
     }
     app.binding(q.project, q.chat)?;
+    let grant = if s.settings.agent_access_enabled {
+        Some(svc.agents.grant(&app).await?)
+    } else {
+        None
+    };
     let session = Session {
+        agent_config: grant.as_ref().map(|g| g.file.clone()),
+        grant,
+        project: q.project,
         chat: q.chat,
         host_id: "local",
         device_id: device.id,
         platform: device.platform,
         opened_at: jiff::Timestamp::now().to_string(),
     };
-    s.sessions
-        .retain(|a| a.chat != q.chat || a.device_id != session.device_id);
+    revoke_matching(&mut s, |v| {
+        v.chat == q.chat && v.device_id == session.device_id
+    });
     s.sessions.push(session.clone());
     svc.publish(&mut s);
     Ok(Json(session))
@@ -349,6 +418,16 @@ struct Close {
     host_id: Option<String>,
     device_id: Option<String>,
     shutdown: Option<bool>,
+}
+fn revoke_matching(s: &mut Live, mut matches: impl FnMut(&Session) -> bool) {
+    s.sessions.retain_mut(|v| {
+        if matches(v) {
+            v.revoke();
+            false
+        } else {
+            true
+        }
+    });
 }
 async fn close(State(app): State<Workbench>, Json(q): Json<Close>) -> Reply<Json<()>> {
     host(q.host_id.as_deref())?;
@@ -364,13 +443,13 @@ async fn close(State(app): State<Workbench>, Json(q): Json<Close>) -> Reply<Json
         if q.shutdown.unwrap_or(false) {
             let d = svc.resolve(&mut s, &id).await?;
             native::shutdown(&d).await?;
-            s.sessions.retain(|v| v.device_id != id);
+            revoke_matching(&mut s, |v| v.device_id == id);
             s.devices
                 .iter_mut()
                 .filter(|d| d.id == id)
                 .for_each(|d| d.booted = false);
         } else {
-            s.sessions.retain(|v| v.device_id != id || v.chat != q.chat);
+            revoke_matching(&mut s, |v| v.device_id == id && v.chat == q.chat);
         }
         svc.publish(&mut s);
     }
@@ -382,7 +461,7 @@ async fn shutdown(State(app): State<Workbench>, Json(q): Json<Target>) -> Reply<
     let mut s = svc.live.lock().await;
     let d = svc.resolve(&mut s, &q.device_id).await?;
     native::shutdown(&d).await?;
-    s.sessions.retain(|v| v.device_id != d.id);
+    revoke_matching(&mut s, |v| v.device_id == d.id);
     svc.refresh(&mut s).await;
     Ok(Json(()))
 }
@@ -416,6 +495,31 @@ async fn screenshot(State(app): State<Workbench>, Query(q): Query<Target>) -> Re
 }
 async fn events(State(app): State<Workbench>) -> Response {
     let rx = app.0.devices.events.subscribe();
+    use std::sync::atomic::Ordering;
+    if !app.0.devices.polling.swap(true, Ordering::AcqRel) {
+        let weak = std::sync::Arc::downgrade(&app.0);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                let Some(inner) = weak.upgrade() else {
+                    return;
+                };
+                let service = &inner.devices;
+                if service.events.receiver_count() == 0 {
+                    service.polling.store(false, Ordering::Release);
+                    if service.events.receiver_count() == 0
+                        || service.polling.swap(true, Ordering::AcqRel)
+                    {
+                        return;
+                    }
+                }
+                let mut state = service.live.lock().await;
+                if state.settings.enabled {
+                    service.refresh(&mut state).await;
+                }
+            }
+        });
+    }
     let feed = futures_util::stream::unfold((rx, true), |(mut rx, initial)| async move {
         if !initial && rx.changed().await.is_err() {
             return None;
