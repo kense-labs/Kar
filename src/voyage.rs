@@ -24,7 +24,9 @@ pub fn import(
         .ok_or_else(|| Error::Protocol("empty voyage".into()))?;
     let header: Value = serde_json::from_str(&first)?;
     if header["kind"] != "header" || header["format"] != "kar-voyage/3" {
-        return Err(Error::Protocol("expected a kar-voyage/3 recording header".into()));
+        return Err(Error::Protocol(
+            "expected a kar-voyage/3 recording header".into(),
+        ));
     }
     let mut summary = VoyageSummary {
         header,
