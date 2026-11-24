@@ -23,6 +23,8 @@ mod child_models;
 mod claude_input;
 #[path = "protocol/codex_catalog.rs"]
 mod codex_catalog;
+#[path = "protocol/crew.rs"]
+mod crew;
 #[path = "protocol/dsh_skills.rs"]
 mod dsh_skills;
 #[path = "protocol/environment.rs"]
@@ -384,6 +386,11 @@ fn peer(protocol: &str) {
                         rpc(json!({}));
                         emit(
                             json!({"method":"turn/completed","params":{"threadId":"session-1","turn":{"id":"t","status":"interrupted"}}}),
+                        );
+                    }
+                    Some("turn/steer") if v["params"]["input"][0]["text"] == "fallback" => {
+                        emit(
+                            json!({"id":req,"error":{"code":-32602,"message":"native control refused"}}),
                         );
                     }
                     Some("turn/steer") => rpc(json!({"turnId":"t"})),
@@ -1608,6 +1615,10 @@ async fn main() {
             .unwrap();
         println!("{p:?} approval, busy, abort and refusal passed");
     }
+    tokio::time::timeout(Duration::from_secs(25), crew::exercise())
+        .await
+        .unwrap()
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(20), cli_contract())
         .await
         .unwrap()

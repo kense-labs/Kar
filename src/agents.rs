@@ -1,8 +1,8 @@
 //! Host-owned, bounded groups of runtime sessions and their turn reports.
 mod recording;
-use crate::{Error, Outcome, Result, Runtime, Session, SessionOptions, Turn};
+use crate::{Delivery, Error, Outcome, Result, Runtime, Session, SessionOptions, Turn};
 use recording::Recorder;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
@@ -11,6 +11,31 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SendMode {
+    #[default]
+    Followup,
+    Steer,
+    Queue,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Landed {
+    Prompted,
+    Steered,
+    Queued,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SendReceipt {
+    pub landed: Landed,
+    /// Highest turn number assigned when the control was accepted.
+    /// Steering adds input to a running turn without allocating another report.
+    pub turns_sent: u64,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentInfo {
@@ -229,7 +254,8 @@ impl Crew {
             }
         });
     }
-    fn agent(&self, id: Uuid) -> Result<Session> {
+    /// Access a child session to inspect its native events or apply a runtime control.
+    pub fn session(&self, id: Uuid) -> Result<Session> {
         self.state
             .lock()
             .unwrap()
@@ -257,9 +283,25 @@ impl Crew {
             .collect()
     }
     pub async fn steer(&self, id: Uuid, message: String) -> Result<()> {
-        self.agent(id)?.steer(message).await
+        self.session(id)?.steer(message).await
     }
     pub async fn send(&self, id: Uuid, message: String, queue: bool) -> Result<u64> {
+        let mode = if queue {
+            SendMode::Queue
+        } else {
+            SendMode::Followup
+        };
+        Ok(self.send_mode(id, message, mode).await?.turns_sent)
+    }
+
+    /// Route follow-ups on the same child and report whether the input started,
+    /// steered or queued a turn. One input identity survives definite refusals.
+    pub async fn send_mode(
+        &self,
+        id: Uuid,
+        message: String,
+        mode: SendMode,
+    ) -> Result<SendReceipt> {
         let (session, gate) = self
             .state
             .lock()
@@ -269,7 +311,9 @@ impl Crew {
             .map(|a| (a.session.clone(), a.send_gate.clone()))
             .ok_or_else(|| Error::Refused("unknown subagent".into()))?;
         let _sending = gate.lock().await;
-        let active = {
+        let active = if matches!(mode, SendMode::Steer) {
+            None
+        } else {
             let mut state = self.state.lock().unwrap();
             let agent = state
                 .agents
@@ -279,25 +323,44 @@ impl Crew {
             agent.active = permit.as_ref().map(Arc::downgrade);
             permit
         };
-        let turn = if queue {
-            session.queue(message).await?.1
-        } else {
-            session.prompt(message).await?
+        let input = Uuid::new_v4();
+        let delivery = match mode {
+            SendMode::Steer => {
+                if !session.capabilities().steering {
+                    return Err(Error::Unsupported("this runtime cannot steer".into()));
+                }
+                session.steer_with_id(input, message).await?;
+                Delivery::Steered
+            }
+            SendMode::Queue => Delivery::Queued {
+                input_id: input,
+                turn: session.queue_with_id(input, message).await?,
+            },
+            SendMode::Followup => followup(&session, input, message).await?,
         };
-        let number = {
-            let mut s = self.state.lock().unwrap();
-            let agent = s
+        let (landed, turn) = match delivery {
+            Delivery::Started(turn) => (Landed::Prompted, Some(turn)),
+            Delivery::Queued { turn, .. } => (Landed::Queued, Some(turn)),
+            Delivery::Steered => (Landed::Steered, None),
+        };
+        let turns_sent = {
+            let mut state = self.state.lock().unwrap();
+            let agent = state
                 .agents
                 .get_mut(&id)
                 .ok_or_else(|| Error::Closed("subagent closed".into()))?;
-            agent.info.turns_sent += 1;
+            if turn.is_some() {
+                agent.info.turns_sent += 1;
+            }
             agent.info.turns_sent
         };
-        self.monitor(id, number, turn, active, None);
-        Ok(number)
+        if let Some(turn) = turn {
+            self.monitor(id, turns_sent, turn, active, None);
+        }
+        Ok(SendReceipt { landed, turns_sent })
     }
     pub async fn interrupt(&self, id: Uuid) -> Result<()> {
-        self.agent(id)?.abort().await
+        self.session(id)?.abort().await
     }
     pub async fn close(&self, id: Uuid) -> Result<()> {
         let agent = self
@@ -340,6 +403,107 @@ impl Crew {
             ) {
                 return ready;
             }
+        }
+    }
+}
+
+async fn followup(session: &Session, input: Uuid, message: String) -> Result<Delivery> {
+    if matches!(session.status(), crate::observe::AgentStatus::Idle { .. }) {
+        match session.prompt_with_id(input, message.clone()).await {
+            Ok(turn) => return Ok(Delivery::Started(turn)),
+            Err(Error::Busy) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    if session.capabilities().steering {
+        match session.steer_with_id(input, message.clone()).await {
+            Ok(()) => return Ok(Delivery::Steered),
+            // The runtime has explicitly refused delivery. A lost reply is
+            // ambiguous and must not lead to another copy of the input.
+            Err(
+                Error::Refused(_) | Error::Unsupported(_) | Error::Busy | Error::ProviderRpc { .. },
+            ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let turn = session.queue_with_id(input, message).await?;
+    Ok(Delivery::Queued {
+        input_id: input,
+        turn,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Protocol, stream::Journal, transport::Command};
+    use serde_json::Value;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn stale_idle_prompt_falls_back_only_on_busy_and_reuses_one_input_id() {
+        for (initial_busy, steer_accepts, queue_accepts) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+            (true, false, false),
+        ] {
+            let (tx, mut rx) = mpsc::channel(2);
+            let session = Session::remote(
+                Protocol::Codex,
+                SessionOptions::new("."),
+                tx,
+                Journal::new(None).unwrap(),
+                "child".into(),
+                Value::Null,
+            );
+            let input = Uuid::new_v4();
+            let send = tokio::spawn(async move { followup(&session, input, "next".into()).await });
+            let Some(Command::Prompt(id, message, _, reply, _)) = rx.recv().await else {
+                panic!("expected an ordinary prompt from the idle observation")
+            };
+            assert_eq!((id, message.text.as_str()), (input, "next"));
+            reply
+                .send(Err(if initial_busy {
+                    Error::Busy
+                } else {
+                    Error::Refused("bad prompt".into())
+                }))
+                .unwrap();
+            if !initial_busy {
+                assert!(matches!(send.await.unwrap(),Err(Error::Refused(s)) if s=="bad prompt"));
+            } else {
+                let Some(Command::Steer(id, message, reply)) = rx.recv().await else {
+                    panic!("expected steer on busy")
+                };
+                assert_eq!((id, message.text.as_str()), (input, "next"));
+                if steer_accepts {
+                    reply.send(Ok(Value::Null)).unwrap();
+                    assert!(matches!(send.await.unwrap(), Ok(Delivery::Steered)));
+                } else {
+                    reply
+                        .send(Err(Error::Refused("cannot steer this turn".into())))
+                        .unwrap();
+                    let Some(Command::Queue(id, message, reply, _)) = rx.recv().await else {
+                        panic!("expected queue after explicit steer refusal")
+                    };
+                    assert_eq!((id, message.text.as_str()), (input, "next"));
+                    if queue_accepts {
+                        reply.send(Ok(())).unwrap();
+                        assert!(
+                            matches!(send.await.unwrap(),Ok(Delivery::Queued{input_id,..}) if input_id==input)
+                        );
+                    } else {
+                        reply
+                            .send(Err(Error::Refused("queue is closed".into())))
+                            .unwrap();
+                        assert!(
+                            matches!(send.await.unwrap(),Err(Error::Refused(s)) if s=="queue is closed")
+                        );
+                    }
+                }
+            }
+            assert!(rx.recv().await.is_none());
         }
     }
 }

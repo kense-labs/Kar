@@ -1,4 +1,7 @@
-use kar::{Runtime, SessionOptions, agents::Crew};
+use kar::{
+    Runtime, SessionOptions,
+    agents::{Crew, Landed, SendMode},
+};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -188,15 +191,42 @@ impl Server {
             "send" => {
                 let id = id()?;
                 let msg = argument(a, "message")?.to_owned();
-                match a["mode"].as_str().unwrap_or("followup") {
-                    "steer" => {
-                        self.crew.steer(id, msg).await.map_err(|e| e.to_string())?;
-                        Ok(json!({"id":id,"steered":true}))
+                let mode = a
+                    .get("mode")
+                    .map(|v| serde_json::from_value::<SendMode>(v.clone()))
+                    .transpose()
+                    .map_err(|_| "mode must be followup, steer or queue")?
+                    .unwrap_or_default();
+                match self.crew.send_mode(id, msg, mode).await {
+                    Ok(receipt) => {
+                        let mut value = json!({"id":id,"kind":"accepted","landed":receipt.landed});
+                        if receipt.landed == Landed::Steered {
+                            value["steered"] = true.into();
+                        } else {
+                            value["turn"] = receipt.turns_sent.into();
+                        }
+                        Ok(value)
                     }
-                    mode @ ("queue" | "followup") => Ok(
-                        json!({"id":id,"turn":self.crew.send(id,msg,mode=="queue").await.map_err(|e|e.to_string())?}),
-                    ),
-                    _ => Err("unknown send mode".into()),
+                    Err(error) => {
+                        let code = match &error {
+                            kar::Error::Unsupported(_) => "unsupported",
+                            kar::Error::Busy => "busy",
+                            kar::Error::Closed(_) => "closed",
+                            kar::Error::Refused(reason)
+                                if reason == "active agent limit reached" =>
+                            {
+                                "running_limit"
+                            }
+                            kar::Error::Refused(reason) if reason == "no active turn" => {
+                                "no_active_turn"
+                            }
+                            kar::Error::Refused(_) => "runtime_refused",
+                            _ => "error",
+                        };
+                        Ok(
+                            json!({"kind":"rejected","id":id,"code":code,"reason":error.to_string()}),
+                        )
+                    }
                 }
             }
             "wait" => {
@@ -301,6 +331,8 @@ pub(super) async fn serve(
                     let handle=calls.spawn(async move{
                         let id=&request["id"];
                         let result=match server.tool(&request["params"]).await{
+                            Ok(value) if matches!(value["kind"].as_str(), Some("refused" | "rejected")) =>
+                                json!({"isError":true,"structuredContent":value,"content":[{"type":"text","text":value["reason"]}]}),
                             Ok(value)=>json!({"structuredContent":value,"content":[{"type":"text","text":value.to_string()}]}),
                             Err(message)=>json!({"isError":true,"content":[{"type":"text","text":message}]}),
                         };
