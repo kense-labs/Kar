@@ -74,7 +74,7 @@ async fn native_root_request_matches_the_model_and_expires_on_close() {
     let http = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let work = dir.path().join("work");
     std::fs::create_dir(&work).unwrap();
-    let bin = std::env::var_os("OAR_CLAUDE_BIN")
+    let bin = std::env::var_os("KAR_CLAUDE_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| "claude".into());
     let secret = "request-redaction-fixture-321";
@@ -86,7 +86,7 @@ async fn native_root_request_matches_the_model_and_expires_on_close() {
         ("ANTHROPIC_BASE_URL", &url),
         ("ANTHROPIC_API_KEY", "only-a-fixture-key"),
         ("ANTHROPIC_AUTH_TOKEN", ""),
-        ("OAR_FIXTURE_TOKEN", secret),
+        ("KAR_FIXTURE_TOKEN", secret),
     ] {
         opts.env.insert(name.into(), value.into());
     }
@@ -116,7 +116,7 @@ async fn native_root_request_matches_the_model_and_expires_on_close() {
         ));
         opts.env
             .insert("PATH".into(), std::env::join_paths(dirs).unwrap());
-        opts.env.insert("OAR_CLAUDE_BIN".into(), "".into());
+        opts.env.insert("KAR_CLAUDE_BIN".into(), "".into());
         launcher
     };
     #[cfg(unix)]
@@ -174,7 +174,7 @@ async fn native_root_request_matches_the_model_and_expires_on_close() {
             {
                 o.env.insert("PATH".into(), "/usr/bin:/bin".into());
                 o.env.insert(
-                    "OAR_CLAUDE_BIN".into(),
+                    "KAR_CLAUDE_BIN".into(),
                     dir.path().join("missing-cli").into_os_string(),
                 );
             }

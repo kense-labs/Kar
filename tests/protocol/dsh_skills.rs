@@ -36,7 +36,7 @@ pub(super) fn peer(mode: &str, args: &[String]) {
         fs::canonicalize(entry["config"]["cwd"].as_str().unwrap()).unwrap(),
         fs::canonicalize(env::current_dir().unwrap()).unwrap()
     );
-    println!("OAR-DSH-SKILLS loaded");
+    println!("KAR-DSH-SKILLS loaded");
     let packet = match mode {
         "partial" => {
             json!({"complete":false,"skills":[{"name":"virtual","source":"runtime","invocation":{"modelInvocable":false,"userInvocable":false},"body":"private instructions"}]})
@@ -51,7 +51,7 @@ pub(super) fn peer(mode: &str, args: &[String]) {
         }
         _ => unreachable!(),
     };
-    println!("OAR-DSH-SKILLS {packet}");
+    println!("KAR-DSH-SKILLS {packet}");
 }
 
 pub(super) async fn run() -> Result<()> {
@@ -64,12 +64,12 @@ pub(super) async fn run() -> Result<()> {
     opts.installation.env.insert("NODE_OPTIONS".into(), None);
     opts.installation
         .env
-        .insert("OAR_DSH_BIN".into(), Some(env::current_exe()?.into()));
+        .insert("KAR_DSH_BIN".into(), Some(env::current_exe()?.into()));
     let rt = kar::runtime("dsh")?;
     for mode in ["partial", "bad", "missing", "hang"] {
         opts.installation
             .env
-            .insert("OAR_TEST_DSH_SKILLS".into(), Some(mode.into()));
+            .insert("KAR_TEST_DSH_SKILLS".into(), Some(mode.into()));
         opts.timeout = Some(if mode == "hang" {
             Duration::from_secs(2)
         } else {

@@ -7,7 +7,7 @@ use node_api::{Env, Handle, Read};
 use std::ptr::null_mut;
 
 fn packet(data: &[u8]) {
-    pipe::stdout(&[b"OAR-PI-TOOLS ", data, b"\n"].concat());
+    pipe::stdout(&[b"KAR-PI-TOOLS ", data, b"\n"].concat());
 }
 
 fn report(env: Handle, action: impl FnOnce(&Env) -> Read<()>) -> Handle {

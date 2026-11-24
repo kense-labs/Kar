@@ -185,7 +185,7 @@ async fn respond(state: &State, request: Request<Incoming>) -> Response {
     let new_session;
     let session = if messages.iter().any(|m| m["method"] == "initialize") {
         new_session =
-            HeaderValue::from_str(&format!("oar-host-tools-{}", uuid::Uuid::new_v4().simple()))
+            HeaderValue::from_str(&format!("kar-host-tools-{}", uuid::Uuid::new_v4().simple()))
                 .unwrap();
         Some(&new_session)
     } else {

@@ -45,7 +45,7 @@ pub(super) fn peer(mode: &str, args: &[String]) {
         let _ = io::stderr().lock().write_all(&vec![b'x'; 1024 * 1024 + 1]);
         return;
     }
-    println!("OAR-PI-TOOLS ready");
+    println!("KAR-PI-TOOLS ready");
     println!(
         "{}",
         json!({"type":"extension_ui_request","id":"registry-dialog","method":"select"})
@@ -76,7 +76,7 @@ pub(super) fn peer(mode: &str, args: &[String]) {
         "missing_list" => json!({"active":[]}),
         _ => unreachable!(),
     };
-    println!("OAR-PI-TOOLS {data}");
+    println!("KAR-PI-TOOLS {data}");
 }
 pub(super) async fn run() -> Result<()> {
     let temp = tempfile::tempdir()?;
@@ -85,12 +85,12 @@ pub(super) async fn run() -> Result<()> {
     opts.installation.cwd = Some(temp.path().into());
     opts.installation
         .env
-        .insert("OAR_PI_BIN".into(), Some(std::env::current_exe()?.into()));
+        .insert("KAR_PI_BIN".into(), Some(std::env::current_exe()?.into()));
     opts.installation
         .env
-        .insert("OAR_PI_AGENT_DIR".into(), Some("profile".into()));
+        .insert("KAR_PI_AGENT_DIR".into(), Some("profile".into()));
     opts.installation.env.insert("NODE_OPTIONS".into(), None);
-    opts.installation.env.insert("OAR_PI_SDK_DIR".into(), None);
+    opts.installation.env.insert("KAR_PI_SDK_DIR".into(), None);
     for mode in [
         "mixed",
         "empty",
@@ -104,7 +104,7 @@ pub(super) async fn run() -> Result<()> {
     ] {
         opts.installation
             .env
-            .insert("OAR_TEST_PI_REGISTRY".into(), Some(mode.into()));
+            .insert("KAR_TEST_PI_REGISTRY".into(), Some(mode.into()));
         opts.timeout = Some(Duration::from_secs(if mode == "hang" { 2 } else { 6 }));
         let result = rt.tools(&opts).await?;
         match (mode, result) {
@@ -174,7 +174,7 @@ pub(super) async fn run() -> Result<()> {
     }
     opts.installation
         .env
-        .insert("OAR_PI_SDK_DIR".into(), Some(root.clone().into()));
+        .insert("KAR_PI_SDK_DIR".into(), Some(root.clone().into()));
     let package = root.join("package.json");
     for (name, version, expected) in [
         (

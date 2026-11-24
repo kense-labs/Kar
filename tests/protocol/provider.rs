@@ -21,7 +21,7 @@ mod inventory;
 
 const SECRET: &str = "private-fixture-provider-value";
 fn case() -> String {
-    std::env::var("OAR_PROVIDER_TEST").unwrap()
+    std::env::var("KAR_PROVIDER_TEST").unwrap()
 }
 async fn serve(req: Request<Body>) -> Response {
     let (parts, body) = req.into_parts();
@@ -190,9 +190,9 @@ fn options(h: &Path, case: &str) -> ProviderAuthOptions {
     for k in ["HOME", "USERPROFILE"] {
         env.insert(k.into(), Some(h.as_os_str().into()));
     }
-    env.insert("OAR_PROVIDER_TEST".into(), Some(case.into()));
+    env.insert("KAR_PROVIDER_TEST".into(), Some(case.into()));
     env.insert(
-        "OAR_OPENCODE_BIN".into(),
+        "KAR_OPENCODE_BIN".into(),
         Some(std::env::current_exe().unwrap().into_os_string()),
     );
     ProviderAuthOptions {

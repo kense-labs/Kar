@@ -44,7 +44,7 @@ async fn model(State(requests): State<Requests>, Json(body): Json<Value>) -> Res
         && !resumed
         && !msgs
             .iter()
-            .any(|m| m["role"] == "tool" && m["tool_call_id"] == "oar-kap-tool");
+            .any(|m| m["role"] == "tool" && m["tool_call_id"] == "kar-kap-tool");
     requests.messages.lock().unwrap().push(body.clone());
     if marker.is_none() && !resumed && !needs_tool {
         requests.saw_live_tool.notified().await;
@@ -53,7 +53,7 @@ async fn model(State(requests): State<Requests>, Json(body): Json<Value>) -> Res
         let arguments =
             json!({"command":"printf kap-native-output","description":"Print a test marker"});
         json!({"role":"assistant","tool_calls":[{
-            "index":0, "id":"oar-kap-tool", "type":"function",
+            "index":0, "id":"kar-kap-tool", "type":"function",
             "function":{"name":"Bash","arguments":arguments.to_string()}
         }]})
     } else {
@@ -107,9 +107,9 @@ async fn exercise(kap: bool) {
     std::fs::write(state.join("config.toml"),format!("default_model = \"fixture\"\nauto_session_title = false\n[loop_control]\nmax_attempts_per_step = 1\n[providers.local]\ntype = \"openai\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\napi_key = \"local-test\"\n[models.fixture]\nprovider = \"local\"\nmodel = \"fixture\"\nmax_context_size = 65536\n")).unwrap();
     let bin = PathBuf::from(
         std::env::var_os(if kap {
-            "OAR_KIMI_BIN"
+            "KAR_KIMI_BIN"
         } else {
-            "OAR_KIMI_ACP_BIN"
+            "KAR_KIMI_ACP_BIN"
         })
         .unwrap(),
     );
@@ -281,7 +281,7 @@ async fn exercise(kap: bool) {
     assert!(
         items
             .iter()
-            .any(|i| matches!(&i.item,Item::Tool{id,..} if id=="oar-kap-tool"))
+            .any(|i| matches!(&i.item,Item::Tool{id,..} if id=="kar-kap-tool"))
     );
     assert_eq!(
         items
@@ -302,7 +302,7 @@ async fn exercise(kap: bool) {
     // frames. The real Kimi session already holds the complete turn.
     let crash_dir = dir.path().join("crash-store");
     let crash_store = ChatStore::open(&crash_dir).unwrap();
-    let name = format!("{id}.oarchat");
+    let name = format!("{id}.karchat");
     let prefix = b
         .cursor()
         .to_string()

@@ -89,7 +89,7 @@ pub(super) async fn run() -> kar::Result<()> {
     std::fs::create_dir(&work)?;
     let mut opts = SessionOptions::new(work);
     opts.env
-        .insert("OAR_TEST_OPENCODE_STEERING".into(), "enabled".into());
+        .insert("KAR_TEST_OPENCODE_STEERING".into(), "enabled".into());
     opts.env
         .insert("XDG_DATA_HOME".into(), dir.path().join("data").into());
     let mut rt = kar::runtime("opencode")?;
@@ -209,7 +209,7 @@ pub(super) async fn run() -> kar::Result<()> {
     assert_eq!(second.turns(), replica.turns());
 
     opts.env
-        .insert("OAR_TEST_OPENCODE_STEERING".into(), "disabled".into());
+        .insert("KAR_TEST_OPENCODE_STEERING".into(), "disabled".into());
     let disabled = rt.open(opts.clone()).await?;
     assert!(!disabled.capabilities().steering);
     let held = disabled.prompt("hold").await?;
@@ -227,7 +227,7 @@ pub(super) async fn run() -> kar::Result<()> {
     held.wait().await?;
     disabled.close().await?;
     opts.env
-        .insert("OAR_TEST_OPENCODE_STEERING".into(), "legacy".into());
+        .insert("KAR_TEST_OPENCODE_STEERING".into(), "legacy".into());
     let mut extra = opts.clone();
     extra
         .settings

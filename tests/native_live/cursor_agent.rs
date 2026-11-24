@@ -324,7 +324,7 @@ async fn review(session: &ChatSession, base: &str) -> (ChatReplica, HttpChatFeed
 #[tokio::test]
 #[ignore = "requires Cursor CLI with ACP; uses the local AgentService and native conversation store"]
 async fn actual_cursor_agent_turn() {
-    let program = std::env::var("OAR_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".into());
+    let program = std::env::var("KAR_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".into());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     std::fs::create_dir(dir.join("work")).unwrap();
@@ -366,7 +366,7 @@ async fn actual_cursor_agent_turn() {
         ("HTTPS_PROXY", ""),
         ("HTTP_PROXY", ""),
         ("ALL_PROXY", ""),
-        ("CURSOR_API_KEY", "oar-loopback-test"),
+        ("CURSOR_API_KEY", "kar-loopback-test"),
         ("CURSOR_API_ENDPOINT", endpoint.as_str()),
         ("NO_PROXY", "127.0.0.1,localhost"),
         ("DO_NOT_TRACK", "1"),

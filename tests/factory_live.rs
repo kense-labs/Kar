@@ -38,18 +38,18 @@ fn has_session_file(dir: &Path) -> bool {
 #[test]
 #[ignore = "requires the official Factory Droid CLI"]
 fn model_and_skill_catalogs_before_session_creation() {
-    let bin = fs::canonicalize(std::env::var_os("OAR_FACTORY_BIN").expect("set OAR_FACTORY_BIN"))
+    let bin = fs::canonicalize(std::env::var_os("KAR_FACTORY_BIN").expect("set KAR_FACTORY_BIN"))
         .unwrap();
     let isolated = tempfile::tempdir().unwrap();
     let home = isolated.path().join("home");
     let work = isolated.path().join("work");
     fs::create_dir_all(home.join("tmp")).unwrap();
     fs::create_dir_all(home.join(".factory")).unwrap();
-    let skill = work.join(".factory/skills/oar-catalog");
+    let skill = work.join(".factory/skills/kar-catalog");
     fs::create_dir_all(&skill).unwrap();
     fs::write(
         skill.join("SKILL.md"),
-        "---\nname: oar-catalog\ndescription: Kar project fixture\n---\nPRIVATE_SKILL_CONTENT\n",
+        "---\nname: kar-catalog\ndescription: Kar project fixture\n---\nPRIVATE_SKILL_CONTENT\n",
     )
     .unwrap();
     let settings = json!({"customModels":[{"model":"fixture","displayName":"CatalogFixture","baseUrl":"http://127.0.0.1:1/v1","apiKey":"PRIVATE_FIXTURE_KEY","provider":"generic-chat-completion-api","maxOutputTokens":4096}]});
@@ -73,7 +73,7 @@ fn model_and_skill_catalogs_before_session_creation() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["name"] == "oar-catalog")
+        .find(|row| row["name"] == "kar-catalog")
         .expect("workspace skill");
     assert_eq!(entry["location"], "project");
     assert_eq!(entry["description"], "Kar project fixture");
@@ -153,7 +153,7 @@ async fn completion(State(model): State<Model>, Json(body): Json<Value>) -> impl
             json!({"content":"approval-finished"})
         } else {
             reason = "tool_calls";
-            let args = json!({"command":"echo oar-approval-marker","summary":"Print a fixture marker","riskLevel":"high","riskLevelReason":"Verify approval routing"});
+            let args = json!({"command":"echo kar-approval-marker","summary":"Print a fixture marker","riskLevel":"high","riskLevelReason":"Verify approval routing"});
             json!({"tool_calls":[{"index":0,"id":"call-approval","type":"function","function":{"name":"Execute","arguments":args.to_string()}}]})
         }
     } else if main && history.contains("FACTORY_HOLD") {
@@ -163,7 +163,7 @@ async fn completion(State(model): State<Model>, Json(body): Json<Value>) -> impl
         json!({"content":"held-answer"})
     } else if main && history.contains("FACTORY_SECOND") {
         json!({"content":"second-answer"})
-    } else if main && history.contains("file-marker-oar") {
+    } else if main && history.contains("file-marker-kar") {
         let mut released = model.tool_seen.subscribe();
         released.wait_for(|seen| *seen).await.unwrap();
         json!({"content":"first-answer"})
@@ -200,7 +200,7 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    let bin = fs::canonicalize(std::env::var_os("OAR_FACTORY_BIN").expect("set OAR_FACTORY_BIN"))
+    let bin = fs::canonicalize(std::env::var_os("KAR_FACTORY_BIN").expect("set KAR_FACTORY_BIN"))
         .unwrap();
     let isolated = tempfile::tempdir().unwrap();
     let home = isolated.path().join("home");
@@ -209,7 +209,7 @@ async fn fixture() -> Fixture {
     fs::create_dir_all(home.join("tmp")).unwrap();
     fs::create_dir(&work).unwrap();
     let file = work.join("marker.txt");
-    fs::write(&file, "file-marker-oar").unwrap();
+    fs::write(&file, "file-marker-kar").unwrap();
     let model = Model {
         requests: Default::default(),
         file,
@@ -225,7 +225,7 @@ async fn fixture() -> Fixture {
         .unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let configs: Vec<_> = ["Fixture", "Alternate"].iter().map(|name| json!({"model":"fixture","displayName":name,"baseUrl":format!("http://{addr}/v1"),"provider":"generic-chat-completion-api","apiKey":"oar-test-only","maxOutputTokens":4096})).collect();
+    let configs: Vec<_> = ["Fixture", "Alternate"].iter().map(|name| json!({"model":"fixture","displayName":name,"baseUrl":format!("http://{addr}/v1"),"provider":"generic-chat-completion-api","apiKey":"kar-test-only","maxOutputTokens":4096})).collect();
     let config = json!({"customModels":configs});
     fs::write(home.join(".factory/settings.json"), config.to_string()).unwrap();
     let mut opts = SessionOptions::new(&work);
@@ -320,7 +320,7 @@ async fn native_tool_feed_and_queued_resume() {
         assert!(
             serde_json::to_string(&turn.items)
                 .unwrap()
-                .contains("file-marker-oar")
+                .contains("file-marker-kar")
         );
     }
     let after_tool = second.cursor();
@@ -377,7 +377,7 @@ async fn native_tool_feed_and_queued_resume() {
             assert!(last.contains(part), "{part}");
         }
     }
-    let file = format!("{id}.oarchat");
+    let file = format!("{id}.karchat");
     let full = fs::read(_isolated.path().join("chats").join(&file)).unwrap();
     for (label, cut) in [
         ("before-receipt", pre_receipt.unwrap()),
@@ -411,7 +411,7 @@ async fn native_tool_feed_and_queued_resume() {
         assert!(
             serde_json::to_string(&turn.items)
                 .unwrap()
-                .contains("file-marker-oar")
+                .contains("file-marker-kar")
         );
         assert!(
             !turn
@@ -595,7 +595,7 @@ async fn native_tool_approval_reaches_both_clients() {
             }
         }).await.unwrap();
         assert_eq!(turn.status, TurnStatus::Completed);
-        assert!(turn.items.iter().any(|i| matches!(&i.item,Item::Tool{activity,..} if activity.result.as_ref().and_then(|r| r.text()).is_some_and(|s| s.contains("oar-approval-marker")))));
+        assert!(turn.items.iter().any(|i| matches!(&i.item,Item::Tool{activity,..} if activity.result.as_ref().and_then(|r| r.text()).is_some_and(|s| s.contains("kar-approval-marker")))));
     }
     assert!(
         chat.decide(
@@ -706,7 +706,7 @@ async fn concurrent_question_answers_reconcile_on_reconnect() {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_FACTORY_BIN; a loopback model calls Rust HTTP and stdio MCP services"]
+#[ignore = "requires KAR_FACTORY_BIN; a loopback model calls Rust HTTP and stdio MCP services"]
 async fn native_mcp_transports_on_create_and_resume() {
     use kar::host_tools::HostTool;
     let mut f = fixture().await;
@@ -734,7 +734,7 @@ async fn native_mcp_transports_on_create_and_resume() {
         .mcp_servers
         .extend([host.entry(), ("local".into(), stdio)]);
     f.opts.approvals = kar::ApprovalMode::Host;
-    f.opts.remove_env("OAR_FACTORY_BIN").unwrap();
+    f.opts.remove_env("KAR_FACTORY_BIN").unwrap();
     let path = std::env::join_paths([
         f.runtime.program.parent().unwrap(),
         Path::new("/usr/bin"),

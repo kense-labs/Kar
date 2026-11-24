@@ -7,7 +7,7 @@ fn status(runtime: &str, key: Option<&str>) -> Value {
 }
 
 fn operations(runtime: &str, key: Option<&str>, actions: &[&str]) -> Vec<Value> {
-    let variable = format!("OAR_{}_BIN", runtime.to_uppercase());
+    let variable = format!("KAR_{}_BIN", runtime.to_uppercase());
     let vendor = std::env::var_os(&variable).unwrap_or_else(|| panic!("set {variable}"));
     let home = tempfile::tempdir().unwrap();
     let profile = home.path().join("profile");
@@ -82,7 +82,7 @@ fn operations(runtime: &str, key: Option<&str>, actions: &[&str]) -> Vec<Value> 
 }
 
 #[test]
-#[ignore = "requires OAR_CODEX_BIN"]
+#[ignore = "requires KAR_CODEX_BIN"]
 fn codex_file_login() {
     assert_eq!(status("codex", None)["kind"], "logged_out");
     let login = status("codex", Some("OPENAI_API_KEY"));
@@ -91,7 +91,7 @@ fn codex_file_login() {
 }
 
 #[test]
-#[ignore = "requires OAR_CLAUDE_BIN"]
+#[ignore = "requires KAR_CLAUDE_BIN"]
 fn claude_key_status() {
     let login = status("claude", Some("ANTHROPIC_API_KEY"));
     assert_eq!(login["kind"], "logged_in");
@@ -99,7 +99,7 @@ fn claude_key_status() {
 }
 
 #[test]
-#[ignore = "requires OAR_FACTORY_BIN"]
+#[ignore = "requires KAR_FACTORY_BIN"]
 fn factory_unvalidated_key() {
     let status = status("factory", Some("FACTORY_API_KEY"));
     assert_eq!(status["kind"], "unknown");
@@ -107,19 +107,19 @@ fn factory_unvalidated_key() {
 }
 
 #[test]
-#[ignore = "requires OAR_KIMI_BIN with native ACP"]
+#[ignore = "requires KAR_KIMI_BIN with native ACP"]
 fn kimi_empty_profile() {
     assert_eq!(status("kimi", None)["kind"], "logged_out");
 }
 
 #[test]
-#[ignore = "requires OAR_QODER_BIN"]
+#[ignore = "requires KAR_QODER_BIN"]
 fn qoder_empty_profile() {
     assert_eq!(status("qoder", None)["kind"], "logged_out");
 }
 
 #[test]
-#[ignore = "requires OAR_CURSOR_BIN"]
+#[ignore = "requires KAR_CURSOR_BIN"]
 fn cursor_file_store() {
     assert_eq!(status("cursor", None)["kind"], "logged_out");
     let key = status("cursor", Some("CURSOR_API_KEY"));
@@ -131,7 +131,7 @@ fn cursor_file_store() {
 }
 
 #[test]
-#[ignore = "requires OAR_CODEX_BIN; only removes a synthetic key in a temporary file store"]
+#[ignore = "requires KAR_CODEX_BIN; only removes a synthetic key in a temporary file store"]
 fn codex_confirms_private_logout() {
     let v = operations(
         "codex",
@@ -147,7 +147,7 @@ fn codex_confirms_private_logout() {
 }
 
 #[test]
-#[ignore = "requires OAR_FACTORY_BIN; no keyring and only a synthetic environment key"]
+#[ignore = "requires KAR_FACTORY_BIN; no keyring and only a synthetic environment key"]
 fn droid_confirms_active_environment_key() {
     let v = operations(
         "factory",
@@ -160,7 +160,7 @@ fn droid_confirms_active_environment_key() {
 }
 
 #[test]
-#[ignore = "requires OAR_CURSOR_BIN; only accesses a temporary file store"]
+#[ignore = "requires KAR_CURSOR_BIN; only accesses a temporary file store"]
 fn cursor_confirms_empty_file_store_logout() {
     let v = operations("cursor", None, &["logout", "status"]);
     assert_eq!(v[0]["kind"], "logged_out");
@@ -168,7 +168,7 @@ fn cursor_confirms_empty_file_store_logout() {
 }
 
 #[test]
-#[ignore = "requires OAR_CODEX_BIN; uses a temporary file store"]
+#[ignore = "requires KAR_CODEX_BIN; uses a temporary file store"]
 fn codex_usage_recognizes_non_subscription_accounts() {
     let signed_out = operations("codex", None, &["usage"]);
     assert_eq!(signed_out[0]["kind"], "reauth_required");
@@ -177,7 +177,7 @@ fn codex_usage_recognizes_non_subscription_accounts() {
 }
 
 #[test]
-#[ignore = "requires OAR_GROK_BIN; uses an empty temporary profile"]
+#[ignore = "requires KAR_GROK_BIN; uses an empty temporary profile"]
 fn grok_usage_signed_out() {
     assert_eq!(
         operations("grok", None, &["usage"])[0]["kind"],
@@ -186,7 +186,7 @@ fn grok_usage_signed_out() {
 }
 
 #[test]
-#[ignore = "requires OAR_ANTIGRAVITY_BIN; uses an empty temporary profile"]
+#[ignore = "requires KAR_ANTIGRAVITY_BIN; uses an empty temporary profile"]
 fn antigravity_usage_signed_out() {
     assert_eq!(
         operations("antigravity", None, &["usage"])[0]["kind"],

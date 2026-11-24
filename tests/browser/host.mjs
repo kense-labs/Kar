@@ -20,7 +20,7 @@ export async function exercise() {
         models: [{api:"anthropic-messages",provider:"fixture",baseUrl,id:"local",name:"local",reasoning:false,
             input:["text"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:65536,maxTokens:512}]
     }));
-    const database = "oar-rs-"+crypto.randomUUID();
+    const database = "kar-rs-"+crypto.randomUUID();
     const storage = await IndexedDbStorage.open(database);
     const options = {models,registry:createRegistry(),settings:{retry:{enabled:false},progress:{partialIntervalMs:0}}};
     const harness = await Harness.open(storage,options,ctx);

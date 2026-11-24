@@ -33,18 +33,18 @@ fn state() -> &'static Mutex<Latest> {
 }
 
 fn serve() -> Read<()> {
-    let port: u16 = std::env::var("OAR_RS_PI_CAPTURE_PORT")
+    let port: u16 = std::env::var("KAR_RS_PI_CAPTURE_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .ok_or("port")?;
-    let token = std::env::var("OAR_RS_PI_CAPTURE_TOKEN").map_err(|_| "token")?;
+    let token = std::env::var("KAR_RS_PI_CAPTURE_TOKEN").map_err(|_| "token")?;
     let mut stream =
         TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).map_err(|_| "connect")?;
     stream
         .write_all(token.as_bytes())
         .map_err(|_| "handshake")?;
     std::thread::Builder::new()
-        .name("oar-pi-requests".into())
+        .name("kar-pi-requests".into())
         .spawn(move || {
             let mut query = [0];
             while stream.read_exact(&mut query).is_ok() {
@@ -162,7 +162,7 @@ extern "C" fn payload(env: Handle, info: Handle) -> Handle {
         let result = invoke(&e, target, receiver, args)?;
         let promise = e.call(e.get(e.global()?, c"Promise")?, c"resolve", &[result])?;
         let after = e.call(
-            e.function(c"oarAfterTransform", after_transform)?,
+            e.function(c"karAfterTransform", after_transform)?,
             c"bind",
             &[generation, payload, model],
         )?;
@@ -199,7 +199,7 @@ extern "C" fn bind_root(env: Handle, info: Handle) -> Handle {
         }
         let exts = e.call(e.get(session, c"resourceLoader")?, c"getExtensions", &[])?;
         let matcher = e.call(
-            e.function(c"oarExtension", our_extension)?,
+            e.function(c"karExtension", our_extension)?,
             c"bind",
             &[config],
         )?;
@@ -234,10 +234,10 @@ extern "C" fn bind_root(env: Handle, info: Handle) -> Handle {
             c"id",
             e.call(global, c"Number", &[e.text(&generation.to_string())?])?,
         )?;
-        let apply = e.call(e.function(c"oarRootPayload", payload)?, c"bind", &[label])?;
+        let apply = e.call(e.function(c"karRootPayload", payload)?, c"bind", &[label])?;
         let original = e.get(agent, c"onPayload")?;
         let transform = if e.kind(original)? == 0 {
-            e.function(c"oarUnmodifiedPayload", unmodified)?
+            e.function(c"karUnmodifiedPayload", unmodified)?
         } else {
             original
         };
@@ -273,11 +273,11 @@ extern "C" fn factory(env: Handle, info: Handle) -> Handle {
         }
         let global = e.global()?;
         if e.kind(e.get(config, c"file")?)? == 0 {
-            let sdk = e.text(&std::env::var("OAR_RS_PI_CAPTURE_SDK").map_err(|_| "sdk")?)?;
+            let sdk = e.text(&std::env::var("KAR_RS_PI_CAPTURE_SDK").map_err(|_| "sdk")?)?;
             let process = e.get(global, c"process")?;
             let vars = e.get(process, c"env")?;
             let reflect = e.get(global, c"Reflect")?;
-            for key in ["OAR_RS_PI_CAPTURE_PORT", "OAR_RS_PI_CAPTURE_TOKEN"] {
+            for key in ["KAR_RS_PI_CAPTURE_PORT", "KAR_RS_PI_CAPTURE_TOKEN"] {
                 e.call(reflect, c"deleteProperty", &[vars, e.text(key)?])?;
             }
             let module = e.call(process, c"getBuiltinModule", &[e.text("node:module")?])?;
@@ -290,12 +290,12 @@ extern "C" fn factory(env: Handle, info: Handle) -> Handle {
                 &[e.get(global, c"WeakSet")?, e.call(global, c"Array", &[])?],
             )?;
             e.set(config, c"agents", agents)?;
-            let apply = e.call(e.function(c"oarBindRoot", bind_root)?, c"bind", &[config])?;
+            let apply = e.call(e.function(c"karBindRoot", bind_root)?, c"bind", &[config])?;
             let binding = proxy(&e, e.get(prototype, c"bindExtensions")?, apply)?;
             e.set(prototype, c"bindExtensions", binding)?;
             // Check the exact extension file registered on this resource loader.
             // Other agents in the same SDK process can also bind in RPC mode.
-            let file = std::env::var("OAR_RS_PI_CAPTURE_PLUGIN").map_err(|_| "plugin")?;
+            let file = std::env::var("KAR_RS_PI_CAPTURE_PLUGIN").map_err(|_| "plugin")?;
             e.set(config, c"file", e.text(&file)?)?;
         }
         Ok(())

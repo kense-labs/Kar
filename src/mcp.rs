@@ -94,15 +94,15 @@ impl Server {
                 let mut opts = SessionOptions::new(&self.cwd);
                 opts.model = a["model"].as_str().map(str::to_owned);
                 opts.resume = a["resume"].as_str().map(str::to_owned);
-                let depth = std::env::var("OAR_AGENT_DEPTH")
+                let depth = std::env::var("KAR_AGENT_DEPTH")
                     .unwrap_or("0".into())
                     .parse::<usize>()
-                    .map_err(|_| "invalid OAR_AGENT_DEPTH")?;
+                    .map_err(|_| "invalid KAR_AGENT_DEPTH")?;
                 if depth >= 1 {
                     return Err("nested MCP delegation is disabled".into());
                 }
                 opts.env
-                    .insert("OAR_AGENT_DEPTH".into(), (depth + 1).to_string().into());
+                    .insert("KAR_AGENT_DEPTH".into(), (depth + 1).to_string().into());
                 let label = a["name"].as_str().map(str::to_owned);
                 let prompt = argument(a, "task")?.to_owned();
                 if name == "spawn" {

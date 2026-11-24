@@ -81,7 +81,7 @@ pub(super) fn peer(version: &str, args: &[String]) {
             ),
             Some("get_models" | "daemon.get_models") => {
                 assert_eq!(method == Some("daemon.get_models"), daemon);
-                if let Ok(strategy) = std::env::var("OAR_FIXTURE_CATALOG_FAILURE")
+                if let Ok(strategy) = std::env::var("KAR_FIXTURE_CATALOG_FAILURE")
                     && r["fetchStrategy"] == strategy
                 {
                     emit(
@@ -165,7 +165,7 @@ pub(super) async fn sessions() -> kar::Result<()> {
         let runtime = Runtime::new("qoder", std::env::current_exe()?, &[], Protocol::Qoder);
         let mut opts = SessionOptions::new(dir.path());
         opts.env
-            .insert("OAR_FIXTURE_QODER_VERSION".into(), version.into());
+            .insert("KAR_FIXTURE_QODER_VERSION".into(), version.into());
         opts.env
             .insert("QODER_PERSONAL_ACCESS_TOKEN".into(), "test-pat".into());
         opts.env
@@ -181,7 +181,7 @@ pub(super) async fn sessions() -> kar::Result<()> {
             let mut bad = opts.clone();
             bad.model = Some("unknown-selector".into());
             bad.env
-                .insert("OAR_FIXTURE_CATALOG_FAILURE".into(), failure.into());
+                .insert("KAR_FIXTURE_CATALOG_FAILURE".into(), failure.into());
             let Err(kar::Error::Open(e)) = runtime.open(bad).await else {
                 panic!("expected Qoder model confirmation refusal");
             };
@@ -254,7 +254,7 @@ pub(super) async fn sessions() -> kar::Result<()> {
         for record in session.records() {
             let data = serde_json::to_string(&*record)?;
             assert!(
-                ![PRIVATE_DATA, CREDENTIAL, "test-pat", "oar-qoder-"]
+                ![PRIVATE_DATA, CREDENTIAL, "test-pat", "kar-qoder-"]
                     .iter()
                     .any(|s| data.contains(s))
             );

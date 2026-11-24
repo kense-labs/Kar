@@ -123,7 +123,7 @@ enum Action {
         #[arg(long, default_value_t = 600)]
         timeout: u64,
     },
-    /// Import a legacy v3 recording into a new Kar JSONL file.
+    /// Import a kar-voyage/3 recording into a Kar JSONL file.
     Import { input: PathBuf, output: PathBuf },
     /// Print previously recorded records, optionally after a stream-specific cursor.
     Replay {
@@ -715,7 +715,7 @@ fn replay(path: &Path, cursor: Option<&Cursor>, mut out: impl Write) -> Result<(
     Ok(())
 }
 #[tokio::main]
-pub(crate) async fn main() -> std::process::ExitCode {
+async fn main() -> std::process::ExitCode {
     let action = Cli::parse().command;
     let json = match &action {
         Action::Chat(chat) => chat.json,

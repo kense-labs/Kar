@@ -37,11 +37,11 @@ async fn profile() -> impl IntoResponse {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_CURSOR_BIN with native file credential store"]
+#[ignore = "requires KAR_CURSOR_BIN with native file credential store"]
 async fn native_cursor_login_and_cancellation() {
     let mut rt = kar::runtime("cursor").unwrap();
-    rt.program = std::env::var_os("OAR_CURSOR_BIN")
-        .expect("set OAR_CURSOR_BIN")
+    rt.program = std::env::var_os("KAR_CURSOR_BIN")
+        .expect("set KAR_CURSOR_BIN")
         .into();
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", socket.local_addr().unwrap());
@@ -61,7 +61,7 @@ async fn native_cursor_login_and_cancellation() {
         for key in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
             env.insert(key.into(), None);
         }
-        env.insert("OAR_CURSOR_BIN".into(), Some(rt.program.as_os_str().into()));
+        env.insert("KAR_CURSOR_BIN".into(), Some(rt.program.as_os_str().into()));
         for (key, value) in [
             ("AGENT_CLI_CREDENTIAL_STORE", "file"),
             ("CURSOR_CLI_DPOP_LOGIN", "0"),

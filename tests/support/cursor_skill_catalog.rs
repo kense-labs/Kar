@@ -165,9 +165,9 @@ fn cursor_files_and_failed_nested_scanner() {
 #[test]
 #[ignore = "uses the upstream Cursor SDK observer, Node, tsx and the SDK's ripgrep"]
 fn cursor_sdk_matches_native_discovery() {
-    let node = PathBuf::from(std::env::var_os("OAR_CURSOR_OBSERVER_NODE").unwrap());
-    let tsx = std::env::var_os("OAR_CURSOR_OBSERVER_TSX").unwrap();
-    let observer = std::env::var_os("OAR_CURSOR_SDK_OBSERVER").unwrap();
+    let node = PathBuf::from(std::env::var_os("KAR_CURSOR_OBSERVER_NODE").unwrap());
+    let tsx = std::env::var_os("KAR_CURSOR_OBSERVER_TSX").unwrap();
+    let observer = std::env::var_os("KAR_CURSOR_SDK_OBSERVER").unwrap();
     let rg = PathBuf::from(std::env::var_os("CURSOR_RIPGREP_PATH").unwrap());
     for git in [false, true] {
         let temp = tempfile::tempdir().unwrap();

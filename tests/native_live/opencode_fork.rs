@@ -81,7 +81,7 @@ async fn native_whole_session_fork_keeps_independent_model_contexts() {
 #[tokio::test]
 #[ignore = "requires OpenCode 2; uses its native session database and a loopback model"]
 async fn native_turn_fork_rolls_back_workspace_and_context() {
-    let program = std::env::var_os("OAR_OPENCODE_BIN").expect("set OAR_OPENCODE_BIN");
+    let program = std::env::var_os("KAR_OPENCODE_BIN").expect("set KAR_OPENCODE_BIN");
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().canonicalize().unwrap();
     let (opts, calls) = fixture(&dir);
@@ -91,8 +91,8 @@ async fn native_turn_fork_rolls_back_workspace_and_context() {
         let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"));
         cmd.current_dir(&dir)
             .envs(&opts.env)
-            .env("OAR_OPENCODE_BIN", &program)
-            .env("OAR_CHAT_DIR", dir.join("chats"))
+            .env("KAR_OPENCODE_BIN", &program)
+            .env("KAR_CHAT_DIR", dir.join("chats"))
             .args(["chat", "--json"])
             .args(args)
             .kill_on_drop(true);
@@ -143,7 +143,7 @@ async fn native_turn_fork_rolls_back_workspace_and_context() {
     );
     cli(&[
         "resume",
-        "green-branch OAR-FORK-READ-SHARED",
+        "green-branch KAR-FORK-READ-SHARED",
         "--chat",
         &child_id,
     ])
@@ -223,8 +223,8 @@ async fn native_turn_fork_rolls_back_workspace_and_context() {
     let denied = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
         .current_dir(&dir)
         .envs(&opts.env)
-        .env("OAR_OPENCODE_BIN", &program)
-        .env("OAR_CHAT_DIR", dir.join("chats"))
+        .env("KAR_OPENCODE_BIN", &program)
+        .env("KAR_CHAT_DIR", dir.join("chats"))
         .args(["chat", "--json", "fork", blue_turn, "--chat", &parent_id])
         .output()
         .await
@@ -290,7 +290,7 @@ async fn recover_finished_turn_from_native_archive() {
     opts.settings
         .additional_directories
         .push(dir.join("shared"));
-    let program = std::env::var_os("OAR_OPENCODE_BIN").unwrap();
+    let program = std::env::var_os("KAR_OPENCODE_BIN").unwrap();
     let original = ChatStore::open(dir.join("original")).unwrap();
     let chat = original
         .create(
@@ -303,7 +303,7 @@ async fn recover_finished_turn_from_native_archive() {
     let id = chat.info().id;
     let root = chat.info().native_id.clone();
     let request = Uuid::new_v4();
-    let prompt = "repeat OAR-FORK-READ-SHARED";
+    let prompt = "repeat KAR-FORK-READ-SHARED";
     let initial = original.feed_snapshot(id).unwrap();
     let mut updates = original.follow(id, Some(initial.cursor)).unwrap();
     let expected = chat.send(request, prompt).await.unwrap();
@@ -476,7 +476,7 @@ async fn recover_failed_turn_after_tool() {
     let (mut opts, _) = fixture(&base);
     std::fs::write(
         base.join("shared/grant.txt"),
-        "oar-fixture-decline-credential",
+        "kar-fixture-decline-credential",
     )
     .unwrap();
     opts.model = Some("fixture/fixture".into());
@@ -484,7 +484,7 @@ async fn recover_failed_turn_after_tool() {
         .additional_directories
         .push(base.join("shared"));
     let store = ChatStore::open(base.join("original")).unwrap();
-    let program = std::env::var_os("OAR_OPENCODE_BIN").unwrap();
+    let program = std::env::var_os("KAR_OPENCODE_BIN").unwrap();
     let chat = store
         .create(
             "opencode",
@@ -495,7 +495,7 @@ async fn recover_failed_turn_after_tool() {
         .unwrap();
     let id = chat.info().id;
     let request = Uuid::new_v4();
-    let prompt = "OAR-FORK-READ-SHARED";
+    let prompt = "KAR-FORK-READ-SHARED";
     let mut events = store
         .follow(id, Some(store.feed_snapshot(id).unwrap().cursor))
         .unwrap();
@@ -548,10 +548,10 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
     opts.settings
         .additional_directories
         .push(base.join("shared"));
-    std::fs::write(base.join("shared/grant.txt"), "OAR-CRASH-AFTER-READ").unwrap();
+    std::fs::write(base.join("shared/grant.txt"), "KAR-CRASH-AFTER-READ").unwrap();
     let dir = base.join("chats");
     let store = ChatStore::open(&dir).unwrap();
-    let program = std::env::var_os("OAR_OPENCODE_BIN").unwrap();
+    let program = std::env::var_os("KAR_OPENCODE_BIN").unwrap();
     let session = store
         .create(
             "opencode",
@@ -565,7 +565,7 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
     session.close().await.unwrap();
     let request = Uuid::new_v4();
     let queued = Uuid::new_v4();
-    let prompt = "read it OAR-FORK-READ-SHARED";
+    let prompt = "read it KAR-FORK-READ-SHARED";
     let next = "queued after hard kill";
     let mut events = store
         .follow(id, Some(store.feed_snapshot(id).unwrap().cursor))
@@ -573,8 +573,8 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
     let mut controller = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
         .current_dir(&base)
         .envs(&opts.env)
-        .env("OAR_CHAT_DIR", &dir)
-        .env("OAR_OPENCODE_BIN", &program)
+        .env("KAR_CHAT_DIR", &dir)
+        .env("KAR_OPENCODE_BIN", &program)
         .args([
             "chat",
             "--json",

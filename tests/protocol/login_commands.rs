@@ -268,7 +268,7 @@ pub(super) async fn exercise() {
     }
     let out = cli
         .current_dir(dir.path())
-        .env("OAR_QODER_BIN", env::current_exe().unwrap())
+        .env("KAR_QODER_BIN", env::current_exe().unwrap())
         .args(["account", "qoder", "login", "--json"])
         .output()
         .unwrap();

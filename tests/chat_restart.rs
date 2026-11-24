@@ -329,7 +329,7 @@ fn agent() {
 fn cli(base: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_kar"));
     cmd.current_dir(base.join("elsewhere"))
-        .env("OAR_CHAT_DIR", base.join("store"))
+        .env("KAR_CHAT_DIR", base.join("store"))
         .env("FIXTURE_NATIVE_DB", base.join("native"))
         .args(["chat", "--json"]);
     cmd
@@ -422,7 +422,7 @@ fn environment_across_controllers() {
     }
     for chat in [id, branch, normal["chat"]["id"].as_str().unwrap()] {
         assert!(
-            !fs::read_to_string(base.join("store").join(format!("{chat}.oarchat")))
+            !fs::read_to_string(base.join("store").join(format!("{chat}.karchat")))
                 .unwrap()
                 .contains(&secret)
         );
@@ -479,6 +479,21 @@ fn restart() {
     );
     let chat_id = Uuid::parse_str(history["chat"]["id"].as_str().unwrap()).unwrap();
     let store = ChatStore::open(base.join("store")).unwrap();
+    let filename = format!("{chat_id}.karchat");
+    let journal = fs::read_to_string(base.join("store").join(&filename)).unwrap();
+    let header: Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+    assert_eq!(header["format"], "kar-chat/1");
+
+    let previous = tempfile::tempdir().unwrap();
+    let untagged = json!({"version": 1, "chat": &header["chat"]});
+    fs::write(previous.path().join(&filename), format!("{untagged}\n")).unwrap();
+    assert!(
+        ChatStore::open(previous.path())
+            .unwrap()
+            .history(chat_id)
+            .is_err()
+    );
+
     let crash_id = Uuid::new_v4().to_string();
     let mut child = cli(&base)
         .args(["send", "crash here", "--request-id", &crash_id])
@@ -512,7 +527,7 @@ fn restart() {
         store.history(chat_id).unwrap().turns.last().unwrap().status,
         TurnStatus::Interrupted
     );
-    let path = base.join("store").join(format!("{chat_id}.oarchat"));
+    let path = base.join("store").join(format!("{chat_id}.karchat"));
     OpenOptions::new()
         .append(true)
         .open(&path)
@@ -677,7 +692,7 @@ fn durable_inputs() {
     assert_eq!(saved[0]["status"], "sent");
     // Recreate the other possible crash boundary: the provider consumed this exact prompt,
     // but the WAL ends at Begin plus a torn receipt. It never returned a native turn ID.
-    let journal = base.join("store").join(format!("{chat}.oarchat"));
+    let journal = base.join("store").join(format!("{chat}.karchat"));
     let data = fs::read_to_string(&journal).unwrap();
     let receipt = data
         .split_inclusive('\n')
@@ -811,7 +826,7 @@ async fn delayed_admission(base: &Path, chat: Uuid) {
         })
         .await
         .unwrap();
-    let checkpoint = store_dir.join(format!("{chat}.git/refs/oar/turns/{id}/before"));
+    let checkpoint = store_dir.join(format!("{chat}.git/refs/kar/turns/{id}/before"));
     let release = tokio::spawn(async move {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !checkpoint.exists() {
@@ -1063,7 +1078,7 @@ async fn live_feed() {
     );
     // An uncommitted tail has no event id. Resuming truncates it, and the same
     // observer must read the replacement row from the last committed boundary.
-    let journal = base.join("store").join(format!("{id}.oarchat"));
+    let journal = base.join("store").join(format!("{id}.karchat"));
     OpenOptions::new()
         .append(true)
         .open(journal)
@@ -1272,7 +1287,7 @@ fn checkpoints() {
     // Simulate a previous host that exited just after writing one destination file.
     let history = success(run(&["history"]));
     let journal = base.join("store").join(format!(
-        "{}.oarchat",
+        "{}.karchat",
         history["chat"]["id"].as_str().unwrap()
     ));
     writeln!(
@@ -1337,7 +1352,7 @@ fn checkpoints() {
     .unwrap();
     assert_eq!(
         shadow
-            .find_reference(format!("refs/oar/turns/{second}/after").as_str())
+            .find_reference(format!("refs/kar/turns/{second}/after").as_str())
             .unwrap()
             .id()
             .to_string(),
@@ -1390,7 +1405,7 @@ fn linked_checkout() {
     let run = |args: &[&str]| {
         success(
             cli(&base)
-                .env("OAR_CHAT_DIR", workspace.join("state"))
+                .env("KAR_CHAT_DIR", workspace.join("state"))
                 .args(args)
                 .output()
                 .unwrap(),
@@ -1607,7 +1622,7 @@ async fn reopen_after_disconnected_writer_and_history_probe() {
 
     // Hold the two read locks of a history observer. A new controller must
     // wait for the journal snapshot rather than reporting a competing writer.
-    let journal = fs::File::open(store_dir.join(format!("{id}.oarchat"))).unwrap();
+    let journal = fs::File::open(store_dir.join(format!("{id}.karchat"))).unwrap();
     let lease = fs::File::open(store_dir.join(format!("{id}.lock"))).unwrap();
     journal.lock_shared().unwrap();
     lease.lock_shared().unwrap();
@@ -1885,7 +1900,7 @@ async fn background_child_replay() {
     let store = ChatStore::open(tmp.path().join("store")).unwrap();
     let setup = |opts: &mut kar::SessionOptions| {
         opts.retained_bytes = Some(1);
-        opts.env.insert("OAR_TEST_OPENCODE".into(), "1".into());
+        opts.env.insert("KAR_TEST_OPENCODE".into(), "1".into());
         opts.env
             .insert("XDG_DATA_HOME".into(), tmp.path().join("data").into());
     };
@@ -2116,11 +2131,11 @@ mod cursor_children;
 #[path = "support/cursor_interactions.rs"]
 mod cursor_interactions;
 fn main() {
-    if std::env::var_os("OAR_TEST_CURSOR_ACP").is_some() {
+    if std::env::var_os("KAR_TEST_CURSOR_ACP").is_some() {
         cursor_children::peer();
         return;
     }
-    if std::env::var_os("OAR_TEST_OPENCODE").is_some() {
+    if std::env::var_os("KAR_TEST_OPENCODE").is_some() {
         if std::env::args().nth(1).as_deref() == Some("--version") {
             println!("opencode 2.3.2");
         } else {

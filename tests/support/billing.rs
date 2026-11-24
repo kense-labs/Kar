@@ -168,7 +168,7 @@ pub async fn query(id: &str, bin: &Path, opts: &AccountUsageOptions) -> kar::Res
     rt.program = bin.into();
     let mut scoped = opts.clone();
     scoped.installation.env.insert(
-        format!("OAR_{}_BIN", id.to_uppercase()).into(),
+        format!("KAR_{}_BIN", id.to_uppercase()).into(),
         Some(bin.as_os_str().into()),
     );
     let value = serde_json::to_value(rt.account_usage(&scoped).await?).unwrap();

@@ -17,7 +17,7 @@ pub(super) fn peer(args: &[String]) {
         return println!("Usage: qwen");
     }
     assert_eq!(args, ["--acp"]);
-    let case = std::env::var("OAR_QWEN_PROVIDER_TEST").unwrap();
+    let case = std::env::var("KAR_QWEN_PROVIDER_TEST").unwrap();
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
     let mut read = || serde_json::from_str::<Value>(&lines.next().unwrap().unwrap()).unwrap();
@@ -82,8 +82,8 @@ pub(super) async fn exercise() {
         for k in ["HOME", "USERPROFILE", "QWEN_HOME"] {
             env.insert(k.into(), Some(h.as_os_str().into()));
         }
-        env.insert("OAR_QWEN_BIN".into(), Some(bin.as_os_str().into()));
-        env.insert("OAR_QWEN_PROVIDER_TEST".into(), Some(case.into()));
+        env.insert("KAR_QWEN_BIN".into(), Some(bin.as_os_str().into()));
+        env.insert("KAR_QWEN_PROVIDER_TEST".into(), Some(case.into()));
         let auth = kar::runtime("qwen")
             .unwrap()
             .qwen_provider_auth(ProviderAuthOptions {

@@ -23,7 +23,7 @@ fn interrupted_copy(
     cut: kar::chat::ChatCursor,
 ) -> kar::chat::ChatStore {
     let store = kar::chat::ChatStore::open(destination).unwrap();
-    let filename = format!("{id}.oarchat");
+    let filename = format!("{id}.karchat");
     let bytes = std::fs::read(source.join(&filename)).unwrap();
     let offset: usize = cut.to_string().split_once(':').unwrap().1.parse().unwrap();
     std::fs::write(destination.join(filename), &bytes[..offset]).unwrap();
@@ -100,7 +100,7 @@ fn respond_observed(
         })
         .map(Value::to_string)
         .unwrap_or_default();
-    if last.contains("oar-fixture-decline-credential") {
+    if last.contains("kar-fixture-decline-credential") {
         let response = json!({"type":"error","error":{"type":"authentication_error","message":"fixture credential was rejected"}}).to_string();
         write!(
             stream,
@@ -110,7 +110,7 @@ fn respond_observed(
         )?;
         return stream.flush();
     }
-    if last.contains("oar-fixture-provider-throttle") {
+    if last.contains("kar-fixture-provider-throttle") {
         let body = json!({"type":"error","error":{"type":"rate_limit_error","message":"The local fixture refused this request."}}).to_string();
         write!(
             stream,
@@ -121,7 +121,7 @@ fn respond_observed(
         return stream.flush();
     }
     if let Some(work) = workspace {
-        if last.contains("OAR-CRASH-AFTER-READ") && last.contains("tool_result") {
+        if last.contains("KAR-CRASH-AFTER-READ") && last.contains("tool_result") {
             let gate = work.parent().unwrap();
             std::fs::write(gate.join("model-waiting"), "")?;
             let limit = std::time::Instant::now() + Duration::from_secs(30);
@@ -177,7 +177,7 @@ fn respond_observed(
             let mut calls = log.lock().unwrap();
             let first = calls.is_empty();
             calls.push(request["messages"].clone());
-            if first && last.contains("oar-retry-once") {
+            if first && last.contains("kar-retry-once") {
                 let body = r#"{"type":"error","error":{"type":"overloaded_error","message":"503 Service Unavailable"}}"#;
                 return write!(
                     stream,
@@ -216,7 +216,7 @@ fn respond_observed(
         }
         if last.contains("opencode-settings-probe") {
             let actual = request["system"].to_string();
-            if !actual.contains("OPEN-BASE {env:OAR_LITERAL_PROBE}")
+            if !actual.contains("OPEN-BASE {env:KAR_LITERAL_PROBE}")
                 || !actual.contains("OPEN-APPEND-RS")
             {
                 reply_text = "missing-opencode-settings";
@@ -255,13 +255,13 @@ fn respond_observed(
             reply_text = "## Objective\nContinue the fixture conversation.\n## Work State\nThe earlier task finished successfully.";
         }
         let spawn_probe =
-            !summarizing && last.contains("OAR-SPAWN-BACKGROUND") && !last.contains("tool_result");
+            !summarizing && last.contains("KAR-SPAWN-BACKGROUND") && !last.contains("tool_result");
         let conversation = request["messages"].to_string();
         let steer_probe =
-            workspace.is_some() && !last.is_empty() && conversation.contains("OAR-LIVE-STEER-TOOL");
+            workspace.is_some() && !last.is_empty() && conversation.contains("KAR-LIVE-STEER-TOOL");
         if let Some(work) = workspace
-            && last.contains("OAR-LIVE-STEER-")
-            && !last.contains("OAR-LIVE-FOLLOWUP")
+            && last.contains("KAR-LIVE-STEER-")
+            && !last.contains("KAR-LIVE-FOLLOWUP")
         {
             std::fs::write(work.join("requested"), "")?;
             let until = std::time::Instant::now() + Duration::from_secs(12);
@@ -269,19 +269,19 @@ fn respond_observed(
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
-        if conversation.contains("OAR-LIVE-FOLLOWUP") {
+        if conversation.contains("KAR-LIVE-FOLLOWUP") {
             reply_text = "saw the follow-up";
         }
-        if !summarizing && last.contains("OAR-CHILD-REPLY") && !last.contains("tool_result") {
+        if !summarizing && last.contains("KAR-CHILD-REPLY") && !last.contains("tool_result") {
             // The parent should already have an end_turn before this child responds.
             std::thread::sleep(Duration::from_millis(600));
             reply_text = "open-child-finished";
         }
         let followup_write = workspace.is_some()
-            && conversation.contains("OAR-LIVE-STEER-TEXT")
-            && last.contains("OAR-LIVE-SECOND")
+            && conversation.contains("KAR-LIVE-STEER-TEXT")
+            && last.contains("KAR-LIVE-SECOND")
             && !last.contains("tool_result");
-        let fork_read = workspace.is_some() && last.contains("OAR-FORK-READ-SHARED");
+        let fork_read = workspace.is_some() && last.contains("KAR-FORK-READ-SHARED");
         if target.is_some()
             || schema_turn
             || spawn_probe
@@ -295,8 +295,8 @@ fn respond_observed(
                 .flatten()
                 .flat_map(|m| m["content"].as_array().into_iter().flatten())
                 .any(|part| part["type"] == "tool_result");
-            let background = last.contains("oar-background-task");
-            let asking = last.contains("oar-form-question");
+            let background = last.contains("kar-background-task");
+            let asking = last.contains("kar-form-question");
             if !answered || background || asking || schema_turn || spawn_probe {
                 let (name, id, input) = if fork_read {
                     (
@@ -308,7 +308,7 @@ fn respond_observed(
                     (
                         "subagent",
                         "call_child",
-                        json!({"agent":"general","description":"Check background events","prompt":"OAR-CHILD-REPLY"}),
+                        json!({"agent":"general","description":"Check background events","prompt":"KAR-CHILD-REPLY"}),
                     )
                 } else if followup_write {
                     (
@@ -357,7 +357,7 @@ fn respond_observed(
                             {"question":"Which checks?","header":"Checks","multiSelect":true,"options":[{"label":"Unit","description":"Unit suite"},{"label":"Replay","description":"Replay suite"}]}
                         ]}),
                     )
-                } else if last.contains("oar-pi-recover") {
+                } else if last.contains("kar-pi-recover") {
                     ("read", "pi_read_1", json!({"path":target}))
                 } else if background {
                     (
@@ -450,9 +450,9 @@ fn respond_observed(
         .into_iter()
         .flatten()
         .any(|v| v["call_id"] == "usage_spawn");
-    if last.contains("OAR-METER-PARENT") && !already_spawned {
+    if last.contains("KAR-METER-PARENT") && !already_spawned {
         let item = json!({"type":"function_call","id":"fc_meter","call_id":"usage_spawn","namespace":"collaboration","name":"spawn_agent",
-            "arguments":json!({"message":"OAR-METER-CHILD","task_name":"meter","fork_turns":"none"}).to_string(),"status":"completed"});
+            "arguments":json!({"message":"KAR-METER-CHILD","task_name":"meter","fork_turns":"none"}).to_string(),"status":"completed"});
         let response = json!({"id":"resp_spawn","object":"response","status":"completed","model":"gpt-5.1","output":[item],"usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4}});
         return send_events(
             stream,
@@ -464,10 +464,10 @@ fn respond_observed(
             ],
         );
     }
-    let child_measurement = last.contains("OAR-METER-CHILD")
+    let child_measurement = last.contains("KAR-METER-CHILD")
         || (!already_spawned
-            && !last.contains("OAR-METER-PARENT")
-            && request["input"].to_string().contains("OAR-METER-CHILD"));
+            && !last.contains("KAR-METER-PARENT")
+            && request["input"].to_string().contains("KAR-METER-CHILD"));
     let (spent_input, spent_output) = if child_measurement { (7, 3) } else { (2, 2) };
     let item = json!({"type":"message","id":"msg_fixture","role":"assistant","status":"completed","content":[{"type":"output_text","text":reply_text,"annotations":[]}]});
     let response = json!({"id":"resp_fixture","object":"response","status":"completed","model":"gpt-5.1","output":[item],"usage":{"input_tokens":spent_input,"output_tokens":spent_output,"total_tokens":spent_input+spent_output}});
@@ -513,7 +513,7 @@ model_provider = "fixture"
 [model_providers.fixture]
 name = "local test fixture"
 base_url = "http://127.0.0.1:{port}/v1"
-env_key = "OAR_FIXTURE_KEY"
+env_key = "KAR_FIXTURE_KEY"
 wire_api = "responses"
 [features]
 multi_agent = true
@@ -524,7 +524,7 @@ multi_agent_v2 = true
     let mut opts = SessionOptions::new(dir.path());
     opts.env.insert("CODEX_HOME".into(), home.into_os_string());
     opts.env
-        .insert("OAR_FIXTURE_KEY".into(), "only-a-fixture".into());
+        .insert("KAR_FIXTURE_KEY".into(), "only-a-fixture".into());
     let provider = runtime("codex").unwrap();
     missing_target(&provider, &opts).await;
     let session = provider.open(opts.clone()).await.unwrap();
@@ -665,7 +665,7 @@ multi_agent_v2 = true
     let mut feed = resumed.subscribe(Some(&cursor)).unwrap();
     assert_eq!(
         resumed
-            .prompt("OAR-METER-PARENT")
+            .prompt("KAR-METER-PARENT")
             .await
             .unwrap()
             .wait()
@@ -828,7 +828,7 @@ async fn actual_claude_input_receipts_and_reconnect() {
         .unwrap();
     let stale = ChatStore::open(dir.path().join("stale")).unwrap();
     // Save the host ledger before the input, then let the native session get ahead.
-    for suffix in ["oarchat", "lock"] {
+    for suffix in ["karchat", "lock"] {
         let file = format!("{id}.{suffix}");
         std::fs::copy(
             dir.path().join("current").join(&file),
@@ -1144,7 +1144,7 @@ async fn actual_claude_turn_and_resume() {
     let report = tokio::time::timeout(
         Duration::from_secs(35),
         resumed
-            .prompt("oar-fixture-decline-credential")
+            .prompt("kar-fixture-decline-credential")
             .await
             .unwrap()
             .report(),
@@ -1240,7 +1240,7 @@ async fn real_protocol_turn(provider_id: &str) {
         let agent_dir = dir.path().join("pi-agent");
         std::fs::create_dir_all(&agent_dir).unwrap();
         opts.env.insert(
-            "OAR_PI_AGENT_DIR".into(),
+            "KAR_PI_AGENT_DIR".into(),
             agent_dir.clone().into_os_string(),
         );
         std::fs::write(
@@ -1258,10 +1258,10 @@ async fn real_protocol_turn(provider_id: &str) {
         let config = json!({"providers":{"fixture":{"baseUrl":endpoint,"api":"anthropic-messages","apiKey":"test-credential","models":[{"id":"fixture","name":"Fixture","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":200000,"maxTokens":8192}]}}});
         std::fs::write(agent_dir.join("models.json"), config.to_string()).unwrap();
     } else {
-        opts.settings.system_prompt = Some("OPEN-BASE {env:OAR_LITERAL_PROBE}".into());
+        opts.settings.system_prompt = Some("OPEN-BASE {env:KAR_LITERAL_PROBE}".into());
         opts.settings.append_system_prompt = Some("OPEN-APPEND-RS".into());
         opts.env
-            .insert("OAR_LITERAL_PROBE".into(), "should-not-interpolate".into());
+            .insert("KAR_LITERAL_PROBE".into(), "should-not-interpolate".into());
         opencode_model(&mut opts, &endpoint);
     }
     let runtime = runtime(provider_id).unwrap();
@@ -1386,7 +1386,7 @@ async fn real_protocol_turn(provider_id: &str) {
         let cursor = resumed.records().last().unwrap().cursor();
         let mut observed = resumed.subscribe(Some(&cursor)).unwrap();
         let parent = resumed
-            .prompt("OAR-SPAWN-BACKGROUND")
+            .prompt("KAR-SPAWN-BACKGROUND")
             .await
             .unwrap()
             .report()
@@ -1509,7 +1509,7 @@ async fn real_protocol_turn(provider_id: &str) {
     assert_eq!(resumed.snapshot().manual_compaction.as_ref(), Some(&report));
     if provider_id == "opencode" {
         let turn = resumed
-            .prompt("oar-fixture-provider-throttle")
+            .prompt("kar-fixture-provider-throttle")
             .await
             .unwrap();
         let result = tokio::time::timeout(Duration::from_secs(150), turn.wait())
@@ -1642,19 +1642,19 @@ async fn live_steering(provider: &str, tool: bool) {
         .expect("native model request did not reach the fixture");
         let image = kar::InputImage::read(&file).unwrap();
         session
-            .steer_images("OAR-LIVE-FOLLOWUP", vec![image])
+            .steer_images("KAR-LIVE-FOLLOWUP", vec![image])
             .await
             .unwrap();
         if provider == "claude" {
-            session.steer("OAR-LIVE-SECOND").await.unwrap();
+            session.steer("KAR-LIVE-SECOND").await.unwrap();
         }
         std::fs::write(work.join("release"), "").unwrap();
     };
     let (turn, ()) = tokio::time::timeout(Duration::from_secs(35), async {
         let prompt = if tool {
-            "OAR-LIVE-STEER-TOOL"
+            "KAR-LIVE-STEER-TOOL"
         } else {
-            "OAR-LIVE-STEER-TEXT"
+            "KAR-LIVE-STEER-TEXT"
         };
         tokio::join!(session.send(turn_id, prompt), steer)
     })
@@ -1713,15 +1713,15 @@ async fn live_steering(provider: &str, tool: bool) {
     assert_eq!(
         rec.iter()
             .flat_map(|r| &r.events)
-            .filter(|e| matches!(e,Event::SteeringInput {text,status,..} if text=="OAR-LIVE-FOLLOWUP" && *status == expected_status))
+            .filter(|e| matches!(e,Event::SteeringInput {text,status,..} if text=="KAR-LIVE-FOLLOWUP" && *status == expected_status))
             .count(),
         1
     );
     assert!(requests.lock().unwrap().iter().any(|messages| {
         let body = messages.to_string();
         body.contains("tool_result") == tool
-            && body.matches("OAR-LIVE-FOLLOWUP").count() == 1
-            && (provider != "claude" || body.matches("OAR-LIVE-SECOND").count() == 1)
+            && body.matches("KAR-LIVE-FOLLOWUP").count() == 1
+            && (provider != "claude" || body.matches("KAR-LIVE-SECOND").count() == 1)
             && body.contains(png)
     }));
     session.close().await.unwrap();
@@ -1790,9 +1790,9 @@ async fn live_steering(provider: &str, tool: bool) {
                 _ => None,
             })
             .collect();
-        assert_eq!(messages, ["OAR-LIVE-FOLLOWUP", "OAR-LIVE-SECOND"]);
+        assert_eq!(messages, ["KAR-LIVE-FOLLOWUP", "KAR-LIVE-SECOND"]);
         assert!(
-            matches!(store.enqueue(chat, ids[1], "OAR-LIVE-SECOND"), Err(kar::Error::Refused(reason)) if reason.contains("steering input"))
+            matches!(store.enqueue(chat, ids[1], "KAR-LIVE-SECOND"), Err(kar::Error::Refused(reason)) if reason.contains("steering input"))
         );
         if !tool {
             assert_eq!(
@@ -1811,7 +1811,7 @@ async fn live_steering(provider: &str, tool: bool) {
         }
     }
     for (activity, role, expected) in [
-        (reply, Role::User, "OAR-LIVE-FOLLOWUP"),
+        (reply, Role::User, "KAR-LIVE-FOLLOWUP"),
         (reply, Role::Assistant, "saw the follow-up"),
     ] {
         assert_eq!(activity.items.iter().filter(|item| matches!(&item.item, Item::Message {role: r, text, ..} if *r == role && text == expected)).count(), 1);
@@ -1844,7 +1844,7 @@ async fn live_steering(provider: &str, tool: bool) {
             .resume_with(chat, |o| o.env = env.clone())
             .await
             .unwrap();
-        let repaired = resumed.send(turn_id, "OAR-LIVE-STEER-TOOL").await.unwrap();
+        let repaired = resumed.send(turn_id, "KAR-LIVE-STEER-TOOL").await.unwrap();
         assert_eq!(repaired.status, TurnStatus::Completed);
         assert_eq!(repaired.steered_inputs, turn.steered_inputs);
         assert_eq!(repaired.items, turn.items);
@@ -1923,13 +1923,13 @@ async fn live_steering(provider: &str, tool: bool) {
             let history = branch.history().unwrap();
             assert_eq!(!history.turns[0].steered_inputs.is_empty(), includes_steer);
             branch
-                .send(Uuid::new_v4(), "OAR-BRANCH-PROBE")
+                .send(Uuid::new_v4(), "KAR-BRANCH-PROBE")
                 .await
                 .unwrap();
             let model = requests.lock().unwrap().last().unwrap().to_string();
-            assert!(model.contains("OAR-BRANCH-PROBE") && model.contains("OAR-LIVE-STEER-TEXT"));
-            assert_eq!(model.contains("OAR-LIVE-FOLLOWUP"), includes_steer);
-            assert_eq!(model.contains("OAR-LIVE-SECOND"), includes_steer);
+            assert!(model.contains("KAR-BRANCH-PROBE") && model.contains("KAR-LIVE-STEER-TEXT"));
+            assert_eq!(model.contains("KAR-LIVE-FOLLOWUP"), includes_steer);
+            assert_eq!(model.contains("KAR-LIVE-SECOND"), includes_steer);
             branch.close().await.unwrap();
         }
     }
@@ -1968,7 +1968,7 @@ async fn actual_claude_waits_for_host_approval() {
     options.approvals = kar::ApprovalMode::Host;
     options
         .env
-        .insert("OAR_TEST_SECRET".into(), "fixture approved".into());
+        .insert("KAR_TEST_SECRET".into(), "fixture approved".into());
     options.env.insert("HOME".into(), dir.path().into());
     options
         .env
@@ -2147,7 +2147,7 @@ async fn actual_claude_waits_for_host_approval() {
         };
     let (background, id) = tokio::time::timeout(Duration::from_secs(15), async {
         tokio::join!(
-            session.send(uuid::Uuid::new_v4(), "oar-background-task"),
+            session.send(uuid::Uuid::new_v4(), "kar-background-task"),
             control
         )
     })
@@ -2209,7 +2209,7 @@ async fn actual_claude_waits_for_host_approval() {
     };
     let (answer, ()) = tokio::time::timeout(Duration::from_secs(18), async {
         tokio::join!(
-            session.send(uuid::Uuid::new_v4(), "oar-form-question"),
+            session.send(uuid::Uuid::new_v4(), "kar-form-question"),
             questions
         )
     })
@@ -2269,7 +2269,7 @@ model_provider = "fixture"
 [model_providers.fixture]
 name = "loopback"
 base_url = "http://127.0.0.1:{port}/v1"
-env_key = "OAR_FIXTURE_KEY"
+env_key = "KAR_FIXTURE_KEY"
 wire_api = "responses"
 "#
         ),
@@ -2286,8 +2286,8 @@ wire_api = "responses"
             .env("ANTHROPIC_API_KEY", "local-fixture-key")
             .env("ANTHROPIC_AUTH_TOKEN", "")
             .env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"))
-            .env("OAR_FIXTURE_KEY", "local-fixture-key")
-            .env("OAR_CHAT_DIR", base.join("store"))
+            .env("KAR_FIXTURE_KEY", "local-fixture-key")
+            .env("KAR_CHAT_DIR", base.join("store"))
             .args(["chat", "--json"]);
         cmd
     };
@@ -2299,7 +2299,7 @@ wire_api = "responses"
                 provider,
                 "orange-original",
                 "--name",
-                "oar-fixture",
+                "kar-fixture",
                 "--effort",
                 "low",
                 "--service-tier",
@@ -2415,7 +2415,7 @@ wire_api = "responses"
             let name = format!("{id}.{suffix}");
             std::fs::copy(base.join("store").join(&name), lost.join(&name)).unwrap();
         }
-        let name = format!("{id}.oarchat");
+        let name = format!("{id}.karchat");
         let ledger = std::fs::read_to_string(base.join("store").join(&name)).unwrap();
         let mut prefix = String::new();
         for line in ledger.lines() {
@@ -2439,7 +2439,7 @@ wire_api = "responses"
             let output = tokio::time::timeout(
                 Duration::from_secs(30),
                 cmd()
-                    .env("OAR_CHAT_DIR", &lost)
+                    .env("KAR_CHAT_DIR", &lost)
                     .args(["resume", "--chat", &id.to_string()])
                     .output(),
             )
@@ -2604,7 +2604,7 @@ wire_api = "responses"
                     .insert("CODEX_HOME".into(), cli_home.clone().into_os_string());
                 options
                     .env
-                    .insert("OAR_FIXTURE_KEY".into(), "local-fixture-key".into());
+                    .insert("KAR_FIXTURE_KEY".into(), "local-fixture-key".into());
             })
             .await
             .unwrap();
@@ -2933,7 +2933,7 @@ async fn actual_cursor_acp_subagents_handshake() {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
-    let program = std::env::var_os("OAR_CURSOR_BIN").unwrap_or_else(|| "cursor-agent".into());
+    let program = std::env::var_os("KAR_CURSOR_BIN").unwrap_or_else(|| "cursor-agent".into());
     for opt_in in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let mut cmd = tokio::process::Command::new(&program);

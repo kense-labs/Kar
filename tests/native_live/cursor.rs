@@ -103,8 +103,8 @@ fn command(dir: &Path, endpoint: &str, args: &[&str]) -> tokio::process::Command
         .env("APPDATA", dir)
         .env("LOCALAPPDATA", dir)
         .env("XDG_CONFIG_HOME", dir)
-        .env("OAR_CHAT_DIR", dir.join("chats"))
-        .env("CURSOR_API_KEY", "oar-loopback-test")
+        .env("KAR_CHAT_DIR", dir.join("chats"))
+        .env("CURSOR_API_KEY", "kar-loopback-test")
         .env("CURSOR_API_ENDPOINT", endpoint)
         .env("HTTPS_PROXY", "http://127.0.0.1:1")
         .env("HTTP_PROXY", "http://127.0.0.1:1")
@@ -132,7 +132,7 @@ async fn cli(dir: &Path, endpoint: &str, args: &[&str]) -> Output {
 #[tokio::test]
 #[ignore = "requires Cursor CLI with ACP; uses a loopback metadata service and a local slash command"]
 async fn actual_cursor_missing_session_preserves_history_and_queue() {
-    let program = std::env::var("OAR_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".into());
+    let program = std::env::var("KAR_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".into());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let workspace = dir.join("work");
@@ -202,7 +202,7 @@ async fn actual_cursor_missing_session_preserves_history_and_queue() {
 #[tokio::test]
 #[ignore = "requires Cursor CLI with ACP and a parameterized model picker"]
 async fn actual_cursor_parameterized_models_and_legacy_variants() {
-    let program = std::env::var("OAR_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".into());
+    let program = std::env::var("KAR_CURSOR_BIN").unwrap_or_else(|_| "cursor-agent".into());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

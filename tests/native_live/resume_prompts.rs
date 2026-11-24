@@ -36,7 +36,7 @@ model_provider = "fixture"
 [model_providers.fixture]
 name = "Loopback fixture"
 base_url = "{endpoint}/v1"
-env_key = "OAR_FIXTURE_KEY"
+env_key = "KAR_FIXTURE_KEY"
 wire_api = "responses"
 "#
                 ),
@@ -44,7 +44,7 @@ wire_api = "responses"
             .unwrap();
             opts.env.insert("CODEX_HOME".into(), home.into());
             opts.env
-                .insert("OAR_FIXTURE_KEY".into(), "only-a-fixture".into());
+                .insert("KAR_FIXTURE_KEY".into(), "only-a-fixture".into());
         }
         "claude" => {
             opts.model = Some("sonnet".into());
@@ -62,7 +62,7 @@ wire_api = "responses"
         "pi" => {
             fs::write(home.join("models.json"), json!({"providers":{"fixture":{"baseUrl":endpoint,"api":"anthropic-messages","apiKey":"local-fixture","models":[{"id":"fixture","name":"Fixture","reasoning":false,"input":["text"],"contextWindow":200000,"maxTokens":8192}]}}}).to_string()).unwrap();
             opts.model = Some("fixture/fixture".into());
-            opts.env.insert("OAR_PI_AGENT_DIR".into(), home.into());
+            opts.env.insert("KAR_PI_AGENT_DIR".into(), home.into());
             opts.env.insert("PI_OFFLINE".into(), "1".into());
         }
         _ => unreachable!(),

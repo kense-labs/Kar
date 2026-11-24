@@ -190,18 +190,18 @@ impl ChatStore {
         })
     }
     pub fn local() -> Result<Self> {
-        if let Some(dir) = std::env::var_os("OAR_CHAT_DIR").filter(|v| !v.is_empty()) {
+        if let Some(dir) = std::env::var_os("KAR_CHAT_DIR").filter(|v| !v.is_empty()) {
             return Self::open(dir);
         }
         let state = std::env::var_os("XDG_STATE_HOME")
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
             .or_else(|| std::env::home_dir().map(|p| p.join(".local/state")))
-            .ok_or_else(|| Error::Protocol("set OAR_CHAT_DIR to a writable directory".into()))?;
-        Self::open(state.join("oar/chats"))
+            .ok_or_else(|| Error::Protocol("set KAR_CHAT_DIR to a writable directory".into()))?;
+        Self::open(state.join("kar/chats"))
     }
     fn path(&self, id: Uuid) -> PathBuf {
-        self.dir.join(format!("{id}.oarchat"))
+        self.dir.join(format!("{id}.karchat"))
     }
     /// Ask in a disposable native fork of a saved conversation.
     pub async fn side_question(&self, id: Uuid, question: &str) -> Result<String> {
@@ -227,7 +227,7 @@ impl ChatStore {
         for item in std::fs::read_dir(&self.dir)? {
             let item = item?;
             let path = item.path();
-            if path.extension().is_none_or(|s| s != "oarchat") {
+            if path.extension().is_none_or(|s| s != "karchat") {
                 continue;
             }
             let Some(id) = path

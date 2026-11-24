@@ -2,7 +2,7 @@
 use serde_json::Value;
 use std::{fs, path::Path, process::Command};
 fn check(id: &str, skill_dir: &str) {
-    let binary = std::env::var_os(format!("OAR_{}_BIN", id.to_ascii_uppercase())).unwrap();
+    let binary = std::env::var_os(format!("KAR_{}_BIN", id.to_ascii_uppercase())).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let profile = home.join("config");
@@ -128,49 +128,49 @@ fn check(id: &str, skill_dir: &str) {
     );
 }
 #[test]
-#[ignore = "requires OAR_KIMI_BIN"]
+#[ignore = "requires KAR_KIMI_BIN"]
 fn kimi() {
     check("kimi", ".agents");
 }
 #[test]
-#[ignore = "requires OAR_CODEX_BIN"]
+#[ignore = "requires KAR_CODEX_BIN"]
 fn codex() {
     check("codex", ".agents");
 }
 #[test]
-#[ignore = "requires OAR_FACTORY_BIN"]
+#[ignore = "requires KAR_FACTORY_BIN"]
 fn factory() {
     check("factory", ".factory");
 }
 #[test]
-#[ignore = "requires OAR_QWEN_BIN"]
+#[ignore = "requires KAR_QWEN_BIN"]
 fn qwen() {
     check("qwen", ".qwen");
 }
 
 #[test]
-#[ignore = "requires OAR_DEVIN_BIN"]
+#[ignore = "requires KAR_DEVIN_BIN"]
 fn devin() {
     check("devin", ".agents");
 }
 
 #[test]
-#[ignore = "requires OAR_CODEX_BIN; isolated profile and a local Rust stdio MCP server"]
+#[ignore = "requires KAR_CODEX_BIN; isolated profile and a local Rust stdio MCP server"]
 fn codex_mcp_and_tools() {
     native_mcp("codex");
 }
 #[test]
-#[ignore = "requires OAR_CLAUDE_BIN"]
+#[ignore = "requires KAR_CLAUDE_BIN"]
 fn claude_commands_mcp_and_tools() {
     native_mcp("claude");
 }
 #[test]
-#[ignore = "requires OAR_GROK_BIN"]
+#[ignore = "requires KAR_GROK_BIN"]
 fn grok_mcp() {
     native_mcp("grok");
 }
 fn native_mcp(id: &str) {
-    let binary = std::env::var_os(format!("OAR_{}_BIN", id.to_ascii_uppercase())).unwrap();
+    let binary = std::env::var_os(format!("KAR_{}_BIN", id.to_ascii_uppercase())).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let workspace = tmp.path().join("workspace");
     let config = tmp.path().join("codex");
@@ -272,18 +272,18 @@ fn native_mcp(id: &str) {
 }
 
 #[test]
-#[ignore = "requires OAR_GROK_BIN"]
+#[ignore = "requires KAR_GROK_BIN"]
 fn grok() {
     check("grok", ".grok");
 }
 #[test]
-#[ignore = "requires OAR_CLAUDE_BIN"]
+#[ignore = "requires KAR_CLAUDE_BIN"]
 fn claude() {
     check("claude", ".claude");
 }
 
 #[test]
-#[ignore = "requires OAR_OPENCODE_BIN (OpenCode 1 or 2)"]
+#[ignore = "requires KAR_OPENCODE_BIN (OpenCode 1 or 2)"]
 fn opencode() {
     check("opencode", ".opencode");
 }
@@ -295,9 +295,9 @@ mod native_skill_catalog;
 mod cursor_skill_catalog;
 
 #[test]
-#[ignore = "requires OAR_DSH_BIN and its Node host with native addon support"]
+#[ignore = "requires KAR_DSH_BIN and its Node host with native addon support"]
 fn isolated_dsh_global_skills_without_a_session() {
-    let bin = std::env::var_os("OAR_DSH_BIN").unwrap();
+    let bin = std::env::var_os("KAR_DSH_BIN").unwrap();
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workspace");
     let home = temp.path().join("home");

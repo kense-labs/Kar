@@ -55,7 +55,7 @@ impl Cybion {
     pub fn from_env() -> Result<Self> {
         let read =
             |name| std::env::var(name).map_err(|_| Error::Refused(format!("missing {name}")));
-        Self::new(&read("OAR_CYBION_BASE_URL")?, &read("OAR_CYBION_API_KEY")?)
+        Self::new(&read("KAR_CYBION_BASE_URL")?, &read("KAR_CYBION_API_KEY")?)
     }
 
     async fn request(

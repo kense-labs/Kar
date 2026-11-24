@@ -19,7 +19,7 @@ static DEVICE: OnceLock<Mutex<mpsc::Receiver<String>>> = OnceLock::new();
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
 fn frame(kind: &str, data: &[u8]) {
-    pipe::stdout(&[b"OAR-AUTH ", kind.as_bytes(), b" ", data, b"\n"].concat());
+    pipe::stdout(&[b"KAR-AUTH ", kind.as_bytes(), b" ", data, b"\n"].concat());
 }
 fn input_line() -> Option<String> {
     // Loading Pi can put fd 0 in nonblocking mode. Keep partial frames,
@@ -351,7 +351,7 @@ extern "C" fn dispatch(env: Handle, info: Handle) -> Handle {
 #[unsafe(no_mangle)]
 extern "C" fn napi_register_module_v1(env: Handle, exports: Handle) -> Handle {
     handle(env, |e| {
-        let sdk = std::env::var("OAR_RS_PI_AUTH_SDK").map_err(|_| "sdk")?;
+        let sdk = std::env::var("KAR_RS_PI_AUTH_SDK").map_err(|_| "sdk")?;
         let g = e.global()?;
         let process = e.get(g, c"process")?;
         let module = e.call(process, c"getBuiltinModule", &[e.text("node:module")?])?;

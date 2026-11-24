@@ -1,4 +1,4 @@
-//! Import legacy version 3 session recordings.
+//! Import Kar voyage v3 session recordings.
 use crate::{Direction, Error, Event, Outcome, Record, RecordKind, Result};
 use serde::Serialize;
 use serde_json::Value;
@@ -23,8 +23,8 @@ pub fn import(
         .transpose()?
         .ok_or_else(|| Error::Protocol("empty voyage".into()))?;
     let header: Value = serde_json::from_str(&first)?;
-    if header["kind"] != "header" || header["format"] != "oar-voyage/3" {
-        return Err(Error::Protocol("expected a version 3 voyage recording header".into()));
+    if header["kind"] != "header" || header["format"] != "kar-voyage/3" {
+        return Err(Error::Protocol("expected a kar-voyage/3 recording header".into()));
     }
     let mut summary = VoyageSummary {
         header,
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn imported_tool_result_and_pending_request_replay() {
         let header =
-            json!({"kind":"header","format":"oar-voyage/3","sessionId":"s","runtime":"codex"});
+            json!({"kind":"header","format":"kar-voyage/3","sessionId":"s","runtime":"codex"});
         let bodies = [
             json!({"kind":"request","id":"ask","direction":"toApp","body":{"kind":"native","type":"item/tool/requestUserInput","native":{"questions":[{"id":"q"}]}}}),
             json!({"kind":"response","requestId":"ask","body":{"kind":"answered","native":{}}}),
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn preserves_attribution_unknown_native_data_and_interrupted_captures() {
         let header =
-            json!({"kind":"header","format":"oar-voyage/3","sessionId":"root","runtime":"codex"});
+            json!({"kind":"header","format":"kar-voyage/3","sessionId":"root","runtime":"codex"});
         let native = json!({"kind":"frame","seq":0,"receivedAt":812,"sessionId":"child","agentPath":["tool-1"],"spanId":"turn-9","body":{"type":"custom","native":{"future":"field"},"events":[{"kind":"text_delta","text":"hello"},{"kind":"future_event"}]}});
         let row = json!({"kind":"record","record":native});
         let data = format!("{header}\n{row}\n");

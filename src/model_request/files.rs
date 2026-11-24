@@ -9,8 +9,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const PREFIX: &str = "oar-rs-claude-requests-";
-const SIGNATURE: &[u8] = b"oar-rs Claude request capture v1\n";
+const PREFIX: &str = "kar-rs-claude-requests-";
+const SIGNATURE: &[u8] = b"kar-rs Claude request capture v1\n";
 
 pub(super) type Directory = crate::private_dir::PrivateDir;
 pub(super) fn directory(cwd: &Path) -> Result<Directory> {

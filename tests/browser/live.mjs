@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
 const repo = fileURLToPath(new URL("../../",import.meta.url));
-const deps = resolve(process.env.OAR_BROWSER_DEPS ?? join(repo,"node_modules"));
-const require = createRequire(join(deps,"oar-browser-test.cjs"));
+const deps = resolve(process.env.KAR_BROWSER_DEPS ?? join(repo,"node_modules"));
+const require = createRequire(join(deps,"kar-browser-test.cjs"));
 const { build } = require("esbuild");
 const { chromium } = require("playwright-chromium");
 const dir = join(repo,"target/browser");

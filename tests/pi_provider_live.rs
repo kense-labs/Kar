@@ -23,10 +23,10 @@ fn options(home: &tempfile::TempDir) -> ProviderAuthOptions {
     ] {
         env.insert(k.into(), Some(home.path().into()));
     }
-    for k in ["OAR_PI_BIN", "OAR_PI_SDK_DIR", "PATH", "SystemRoot"] {
+    for k in ["KAR_PI_BIN", "KAR_PI_SDK_DIR", "PATH", "SystemRoot"] {
         env.insert(k.into(), std::env::var_os(k));
     }
-    env.insert("OAR_PI_AGENT_DIR".into(), Some(agent.as_os_str().into()));
+    env.insert("KAR_PI_AGENT_DIR".into(), Some(agent.as_os_str().into()));
     env.insert(
         "PI_CODING_AGENT_DIR".into(),
         Some(home.path().join("other-profile").into()),
@@ -169,7 +169,7 @@ async fn standalone_independent_files_never_target_the_default_profile() -> Resu
     let path = home.path().join("separate.json");
     fs::write(&path, marker)?;
     let mut opts = options(&home);
-    opts.installation.env.insert("OAR_PI_SDK_DIR".into(), None);
+    opts.installation.env.insert("KAR_PI_SDK_DIR".into(), None);
     let pi = kar::runtime("pi")?
         .pi_provider_auth_with_paths(opts, alternate_paths("separate.json", "elsewhere.json"))
         .await?;
@@ -186,7 +186,7 @@ async fn standalone_independent_files_never_target_the_default_profile() -> Resu
     Ok(())
 }
 #[tokio::test]
-#[ignore = "requires standalone Pi 1.6 and its matching OAR_PI_SDK_DIR"]
+#[ignore = "requires standalone Pi 1.6 and its matching KAR_PI_SDK_DIR"]
 async fn unusable_companion_leaves_credentials_intact() -> Result<()> {
     use kar::providers::ProviderErrorKind;
     let home = tempfile::tempdir()?;
@@ -204,7 +204,7 @@ async fn unusable_companion_leaves_credentials_intact() -> Result<()> {
         old.join("package.json"),
         r#"{"name":"@earendil-works/pi-coding-agent","version":"1.4.0","bin":{"pi":"dist/cli.js"}}"#,
     )?;
-    let paired = std::env::var_os("OAR_PI_SDK_DIR").expect("official matching companion");
+    let paired = std::env::var_os("KAR_PI_SDK_DIR").expect("official matching companion");
     for (sdk, opts, expected) in [
         (
             old.into_os_string(),
@@ -225,7 +225,7 @@ async fn unusable_companion_leaves_credentials_intact() -> Result<()> {
         let mut cfg = options(&home);
         cfg.installation
             .env
-            .insert("OAR_PI_SDK_DIR".into(), Some(sdk));
+            .insert("KAR_PI_SDK_DIR".into(), Some(sdk));
         cfg.installation.env.insert("NODE_OPTIONS".into(), opts);
         let pi = kar::runtime("pi")?.pi_provider_auth(cfg).await?;
         for result in [
@@ -239,7 +239,7 @@ async fn unusable_companion_leaves_credentials_intact() -> Result<()> {
     Ok(())
 }
 #[tokio::test]
-#[ignore = "requires OAR_PI_BIN with auth check --json"]
+#[ignore = "requires KAR_PI_BIN with auth check --json"]
 async fn pi_metadata_resolution_and_native_logout() {
     let home = tempfile::tempdir().unwrap();
     let agent = home.path().join("agent");
@@ -357,7 +357,7 @@ async fn native_login_registry_and_keys() -> Result<()> {
     let auth = agent.join("auth.json");
     let data: serde_json::Value = serde_json::from_slice(&fs::read(&auth)?)?;
     assert_eq!(data["local-test"]["key"], "$!literal-$$FIXTURE");
-    let mut native = std::process::Command::new(std::env::var_os("OAR_PI_BIN").unwrap());
+    let mut native = std::process::Command::new(std::env::var_os("KAR_PI_BIN").unwrap());
     native
         .args(["auth", "print-api-key", "--provider", "local-test"])
         .current_dir(home.path())

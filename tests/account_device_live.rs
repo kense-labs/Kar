@@ -95,9 +95,9 @@ async fn exchange(State(state): State<Arc<Issuer>>, body: String) -> Json<Value>
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_CODEX_BIN with a configurable device-login issuer"]
+#[ignore = "requires KAR_CODEX_BIN with a configurable device-login issuer"]
 async fn native_device_code_and_cancellation() {
-    let binary = std::env::var_os("OAR_CODEX_BIN").expect("set OAR_CODEX_BIN");
+    let binary = std::env::var_os("KAR_CODEX_BIN").expect("set KAR_CODEX_BIN");
     let state = Arc::new(Issuer::default());
     let app = Router::new()
         .route("/api/accounts/deviceauth/usercode", post(user_code))
@@ -119,7 +119,7 @@ async fn native_device_code_and_cancellation() {
         fs::create_dir(&profile).unwrap();
         fs::write(profile.join("config.toml"),format!("cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{base}/backend-api\"\n[analytics]\nenabled = false\n")).unwrap();
         let mut env = private_env(home.path());
-        env.insert("OAR_CODEX_BIN".into(), Some(rt.program.as_os_str().into()));
+        env.insert("KAR_CODEX_BIN".into(), Some(rt.program.as_os_str().into()));
         env.insert("CODEX_HOME".into(), Some(profile.clone().into_os_string()));
         env.insert(
             "CODEX_APP_SERVER_LOGIN_ISSUER".into(),
@@ -176,11 +176,11 @@ async fn native_device_code_and_cancellation() {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_KIMI_BIN with region-aware device login"]
+#[ignore = "requires KAR_KIMI_BIN with region-aware device login"]
 async fn kimi_native_device_login_status_and_logout() {
     let mut runtime = kar::runtime("kimi").unwrap();
-    runtime.program = std::env::var_os("OAR_KIMI_BIN")
-        .expect("set OAR_KIMI_BIN")
+    runtime.program = std::env::var_os("KAR_KIMI_BIN")
+        .expect("set KAR_KIMI_BIN")
         .into();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -204,7 +204,7 @@ async fn kimi_native_device_login_status_and_logout() {
     fs::create_dir(&profile).unwrap();
     let mut env = private_env(home.path());
     env.insert(
-        "OAR_KIMI_BIN".into(),
+        "KAR_KIMI_BIN".into(),
         Some(runtime.program.as_os_str().into()),
     );
     for key in ["KIMI_CODE_HOME", "KIMI_SHARE_DIR"] {

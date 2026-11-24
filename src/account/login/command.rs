@@ -57,7 +57,7 @@ fn suppress(reader: Reader, probe: &Probe, cmd: &mut Command) -> Option<Option<t
                 return None;
             };
             let dir = tempfile::Builder::new()
-                .prefix("oar-kimi-browser-")
+                .prefix("kar-kimi-browser-")
                 .tempdir()
                 .ok()?;
             let cwd = std::fs::canonicalize(&probe.cwd).ok()?;

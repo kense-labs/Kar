@@ -195,7 +195,7 @@ mod unix {
                 .env("HOME", h)
                 .env("CLAUDE_CONFIG_DIR", h)
                 .env("CLAUDECODE", "parent")
-                .env("OAR_CLAUDE_RESET_PEER", case)
+                .env("KAR_CLAUDE_RESET_PEER", case)
                 .args(["account", "claude", action, "--bin"])
                 .arg(std::env::current_exe().unwrap())
                 .arg("--cwd")
@@ -374,7 +374,7 @@ mod unix {
         options
             .installation
             .env
-            .insert("OAR_CLAUDE_RESET_PEER".into(), Some("success".into()));
+            .insert("KAR_CLAUDE_RESET_PEER".into(), Some("success".into()));
         let mut other = options.clone();
         other.reset_id = Some("five_hour".into());
         let (many, conflict) = tokio::join!(
@@ -409,7 +409,7 @@ mod unix {
 async fn main() {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        if let Ok(case) = std::env::var("OAR_CLAUDE_RESET_PEER") {
+        if let Ok(case) = std::env::var("KAR_CLAUDE_RESET_PEER") {
             return unix::peer(&case);
         }
         unix::suite().await;

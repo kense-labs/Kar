@@ -22,7 +22,7 @@ impl Receipts {
         Ok(crate::account::profile::path(probe, "CLAUDE_CONFIG_DIR")
             .or_else(|| crate::account::profile_home(probe).map(|h| h.join(".claude")))
             .ok_or_else(|| protocol("Cannot locate the Claude profile for limit reset receipts"))?
-            .join("oar-limit-resets"))
+            .join("kar-limit-resets"))
     }
     pub async fn open(probe: &Probe, end: Instant) -> Result<Option<Self>> {
         let dir = Self::directory(probe)?;

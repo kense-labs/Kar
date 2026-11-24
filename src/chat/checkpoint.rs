@@ -185,7 +185,7 @@ impl ChatStore {
         // One lease per checkout across chat stores. Linked worktrees have independent working files.
         let locks = std::env::home_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join(".local/state/oar/workspace-locks");
+            .join(".local/state/kar/workspace-locks");
         let dir = ChatStore::open(locks)?;
         let f = File::options()
             .create(true)
@@ -298,9 +298,9 @@ impl ChatStore {
     ) -> Result<()> {
         let side = if point.before { "before" } else { "after" };
         let prefix = if chat.forked_from.is_some() {
-            format!("refs/oar/chats/{}/turns", chat.id)
+            format!("refs/kar/chats/{}/turns", chat.id)
         } else {
-            "refs/oar/turns".to_owned()
+            "refs/kar/turns".to_owned()
         };
         repo.reference(
             format!("{prefix}/{}/{side}", point.turn),

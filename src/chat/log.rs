@@ -15,9 +15,11 @@ use std::{
 };
 use uuid::Uuid;
 
+const CHAT_FORMAT: &str = "kar-chat/1";
+
 #[derive(Serialize, Deserialize)]
 struct Header {
-    version: u16,
+    format: String,
     chat: ChatInfo,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -860,7 +862,7 @@ pub(super) fn header(file: &mut File, info: &ChatInfo) -> Result<()> {
     append(
         file,
         &Header {
-            version: 1,
+            format: CHAT_FORMAT.to_owned(),
             chat: info.clone(),
         },
     )
@@ -896,9 +898,9 @@ pub(super) fn parse_header(reader: &mut impl BufRead, id: Option<Uuid>) -> Resul
         return Err(Error::Protocol("incomplete chat header".into()));
     }
     let header: Header = serde_json::from_slice(&line)?;
-    if header.version != 1 || id.is_some_and(|id| header.chat.id != id) {
+    if header.format != CHAT_FORMAT || id.is_some_and(|id| header.chat.id != id) {
         return Err(Error::Protocol(
-            "unsupported chat version or mismatched file identity".into(),
+            "unsupported chat format or mismatched file identity".into(),
         ));
     }
     Ok((State::new(header.chat), line.len() as u64))

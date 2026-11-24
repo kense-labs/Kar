@@ -49,9 +49,9 @@ impl ProviderInteraction for Input {
     }
 }
 #[tokio::test]
-#[ignore = "requires OAR_OPENCODE_BIN with OpenCode 2 integrations"]
+#[ignore = "requires KAR_OPENCODE_BIN with OpenCode 2 integrations"]
 async fn real_provider_registry_key_replacement_forms_and_logout() {
-    let bin = std::env::var_os("OAR_OPENCODE_BIN").expect("set OAR_OPENCODE_BIN");
+    let bin = std::env::var_os("KAR_OPENCODE_BIN").expect("set KAR_OPENCODE_BIN");
     let dir = tempfile::tempdir().unwrap();
     let mut env: BTreeMap<OsString, Option<OsString>> =
         std::env::vars_os().map(|(k, _)| (k, None)).collect();
@@ -82,7 +82,7 @@ async fn real_provider_registry_key_replacement_forms_and_logout() {
     for name in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
         env.insert(name.into(), Some("http://127.0.0.1:1".into()));
     }
-    env.insert("OAR_OPENCODE_BIN".into(), Some(bin));
+    env.insert("KAR_OPENCODE_BIN".into(), Some(bin));
     env.insert(
         "ANTHROPIC_API_KEY".into(),
         Some("private-environment-fixture".into()),

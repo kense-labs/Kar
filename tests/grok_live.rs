@@ -5,7 +5,7 @@ use std::{path::PathBuf, process::Command};
 #[test]
 #[ignore = "requires the official Grok CLI with the ACP model listing extension"]
 fn isolated_grok_lists_models_for_the_runtime_form_without_a_chat() {
-    let grok = PathBuf::from(std::env::var_os("OAR_GROK_BIN").expect("set OAR_GROK_BIN"))
+    let grok = PathBuf::from(std::env::var_os("KAR_GROK_BIN").expect("set KAR_GROK_BIN"))
         .canonicalize()
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -66,7 +66,7 @@ fn isolated_grok_lists_models_for_the_runtime_form_without_a_chat() {
 const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGNQDGyjKWIYtWDUglELRi0YtWDUglELRi0YtWDUglELhooFANhz4C4rw+sCAAAAAElFTkSuQmCC";
 
 #[tokio::test]
-#[ignore = "requires OAR_GROK_BIN; a local chat-completions model observes the image bytes"]
+#[ignore = "requires KAR_GROK_BIN; a local chat-completions model observes the image bytes"]
 async fn native_image_reaches_the_model() {
     use axum::{
         Json, Router,
@@ -80,7 +80,7 @@ async fn native_image_reaches_the_model() {
         State(requests): State<Arc<Mutex<Vec<Value>>>>,
         Json(body): Json<Value>,
     ) -> Response {
-        let main = body["messages"].to_string().contains("OAR_GROK_IMAGE");
+        let main = body["messages"].to_string().contains("KAR_GROK_IMAGE");
         if main {
             requests.lock().unwrap().push(body["messages"].clone());
         }
@@ -133,13 +133,13 @@ async fn native_image_reaches_the_model() {
         })
     };
     let mut rt = kar::runtime("grok").unwrap();
-    rt.program = std::env::var_os("OAR_GROK_BIN").unwrap().into();
+    rt.program = std::env::var_os("KAR_GROK_BIN").unwrap().into();
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         let session = rt.open(opts).await.unwrap();
         assert!(session.capabilities().image_input);
         let image = kar::InputImage::from_bytes(&STANDARD.decode(PNG).unwrap()).unwrap();
         let turn = session
-            .prompt_images("OAR_GROK_IMAGE", vec![image.clone()])
+            .prompt_images("KAR_GROK_IMAGE", vec![image.clone()])
             .await
             .unwrap()
             .report()
@@ -229,7 +229,7 @@ max_completion_tokens = 1000
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_GROK_BIN; exercises real Grok interjection against a loopback model"]
+#[ignore = "requires KAR_GROK_BIN; exercises real Grok interjection against a loopback model"]
 async fn native_interjection_reaches_the_next_model_step_and_both_clients() {
     use axum::{Json, Router, extract::State, response::Response, routing::post};
     use base64::{Engine, engine::general_purpose::STANDARD};
@@ -284,7 +284,7 @@ async fn native_interjection_reaches_the_next_model_step_and_both_clients() {
         let router=Router::new().fallback(post(respond)).with_state(model.clone());
         let server=tokio::spawn(async move {axum::serve(listener,router).await.unwrap()});
         let store=ChatStore::open(temp.path().join("chats")).unwrap();
-        let program=PathBuf::from(std::env::var_os("OAR_GROK_BIN").unwrap());
+        let program=PathBuf::from(std::env::var_os("KAR_GROK_BIN").unwrap());
         let chat=Arc::new(store.create("grok",Some(&program),opts).await.unwrap());
         let id=chat.info().id;
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -381,7 +381,7 @@ async fn terminal_cleanup(enabled: bool) {
                     m["role"] == "user" && m["content"].to_string().contains("RUN_LOCAL_TERMINAL")
                 });
         if should_run {
-            let command = r#"printf '%s' "${OAR_GROK_BIN+present}" > kar-env; printf started > kar-started; sleep 2; printf finished > kar-finished"#;
+            let command = r#"printf '%s' "${KAR_GROK_BIN+present}" > kar-env; printf started > kar-started; sleep 2; printf finished > kar-finished"#;
             let args = json!({"command":command, "description":"Write fixture markers in the temporary workspace."});
             let message = json!({"role":"assistant","tool_calls":[{"type":"function","id":"terminal-marker","function":{"name":"run_terminal_command","arguments":args.to_string()}}]});
             completion(&body, message, "tool_calls")
@@ -402,12 +402,12 @@ async fn terminal_cleanup(enabled: bool) {
             .unwrap()
     });
     if enabled {
-        options.remove_env("OAR_GROK_BIN").unwrap();
+        options.remove_env("KAR_GROK_BIN").unwrap();
     }
     options.settings.end_turn_processes_on_abort = enabled;
     options.approvals = kar::ApprovalMode::Host;
     let work = options.cwd.clone();
-    let program = PathBuf::from(std::env::var_os("OAR_GROK_BIN").unwrap());
+    let program = PathBuf::from(std::env::var_os("KAR_GROK_BIN").unwrap());
     let store = ChatStore::open(tmp.path().join("chats")).unwrap();
     let chat = store.create("grok", Some(&program), options).await.unwrap();
     let id = chat.info().id;
@@ -498,7 +498,7 @@ async fn default_abort_leaves_the_terminal_running() {
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_GROK_BIN; a loopback model calls a real Rust host tool"]
+#[ignore = "requires KAR_GROK_BIN; a loopback model calls a real Rust host tool"]
 async fn host_tool_is_ready_on_the_first_turn() {
     use axum::{Json, Router, extract::State, response::Response, routing::post};
     use kar::host_tools::HostTool;
@@ -578,7 +578,7 @@ async fn host_tool_is_ready_on_the_first_turn() {
         .with_state(model.clone());
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let mut rt = kar::runtime("grok").unwrap();
-    rt.program = std::env::var_os("OAR_GROK_BIN").unwrap().into();
+    rt.program = std::env::var_os("KAR_GROK_BIN").unwrap().into();
     tokio::time::timeout(std::time::Duration::from_secs(40), async {
         let session = rt.open(opts).await.unwrap();
         let mut records = session.subscribe(None).unwrap();

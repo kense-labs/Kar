@@ -40,7 +40,7 @@ impl CompanionError {
     pub(crate) fn message(&self) -> &'static str {
         match self {
             Self::Installation => {
-                "OAR_PI_SDK_DIR must point to an installed @earendil-works/pi-coding-agent SDK"
+                "KAR_PI_SDK_DIR must point to an installed @earendil-works/pi-coding-agent SDK"
             }
             Self::Version { .. } => "The Pi SDK must match the selected executable's exact version",
         }
@@ -149,9 +149,9 @@ impl Launch {
         let dist = match sdk(&rt.program) {
             Some(dist) => dist,
             None => {
-                let Some(dir) = crate::options::env_path(opts, "OAR_PI_SDK_DIR") else {
+                let Some(dir) = crate::options::env_path(opts, "KAR_PI_SDK_DIR") else {
                     return Err(crate::Error::Unsupported(
-                        "This Pi operation requires the official npm SDK or a matching SDK in OAR_PI_SDK_DIR".into(),
+                        "This Pi operation requires the official npm SDK or a matching SDK in KAR_PI_SDK_DIR".into(),
                     ));
                 };
                 let checked;

@@ -216,7 +216,7 @@ async fn observe_http_call(store: &ChatStore, chat: &ChatSession, peer: &Peer) -
 }
 
 #[tokio::test]
-#[ignore = "requires npm Pi or standalone Pi with matching OAR_PI_SDK_DIR, and Node with native addon support"]
+#[ignore = "requires npm Pi or standalone Pi with matching KAR_PI_SDK_DIR, and Node with native addon support"]
 async fn native_stdio_http_isolation_and_resume() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();
@@ -250,12 +250,12 @@ async fn native_stdio_http_isolation_and_resume() {
         opts.env.insert(k.into(), base.join(k).into());
     }
     opts.env
-        .insert("OAR_PI_AGENT_DIR".into(), agent.clone().into());
+        .insert("KAR_PI_AGENT_DIR".into(), agent.clone().into());
     opts.env.insert("PI_OFFLINE".into(), "1".into());
     opts.model = Some("fixture/fixture".into());
     opts.settings.pi_project_trusted = Some(true);
     let store = ChatStore::open(base.join("chats")).unwrap();
-    let bin = std::env::var_os("OAR_PI_BIN").unwrap();
+    let bin = std::env::var_os("KAR_PI_BIN").unwrap();
     let plain = opts.clone();
     opts.mcp_servers
         .insert("local-agent".into(), stdio(&marker));

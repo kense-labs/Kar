@@ -70,14 +70,14 @@ async fn generate(State(model): State<Arc<Gemini>>, uri: Uri, Json(body): Json<V
 }
 
 #[tokio::test]
-#[ignore = "requires OAR_ANTIGRAVITY_BIN; uses an isolated CLI and a local Gemini service"]
+#[ignore = "requires KAR_ANTIGRAVITY_BIN; uses an isolated CLI and a local Gemini service"]
 async fn steer_during_tool_loop_and_resume_both_clients() {
     tokio::time::timeout(Duration::from_secs(50), actual())
         .await
         .expect("Antigravity test exceeded its deadline");
 }
 async fn actual() {
-    let bin = PathBuf::from(std::env::var_os("OAR_ANTIGRAVITY_BIN").unwrap());
+    let bin = PathBuf::from(std::env::var_os("KAR_ANTIGRAVITY_BIN").unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();
     let home = base.join("home");
@@ -173,7 +173,7 @@ async fn actual() {
     // A separate store ends at exactly this durable prefix, as after a controller crash.
     let stale_dir = base.join("crash-prefix");
     let stale = ChatStore::open(&stale_dir).unwrap();
-    for suffix in ["oarchat", "lock"] {
+    for suffix in ["karchat", "lock"] {
         let file = format!("{id}.{suffix}");
         std::fs::copy(base.join("chats").join(&file), stale_dir.join(&file)).unwrap();
     }

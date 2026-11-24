@@ -21,7 +21,7 @@ impl Env {
 
 fn packet(bytes: &[u8]) {
     let mut output = io::stdout().lock();
-    let _ = output.write_all(b"OAR-DSH-SKILLS ");
+    let _ = output.write_all(b"KAR-DSH-SKILLS ");
     let _ = output.write_all(bytes);
     let _ = output.write_all(b"\n");
     let _ = output.flush();
