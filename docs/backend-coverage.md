@@ -58,3 +58,5 @@ cargo run --locked --example backend_suite -- --runtime kar --execute --output /
 每条记录保存实际提交、工作区状态、macOS 版本、架构、探测到的供应商程序和版本、操作命令及日志。完整 libtest 名称必须命中一个成功的测试。缺程序、版本不符、测试未命中、命令失败和命令完成有独立结果；任何未完成的操作都会使套件以非零码结束。外部条件在 `requires` 中列出。不带 `--execute` 只打印计划。
 
 `kimi-peer` 是固定上游 KAP 协议对端，需设置 `KAR_UPSTREAM_SOURCE`。浏览器 `pi-durable` 场景另需依 README 准备 Wasm、Chromium、固定 Harness 和 Node。记录浏览器与 Harness 版本时使用该宿主的运行日志。CLI 与部署 API 的逐项操作、外部认证和未建立 Kar 测试的上游断言，仍在固定源码对照和证据表中逐项核对。统一入口的命令成功后，按实际日志登记供应商断言结果。
+
+`kar` 的 `ignored-inventory` 项检查当前候选实际编译出的第一阶段标准 libtest 名称。它读取 Cargo 清单排除自带入口的测试程序，调用标准测试程序的列举功能，报告遗漏与失效的名字。若供应商可执行文件存在但版本探测未确认，入口继续保留实际场景输出并标为 `command_succeeded_version_unconfirmed`；显式要求某版本时须匹配主程序的探测结果。

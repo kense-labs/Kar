@@ -15,6 +15,9 @@ use std::{
 
 #[derive(Parser)]
 struct Args {
+    /// Compare the compiled macOS ignored test names with the checked-in matrix.
+    #[arg(long)]
+    audit_names: bool,
     /// Run whole scenarios. Omit to print the plan.
     #[arg(long)]
     execute: bool,
@@ -131,6 +134,23 @@ fn catalog() -> Result<Vec<Case>> {
     append(
         "kar",
         "contracts",
+        "ignored-inventory",
+        &[],
+        "cargo",
+        &[
+            "run",
+            "--locked",
+            "--quiet",
+            "--example",
+            "backend_suite",
+            "--",
+            "--audit-names",
+        ],
+        "list standard first-stage libtest harnesses and report missing or stale names",
+    );
+    append(
+        "kar",
+        "contracts",
         "source",
         &["KAR_UPSTREAM_SOURCE"],
         "cargo",
@@ -210,8 +230,92 @@ async fn installation(rt: &str, path: OsString, dir: &Path) -> Result<Value> {
         .await?;
     Ok(serde_json::to_value(snapshot)?)
 }
+// Custom test binaries may treat --list as a request to run a scenario. Read
+// the Cargo manifest before invoking libtest, including for new test targets.
+fn audit_names(matrix: &[Case]) -> Result<()> {
+    let manifest: toml::Value = toml::from_str(&fs::read_to_string("Cargo.toml")?)?;
+    let custom: BTreeSet<_> = manifest
+        .get("test")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|t| t.get("harness").and_then(toml::Value::as_bool) == Some(false))
+        .filter_map(|t| t.get("name").and_then(toml::Value::as_str))
+        .collect();
+    let meta: Value = serde_json::from_str(&output_text(
+        "cargo",
+        &["metadata", "--no-deps", "--locked", "--format-version", "1"],
+    )?)?;
+    let package = meta["packages"]
+        .as_array()
+        .context("cargo metadata packages")?
+        .iter()
+        .find(|p| p["name"] == "kar")
+        .context("Kar metadata")?;
+    let mut actual = BTreeSet::new();
+    for t in package["targets"]
+        .as_array()
+        .context("cargo metadata targets")?
+    {
+        let name = t["name"].as_str().context("test target name")?;
+        if !t["kind"]
+            .as_array()
+            .is_some_and(|k| k.iter().any(|v| v == "test"))
+            || custom.contains(name)
+            || name.starts_with("workbench_")
+        {
+            continue;
+        }
+        let listed = output_text(
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "--quiet",
+                "--test",
+                name,
+                "--",
+                "--ignored",
+                "--list",
+                "--format",
+                "terse",
+            ],
+        )?;
+        for case in listed
+            .lines()
+            .filter_map(|line| line.strip_suffix(": test"))
+        {
+            actual.insert((name.to_string(), case.to_string()));
+        }
+    }
+    let expected: BTreeSet<_> = matrix
+        .iter()
+        .filter(|c| c.libtest)
+        .map(|c| (c.target.clone(), c.test.clone()))
+        .collect();
+    for (target, test) in actual.difference(&expected) {
+        println!("unregistered {target}::{test}");
+    }
+    for (target, test) in expected.difference(&actual) {
+        println!("not compiled {target}::{test}");
+    }
+    ensure!(
+        actual == expected,
+        "compiled named tests differ from the macOS inventory"
+    );
+    println!("{} ignored first-stage cases listed", actual.len());
+    Ok(())
+}
 async fn run() -> Result<bool> {
     let a = Args::parse();
+    if a.audit_names {
+        ensure!(
+            cfg!(target_os = "macos"),
+            "compiled inventory is scoped to macOS"
+        );
+        audit_names(&catalog()?)?;
+        return Ok(true);
+    }
     let cases: Vec<_> = catalog()?
         .into_iter()
         .filter(|c| {
@@ -270,6 +374,7 @@ async fn run() -> Result<bool> {
         }
         let mut binaries = BTreeMap::new();
         let mut unavailable = false;
+        let mut versions_confirmed = true;
         for (n, key) in c
             .environment
             .iter()
@@ -277,9 +382,15 @@ async fn run() -> Result<bool> {
             .enumerate()
         {
             let path = std::env::var_os(key).expect("checked");
-            let cache_key = (c.runtime.clone(), path.clone());
+            let provider = key
+                .trim_start_matches("KAR_")
+                .split('_')
+                .next()
+                .context("binary variable")?
+                .to_ascii_lowercase();
+            let cache_key = (provider.clone(), path.clone());
             if !probes.contains_key(&cache_key) {
-                let snap = installation(&c.runtime, path.clone(), dir)
+                let snap = installation(&provider, path.clone(), dir)
                     .await
                     .unwrap_or_else(|e| json!({"kind":"probe_error","reason":e.to_string()}));
                 probes.insert(cache_key.clone(), snap);
@@ -289,7 +400,8 @@ async fn run() -> Result<bool> {
                 key,
                 json!({"path":path.to_string_lossy(),"installation":snap}),
             );
-            if snap["kind"] != "available"
+            versions_confirmed &= snap["kind"] == "available" && snap["version"].is_string();
+            if snap["kind"] == "missing"
                 || (n == 0
                     && a.version
                         .as_ref()
@@ -343,11 +455,13 @@ async fn run() -> Result<bool> {
                     "failed"
                 } else if !counted {
                     "no_matching_test"
+                } else if !versions_confirmed {
+                    "command_succeeded_version_unconfirmed"
                 } else {
                     "command_succeeded"
                 }
                 .into();
-                complete &= s.success() && counted;
+                complete &= s.success() && counted && versions_confirmed;
             }
             Err(e) => {
                 row["status"] = "launch_failed".into();

@@ -42,7 +42,7 @@ cursor	native_live	cursor::agent::actual_cursor_agent_turn	KAR_CURSOR_BIN	requir
 cursor	skill_inventory_live	cursor_skill_catalog::cursor_sdk_matches_native_discovery	KAR_CURSOR_OBSERVER_NODE,KAR_CURSOR_OBSERVER_TSX,KAR_CURSOR_SDK_OBSERVER	uses the upstream Cursor SDK observer, Node, tsx and the SDK's ripgrep
 devin	skill_inventory_live	devin	KAR_DEVIN_BIN	requires KAR_DEVIN_BIN
 dsh	dsh_live	acp_scoped_writable_directories	KAR_DSH_ACP_ROOTS_BIN,KAR_DSH_ACP_BIN	requires official DeepSeek Harness 0.2.2-rc.3 with a working native process sandbox
-dsh	dsh_live	cli_routing::cli_routes_to_the_selected_native_runtime	KAR_DSH_BIN	requires official DSH Web and Kimi ACP; two isolated loopback model endpoints
+dsh	dsh_live	cli_routing::cli_routes_to_the_selected_native_runtime	KAR_DSH_BIN,KAR_KIMI_ACP_BIN	requires official DSH Web and Kimi ACP; two isolated loopback model endpoints
 dsh	dsh_live	legacy_cli_opens_using_acp	KAR_DSH_ACP_BIN	requires the official earlier DSH CLI with the ACP profile
 dsh	dsh_live	legacy_refuses_scoped_directories_before_prompt	KAR_DSH_ACP_BIN	requires official DeepSeek Harness 0.2.1-rc.5
 dsh	dsh_live	legacy_scoped_tool_policy	KAR_DSH_ACP_BIN	requires official DeepSeek Harness with the ACP transport
@@ -144,7 +144,7 @@ pi	native_live	pi_history::recover_after_a_native_retry_without_resending	KAR_PI
 pi	native_live	pi_history::restore_native_turn_and_reconnect_both_clients	KAR_PI_BIN	requires KAR_PI_BIN; real Pi v3 transcript, native read tool and two HTTP clients
 pi	native_live	pi_history::three_native_writes_fork_at_middle_and_reopen_both_contexts	KAR_PI_BIN	requires KAR_PI_BIN; native write tools in three turns and a mid-history fork
 pi	native_live	resume_prompts::pi_prompt_persistence	KAR_PI_BIN	requires Pi RPC with a loopback model
-pi	pi_mcp_live	native_stdio_http_isolation_and_resume	KAR_PI_BIN,KAR_PI_SDK_DIR	requires npm Pi or standalone Pi with matching KAR_PI_SDK_DIR, and Node with native addon support
+pi	pi_mcp_live	native_stdio_http_isolation_and_resume	KAR_PI_BIN	requires npm Pi or standalone Pi with matching KAR_PI_SDK_DIR, and Node with native addon support
 pi	pi_provider_live	cancels_browser_prompt_and_times_out_key_prompt	KAR_PI_BIN	requires native Pi 1.6, with a local callback and no external token exchange
 pi	pi_provider_live	host_identity_is_lazy_and_reaches_chatgpt	KAR_PI_BIN	requires Pi 1.6; exercises ChatGPT identity on its native loopback port
 pi	pi_provider_live	model_catalog::sdk_catalog_capabilities_and_scoped_reload	KAR_PI_BIN	requires npm Pi 1.6 with a native SDK host
