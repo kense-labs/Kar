@@ -115,7 +115,7 @@ fn message(row: &Value, edits: &mut Vec<ChatEdit>, projection: &mut Projection) 
 }
 
 enum Transcript {
-    Admitted,
+    Open(Vec<ChatEdit>),
     Settled(Vec<ChatEdit>),
 }
 
@@ -139,9 +139,15 @@ fn read_turn(
     loop {
         line.clear();
         if reader.read_until(b'\n', &mut line)? == 0 || !line.ends_with(b"\n") {
-            // The opener carries the exact submitted messageId even when the
-            // process never writes its outcome. Later rows may be incomplete.
-            return Ok(previous.is_some().then_some(Transcript::Admitted));
+            // Only complete, chained rows before the next visible user input
+            // are attributable without a matching turn outcome.
+            if let Some(next) = edits
+                .iter()
+                .position(|edit| matches!(edit, ChatEdit::UserInput { .. }))
+            {
+                edits.truncate(next);
+            }
+            return Ok(previous.is_some().then_some(Transcript::Open(edits)));
         }
         let Ok(row) = serde_json::from_slice::<Value>(&line) else {
             return Ok(None);
@@ -227,22 +233,34 @@ pub(crate) async fn recover(
     })
     .await
     .map_err(|e| Error::Closed(e.to_string()))??;
-    let edits = match captured {
-        Some(Transcript::Settled(edits)) => edits,
-        Some(Transcript::Admitted) if !local.input_sent || local.native_turn_id.is_none() => {
-            Vec::new()
-        }
-        _ => return Ok(None),
+    let Some(transcript) = captured else {
+        return Ok(None);
     };
-    ChatFrame::transcript(
-        journal,
-        root,
-        turn,
-        "factory/transcript",
-        edits,
-        options,
-        |_| true,
-    )
+    let (edits, settled) = match transcript {
+        Transcript::Open(edits) => (edits, false),
+        Transcript::Settled(edits) => (edits, true),
+    };
+    let missing_receipt = !local.input_sent || local.native_turn_id.is_none();
+    let frame = |edits, accept: &dyn Fn(&[ChatEdit]) -> bool| {
+        ChatFrame::transcript(
+            journal,
+            root,
+            turn.clone(),
+            "factory/transcript",
+            edits,
+            options,
+            accept,
+        )
+    };
+    let content = frame(edits, &|edits| {
+        settled || local.transcript_adds_content(root, edits) == Some(true)
+    })?;
+    if content.is_none() && missing_receipt {
+        // The opener proves delivery even if the local stream contains later
+        // or unidentifiable content that a partial transcript cannot replace.
+        return frame(Vec::new(), &|_| true);
+    }
+    Ok(content)
 }
 
 #[cfg(test)]
@@ -276,13 +294,26 @@ mod tests {
         ));
         assert!(matches!(
             read(&rows[..3], &root, "hello"),
-            Some(Transcript::Admitted)
+            Some(Transcript::Open(ref edits)) if matches!(edits.as_slice(), [ChatEdit::Text { text, .. }] if text == "answer")
         ));
         assert!(matches!(
             read(&rows[..2], &root, "hello"),
-            Some(Transcript::Admitted)
+            Some(Transcript::Open(ref edits)) if edits.is_empty()
         ));
         assert!(read(&rows[..1], &root, "hello").is_none());
+        let mut multiple = rows[..3].to_vec();
+        multiple.push(
+            json!({"type":"message","id":"later-input","seq":12,"parentId":"reply",
+            "message":{"role":"user","content":[{"type":"text","text":"another prompt"}]}}),
+        );
+        multiple.push(
+            json!({"type":"message","id":"later-answer","seq":13,"parentId":"later-input",
+            "message":{"role":"assistant","content":[{"type":"text","text":"another answer"}]}}),
+        );
+        assert!(
+            matches!(read(&multiple, &root, "hello"), Some(Transcript::Open(ref edits))
+            if matches!(edits.as_slice(), [ChatEdit::Text {text, ..}] if text == "answer"))
+        );
         let mut partial = rows[..2].to_vec();
         partial[1]["id"] = json!(uuid::Uuid::new_v4());
         assert!(read(&partial, &root, "hello").is_none());
@@ -297,7 +328,7 @@ mod tests {
         assert!(read(&partial, &root, "hello").is_none());
         assert!(matches!(
             read(&rows[..2], &root, "hello"),
-            Some(Transcript::Admitted)
+            Some(Transcript::Open(ref edits)) if edits.is_empty()
         ));
         // Even an interrupted UTF-8 code point in the next row cannot erase
         // the already persisted input or provide a terminal outcome.
@@ -309,7 +340,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             read_turn(&file, &root, &cwd, &turn, "hello").unwrap(),
-            Some(Transcript::Admitted)
+            Some(Transcript::Open(ref edits)) if edits.is_empty()
         ));
         assert!(read(&rows, &root, "different").is_none());
         assert!(read(&rows, "unrelated", "hello").is_none());

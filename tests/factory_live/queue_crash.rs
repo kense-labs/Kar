@@ -24,16 +24,30 @@ fn native_rows(path: &Path) -> Vec<Value> {
 #[tokio::test]
 #[ignore = "requires Factory Droid and POSIX process groups"]
 async fn kill_after_admission_before_host_receipt() {
-    crash_at_receipt(false).await;
+    crash_at_receipt(Cut::Admitted).await;
 }
 
 #[tokio::test]
 #[ignore = "requires Factory Droid and POSIX process groups"]
 async fn kill_after_outcome_before_host_receipt() {
-    crash_at_receipt(true).await;
+    crash_at_receipt(Cut::Completed).await;
 }
 
-async fn crash_at_receipt(ended: bool) {
+#[tokio::test]
+#[ignore = "requires Factory Droid and POSIX process groups"]
+async fn kill_after_native_tool_result_before_host_receipt() {
+    crash_at_receipt(Cut::ToolResult).await;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cut {
+    Admitted,
+    ToolResult,
+    Completed,
+}
+
+async fn crash_at_receipt(boundary: Cut) {
+    let ended = boundary == Cut::Completed;
     let f = fixture().await;
     let dir = f._isolated.path().join("chats");
     let chat = f
@@ -92,7 +106,12 @@ async fn crash_at_receipt(ended: bool) {
     let group = NativeGroup::of(controller.id().unwrap());
     group.signal(Signal::SIGSTOP);
     // Larger than the pipe buffer while the child is stopped.
-    let large = format!("KAR_RECEIPT_FIRST {}", "x".repeat(256 * 1024));
+    let tool = if boundary == Cut::ToolResult {
+        " KAR_CRASH_READ"
+    } else {
+        ""
+    };
+    let large = format!("KAR_RECEIPT_FIRST{tool} {}", "x".repeat(256 * 1024));
     let inputs = [
         (Uuid::new_v4(), large.as_str()),
         (Uuid::new_v4(), "KAR_RECEIPT_SECOND"),
@@ -153,6 +172,16 @@ async fn crash_at_receipt(ended: bool) {
                     .iter()
                     .any(|r| r["type"] == "agent_turn_outcome" && r["turnId"] == key)
                     == ended
+                && (boundary != Cut::ToolResult
+                    || rows.iter().any(|r| {
+                        r["message"]["content"].as_array().is_some_and(|blocks| {
+                            blocks.iter().any(|b| {
+                                b["type"] == "tool_result"
+                                    && b["tool_use_id"].is_string()
+                                    && b["content"].to_string().contains("file-marker-kar")
+                            })
+                        })
+                    }))
         },
         "Droid persisted the matching input at the requested model boundary",
     )
@@ -161,6 +190,14 @@ async fn crash_at_receipt(ended: bool) {
         fs::read(&file).unwrap() == cut,
         "host receipt escaped the lock"
     );
+    let native_tool = native_rows(&transcript)
+        .into_iter()
+        .filter_map(|r| r["message"]["content"].as_array().cloned())
+        .flatten()
+        .find(|b| {
+            b["type"] == "tool_result" && b["content"].to_string().contains("file-marker-kar")
+        })
+        .and_then(|b| b["tool_use_id"].as_str().map(String::from));
     controller.kill().await.unwrap();
     assert!(!controller.wait().await.unwrap().success());
     drop(group);
@@ -194,6 +231,33 @@ async fn crash_at_receipt(ended: bool) {
             "native admission missing for {key} (terminal before crash: {ended})"
         );
         assert_eq!(t.native_turn_id, Some(key.to_string()));
+        if key == first && boundary == Cut::ToolResult {
+            let tools: Vec<_> = t
+                .items
+                .iter()
+                .filter_map(|i| match &i.item {
+                    Item::Tool { id, activity } => Some((id, activity)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                tools.len(),
+                1,
+                "missing or duplicate native Read after the crash"
+            );
+            let (id, activity) = tools[0];
+            assert_eq!(Some(id), native_tool.as_ref());
+            assert_eq!(activity.name.as_deref(), Some("Read"));
+            assert!(activity.finished);
+            assert!(
+                activity
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.text())
+                    .unwrap()
+                    .contains("file-marker-kar")
+            );
+        }
         assert_eq!(
             reopened.enqueue(id, key, text).unwrap().status,
             InputStatus::Sent
@@ -237,6 +301,14 @@ async fn crash_at_receipt(ended: bool) {
     let markers = calls
         .iter()
         .map(|body| {
+            if body["messages"]
+                .as_array()
+                .unwrap()
+                .last()
+                .is_some_and(|m| m["role"] == "tool")
+            {
+                return "TOOL_RESULT";
+            }
             let user = body["messages"]
                 .as_array()
                 .unwrap()
@@ -251,7 +323,11 @@ async fn crash_at_receipt(ended: bool) {
                 .unwrap()
         })
         .collect::<Vec<_>>();
-    assert_eq!(markers, ["SEED", "FIRST", "SECOND", "THIRD"]);
+    if boundary == Cut::ToolResult {
+        assert_eq!(markers, ["SEED", "FIRST", "TOOL_RESULT", "SECOND", "THIRD"]);
+    } else {
+        assert_eq!(markers, ["SEED", "FIRST", "SECOND", "THIRD"]);
+    }
     let native = native_rows(&transcript);
     for (key, _) in inputs {
         assert_eq!(
@@ -263,7 +339,7 @@ async fn crash_at_receipt(ended: bool) {
         );
     }
     println!(
-        "Factory terminal before kill={ended}; model saw {markers:?}; both clients matched {} durable events",
+        "Factory native boundary={boundary:?}; model saw {markers:?}; both clients matched {} durable events",
         canonical.len()
     );
 }

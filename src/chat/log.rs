@@ -884,6 +884,11 @@ impl State {
                     // Older journals stored full native transcripts as individual start/end events.
                     super::timeline::snapshot_tools(&mut frame.edits, frame.elided);
                     last.apply_transcript(&frame, &self.info.native_id);
+                    if self.info.protocol == Protocol::Factory
+                        && last.status == TurnStatus::Interrupted
+                    {
+                        last.finish(TurnStatus::Interrupted, &self.info.native_id);
+                    }
                 } else if self.info.protocol == Protocol::Dsh {
                     last.apply_edits(
                         &frame,

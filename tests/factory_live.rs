@@ -126,12 +126,22 @@ async fn completion(State(model): State<Model>, Json(body): Json<Value>) -> impl
         .map(|m| m["content"].to_string())
         .unwrap_or_default();
     let delta = if main && mcp_prompt.contains("KAR_RECEIPT_") {
-        if mcp_prompt.contains("KAR_RECEIPT_FIRST") {
-            let mut released = model.release.subscribe();
-            model.held.notify_one();
-            released.wait_for(|allow| *allow).await.unwrap();
+        if mcp_prompt.contains("KAR_CRASH_READ")
+            && body["messages"]
+                .as_array()
+                .and_then(|m| m.last())
+                .is_some_and(|m| m["role"] == "user")
+        {
+            reason = "tool_calls";
+            json!({"tool_calls":[{"index":0,"id":"call-crash-read","type":"function","function":{"name":"Read","arguments":json!({"file_path":model.file}).to_string()}}]})
+        } else {
+            if mcp_prompt.contains("KAR_RECEIPT_FIRST") {
+                let mut released = model.release.subscribe();
+                model.held.notify_one();
+                released.wait_for(|allow| *allow).await.unwrap();
+            }
+            json!({"content":"receipt probe complete"})
         }
-        json!({"content":"receipt probe complete"})
     } else if main && mcp_prompt.contains("KAR_FACTORY_MCP") {
         if body["messages"]
             .as_array()
