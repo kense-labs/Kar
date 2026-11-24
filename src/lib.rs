@@ -135,7 +135,7 @@ pub use runtime::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use session::{
-    Capabilities, Delivery, InputOptions, PromptDecision, PromptInterrupt, PromptRun,
+    Capabilities, Delivery, DeliverWhen, DeliverOptions, DeliverReceipt, DeliverLanded, MergeInput, MergedInput, InputOptions, PromptDecision, PromptInterrupt, PromptRun,
     PromptRunOptions, Session, Turn, TurnReport,
 };
 pub use stream::{

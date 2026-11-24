@@ -506,6 +506,7 @@ impl Actor {
         let mut exit = self.lease.exit();
         let (ack, reason, settle) = loop {
             if self.tasks.is_empty()
+                && !self.journal.delivery.paused()
                 && let Some((id, input, done)) = self.queue.pop_front()
             {
                 let _ = self.start(id, input.dispatch_queued(id), done).await;
@@ -515,6 +516,7 @@ impl Actor {
                 continue;
             }
             tokio::select! {
+                () = self.journal.delivery.resume.notified() => continue,
                 cmd=commands.recv()=>match cmd{
                     Some(Command::Close(ack))=>break (Some((self.journal.request_dispose(), ack)),"session closed".into(),true),
                     Some(cmd)=>self.command(cmd).await,

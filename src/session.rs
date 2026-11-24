@@ -1,3 +1,5 @@
+pub(crate) mod delivery;
+pub use delivery::{DeliverWhen, DeliverOptions, DeliverReceipt, DeliverLanded, MergeInput, MergedInput};
 mod image_input;
 mod prompt_run;
 mod qwen;
@@ -1701,6 +1703,9 @@ impl Session {
         let request = input.request_id;
         self.check_input("queue", id, &input)?;
         crate::input::check_text(&input.text, self.text_limit)?;
+        let coordinator = &self.journal.delivery;
+        let _admission = coordinator.queue_gate.lock().await;
+        let receiver = coordinator.track(id, &input, receiver);
         self.call(|tx| Command::Queue(id, input, tx, done)).await?;
         Ok(Turn {
             input_id: id,
@@ -1709,6 +1714,7 @@ impl Session {
         })
     }
     pub async fn withdraw(&self, id: Uuid) -> Result<()> {
+        let _admission = self.journal.delivery.queue_gate.lock().await;
         self.call(|tx| Command::Withdraw(id, tx)).await
     }
     /// Start now when idle, steer a live native turn when supported, otherwise queue.
@@ -1730,51 +1736,9 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<Delivery> {
-        let text = text.into();
-        let running_since = || match self.status() {
-            crate::observe::AgentStatus::Running { since_seq, .. } => Some(since_seq),
-            _ => None,
-        };
-        for _ in 0..4 {
-            if running_since().is_none() {
-                match self
-                    .prompt_images_with_id(input_id, text.clone(), images.clone())
-                    .await
-                {
-                    Ok(turn) => return Ok(Delivery::Started(turn)),
-                    Err(Error::Busy) => {}
-                    Err(error) => return Err(error),
-                }
-            }
-            let Some(target) = running_since() else {
-                continue;
-            };
-            if self.capabilities().steering {
-                match self
-                    .steer_images_with_id(input_id, text.clone(), images.clone())
-                    .await
-                {
-                    Ok(()) => return Ok(Delivery::Steered),
-                    Err(Error::Refused(_) | Error::Unsupported(_))
-                        if running_since() != Some(target) =>
-                    {
-                        continue;
-                    }
-                    Err(Error::Unsupported(_)) => {}
-                    Err(Error::Refused(reason))
-                        if matches!(
-                            reason.as_str(),
-                            "no active turn"
-                                | "no active DSH turn"
-                                | "runtime has not acknowledged this turn"
-                        ) => {}
-                    Err(error) => return Err(error),
-                }
-            }
-            let turn = self.queue_images_with_id(input_id, text, images).await?;
-            return Ok(Delivery::Queued { input_id, turn });
-        }
-        Err(Error::Busy)
+        let (id, input) = self.prepare_input(text.into(), InputOptions { input_id: Some(input_id), images, origin: None });
+        let _gate = self.delivery_gate().await;
+        self.deliver_single(id, input, DeliverWhen::Now).await.map(|(delivery, _)| delivery)
     }
     pub async fn steer(&self, text: impl Into<String>) -> Result<()> {
         self.steer_with_id(Uuid::new_v4(), text).await

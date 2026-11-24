@@ -668,6 +668,8 @@ struct State {
 }
 #[derive(Clone)]
 pub(crate) struct Journal {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) delivery: Arc<crate::session::delivery::Coordinator>,
     id: Uuid,
     state: Arc<Mutex<State>>,
 }
@@ -716,6 +718,8 @@ impl Journal {
     pub fn new(retained_bytes: Option<usize>) -> Result<Self> {
         retention::check_limit(retained_bytes)?;
         Ok(Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            delivery: Default::default(),
             id: Uuid::new_v4(),
             state: Arc::new(Mutex::new(State {
                 #[cfg(not(target_arch = "wasm32"))]

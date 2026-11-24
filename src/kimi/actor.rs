@@ -740,6 +740,7 @@ impl Actor {
         let mut close_ack = None;
         let reason = loop {
             if !self.busy()
+                && !self.journal.delivery.paused()
                 && let Some((id, input, done)) = self.queue.pop_front()
             {
                 self.journal.host_event(Event::InputRemoved {
@@ -756,6 +757,7 @@ impl Actor {
                 .chain(self.pending_abort.as_ref().map(|cancel| cancel.deadline))
                 .min();
             tokio::select! {
+                () = self.journal.delivery.resume.notified() => continue,
                 ()=async {if let Some(at)=deadline{tokio::time::sleep_until(at).await}else{std::future::pending::<()>().await}}=>{
                     if self.pending_abort.as_ref().is_some_and(|cancel| cancel.deadline <= tokio::time::Instant::now()) { break "Kimi cancellation exceeded its deadline".into(); }
                     let expired:Vec<_>=self.controls.iter().filter(|(_,v)|v.0<=tokio::time::Instant::now()).map(|(id,_)|id.clone()).collect();

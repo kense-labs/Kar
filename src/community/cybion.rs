@@ -827,6 +827,7 @@ impl ThreadActor {
     async fn run(mut self, mut inbox: mpsc::Receiver<Command>) {
         loop {
             if self.turn.is_none()
+                && !self.journal.delivery.paused()
                 && let Some((id, input, done)) = self.queue.pop_front()
             {
                 let _ = self.start(id, input.dispatch_queued(id), done).await;
@@ -842,6 +843,7 @@ impl ThreadActor {
                 self.poll_status().await
             };
             tokio::select! {
+                () = self.journal.delivery.resume.notified() => continue,
                 incoming = inbox.recv() => match incoming {
                     Some(command) => { if !self.command(command).await { break; } }
                     None => { self.release(None); break; }

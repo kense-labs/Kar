@@ -3404,6 +3404,7 @@ impl Actor {
                 && self.observed_root_turn().is_none()
                 && self.grok_owner().is_none()
                 && self.manual_compaction.is_none()
+                && !self.journal.delivery.paused()
                 && let Some(input) = self.queue.pop_front()
             {
                 self.record(
@@ -3436,6 +3437,7 @@ impl Actor {
             let deadline = self.pi_deadlines.values().map(|(at, _)| *at).min();
             let interrupt = self.interrupt_timeout.deadline();
             tokio::select! {
+                () = self.journal.delivery.resume.notified() => continue,
                 () = crate::prompt_suggestions::Native::changed(&mut self.suggestions) => {
                     if let Err(e) = self.configure_prompt_suggestions().await { break e.to_string() }
                 }
