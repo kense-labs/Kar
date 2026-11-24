@@ -1,0 +1,184 @@
+runtime	target	test	environment	requires
+antigravity	account_live	antigravity_usage_signed_out	KAR_ANTIGRAVITY_BIN	requires KAR_ANTIGRAVITY_BIN; uses an empty temporary profile
+antigravity	antigravity_live	steer_during_tool_loop_and_resume_both_clients	KAR_ANTIGRAVITY_BIN	requires KAR_ANTIGRAVITY_BIN; uses an isolated CLI and a local Gemini service
+antigravity	skill_inventory_live	native_skill_catalog::antigravity_skills	KAR_ANTIGRAVITY_BIN	requires KAR_ANTIGRAVITY_BIN; real catalog in isolated HOME
+claude	abort_fallback_live	claude_unanswered_interrupt	KAR_CLAUDE_BIN	requires native Claude with a loopback Messages endpoint
+claude	account_live	claude_key_status	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
+claude	claude_limit_reset_live	real_dialog_and_changed_remote_labels	KAR_CLAUDE_BIN	requires a native Claude Code with /limit-reset, all services use synthetic data locally
+claude	claude_request_live	native_root_request_matches_the_model_and_expires_on_close	KAR_CLAUDE_BIN	requires Claude Code >=2.1.274; runs real request capture with a loopback model
+claude	native_live	actual_claude_durable_chat_across_processes	KAR_CLAUDE_BIN	Claude Code 2.1.326+ for the side-question part, isolated home and loopback model
+claude	native_live	actual_claude_input_receipts_and_reconnect	KAR_CLAUDE_BIN	requires installed Claude Code; tests native UUID refusal, cancellation and HTTP replay against a loopback model
+claude	native_live	actual_claude_steering_and_reconnect	KAR_CLAUDE_BIN	requires Claude Code; checks both tool-loop and separate native turns with a loopback model
+claude	native_live	actual_claude_turn_and_resume	KAR_CLAUDE_BIN	requires an installed Claude Code binary; uses only a loopback model fixture
+claude	native_live	actual_claude_waits_for_host_approval	KAR_CLAUDE_BIN	requires a Claude Code binary; sends a tool request from a loopback fixture
+claude	native_live	claude_history::replay_native_blocks_after_controller_crash	KAR_CLAUDE_BIN	real Claude Code, isolated native transcript, local model and two HTTP clients
+claude	native_live	resume_prompts::claude_prompt_persistence	KAR_CLAUDE_BIN	requires Claude Code with a loopback model
+claude	skill_inventory_live	claude	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
+claude	skill_inventory_live	claude_commands_mcp_and_tools	KAR_CLAUDE_BIN	requires KAR_CLAUDE_BIN
+codex	abort_fallback_live	codex_unanswered_interrupt	KAR_CODEX_BIN	requires native Codex with a loopback Responses endpoint
+codex	account_device_live	native_device_code_and_cancellation	KAR_CODEX_BIN	requires KAR_CODEX_BIN with a configurable device-login issuer
+codex	account_live	codex_confirms_private_logout	KAR_CODEX_BIN	requires KAR_CODEX_BIN; only removes a synthetic key in a temporary file store
+codex	account_live	codex_file_login	KAR_CODEX_BIN	requires KAR_CODEX_BIN
+codex	account_live	codex_usage_recognizes_non_subscription_accounts	KAR_CODEX_BIN	requires KAR_CODEX_BIN; uses a temporary file store
+codex	codex_process_cleanup	abort_ends_the_foreground_tools_child	KAR_CODEX_BIN	real Codex interrupts a foreground tool with a separately grouped child
+codex	codex_process_cleanup	abort_spares_earlier_commands_and_mcp_workers	KAR_CODEX_BIN	real Codex app-server and exec_command with a loopback model and isolated MCP server
+codex	codex_process_cleanup	native_interrupt_preserves_the_default	KAR_CODEX_BIN	real Codex native interrupt without opt-in cleanup
+codex	host_tools	codex_reports_the_required_host_service_ready	KAR_CODEX_BIN	requires Codex CLI with thread-scoped MCP startup notifications
+codex	native_live	actual_codex_durable_chat_across_processes	KAR_CODEX_BIN	installed Codex CLI, isolated home and loopback model
+codex	native_live	actual_codex_managed_worktree_across_processes	KAR_CODEX_BIN	installed Codex CLI, local Git, isolated home and loopback model
+codex	native_live	actual_codex_turn_and_resume	KAR_CODEX_BIN	requires an installed Codex CLI; uses only a loopback model fixture
+codex	native_live	resume_prompts::codex_prompt_persistence	KAR_CODEX_BIN	requires Codex CLI with a loopback model
+codex	skill_inventory_live	codex	KAR_CODEX_BIN	requires KAR_CODEX_BIN
+codex	skill_inventory_live	codex_mcp_and_tools	KAR_CODEX_BIN	requires KAR_CODEX_BIN; isolated profile and a local Rust stdio MCP server
+cursor	account_device_live	cursor::native_cursor_login_and_cancellation	KAR_CURSOR_BIN	requires KAR_CURSOR_BIN with native file credential store
+cursor	account_live	cursor_confirms_empty_file_store_logout	KAR_CURSOR_BIN	requires KAR_CURSOR_BIN; only accesses a temporary file store
+cursor	account_live	cursor_file_store	KAR_CURSOR_BIN	requires KAR_CURSOR_BIN
+cursor	native_live	actual_cursor_acp_subagents_handshake	KAR_CURSOR_BIN	requires a Cursor CLI with ACP subagents; initializes two isolated connections without a model
+cursor	native_live	cursor::actual_cursor_missing_session_preserves_history_and_queue	KAR_CURSOR_BIN	requires Cursor CLI with ACP; uses a loopback metadata service and a local slash command
+cursor	native_live	cursor::actual_cursor_parameterized_models_and_legacy_variants	KAR_CURSOR_BIN	requires Cursor CLI with ACP and a parameterized model picker
+cursor	native_live	cursor::agent::actual_cursor_agent_turn	KAR_CURSOR_BIN	requires Cursor CLI with ACP; uses the local AgentService and native conversation store
+cursor	skill_inventory_live	cursor_skill_catalog::cursor_sdk_matches_native_discovery	KAR_CURSOR_OBSERVER_NODE,KAR_CURSOR_OBSERVER_TSX,KAR_CURSOR_SDK_OBSERVER	uses the upstream Cursor SDK observer, Node, tsx and the SDK's ripgrep
+devin	skill_inventory_live	devin	KAR_DEVIN_BIN	requires KAR_DEVIN_BIN
+dsh	dsh_live	acp_scoped_writable_directories	KAR_DSH_ACP_ROOTS_BIN,KAR_DSH_ACP_BIN	requires official DeepSeek Harness 0.2.2-rc.3 with a working native process sandbox
+dsh	dsh_live	cli_routing::cli_routes_to_the_selected_native_runtime	KAR_DSH_BIN	requires official DSH Web and Kimi ACP; two isolated loopback model endpoints
+dsh	dsh_live	legacy_cli_opens_using_acp	KAR_DSH_ACP_BIN	requires the official earlier DSH CLI with the ACP profile
+dsh	dsh_live	legacy_refuses_scoped_directories_before_prompt	KAR_DSH_ACP_BIN	requires official DeepSeek Harness 0.2.1-rc.5
+dsh	dsh_live	legacy_scoped_tool_policy	KAR_DSH_ACP_BIN	requires official DeepSeek Harness with the ACP transport
+dsh	dsh_live	legacy_session_log_upload	KAR_DSH_ACP_BIN	requires DSH 0.2.1-rc.5 and its official ACP profile
+dsh	dsh_live	legacy_session_mcp	KAR_DSH_ACP_BIN	requires DSH with the ACP profile; calls a real Rust stdio MCP server
+dsh	dsh_live	missing_native_resume	KAR_DSH_BIN	requires official DeepSeek Harness with the web transport
+dsh	dsh_live	native_goal_rounds_survive_restart	KAR_DSH_BIN	requires official DeepSeek Harness 0.2.2-rc.5; uses an isolated home and a loopback model
+dsh	dsh_live	native_inbox_withdraw_and_background_job_stop	KAR_DSH_BIN	requires official DeepSeek Harness 0.2.2-rc.5; uses an isolated home and a loopback model
+dsh	dsh_live	native_manual_compaction	KAR_DSH_BIN	requires official DeepSeek Harness 0.2.2-rc.5; uses an isolated home and a loopback model
+dsh	dsh_live	native_reused_tool_id_is_distinct_across_stream_replay_and_recovery	KAR_DSH_BIN	requires DSH Web with the native bash tool and a loopback model
+dsh	dsh_live	native_scoped_tool_policy	KAR_DSH_BIN	requires official DeepSeek Harness with the web transport
+dsh	dsh_live	native_scoped_writable_directories	KAR_DSH_BIN	requires official DeepSeek Harness with a working native process sandbox
+dsh	dsh_live	native_session_log_upload	KAR_DSH_BIN	requires DSH 0.2.2-rc.5+ and its official Web profile
+dsh	dsh_live	native_session_mcp	KAR_DSH_BIN	requires DSH with the Web profile; calls a real Rust stdio MCP server
+dsh	dsh_live	native_tool_queue_reconnect_and_resume	KAR_DSH_BIN	requires official DeepSeek Harness 0.2.2-rc.5; uses an isolated home and a loopback model
+dsh	dsh_live	native_uploader_already_disabled_and_conflicting_entries	KAR_DSH_BIN	requires DSH 0.2.2-rc.5+; inspects the plugin loader before the first model request
+dsh	dsh_live	prompts::legacy_system_prompt	KAR_DSH_ACP_BIN	requires real DSH ACP
+dsh	dsh_live	prompts::legacy_system_prompt_creation_hook	KAR_DSH_ACP_BIN	requires real DSH ACP
+dsh	dsh_live	prompts::native_system_prompt	KAR_DSH_BIN	requires real DSH Web
+dsh	dsh_live	prompts::native_system_prompt_creation_hook	KAR_DSH_BIN	requires real DSH Web
+dsh	dsh_live	public_abort_active_then_idle	KAR_DSH_BIN,KAR_DSH_ACP_BIN	requires KAR_DSH_BIN and KAR_DSH_ACP_BIN; aborts an active native model request
+dsh	dsh_live	public_prompt_readbacks	KAR_DSH_BIN,KAR_DSH_ACP_BIN	real Web and ACP DSH with loopback models
+dsh	dsh_live	queue_crash::kill_after_native_admission_before_durable_receipt	KAR_DSH_BIN	requires a real Web DSH and POSIX process groups
+dsh	dsh_live	queue_crash::kill_after_native_claim_without_terminal_or_durable_receipt	KAR_DSH_BIN	requires a real Web DSH and POSIX process groups
+dsh	dsh_live	titles::legacy_saved_title	KAR_DSH_ACP_BIN	requires real DSH ACP
+dsh	dsh_live	titles::native_saved_title	KAR_DSH_BIN	requires real DSH Web
+dsh	skill_inventory_live	isolated_dsh_global_skills_without_a_session	KAR_DSH_BIN	requires KAR_DSH_BIN and its Node host with native addon support
+factory	account_live	droid_confirms_active_environment_key	KAR_FACTORY_BIN	requires KAR_FACTORY_BIN; no keyring and only a synthetic environment key
+factory	account_live	factory_unvalidated_key	KAR_FACTORY_BIN	requires KAR_FACTORY_BIN
+factory	account_quota_live	factory_limits_from_pinned_installation	KAR_FACTORY_BIN	requires an installed KAR_FACTORY_BIN; synthetic Factory account and loopback only
+factory	factory_live	concurrent_question_answers_reconcile_on_reconnect	KAR_FACTORY_BIN	requires the official Factory Droid CLI; uses a loopback model
+factory	factory_live	listed_effort_levels_apply_across_native_resume	KAR_FACTORY_BIN	requires Factory Droid; uses a loopback model
+factory	factory_live	model_and_skill_catalogs_before_session_creation	KAR_FACTORY_BIN	requires the official Factory Droid CLI
+factory	factory_live	native_control_receipts_and_settings	KAR_FACTORY_BIN	requires the official Factory Droid CLI; uses a loopback model
+factory	factory_live	native_mcp_transports_on_create_and_resume	KAR_FACTORY_BIN	requires KAR_FACTORY_BIN; a loopback model calls Rust HTTP and stdio MCP services
+factory	factory_live	native_tool_approval_reaches_both_clients	KAR_FACTORY_BIN	requires the official Factory Droid CLI; uses a loopback model
+factory	factory_live	native_tool_feed_and_queued_resume	KAR_FACTORY_BIN	requires the official Factory Droid CLI; uses a loopback model
+factory	factory_live	public_adapter_queue_and_withdraw	KAR_FACTORY_BIN	requires real factory and a loopback model
+factory	factory_live	public_prompt_readbacks	KAR_FACTORY_BIN	real Factory Droid with a loopback model
+factory	factory_live	queue_crash::kill_after_admission_before_host_receipt	KAR_FACTORY_BIN	requires Factory Droid and POSIX process groups
+factory	factory_live	queue_crash::kill_after_native_tool_result_before_host_receipt	KAR_FACTORY_BIN	requires Factory Droid and POSIX process groups
+factory	factory_live	queue_crash::kill_after_outcome_before_host_receipt	KAR_FACTORY_BIN	requires Factory Droid and POSIX process groups
+factory	factory_live	unknown_effort_is_named_on_open_and_resume	KAR_FACTORY_BIN	requires Factory Droid; verifies public effort refusals without model traffic
+factory	skill_inventory_live	factory	KAR_FACTORY_BIN	requires KAR_FACTORY_BIN
+grok	account_live	grok_usage_signed_out	KAR_GROK_BIN	requires KAR_GROK_BIN; uses an empty temporary profile
+grok	grok_live	abort_ends_the_hosted_terminal	KAR_GROK_BIN	real Grok command, native abort and two HTTP chat clients
+grok	grok_live	default_abort_leaves_the_terminal_running	KAR_GROK_BIN	real Grok command continuing after its default native abort
+grok	grok_live	host_tool_is_ready_on_the_first_turn	KAR_GROK_BIN	requires KAR_GROK_BIN; a loopback model calls a real Rust host tool
+grok	grok_live	isolated_grok_lists_models_for_the_runtime_form_without_a_chat	KAR_GROK_BIN	requires the official Grok CLI with the ACP model listing extension
+grok	grok_live	native_image_reaches_the_model	KAR_GROK_BIN	requires KAR_GROK_BIN; a local chat-completions model observes the image bytes
+grok	grok_live	native_interjection_reaches_the_next_model_step_and_both_clients	KAR_GROK_BIN	requires KAR_GROK_BIN; exercises real Grok interjection against a loopback model
+grok	skill_inventory_live	grok	KAR_GROK_BIN	requires KAR_GROK_BIN
+grok	skill_inventory_live	grok_mcp	KAR_GROK_BIN	requires KAR_GROK_BIN
+kimi	account_device_live	kimi_native_device_login_status_and_logout	KAR_KIMI_BIN	requires KAR_KIMI_BIN with region-aware device login
+kimi	account_live	kimi_empty_profile	KAR_KIMI_BIN	requires KAR_KIMI_BIN with native ACP
+kimi	account_quota_live	managed_kimi_quota_in_an_isolated_profile	KAR_KIMI_BIN	requires KAR_KIMI_BIN; managed Kimi provider with synthetic tokens and a loopback API
+kimi	kimi_live	kap_tool_turn_replay_and_native_resume	KAR_KIMI_BIN	requires Kimi KAP; uses an isolated home and a loopback model
+kimi	kimi_live	official_cli_falls_back_and_resumes_over_acp	KAR_KIMI_ACP_BIN	requires unpatched Kimi 2.7.2; uses the native ACP fallback and a loopback model
+kimi	skill_inventory_live	kimi	KAR_KIMI_BIN	requires KAR_KIMI_BIN
+kimi-peer	kimi_controls	aborted_or_absent_followup_releases_held_input	KAR_UPSTREAM_SOURCE	requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer
+kimi-peer	kimi_controls	accepted_cancel_without_native_end_is_bounded_across_retries	KAR_UPSTREAM_SOURCE	requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer
+kimi-peer	kimi_controls	failed_web_spawn_releases_the_profile_and_deadline	KAR_UPSTREAM_SOURCE	requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer
+kimi-peer	kimi_controls	late_cancel_response_stays_with_the_cancelled_turn	KAR_UPSTREAM_SOURCE	requires Node and KAR_UPSTREAM_SOURCE with the fixed v0.130.1 protocol peer
+morph	morph_live	actual_morph_shared_console_turn_and_resume	KAR_MORPH_BIN	requires an installed Morph executable; uses a local model and an isolated Console
+morph	morph_live	native_task_archive_recovers_two_chat_clients	KAR_MORPH_BIN	requires an installed Morph executable; uses an isolated native task archive
+morph	morph_live	reattach_running_task_then_deliver_offline_queue	KAR_MORPH_BIN	requires Morph and bash; kills an isolated controller while its native tool is executing
+opencode	native_live	actual_opencode_steering_reaches_next_model_step	KAR_OPENCODE_BIN	requires OpenCode 1 or OpenCode 2 with ACP steering; uses a loopback model
+opencode	native_live	actual_opencode_turn_and_resume	KAR_OPENCODE_BIN	requires installed OpenCode; uses a loopback model fixture
+opencode	native_live	opencode_fork::kill_controller_after_native_end_and_deliver_queue	KAR_OPENCODE_BIN	requires OpenCode 1 or 2 and Unix signals; kills only the test controller after a real native commit
+opencode	native_live	opencode_fork::native_turn_fork_rolls_back_workspace_and_context	KAR_OPENCODE_BIN	requires OpenCode 2; uses its native session database and a loopback model
+opencode	native_live	opencode_fork::native_whole_session_fork_keeps_independent_model_contexts	KAR_OPENCODE_BIN	requires OpenCode with native ACP session/fork; verifies the next model requests on both branches
+opencode	native_live	opencode_fork::queue_crash::two_clients_and_fifo_after_native_receive_before_host_receipt	KAR_OPENCODE_BIN	requires OpenCode 1 or 2 ACP and POSIX process groups
+opencode	native_live	opencode_fork::recover_failed_turn_after_tool	KAR_OPENCODE_BIN	requires OpenCode 1 or 2; real failed model step after a completed native read
+opencode	native_live	opencode_fork::recover_finished_turn_from_native_archive	KAR_OPENCODE_BIN	requires OpenCode 2, checks its real transcript, native read tool and two SSE clients
+opencode	opencode_provider_live	real_provider_registry_key_replacement_forms_and_logout	KAR_OPENCODE_BIN	requires KAR_OPENCODE_BIN with OpenCode 2 integrations
+opencode	skill_inventory_live	opencode	KAR_OPENCODE_BIN	requires KAR_OPENCODE_BIN (OpenCode 1 or 2)
+pi	native_live	actual_pi_turn_and_resume	KAR_PI_BIN	requires installed Pi; uses a loopback model fixture
+pi	native_live	pi_history::admission_holds_while_a_second_input_queues_and_both_are_refused	KAR_PI_BIN,KAR_PI_PREFLIGHT_FIXTURE	requires KAR_PI_BIN and KAR_PI_PREFLIGHT_FIXTURE pointing to the fixed upstream support/pi-preflight.ts
+pi	native_live	pi_history::explicit_native_refusal_and_handled_input_drain_in_order_after_restart	KAR_PI_BIN	requires Pi RPC and its published examples/extensions/input-transform.ts fixture
+pi	native_live	pi_history::extension_runs::abort_active_then_idle_preserves_the_original_outcome	KAR_PI_BIN	requires real KAR_PI_BIN; holds a real model request open during abort
+pi	native_live	pi_history::extension_runs::abort_during_preflight_reaches_the_native_run_when_it_starts	KAR_PI_BIN	requires real KAR_PI_BIN with an abortable native extension command
+pi	native_live	pi_history::extension_runs::clients_replay_independent_activity_without_attaching_it_to_the_command	KAR_PI_BIN	requires real KAR_PI_BIN; restarts Kar and reconnects HTTP clients across a native extension run
+pi	native_live	pi_history::extension_runs::handled_command_preserves_native_extension_error_without_a_model_turn	KAR_PI_BIN	requires real KAR_PI_BIN; native command handler raises its own error
+pi	native_live	pi_history::extension_runs::handled_middle_entry_has_one_bubble_and_advances_the_queue	KAR_PI_BIN	requires real KAR_PI_BIN; extension handles the middle FIFO entry
+pi	native_live	pi_history::extension_runs::handled_steer_preserves_the_running_prompt	KAR_PI_BIN	requires real KAR_PI_BIN; checks the native handled receipt for a mid-turn steer
+pi	native_live	pi_history::extension_runs::independent_end_does_not_settle_the_pending_command	KAR_PI_BIN	requires real KAR_PI_BIN with the public extension command API
+pi	native_live	pi_history::extension_runs::independent_model_outlives_its_handled_command	KAR_PI_BIN	requires real KAR_PI_BIN with the public extension command API
+pi	native_live	pi_history::extension_runs::killed_controller_recovers_handled_input_and_interrupts_only_the_independent_run	KAR_PI_BIN	requires real KAR_PI_BIN; kills the controller while independent Pi activity is running
+pi	native_live	pi_history::extension_runs::late_steer_receipt_remains_on_the_completed_chat_turn	KAR_PI_BIN	requires real KAR_PI_BIN; the extension answers after the model completes
+pi	native_live	pi_history::extension_runs::queued_refusal_during_an_independent_run_does_not_end_it	KAR_PI_BIN	requires real KAR_PI_BIN; races one adapter-held input against a native extension run
+pi	native_live	pi_history::fork_at_turn_restores_workspace_and_native_context	KAR_PI_BIN	requires KAR_PI_BIN; checks real Pi forks, workspace rollback and model input
+pi	native_live	pi_history::native_handled_prompt_settles_without_a_model_turn	KAR_PI_BIN	requires Pi RPC and its published examples/extensions/input-transform.ts fixture
+pi	native_live	pi_history::public_adapter_queue_and_withdraw	KAR_PI_BIN	requires real KAR_PI_BIN to verify queue dispatch and withdrawal
+pi	native_live	pi_history::public_prompt_readbacks	KAR_PI_BIN	requires KAR_PI_BIN; raw public prompt identities and projection cursors
+pi	native_live	pi_history::queue_waits_for_native_retry_to_settle	KAR_PI_BIN	requires KAR_PI_BIN with native retry and settlement signals; loopback model only
+pi	native_live	pi_history::queued_inputs_and_two_http_clients_survive_controller_kill	KAR_PI_BIN	requires KAR_PI_BIN; hard-kills a Kar CLI during a real Pi model request
+pi	native_live	pi_history::recover_after_a_native_retry_without_resending	KAR_PI_BIN	requires KAR_PI_BIN; restores a retried turn from its real Pi v3 transcript
+pi	native_live	pi_history::restore_native_turn_and_reconnect_both_clients	KAR_PI_BIN	requires KAR_PI_BIN; real Pi v3 transcript, native read tool and two HTTP clients
+pi	native_live	pi_history::three_native_writes_fork_at_middle_and_reopen_both_contexts	KAR_PI_BIN	requires KAR_PI_BIN; native write tools in three turns and a mid-history fork
+pi	native_live	resume_prompts::pi_prompt_persistence	KAR_PI_BIN	requires Pi RPC with a loopback model
+pi	pi_mcp_live	native_stdio_http_isolation_and_resume	KAR_PI_BIN,KAR_PI_SDK_DIR	requires npm Pi or standalone Pi with matching KAR_PI_SDK_DIR, and Node with native addon support
+pi	pi_provider_live	cancels_browser_prompt_and_times_out_key_prompt	KAR_PI_BIN	requires native Pi 1.6, with a local callback and no external token exchange
+pi	pi_provider_live	host_identity_is_lazy_and_reaches_chatgpt	KAR_PI_BIN	requires Pi 1.6; exercises ChatGPT identity on its native loopback port
+pi	pi_provider_live	model_catalog::sdk_catalog_capabilities_and_scoped_reload	KAR_PI_BIN	requires npm Pi 1.6 with a native SDK host
+pi	pi_provider_live	model_catalog::sdk_catalog_remote_cache_errors_and_cancellation	KAR_PI_BIN	requires npm Pi; all remote catalog requests use an isolated local TLS proxy
+pi	pi_provider_live	model_catalog::sdk_large_catalog_snapshot_is_complete	KAR_PI_BIN	requires npm Pi; checks complete transfer of a multi-megabyte user catalog
+pi	pi_provider_live	native_login_registry_and_keys	KAR_PI_BIN	requires native Pi 1.6 provider CLI
+pi	pi_provider_live	native_oauth_device	KAR_PI_BIN	requires native Pi 1.6 and uses a loopback Radius device flow
+pi	pi_provider_live	pi_metadata_resolution_and_native_logout	KAR_PI_BIN	requires KAR_PI_BIN with auth check --json
+pi	pi_provider_live	product_cli_roundtrip	KAR_PI_BIN	requires native Pi 1.6 provider CLI
+pi	pi_provider_live	sdk_independent_configuration_files	KAR_PI_BIN	requires npm Pi with a native SDK host
+pi	pi_provider_live	standalone_independent_files_never_target_the_default_profile	KAR_PI_BIN	requires the standalone Pi distribution without an SDK
+pi	pi_provider_live	unusable_companion_leaves_credentials_intact	KAR_PI_BIN,KAR_PI_SDK_DIR	requires standalone Pi 1.6 and its matching KAR_PI_SDK_DIR
+pi	pi_request_live	final_root_body_for_three_apis	KAR_PI_BIN	requires npm Pi and Node with native addon support; checks the wire before any provider response
+pi	pi_request_live	first_request_started_by_a_user_extension	KAR_PI_BIN	requires npm Pi; a startup handler starts the first root prompt while binding
+pi	pi_request_live	later_unobservable_request_supersedes_previous_snapshot	KAR_PI_BIN	requires npm Pi; exercises per-request model selection and JSON encoding failures
+pi	pi_request_live	node_with_addons_disabled	KAR_PI_BIN	requires npm Pi; checks opt-in capture availability and ordinary RPC fallback
+pi	pi_request_live	persistent_chat_two_subscribers	KAR_PI_BIN	requires npm Pi; proves two SSE clients resume without publishing model request bodies
+pi	pi_request_live	startup_model_switch_and_nested_root_isolation	KAR_PI_BIN	requires npm Pi; exercises SDK startup hooks and a second SDK agent in the same process
+pi	skill_inventory_live	native_skill_catalog::pi_registered_tools	KAR_PI_BIN	requires KAR_PI_BIN with Pi npm package, its examples and a Node host supporting native addons
+pi	skill_inventory_live	native_skill_catalog::pi_skills_and_commands	KAR_PI_BIN	requires KAR_PI_BIN with Pi RPC 1.4+
+pi	skill_inventory_live	native_skill_catalog::pi_standalone_registered_tools	KAR_PI_BIN,KAR_PI_SDK_DIR	requires standalone KAR_PI_BIN, a matching KAR_PI_SDK_DIR, and Node on PATH
+qoder	account_live	qoder_empty_profile	KAR_QODER_BIN	requires KAR_QODER_BIN
+qoder	qoder_live	real_daemon_acknowledges_session_before_requesting_login	KAR_QODER_DAEMON_BIN	requires Qoder daemon 1.1.83 in an empty home
+qoder	qoder_live	real_worker_reopens_saved_conversation	KAR_QODER_WORKER_BIN	requires Qoder worker 1.1.78; uses its native response replay in an empty home
+qwen	qwen_live	actual_qwen_turn_catalog_history_and_interrupt	KAR_QWEN_BIN	requires Qwen Code; uses an isolated home and a loopback model
+qwen	qwen_live	catalog_launch::catalog_distinguishes_missing_auth_empty_and_configured	KAR_QWEN_BIN	requires Qwen Code and an isolated native profile
+qwen	qwen_live	catalog_launch::missing_resume_and_busy_extension_store_report_native_failures	KAR_QWEN_BIN	requires Qwen Code and its native extension store
+qwen	qwen_live	catalog_launch::session_launch_arguments_are_per_process	KAR_QWEN_BIN	requires Qwen Code and a loopback model
+qwen	qwen_live	effort::effort_listed_levels_apply_across_resume	KAR_QWEN_BIN	requires actual Qwen Code with native model discovery and a local model
+qwen	qwen_live	effort::effort_never_substituted	KAR_QWEN_BIN	requires actual Qwen Code with a local model
+qwen	qwen_live	images_travel_with_input	KAR_QWEN_BIN	requires real Qwen Code with an isolated home and a loopback model
+qwen	qwen_live	native_memory_default_survives_chat_restart_and_user_settings_take_precedence	KAR_QWEN_BIN	requires Qwen Code 0.26+; uses isolated settings and a loopback model
+qwen	qwen_live	public_adapter_queue_and_withdraw	KAR_QWEN_BIN	requires real qwen and a loopback model
+qwen	qwen_live	public_prompt_readbacks	KAR_QWEN_BIN	real Qwen Code with a loopback model
+qwen	qwen_live	queue_crash::kill_after_host_receipt	KAR_QWEN_BIN	requires Qwen Code and POSIX process groups
+qwen	qwen_live	queue_crash::kill_after_native_completion_before_host_receipt	KAR_QWEN_BIN	requires Qwen Code and POSIX process groups
+qwen	qwen_live	queue_crash::kill_after_native_input_before_host_receipt	KAR_QWEN_BIN	requires Qwen Code, POSIX process groups and a local HTTP model
+qwen	qwen_live	queue_crash::native_retry_of_same_sdk_uuid	KAR_QWEN_BIN	requires real Qwen Code; SDK UUID and native deduplication across resume
+qwen	qwen_provider_live	qwen_settings_scope_and_stored_key_reuse	KAR_QWEN_BIN	requires KAR_QWEN_BIN with native qwen/providers/connect
+qwen	skill_inventory_live	qwen	KAR_QWEN_BIN	requires KAR_QWEN_BIN

@@ -38,3 +38,23 @@ rustc --edition=2024 -D warnings tools/backend-coverage.rs -o /tmp/kar-backend-c
 Pi RPC 的原生输入处理、预执行拒绝、独立扩展回合和插话已有对应历史记录。映射按输入身份、回合终态、请求次数和等待状态分别定位。同一固定源码行出现多处断言时，行号后的 `.1`、`.2` 标识从左至右的序号。Kar 测试定位可用 `fn ... >> ...` 指定函数内的断言。
 
 Codex 与 Claude 中止无应答的实现和原生测试位于 `d8e1dd1`，Pi、Qwen、Factory 的撤回状态和浏览器原生会话 ID 断言位于 `408b686`。这些新条目的状态保留为「未完成或失败」，观察栏记载编译情况和复验条件。浏览器第 74 行检查的是传给 Harness 的正整数会话 ID。
+
+## macOS 统一入口
+
+在 Kar 仓库根目录列出候选场景。供应商表登记独立集成测试目标和 libtest 完整测试名，另有两项原生 MCP 测试、浏览器宿主、固定源码对照、格式检查、Clippy 和全量 Cargo 回归。新加入的测试应同步更新 `backend-macos-tests.tsv`。
+
+```sh
+cargo run --locked --example backend_suite -- --runtime pi
+cargo run --locked --example backend_suite -- --runtime codex --filter unanswered_interrupt
+```
+
+集中验收时设置计划列出的原生程序路径和附加条件，例如 Pi 独立发行包配套的 SDK，或 Cursor 对照观察程序。每个版本单独运行并使用新的输出目录。下面的 Codex 示例使用 `KAR_CODEX_BIN`，版本参数按 Kar 安装探测实际报告的完整字符串填写。
+
+```sh
+cargo run --locked --example backend_suite -- --runtime codex --filter unanswered_interrupt --execute --output /tmp/kar-codex-abort-result
+cargo run --locked --example backend_suite -- --runtime kar --execute --output /tmp/kar-core-result
+```
+
+每条记录保存实际提交、工作区状态、macOS 版本、架构、探测到的供应商程序和版本、操作命令及日志。完整 libtest 名称必须命中一个成功的测试。缺程序、版本不符、测试未命中、命令失败和命令完成有独立结果；任何未完成的操作都会使套件以非零码结束。外部条件在 `requires` 中列出。不带 `--execute` 只打印计划。
+
+`kimi-peer` 是固定上游 KAP 协议对端，需设置 `KAR_UPSTREAM_SOURCE`。浏览器 `pi-durable` 场景另需依 README 准备 Wasm、Chromium、固定 Harness 和 Node。记录浏览器与 Harness 版本时使用该宿主的运行日志。CLI 与部署 API 的逐项操作、外部认证和未建立 Kar 测试的上游断言，仍在固定源码对照和证据表中逐项核对。统一入口的命令成功后，按实际日志登记供应商断言结果。

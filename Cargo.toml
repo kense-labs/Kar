@@ -138,3 +138,11 @@ harness = false
 [patch.crates-io]
 ironcalc = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
 ironcalc_base = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
+
+[[example]]
+name = "backend_suite"
+path = "tools/backend-suite.rs"
+
+[[example]]
+name = "backend_coverage"
+path = "tools/backend-coverage.rs"

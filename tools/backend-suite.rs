@@ -1,0 +1,372 @@
+//! Plan or execute the compiled macOS provider acceptance scenarios. Source
+//! contracts and evidence classification are reported by backend-coverage.rs.
+use anyhow::{Context, Result, bail, ensure};
+use clap::Parser;
+use serde::Serialize;
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
+    fs::{self, File},
+    io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
+    process::{Command, ExitCode, Stdio},
+};
+
+#[derive(Parser)]
+struct Args {
+    /// Run whole scenarios. Omit to print the plan.
+    #[arg(long)]
+    execute: bool,
+    /// Exact runtime lane, e.g. codex, pi, kimi-peer, or kar.
+    #[arg(long)]
+    runtime: Option<String>,
+    /// Exact suite target or substring of the fully qualified test name.
+    #[arg(long)]
+    filter: Option<String>,
+    /// Create a new evidence directory; existing directories are preserved.
+    #[arg(long, requires = "execute")]
+    output: Option<PathBuf>,
+    /// Optional exact reported version of the primary provider executable.
+    #[arg(long, requires = "runtime")]
+    version: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct Case {
+    runtime: String,
+    target: String,
+    test: String,
+    environment: Vec<String>,
+    requires: String,
+    program: String,
+    args: Vec<String>,
+    libtest: bool,
+}
+fn catalog() -> Result<Vec<Case>> {
+    let mut cases = Vec::new();
+    let mut keys = BTreeSet::new();
+    for line in include_str!("../docs/backend-macos-tests.tsv")
+        .lines()
+        .skip(1)
+    {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        let [rt, target, test, environment, requires] = fields.as_slice() else {
+            bail!("invalid native case: {line}")
+        };
+        ensure!(
+            keys.insert((*target, *test)),
+            "duplicate {}::{}",
+            target,
+            test
+        );
+        cases.push(Case {
+            runtime: rt.to_string(),
+            target: target.to_string(),
+            test: test.to_string(),
+            environment: environment
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            requires: requires.to_string(),
+            program: "cargo".into(),
+            libtest: true,
+            args: [
+                "test",
+                "--locked",
+                "--test",
+                target,
+                test,
+                "--",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ]
+            .map(str::to_owned)
+            .into(),
+        });
+    }
+    let mut append = |runtime: &str,
+                      target: &str,
+                      test: &str,
+                      env: &[&str],
+                      program: &str,
+                      args: &[&str],
+                      requires: &str| {
+        cases.push(Case {
+            runtime: runtime.into(),
+            target: target.into(),
+            test: test.into(),
+            environment: env.iter().map(|s| s.to_string()).collect(),
+            requires: requires.into(),
+            program: program.into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            libtest: false,
+        });
+    };
+    for (rt, flag, key) in [
+        ("claude", "claude-mcp-native", "KAR_CLAUDE_BIN"),
+        ("qoder", "qoder-mcp-native", "KAR_QODER_WORKER_BIN"),
+    ] {
+        append(
+            rt,
+            "protocol",
+            flag,
+            &[key],
+            "cargo",
+            &["test", "--locked", "--test", "protocol", "--", flag],
+            "installed provider, isolated profile and MCP services",
+        );
+    }
+    append(
+        "pi-durable",
+        "browser",
+        "live",
+        &[],
+        "node",
+        &["tests/browser/live.mjs"],
+        "build Wasm and install pinned browser dependencies per README; record Node, Chromium and Harness versions",
+    );
+    append(
+        "kar",
+        "contracts",
+        "source",
+        &["KAR_UPSTREAM_SOURCE"],
+        "cargo",
+        &[
+            "run",
+            "--locked",
+            "--quiet",
+            "--example",
+            "backend_coverage",
+            "--",
+            "--upstream",
+            "{KAR_UPSTREAM_SOURCE}",
+        ],
+        "upstream Git checkout containing the fixed commit and Kar history for the source/evidence map",
+    );
+    append(
+        "kar",
+        "regression",
+        "fmt",
+        &[],
+        "cargo",
+        &["fmt", "--all", "--", "--check"],
+        "Rust with rustfmt",
+    );
+    append(
+        "kar",
+        "regression",
+        "clippy",
+        &[],
+        "cargo",
+        &[
+            "clippy",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        "Rust with clippy",
+    );
+    append(
+        "kar",
+        "regression",
+        "test",
+        &[],
+        "cargo",
+        &["test", "--locked"],
+        "Cargo regression including the custom CLI/protocol test harnesses",
+    );
+    Ok(cases)
+}
+fn output_text(cmd: &str, args: &[&str]) -> Result<String> {
+    let out = Command::new(cmd).args(args).output()?;
+    ensure!(
+        out.status.success(),
+        "{cmd} {args:?} exited with {}",
+        out.status
+    );
+    Ok(String::from_utf8(out.stdout)?.trim().to_string())
+}
+fn save(output: &mut File, value: &Value) -> Result<()> {
+    serde_json::to_writer(&mut *output, value)?;
+    writeln!(output)?;
+    output.sync_data()?;
+    Ok(())
+}
+
+async fn installation(rt: &str, path: OsString, dir: &Path) -> Result<Value> {
+    let mut provider = kar::runtime(rt)?;
+    provider.program = path.into();
+    let temp = tempfile::tempdir_in(dir)?;
+    let snapshot = provider
+        .probe_installation(&kar::InstallationOptions {
+            cwd: Some(temp.path().into()),
+            ..Default::default()
+        })
+        .await?;
+    Ok(serde_json::to_value(snapshot)?)
+}
+async fn run() -> Result<bool> {
+    let a = Args::parse();
+    let cases: Vec<_> = catalog()?
+        .into_iter()
+        .filter(|c| {
+            a.runtime.as_ref().is_none_or(|rt| *rt == c.runtime)
+                && a.filter
+                    .as_ref()
+                    .is_none_or(|s| c.target == *s || c.test.contains(s))
+        })
+        .collect();
+    ensure!(!cases.is_empty(), "no matching cases");
+    if !a.execute {
+        for c in cases {
+            println!("{}", serde_json::to_string(&c)?);
+        }
+        return Ok(true);
+    }
+    ensure!(
+        cfg!(target_os = "macos"),
+        "this acceptance matrix is scoped to macOS"
+    );
+    let dir = a.output.as_deref().context("--execute requires --output")?;
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(dir)
+        .context("create a new evidence directory")?;
+    let mut report = File::create_new(dir.join("results.jsonl"))?;
+    let rev = output_text("git", &["rev-parse", "HEAD"])?;
+    let platform = output_text("sw_vers", &["-productVersion"])?;
+    let arch = std::env::consts::ARCH;
+    // Evidence is meaningful only for a reproducible source revision. Preserve
+    // any working-tree differences, including planned local changes, in metadata.
+    save(
+        &mut report,
+        &json!({"type":"run","revision":rev,"platform":platform,"arch":arch,"rust":output_text("rustc",&["-V"])?,"changes":output_text("git",&["status","--porcelain","--untracked-files=normal"])?,"selected":cases.len()}),
+    )?;
+    let mut probes = BTreeMap::new();
+    let mut complete = true;
+    for (i, c) in cases.iter().enumerate() {
+        let mut row = json!({"type":"case","runtime":c.runtime,"target":c.target,"test":c.test,"requires":c.requires,"executable":c.program,"argv":c.args,"revision":rev,"platform":platform,"arch":arch});
+        let absent: Vec<_> = c
+            .environment
+            .iter()
+            .filter(|key| std::env::var_os(key).is_none_or(|v| v.is_empty()))
+            .collect();
+        if !absent.is_empty() {
+            row["status"] = "missing_environment".into();
+            row["missing"] = json!(absent);
+            save(&mut report, &row)?;
+            complete = false;
+            continue;
+        }
+        let mut binaries = BTreeMap::new();
+        let mut unavailable = false;
+        for (n, key) in c
+            .environment
+            .iter()
+            .filter(|k| k.ends_with("_BIN"))
+            .enumerate()
+        {
+            let path = std::env::var_os(key).expect("checked");
+            let cache_key = (c.runtime.clone(), path.clone());
+            if !probes.contains_key(&cache_key) {
+                let snap = installation(&c.runtime, path.clone(), dir)
+                    .await
+                    .unwrap_or_else(|e| json!({"kind":"probe_error","reason":e.to_string()}));
+                probes.insert(cache_key.clone(), snap);
+            }
+            let snap = &probes[&cache_key];
+            binaries.insert(
+                key,
+                json!({"path":path.to_string_lossy(),"installation":snap}),
+            );
+            if snap["kind"] != "available"
+                || (n == 0
+                    && a.version
+                        .as_ref()
+                        .is_some_and(|v| snap["version"].as_str() != Some(v)))
+            {
+                unavailable = true;
+            }
+        }
+        row["binaries"] = json!(binaries);
+        if unavailable {
+            row["status"] = "missing_or_mismatched_installation".into();
+            row["required_version"] = json!(a.version);
+            save(&mut report, &row)?;
+            complete = false;
+            continue;
+        }
+        let out = format!("{i:04}.stdout.log");
+        let err = format!("{i:04}.stderr.log");
+        row["stdout"] = json!(out);
+        row["stderr"] = json!(err);
+        save(&mut report, &json!({"type":"start","case":row}))?;
+        let argv: Vec<OsString> = c
+            .args
+            .iter()
+            .map(|arg| {
+                if arg == "{KAR_UPSTREAM_SOURCE}" {
+                    std::env::var_os("KAR_UPSTREAM_SOURCE").expect("checked source checkout")
+                } else {
+                    OsString::from(arg)
+                }
+            })
+            .collect();
+        let status = Command::new(&c.program)
+            .args(&argv)
+            .stdin(Stdio::null())
+            .stdout(File::create_new(dir.join(&out))?)
+            .stderr(File::create_new(dir.join(&err))?)
+            .status();
+        match status {
+            Ok(s) => {
+                let mut counted = !c.libtest;
+                if c.libtest && s.success() {
+                    for l in BufReader::new(File::open(dir.join(&out))?).lines() {
+                        if l?.starts_with("test result: ok. 1 passed;") {
+                            counted = true;
+                        }
+                    }
+                }
+                row["exit_code"] = json!(s.code());
+                row["status"] = if !s.success() {
+                    "failed"
+                } else if !counted {
+                    "no_matching_test"
+                } else {
+                    "command_succeeded"
+                }
+                .into();
+                complete &= s.success() && counted;
+            }
+            Err(e) => {
+                row["status"] = "launch_failed".into();
+                row["reason"] = e.to_string().into();
+                complete = false;
+            }
+        }
+        save(&mut report, &row)?;
+    }
+    Ok(complete)
+}
+#[tokio::main]
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(e) => {
+            eprintln!("{e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
