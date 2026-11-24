@@ -112,6 +112,7 @@ morph	morph_live	reattach_running_task_then_deliver_offline_queue	KAR_MORPH_BIN	
 opencode	native_live	actual_opencode_steering_reaches_next_model_step	KAR_OPENCODE_BIN	requires OpenCode 1 or OpenCode 2 with ACP steering; uses a loopback model
 opencode	native_live	actual_opencode_turn_and_resume	KAR_OPENCODE_BIN	requires installed OpenCode; uses a loopback model fixture
 opencode	native_live	opencode_fork::kill_controller_after_native_end_and_deliver_queue	KAR_OPENCODE_BIN	requires OpenCode 1 or 2 and Unix signals; kills only the test controller after a real native commit
+opencode	native_live	opencode_fork::native_primary_prompt_replacement_and_retraction_across_resume	KAR_OPENCODE_BIN	OpenCode >=2.2.0 with a configurable primary agent on macOS; isolated home and a loopback model; verifies effective instructions on create, replacement, retraction and resume (f26013b)
 opencode	native_live	opencode_fork::native_retry_is_projected_once_and_replayed_at_its_original_time	KAR_OPENCODE_BIN	OpenCode 2.3.2 on macOS with a real ACP executable, isolated HOME and a loopback Anthropic endpoint that returns HTTP 529 before recovery
 opencode	native_live	opencode_fork::native_turn_fork_rolls_back_workspace_and_context	KAR_OPENCODE_BIN	requires OpenCode 2; uses its native session database and a loopback model
 opencode	native_live	opencode_fork::native_whole_session_fork_keeps_independent_model_contexts	KAR_OPENCODE_BIN	requires OpenCode with native ACP session/fork; verifies the next model requests on both branches
