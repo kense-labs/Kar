@@ -1318,10 +1318,13 @@ async fn native_reused_tool_id_is_distinct_across_stream_replay_and_recovery() {
             tool.input.as_ref().unwrap()["command"],
             format!("printf {expected}")
         );
-        assert_eq!(
-            tool.result.as_ref().unwrap().text().as_deref(),
-            Some(expected)
-        );
+        let output = tool.result.as_ref().unwrap().text().unwrap();
+        // DSH appends labelled sandbox stderr on Linux kernels with an older Landlock ABI.
+        // Compare stdout here. The replica and restart assertions below compare the full result.
+        let stdout = output
+            .split_once("\n[stderr]\n")
+            .map_or(output.as_str(), |(stdout, _)| stdout);
+        assert_eq!(stdout, expected);
     }
     chat.close().await.unwrap();
     let tip = tb.store.feed_snapshot(id).unwrap().cursor;
