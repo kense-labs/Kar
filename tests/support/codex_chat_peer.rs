@@ -395,6 +395,39 @@ pub(crate) fn agent() {
                         json!({"method":"thread/tokenUsage/updated","params":{"threadId":session,"turnId":turn,"tokenUsage":{"total":{"inputTokens":10,"outputTokens":4}}}}),
                     );
                 }
+                if text == "watch command output" {
+                    let status = |method: &str, item: Value| {
+                        emit(
+                            json!({"method":method,"params":{"threadId":session,"turnId":turn,"item":item}}),
+                        )
+                    };
+                    status(
+                        "item/started",
+                        json!({"type":"commandExecution","id":"output-target","command":"fixture"}),
+                    );
+                    for (signal, chunk) in [
+                        ("output-append", String::from("10%\r20%")),
+                        ("output-replace", "x".repeat(18000)),
+                    ] {
+                        let deadline = Instant::now() + Duration::from_secs(15);
+                        while !database.join(signal).exists() {
+                            assert!(Instant::now() < deadline);
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        emit(
+                            json!({"method":"item/commandExecution/outputDelta","params":{"turnId":turn,"threadId":session,"itemId":"output-target","delta":chunk}}),
+                        );
+                    }
+                    let deadline = Instant::now() + Duration::from_secs(15);
+                    while !database.join("output-finish").exists() {
+                        assert!(Instant::now() < deadline);
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    status(
+                        "item/completed",
+                        json!({"type":"commandExecution","id":"output-target","status":"completed","exitCode":0,"aggregatedOutput":"done\rPASS\n"}),
+                    );
+                }
                 if text == "observe live tool" {
                     let tool = |method: &str, status: &str| json!({"method":method,"params":{"threadId":session,"turnId":turn,"item":{"type":"commandExecution","id":"stream-tool","command":"fixture","status":status,"aggregatedOutput":"result"}}});
                     emit(tool("item/started", "inProgress"));

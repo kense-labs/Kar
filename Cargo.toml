@@ -42,6 +42,8 @@ subtle = "2"
 tokio-util = "0.7"
 portable-pty = "0.9"
 vt100 = "0.16"
+vte = "0.15"
+unicode-width = "0.2"
 serde-saphyr = { version = "2.2", default-features = false, features = ["deserialize"] }
 icu_collator = "2"
 indexmap = { version = "2", features = ["serde"] }

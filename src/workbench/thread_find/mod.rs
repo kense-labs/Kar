@@ -1,3 +1,4 @@
+mod output;
 mod render;
 use super::{
     Workbench,
@@ -292,4 +293,8 @@ pub(super) fn routes() -> Router<Workbench> {
             get(turn_items),
         )
         .route("/projects/{p}/chats/{c}/items/{item}", get(detail))
+        .route(
+            "/projects/{p}/chats/{c}/items/{item}/output",
+            get(output::events),
+        )
 }

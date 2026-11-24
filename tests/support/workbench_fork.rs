@@ -365,5 +365,69 @@ async fn scenario() {
         fs::read_to_string(native.join("forks")).unwrap(),
         fork_count
     );
+    let command_turn = Uuid::new_v4();
+    let run = tokio::spawn(ok(a
+        .post(format!("{url}{child_path}/messages"))
+        .json(&json!({"id":command_turn,"text":"watch command output"}))));
+    let entries = format!("{url}{child_path}/turns/{command_turn}/items");
+    let entry = loop {
+        let response = b.get(&entries).send().await.unwrap();
+        if response.status().is_success() {
+            let rows = response.json::<Vec<Value>>().await.unwrap();
+            if let Some(row) = rows.iter().find(|r| r["item"]["kind"] == "tool") {
+                break row["entry_id"].as_str().unwrap().to_owned();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let output = format!("{url}{child_path}/items/{entry}/output");
+    let mut left = a
+        .get(&output)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let mut right = b
+        .get(&output)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    for feed in [&mut left, &mut right] {
+        assert_eq!(
+            next_change(feed).await,
+            json!({"kind":"replace","text":"","truncated":false,"running":true})
+        );
+    }
+    fs::write(native.join("output-append"), []).unwrap();
+    for feed in [&mut left, &mut right] {
+        assert_eq!(
+            next_change(feed).await,
+            json!({"kind":"append","text":"20%","truncated":false,"running":true})
+        );
+    }
+    fs::write(native.join("output-replace"), []).unwrap();
+    for feed in [&mut left, &mut right] {
+        let frame = next_change(feed).await;
+        assert_eq!(frame["kind"], "replace");
+        assert_eq!(frame["text"].as_str().unwrap().len(), 18003);
+    }
+    fs::write(native.join("output-finish"), []).unwrap();
+    let expected = json!({"kind":"replace","text":"PASS\n","running":false,"truncated":false});
+    for feed in [&mut left, &mut right] {
+        assert_eq!(next_change(feed).await, expected);
+    }
+    assert_eq!(run.await.unwrap()["status"], "completed");
+    drop((left, right));
+    let mut late = b
+        .get(&output)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(next_change(&mut late).await, expected);
     next.kill().await.unwrap();
 }
