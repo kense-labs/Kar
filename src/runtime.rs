@@ -445,6 +445,8 @@ pub struct SessionOptions {
     /// Volatile registration supplied by the workbench that owns this controller.
     #[doc(hidden)]
     pub workbench_registration: Option<crate::WorkbenchRegistration>,
+    #[doc(hidden)]
+    pub account_admission: Option<crate::account::AccountAdmission>,
     pub mcp_servers: BTreeMap<String, crate::McpServer>,
     pub env: BTreeMap<OsString, OsString>,
     /// Names removed from the inherited environment. Explicit `env` values take precedence.
@@ -495,6 +497,7 @@ impl SessionOptions {
             settings: Default::default(),
             prompt_suggestions: None,
             workbench_registration: None,
+            account_admission: None,
             mcp_servers: BTreeMap::new(),
             env: BTreeMap::new(),
             unset_env: Default::default(),

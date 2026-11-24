@@ -2,7 +2,15 @@
 use super::*;
 use crate::account::{AccountUsageOptions, AuthStatusOptions, LoginOptions, LoginResult};
 
-fn context(app: &Workbench, p: Uuid, id: &str) -> Result<(Runtime, crate::InstallationOptions)> {
+fn context(
+    app: &Workbench,
+    p: Uuid,
+    id: &str,
+) -> Result<(
+    Runtime,
+    crate::InstallationOptions,
+    crate::account::binding::Key,
+)> {
     let project = app.project(p)?;
     app.workspace(&project)?;
     let mut opts = SessionOptions::new(project.root);
@@ -16,17 +24,18 @@ fn context(app: &Workbench, p: Uuid, id: &str) -> Result<(Runtime, crate::Instal
     let driver = instance
         .as_ref()
         .map_or(id, |instance| instance.runtime.runtime());
-    let mut runtime = app.0.chats.resolve_runtime(driver, &mut opts)?;
-    if let Some(instance) = instance {
+    if let Some(instance) = &instance {
         instance.configure(&mut opts);
-        if let Some(program) = instance.program {
-            runtime.program = program;
-        }
     }
-    Ok((runtime, opts.installation_options()))
+    let mut runtime = app.0.chats.resolve_runtime(driver, &mut opts)?;
+    if let Some(program) = instance.and_then(|instance| instance.program) {
+        runtime.program = program;
+    }
+    let binding = crate::account::binding::Key::new(driver, &opts);
+    Ok((runtime, opts.installation_options(), binding))
 }
 async fn status(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String)>) -> Reply {
-    let (rt, installation) = context(&app, p, &id)?;
+    let (rt, installation, _) = context(&app, p, &id)?;
     Ok(Json(
         serde_json::to_value(
             rt.auth_status(&AuthStatusOptions {
@@ -39,7 +48,7 @@ async fn status(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, Strin
     ))
 }
 async fn quota(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String)>) -> Reply {
-    let (rt, installation) = context(&app, p, &id)?;
+    let (rt, installation, _) = context(&app, p, &id)?;
     Ok(Json(
         serde_json::to_value(
             rt.account_usage(&AccountUsageOptions {
@@ -52,7 +61,7 @@ async fn quota(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String
     ))
 }
 async fn methods(State(app): State<Workbench>, Param((p, id)): Param<(Uuid, String)>) -> Reply {
-    let (rt, _) = context(&app, p, &id)?;
+    let (rt, _, _) = context(&app, p, &id)?;
     Ok(Json(
         json!({"runtime":id,"login":rt.supports_login(),"logout":rt.supports_logout(),"quota":rt.supports_account_usage()}),
     ))
@@ -62,16 +71,18 @@ async fn login(
     Param((p, id)): Param<(Uuid, String)>,
     headers: HeaderMap,
 ) -> Reply {
-    let (rt, installation) = context(&app, p, &id)?;
+    let (rt, installation, binding) = context(&app, p, &id)?;
     if !rt.supports_login() {
         return Err(Error::Unsupported(format!("hosted account login for {id}")).into());
     }
     let owner =
         flow::client(&headers)?.ok_or_else(|| bad("Kar-Auth-Client is required for sign-in"))?;
+    let accounts = app.0.chats.accounts.clone();
     let program = rt.program.clone();
     app.0
         .acp_auth
         .start(p, id, &program, Some(owner), move |io| async move {
+            let _change = accounts.change(binding).await?;
             let options = LoginOptions {
                 installation,
                 open_browser: Some(false),
@@ -97,16 +108,18 @@ async fn logout(
     Param((p, id)): Param<(Uuid, String)>,
     headers: HeaderMap,
 ) -> Reply {
-    let (rt, installation) = context(&app, p, &id)?;
+    let (rt, installation, binding) = context(&app, p, &id)?;
     if !rt.supports_logout() {
         return Err(Error::Unsupported(format!("hosted account logout for {id}")).into());
     }
     let owner =
         flow::client(&headers)?.ok_or_else(|| bad("Kar-Auth-Client is required for sign-out"))?;
+    let accounts = app.0.chats.accounts.clone();
     let program = rt.program.clone();
     app.0
         .acp_auth
         .start(p, id, &program, Some(owner), move |_| async move {
+            let _change = accounts.change(binding).await?;
             let r = rt
                 .logout(&AuthStatusOptions {
                     installation,

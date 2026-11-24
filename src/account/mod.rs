@@ -1,4 +1,6 @@
 //! Isolated vendor account operations. Account traffic stays outside session journals.
+pub(crate) mod binding;
+pub use binding::AccountAdmission;
 mod antigravity;
 mod login;
 pub use login::{

@@ -250,6 +250,7 @@ impl SessionOptions {
 }
 #[derive(Clone)]
 pub struct ChatStore {
+    pub(crate) accounts: crate::account::binding::Bindings,
     dir: PathBuf,
     repository_scopes: Option<checkpoint::scopes::Lookup>,
     turn_checkpointed: Option<Arc<dyn Fn(Uuid) + Send + Sync>>,
@@ -270,6 +271,7 @@ impl ChatStore {
         create.create(dir.as_ref())?;
         Ok(Self {
             dir: dir.as_ref().canonicalize()?,
+            accounts: Default::default(),
             repository_scopes: None,
             turn_checkpointed: None,
         })
@@ -286,6 +288,8 @@ impl ChatStore {
         Self::open(state.join("kar/chats"))
     }
     pub(crate) fn resolve_runtime(&self, id: &str, opts: &mut SessionOptions) -> Result<crate::Runtime> {
+        let binding = crate::account::binding::Key::new(id, opts);
+        opts.account_admission = Some(self.accounts.admit(binding)?);
         if crate::workbench::acp_registry::dynamic(id) {
             crate::workbench::acp_registry::resolve(self, id, opts)
         } else {
@@ -702,6 +706,10 @@ impl ChatSession {
         store: ChatStore,
         launch: SessionOptions,
     ) -> Result<Self> {
+        let session = Arc::new(session);
+        if let Some(ticket) = &launch.account_admission {
+            store.accounts.bind(ticket, &session)?;
+        }
         if log.state.stream != Some(session.stream_id()) {
             let profile = AntigravityProfile::at_launch(&log.state.info.runtime, &launch);
             log.attach(session.stream_id(), profile)?;
@@ -719,7 +727,7 @@ impl ChatSession {
         let sender = Arc::new(Sender {
             _worktree: worktree,
             store,
-            session: Arc::new(session),
+            session,
             sink,
             info,
         });
