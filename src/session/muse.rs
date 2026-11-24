@@ -93,15 +93,6 @@ impl Session {
                 OpenStep::Target(id.clone()),
             )
             .await?;
-            if result
-                .pointer("/session/activeTurnId")
-                .and_then(Value::as_str)
-                .is_some()
-            {
-                return Err(Error::Refused(
-                    "Muse reports an active native turn; resume after it settles".into(),
-                ));
-            }
         }
         if let Some(wanted) = &opts.model
             && result.pointer("/session/modelId").and_then(Value::as_str) != Some(wanted)

@@ -1148,7 +1148,14 @@ impl MessageIds {
             && r.direction == crate::Direction::FromRuntime
             && r.events.contains(&Event::PromptDispatched)
             && r.span_id.as_deref().is_some_and(|id| n["id"] == id);
-        let native_turn = if morph_accepted {
+        let native_turn = if p == Protocol::Muse
+            && source.path.is_empty()
+            && r.events.contains(&Event::TurnStarted)
+        {
+            n.pointer("/params/turnId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        } else if morph_accepted {
             r.span_id.clone()
         } else if p == Protocol::Codex
             && source.path.is_empty()

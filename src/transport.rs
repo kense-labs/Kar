@@ -134,6 +134,7 @@ impl TurnTarget {
     }
 }
 pub(crate) struct AbortRequest {
+    pub muse_continuation: Option<uuid::Uuid>,
     pub target_request: Option<String>,
     pub reply: Reply<Value>,
 }
@@ -297,6 +298,7 @@ struct Pending {
     reply: Option<Reply<Value>>,
     prompt_ack: Option<Reply<()>>,
     muse_turn: Option<String>,
+    muse_decision: Option<(String, Value)>,
     prompt_request: Option<uuid::Uuid>,
     codex_prompt_input: Option<uuid::Uuid>,
     control_request: Option<uuid::Uuid>,
@@ -501,11 +503,15 @@ impl Actor {
             && !self.claude_notifications.active()
             && !(self.claude_cancel_queued && self.claude_steering.waiting())
             && self.observed_root_turn().is_none()
+            && self.muse_autonomous().is_none()
             && self.grok_owner().is_none()
             && self.manual_compaction.is_none()
     }
     fn observed_root_turn(&self) -> Option<&str> {
         self.child_tasks.turn(&self.session()?)
+    }
+    fn muse_autonomous(&self) -> Option<&str> {
+        self.muse.as_ref().and_then(muse::Projection::autonomous)
     }
     fn grok_owner(&self) -> Option<uuid::Uuid> {
         self.grok.as_ref().and_then(GrokTurns::owner)
@@ -714,6 +720,12 @@ impl Actor {
             params["promptSuggestions"] = true.into();
         }
         let starts_turn = matches!(intent, RpcIntent::Prompt);
+        if matches!(method, "session/start" | "session/resume")
+            && let Some(muse) = &mut self.muse
+            && let Some(id) = params["sessionId"].as_str()
+        {
+            muse.opening(id, method == "session/resume");
+        }
         if method == "initialize"
             && let Some(children) = &mut self.opencode
         {
@@ -785,6 +797,7 @@ impl Actor {
                 },
                 reply,
                 prompt_ack: None,
+                muse_decision: None,
                 muse_turn: (starts_turn && self.protocol == Protocol::Muse)
                     .then(|| params["commandId"].as_str().map(str::to_owned)).flatten(),
                 codex_prompt_input: (starts_turn && self.protocol == Protocol::Codex)
@@ -1018,6 +1031,7 @@ impl Actor {
                     || self.claude_notifications.active()
                     || self.claude_steering.waiting()
                     || self.observed_root_turn().is_some()
+                    || self.muse_autonomous().is_some()
                     || self.grok_owner().is_some()
                     || !self.queue.is_empty()
                     || self.codex_queue.has_entries()
@@ -1195,8 +1209,21 @@ impl Actor {
                         Ok(cmd) => cmd,
                         Err(err) => { let _ = tx.send(Err(err)); return Ok(true); }
                     };
+                    let muse = self.muse.as_mut().expect("Muse projection");
+                    let revision = match muse.reserve_decision(&key, body) {
+                        Ok(revision) => revision,
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                            return Ok(true);
+                        }
+                    };
                     self.rpc(command, params, None, RpcIntent::Control).await?;
-                    self.pending.get_mut(&self.next).expect("pending Muse decision").prompt_ack = Some(tx);
+                    let pending = self
+                        .pending
+                        .get_mut(&self.next)
+                        .expect("pending Muse decision");
+                    pending.muse_decision = Some((key, revision));
+                    pending.prompt_ack = Some(tx);
                     return Ok(true);
                 }
                 let packet = wire::answer(self.protocol, &id, method, Some(answer));
@@ -1211,6 +1238,7 @@ impl Actor {
                     || self.claude_notifications.active()
                     || self.claude_steering.waiting()
                     || self.observed_root_turn().is_some()
+                    || self.muse_autonomous().is_some()
                     || self.grok_owner().is_some()
                     || self.manual_compaction.is_some()
                 {
@@ -1333,7 +1361,12 @@ impl Actor {
                 let _ = tx.send(Ok(()));
             }
             Command::Abort(request) => {
-                if request.target_request.is_some() && self.pi_independent.is_some() {
+                let stale_continuation = request.muse_continuation.is_some_and(|id| {
+                    self.session()
+                        .zip(self.muse_autonomous())
+                        .is_none_or(|(session, turn)| muse::continuation_id(&session, turn) != id)
+                });
+                if stale_continuation || (request.target_request.is_some() && self.pi_independent.is_some()) {
                     let _ = request.reply.send(Err(AbortRequest::stale()));
                 } else if let Some(reply) = request.for_current(&self.journal) {
                     self.abort(reply).await?;
@@ -1367,10 +1400,22 @@ impl Actor {
                 return Err(Error::Protocol("expected a stdio runtime".into()));
             }
             Protocol::Muse => {
-                let Some(native) = self.turn.as_ref().and_then(|t| t.native.clone()) else {
-                    abort.finish(&self.journal,Err(Error::Refused("no active turn".into()))); return Ok(());
+                let mut targets = self
+                    .muse
+                    .as_ref()
+                    .expect("Muse projection")
+                    .interrupt_targets();
+                let Some(root) = targets.pop() else {
+                    abort.finish(
+                        &self.journal,
+                        Err(Error::Refused("no active Muse turn".into())),
+                    );
+                    return Ok(());
                 };
-                self.rpc("turn/interrupt", json!({"sessionId":self.session(),"turnId":native,"commandId":uuid::Uuid::now_v7()}), Some(abort.client),RpcIntent::Abort(abort.request)).await?;
+                for joined in targets {
+                    self.rpc("turn/interrupt",json!({"sessionId":self.session(),"turnId":joined,"commandId":uuid::Uuid::now_v7()}), None,RpcIntent::Control).await?;
+                }
+                self.rpc("turn/interrupt",json!({"sessionId":self.session(),"turnId":root,"commandId":uuid::Uuid::now_v7()}), Some(abort.client),RpcIntent::Abort(abort.request)).await?;
             }
             Protocol::Codex => {
                 let turn_id = match self.manual_compaction.as_ref() {
@@ -1648,6 +1693,24 @@ impl Actor {
         transport
     }
     async fn receive(&mut self, v: Value, context: Option<crate::ContextUsage>) -> Result<()> {
+        if let Some(muse) = &mut self.muse {
+            if muse.hold_before_open(&v)? {
+                return Ok(());
+            }
+            if let Some(id) = wire::response_id(Protocol::Muse, &v).and_then(|id| id.as_u64())
+                && self.pending.get(&id).is_some_and(|p| {
+                    matches!(p.method.as_str(), "session/start" | "session/resume")
+                })
+                && let Some((root, early)) = muse.opened(&v["result"])
+            {
+                self.identity.lock().unwrap().session = Some(root);
+                self.receive_record(v, context).await?;
+                for frame in early {
+                    self.receive_record(frame, None).await?;
+                }
+                return Ok(());
+            }
+        }
         if self.protocol == Protocol::Qwen
             && let Some(error) = crate::opening::qwen_missing_auth(&v)
             && let Some(id) = self
@@ -2015,9 +2078,12 @@ impl Actor {
             return Ok(());
         }
         // Permission replies must round-trip the vendor's original arguments, including values hidden in the UI.
-        let muse_control = (self.protocol == Protocol::Muse).then(|| {
-            muse::control(&v, self.session().as_deref(), self.turn.as_ref().and_then(|t| t.native.as_deref()))
-        }).flatten();
+        let muse_control = self.muse.as_ref().and_then(|muse| {
+            let owns_turn = v["params"]["turnId"]
+                .as_str()
+                .is_some_and(|id| muse.owns(id));
+            muse::control(&v, self.session().as_deref(), owns_turn)
+        });
         let original_request = if muse_control.is_some() {
             Some(v["params"].clone())
         } else if self.mode == ApprovalMode::Host {
@@ -2360,13 +2426,45 @@ impl Actor {
                 .unwrap_or(events.len());
             events.insert(at, report);
         }
-        if let Some((id, method)) = &muse_control {
-            if matches!(method.as_str(), "approval/resolved" | "userInput/settled") {
-                if self.requests.remove(&id.to_string()).is_some() {
-                    events.push(Event::RequestResolved { id:id.clone() });
+        if let Some(muse) = &mut self.muse {
+            if events.iter().any(|e| matches!(e, Event::TurnEnded { .. })) {
+                // A workflow child may outlive this foreground run.
+                self.requests.retain(|key, (method, body)| {
+                    let foreground = matches!(
+                        method.as_str(),
+                        "approval/requested" | "approval/updated" | "userInput/requested"
+                    ) && body["subagentOrigin"].is_null();
+                    if foreground {
+                        muse.resolve(key);
+                        let id = body
+                            .get("approvalId")
+                            .unwrap_or(&body["userInputId"])
+                            .clone();
+                        events.push(Event::RequestResolved { id });
+                    }
+                    !foreground
+                });
+            }
+            if let Some((id, method)) = &muse_control {
+                let key = id.to_string();
+                let previous = self.requests.get(&key);
+                let params = original_request
+                    .as_ref()
+                    .expect("Muse request or settlement");
+                if muse.can_publish(&key)
+                    && previous.is_none_or(|(_, body)| muse::same_request(body, params))
+                {
+                    if matches!(method.as_str(), "approval/resolved" | "userInput/settled") {
+                        muse.resolve(&key);
+                        if self.requests.remove(&key).is_some() {
+                            events.push(Event::RequestResolved { id: id.clone() });
+                        }
+                    } else if previous.is_none_or(|(_, body)| body != params)
+                        && (method != "approval/updated" || previous.is_some())
+                    {
+                        request = Some((id.clone(), method.clone()));
+                    }
                 }
-            } else if method != "approval/updated" || self.requests.contains_key(&id.to_string()) {
-                request = Some((id.clone(), method.clone()));
             }
         }
         if let Some(ref req) = request {
@@ -2401,6 +2499,18 @@ impl Actor {
             } else {
                 open_error.map_or_else(|| wire::result(self.protocol, &v), Err)
             };
+            if result.is_err()
+                && let Some(id) = &p.muse_turn
+                && let Some(muse) = &mut self.muse
+            {
+                muse.refused_prompt(id);
+            }
+            if result.is_err()
+                && let Some((key, revision)) = &p.muse_decision
+                && let Some(muse) = &mut self.muse
+            {
+                muse.refused_decision(key, revision);
+            }
             if result.is_err()
                 && let Some(id) = number
             {
@@ -2550,10 +2660,11 @@ impl Actor {
                     invalid_codex_admission = true;
                 }
             } else if let Some(request) = p.prompt_request {
-                if let Some(expected) = &p.muse_turn && result.is_ok()
-                    && !muse::accepts(expected, &v["result"])
-                {
-                    return Err(Error::Closed("Muse did not confirm the submitted native turn identity".into()));
+                if let Some(expected) = &p.muse_turn && result.is_ok() {
+                    if !muse::accepts(expected, &v["result"]) {
+                        return Err(Error::Closed("Muse did not confirm the submitted native turn identity".into()));
+                    }
+                    self.muse.as_mut().expect("Muse projection").admitted(expected);
                 }
                 let refusal = result.as_ref().err().map(|error| {
                     let mut reason = v["error"]
@@ -3180,10 +3291,30 @@ impl Actor {
                 let body = original_request.unwrap_or(Value::Null);
                 self.requests.insert(id.to_string(), (method.clone(), body.clone()));
                 if self.mode != ApprovalMode::Host {
-                    let deny = crate::interaction::decision_payload(&method, &body, crate::PermissionDecision::Deny)
-                        .unwrap_or_else(|| json!({"cancelled":true}));
-                    let (command, params) = muse::answer_command(&method, &body, &deny)?;
-                    self.rpc(command, params, None, RpcIntent::Control).await?;
+                    let deny = crate::interaction::decision_payload(
+                        &method,
+                        &body,
+                        crate::PermissionDecision::Deny,
+                    );
+                    // A child belongs to its own run. With no native refusal choice,
+                    // leave it pending for the host instead of stopping an unrelated run.
+                    if deny.is_some() || body["subagentOrigin"].is_null() {
+                        let deny = deny.unwrap_or_else(|| json!({"cancelled":true}));
+                        let (command, params) = muse::answer_command(&method, &body, &deny)?;
+                        let key = id.to_string();
+                        if let Ok(revision) = self
+                            .muse
+                            .as_mut()
+                            .expect("Muse projection")
+                            .reserve_decision(&key, &body)
+                        {
+                            self.rpc(command, params, None, RpcIntent::Control).await?;
+                            self.pending
+                                .get_mut(&self.next)
+                                .expect("pending Muse decision")
+                                .muse_decision = Some((key, revision));
+                        }
+                    }
                 }
             } else if self.mode == ApprovalMode::Host {
                 if self.protocol == Protocol::Pi {
@@ -3466,6 +3597,7 @@ impl Actor {
                 && !self.claude_notifications.active()
                 && !self.claude_steering.waiting()
                 && self.observed_root_turn().is_none()
+                && self.muse_autonomous().is_none()
                 && self.grok_owner().is_none()
                 && self.manual_compaction.is_none()
                 && !self.journal.delivery.paused()
@@ -3662,6 +3794,27 @@ impl Actor {
             {
                 self.journal.prompt_error(request, &closed, &self.secrets);
             }
+        }
+        if self.close_ack.is_none()
+            && let Some(turn) = self.muse.as_ref().and_then(muse::Projection::live_turn)
+        {
+            self.record(
+                Direction::Host,
+                RecordKind::Frame,
+                json!({"type":"muse_connection_lost","turnId":turn}),
+                vec![
+                    Event::TurnFailure {
+                        failure: crate::TurnFailure::new(
+                            crate::FailureClass::RuntimeExited,
+                            reason.clone(),
+                        ),
+                    },
+                    Event::TurnEnded {
+                        outcome: Outcome::Failed,
+                    },
+                ],
+                vec![],
+            );
         }
         let mut exit = crate::process::exit_body(&status, &reason);
         if let Some((id, _)) = &self.close_ack {

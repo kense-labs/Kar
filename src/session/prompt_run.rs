@@ -90,7 +90,7 @@ impl Session {
                 if let Some(disposition) = self.journal.handled_prompt(&request, input) {
                     return Ok(PromptRun::Handled { receipt, disposition });
                 }
-                let interrupted = match self.abort_prompt(Some(request.clone())).await {
+                let interrupted = match self.abort_prompt(Some(request.clone()), None).await {
                     Ok(()) => Some(by),
                     Err(Error::Refused(_) | Error::Unsupported(_) | Error::Busy) => None,
                     Err(error) => return Err(error),

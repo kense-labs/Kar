@@ -1892,7 +1892,7 @@ impl Session {
             .map(drop)
     }
     pub async fn abort(&self) -> Result<()> {
-        self.abort_prompt(None).await
+        self.abort_prompt(None, None).await
     }
     /// Interrupt the active root prompt identified by its input UUID.
     /// Providing its request UUID also distinguishes attempts that reuse the input UUID.
@@ -1903,14 +1903,24 @@ impl Session {
             request_id,
         }
         .pin(&self.journal)
-        .and_then(|t| t.request_id)
-        .ok_or_else(crate::transport::AbortRequest::stale)?;
-        self.abort_prompt(Some(target.to_string())).await
+        .and_then(|t| t.request_id);
+        if let Some(target) = target {
+            self.abort_prompt(Some(target.to_string()), None).await
+        } else if self.protocol == Protocol::Muse && request_id.is_none() {
+            self.abort_prompt(None, Some(input_id)).await
+        } else {
+            Err(crate::transport::AbortRequest::stale())
+        }
     }
-    async fn abort_prompt(&self, target_request: Option<String>) -> Result<()> {
+    async fn abort_prompt(
+        &self,
+        target_request: Option<String>,
+        muse_continuation: Option<Uuid>,
+    ) -> Result<()> {
         self.call(|reply| {
             Command::Abort(crate::transport::AbortRequest {
                 target_request,
+                muse_continuation,
                 reply,
             })
         })

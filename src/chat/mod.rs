@@ -1,6 +1,7 @@
 //! Persistent native chats. A per-chat file lock gives one process ownership of the provider session.
 mod background_note;
 pub use background_note::BackgroundNote;
+pub(crate) use background_note::stable_id;
 mod attachments;
 mod native_profile;
 pub use attachments::{Attachment, AttachmentKind};
@@ -669,7 +670,7 @@ impl ChatSession {
             log.attach(session.stream_id(), profile)?;
         }
         if session.capabilities().goals
-            || session.protocol() == Protocol::Claude
+            || matches!(session.protocol(), Protocol::Claude | Protocol::Muse)
             || log.state.info.runtime == "grok"
         {
             log.native_store = Some(store.clone());

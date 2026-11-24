@@ -1,4 +1,9 @@
 //! Real Kar CLI and persistence, native protocols replaced with recording peers.
+#[path = "workbench_provider_chat/muse_continuation.rs"]
+mod muse_continuation;
+#[allow(dead_code)]
+#[path = "support/workbench_server.rs"]
+mod workbench_server;
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, Write},
@@ -277,7 +282,11 @@ fn main() {
         if args.first().map(String::as_str) == Some("--version") {
             println!("{}", if id == "kiro" { "2.27.1" } else { "0.0.14" });
         } else {
-            if id == "muse" {
+            if id == "muse"
+                && std::env::var("KAR_MUSE_TEST_SCENARIO").as_deref() == Ok("continuation")
+            {
+                muse_continuation::peer(&args);
+            } else if id == "muse" {
                 muse(&args);
             } else {
                 acp(&id, &args);
@@ -287,6 +296,10 @@ fn main() {
     }
     if args.first().map(String::as_str) == Some("installed") {
         installed(args.get(1).expect("provider id"));
+        return;
+    }
+    if args.first().map(String::as_str) == Some("muse-continuation") {
+        muse_continuation::run();
         return;
     }
     for provider in ["kiro", "fx", "muse"] {

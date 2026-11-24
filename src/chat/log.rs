@@ -1702,6 +1702,7 @@ impl Log {
         });
         let started = match self.state.info.protocol {
             Protocol::Acp if self.state.info.runtime == "grok" => native_run.is_some(),
+            Protocol::Muse => native_run.is_some(),
             Protocol::Claude => steering.is_some(),
             Protocol::Codex => r.native["method"] == "turn/started",
             Protocol::Dsh => r.native["event"]["type"] == "turn/start",

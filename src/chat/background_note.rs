@@ -29,7 +29,7 @@ impl BackgroundNote {
     }
 }
 
-fn stable_id(parts: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Uuid {
+pub(crate) fn stable_id(parts: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Uuid {
     let mut hash = Sha256::new();
     for part in parts {
         let bytes = part.as_ref();
