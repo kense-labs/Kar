@@ -86,10 +86,35 @@ Kar 提交 `1444fe3`。下列两种 CLI 的工具都由真实供应商进程调�
 | Qoder worker 1.1.78，macOS arm64 | 用原生离线模型循环在同一回合依次调用 stdio、HTTP、stdio、HTTP。检查首轮前配置路径已经移除，工具仍能收到原始凭据。 | 设置 `KAR_QODER_WORKER_BIN`，运行 `cargo test --locked --test protocol -- qoder-mcp-native`。四个工具结果都包含指定标记和预期摘要；进程参数、Kar 记录及隔离 HOME 未出现原值。另以 `cargo test --locked --test qoder_live -- --ignored` 回归 1.1.78 原生恢复和 1.1.83 匿名 daemon 握手，两项通过。 |
 | Kar Rust 交接层，macOS arm64 | 验证私有目录和文件的权限、排他创建、保留活跃租约、清理失去宿主的读者、慢读者传输大于管道缓冲区的数据，以及供应商未读取时的超时与清理。 | `cargo test --locked --lib mcp_file` 三项通过。等待中的读者收到 1 MiB 完整数据或在回收后收到 EOF。普通文件后备路径在 macOS 运行；Windows 原生执行仍属本轮排除项。 |
 
+## 三轮检查点与中间回合分叉
+
+Kar 提交 `bc905c7`。测试分开记录文件操作、Git 断言和原生模型上下文。
+
+| 平台、供应商和传输 | 操作与预期 | 命令与证据 |
+| --- | --- | --- |
+| macOS arm64、Ubuntu 24.04.5 arm64，Kar Rust CLI 与 Git，对端为 Rust Codex 协议夹具 | 连续三轮新增、删除、修改文件，含二进制、符号链接、可执行位、忽略项和已有暂存区。对照三个回合所有路径与变更类型；回滚到第二轮，逐路径比对文件内容、模式和链接目标。 | `cargo test --locked --test chat_restart` 两个平台通过。工作区 HEAD、index 字节不变，第二轮树和第三轮起始树相等；冲突路径阻止覆盖，部分恢复可重试。 |
+| Pi RPC 1.4.0、1.6.0，macOS arm64、Ubuntu arm64 | 三轮分别让真实 Pi write 工具写入 first、middle、late。选第二轮分叉，重开控制器后让子会话继续写 child，再重开父会话读上下文。 | 设置 `KAR_PI_BIN`，运行 `cargo test --locked --test native_live three_native_writes -- --ignored`。每轮只有一个新增文件；回滚后 late 文件消失，子回复为 `first/middle/child`，父回复为 `first/middle/late/inspect`。记录的父子原生 ID 不同。 |
+| OpenCode 2.2.7 ACP，macOS arm64、Ubuntu arm64 | 通过 Kar CLI 连做三轮、从第二轮分叉新会话，对照模型收到的父消息、附加工作目录工具读取与再次分叉。 | 设置 `KAR_OPENCODE_BIN`，运行 `cargo test --locked --test native_live native_turn_fork_rolls_back_workspace_and_context -- --ignored`。两端通过，第三轮的用户和助手标记都未进入子请求，父回合记录保持原值。 |
+
+## Linux 原生验证
+
+在隔离的 Lima 2.3.0 / Apple VZ 虚拟机运行 Ubuntu 24.04.5 LTS、内核 6.8.0-147-generic（aarch64），Rust 1.100.0、Node 24.15.0。虚拟机使用独立 HOME 和文件系统。以下记录在 Linux 内编译、运行并读取供应商进程结果。
+
+| 提交、供应商和版本 | 操作与命令 | 实际证据 |
+| --- | --- | --- |
+| `bc905c7`，Kar，Ubuntu arm64 | `cargo test --locked --all-targets -j1` | 118 项由标准 Rust 测试框架计为通过，139 项标有环境条件而跳过。另有独立可执行测试通过，包括跨进程聊天恢复、队列、双订阅与检查点。首次以默认并行度链接时内核终止了链接器；降低并行度并添加虚拟机临时交换空间后通过。 |
+| 同提交，Codex 0.169.0 app-server、Claude Code 2.1.326 stream-json | 分别设置 `KAR_CODEX_BIN`、`KAR_CLAUDE_BIN`，运行 `cargo test --locked --test native_live actual_codex_durable_chat_across_processes -- --ignored`、`actual_claude_durable_chat_across_processes` | 两项均通过。独立 Kar CLI 进程新建、按 ID 重开及续聊，校验原生历史、模型请求和持久化回合。 |
+| 同提交，Pi RPC 1.4.0、1.6.0，Claude 2.1.326 | 分别执行上面的 `pi_mcp_live`、`claude-mcp-native` | 两个 Pi 版本分别通过凭据隔离、双客户端工具回放与重启；Claude 两种工具在路径删除后再次认证成功。同时运行 `cargo test --locked --test native_live pi_history:: -- --ignored`，Pi 1.6.0 的五项原生历史、重试及分叉测试全部通过。 |
+| 同提交，Qwen Code 0.27.4，Grok 1.0.70 ACP，Kimi 官方 2.7.2 ACP | `cargo test --locked --test qwen_live -- --ignored`；Grok 分别运行 `native_image_reaches_the_model`、`host_tool_is_ready_on_the_first_turn`；Kimi 运行 `official_cli_falls_back_and_resumes_over_acp` | Qwen 两项、Grok 两项和 Kimi 一项均通过。分别校验 Qwen 目录、记忆、续聊与中止，Grok 模型实收图像和首轮工具调用，Kimi 官方 CLI 的 ACP 续聊。复验时指定 `KAR_QWEN_BIN`、`KAR_GROK_BIN`、`KAR_KIMI_ACP_BIN`。 |
+| `bc905c7` 与 `c6d2341`，DSH Web 0.2.2-rc.5、ACP 0.2.1-rc.5 / 0.2.2-rc.3 | 设置 `KAR_DSH_BIN`、`KAR_DSH_ACP_BIN`、`KAR_DSH_ACP_ROOTS_BIN`、`KAR_KIMI_ACP_BIN`，运行 `cargo test --locked --test dsh_live -- --ignored --test-threads=1` | 首次完整执行 24 项，23 项通过；重复工具 ID 用例碰到供应商的 Landlock stderr，原断言将它一并当作 stdout。修正后单跑该项通过，分别核对两次 stdout，再将含 stderr 的完整工具结果与回放、重启恢复逐项比对。 |
+| `0b13edf`，Pi 1.4.0、Claude 2.1.326、Qwen 0.27.4、Factory 1.12.1、DSH Web 0.2.2-rc.5、DSH ACP 0.2.1-rc.5 | 各自运行 `public_prompt_readbacks`（Pi 位于 `native_live`，其余位于对应 `*_live`），Claude 运行 `cargo test --locked --test protocol -- claude-mcp-native` | 通过公共用例 `session.query-readbacks-carry-stream-seq` 的两次普通输入。给定 UUID 原样记录，省略 UUID 时自动生成；逐条重放到模型、用量和上下文各自的 seq，返回值分别一致。 |
+
+macOS 同一公共用例通过 Pi 1.6.0、Claude 2.1.330、Qwen、Factory 1.12.1 / 1.17.2 和上述两种 DSH 传输。真实 Chromium 的 Pi Durable 还用不透明字符串 `lookup` 和自动生成的 UUID 核对输入记录，三项查询值及序号均与快照相符；`node tests/browser/live.mjs` 的整套模型请求数为 8。Rust 协议用例另在 Codex、Claude、Qwen、ACP 和 Pi 五种传输执行。
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。
 - **未完成或失败。** 实时推送、重启和队列已有上述平台证据。其余供应商、完整强制终止切点、三轮检查点及分叉、并行工作树、原生目标、其余供应商的子任务归属、用量、其他供应商的凭据传递以及未覆盖的运行时专有目录仍须按清单各自核销。
 - **供应商不支持。** 本批次没有把未实测的功能登记为供应商不支持。
-- **缺环境待验证。** 表中实机结果来自 macOS arm64。Linux 原生运行仍须提供可执行这些供应商程序的 Linux 环境及对应架构安装包，设置同表环境变量后逐项复跑。交叉编译只验证编译。
+- **缺环境待验证。** 逐表标注 macOS arm64 与 Ubuntu arm64 的实机结果。Linux x86_64 仍只有交叉检查记录，未在该架构执行的供应商用例继续单列。
 - **本轮排除：Windows 实机验证。** 此排除项沿用固定清单。
