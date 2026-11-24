@@ -1,21 +1,21 @@
 method	upstream_contract	upstream_handler	gap_id	kar_entry	test_command	evidence	state
-projects.listEntries	packages/contracts/src/rpc.ts#L487	apps/server/src/ws.ts#L3065	project-entries				已登记差异
-projects.listIgnoredFiles	packages/contracts/src/rpc.ts#L488	apps/server/src/ws.ts#L3076	project-entries				已登记差异
-projects.readFile	packages/contracts/src/rpc.ts#L489	apps/server/src/ws.ts#L3087	project-read-options				已登记差异
-projects.searchContents	packages/contracts/src/rpc.ts#L490	apps/server/src/ws.ts#L3052					待源码核对
-projects.searchEntries	packages/contracts/src/rpc.ts#L491	apps/server/src/ws.ts#L3039					待源码核对
+projects.listEntries	packages/contracts/src/rpc.ts#L487	apps/server/src/ws.ts#L3065	project-entries	GET entries	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
+projects.listIgnoredFiles	packages/contracts/src/rpc.ts#L488	apps/server/src/ws.ts#L3076	project-entries	GET ignored-files	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
+projects.readFile	packages/contracts/src/rpc.ts#L489	apps/server/src/ws.ts#L3087	project-read-options	GET file	cargo test --locked --test chat_restart -- workbench-projects	162d633	实现已集成，待统一验收
+projects.searchContents	packages/contracts/src/rpc.ts#L490	apps/server/src/ws.ts#L3052	project-search-options				已登记差异
+projects.searchEntries	packages/contracts/src/rpc.ts#L491	apps/server/src/ws.ts#L3039	project-search-options				已登记差异
 projects.writeFile	packages/contracts/src/rpc.ts#L492	apps/server/src/ws.ts#L3098					待源码核对
 projects.mutate	packages/contracts/src/rpc.ts#L493	apps/server/src/ws.ts#L3110	project-lifecycle				已登记差异
 projects.ensureScratch	packages/contracts/src/rpc.ts#L494	apps/server/src/ws.ts#L3003	project-creation				已登记差异
 projects.createNew	packages/contracts/src/rpc.ts#L495	apps/server/src/ws.ts#L3009	project-creation				已登记差异
 projects.createFromThread	packages/contracts/src/rpc.ts#L496	apps/server/src/ws.ts#L3017	project-creation				已登记差异
 shell.openInEditor	packages/contracts/src/rpc.ts#L498	apps/server/src/ws.ts#L3124					待源码核对
-filesystem.browse	packages/contracts/src/rpc.ts#L500	apps/server/src/ws.ts#L3126	filesystem-inspection				已登记差异
-workspace.listFolders	packages/contracts/src/rpc.ts#L501	apps/server/src/ws.ts#L3137	task-folders				已登记差异
-workspace.scanFolders	packages/contracts/src/rpc.ts#L502	apps/server/src/ws.ts#L3138	task-folders				已登记差异
+filesystem.browse	packages/contracts/src/rpc.ts#L500	apps/server/src/ws.ts#L3126	filesystem-inspection	GET browse	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
+workspace.listFolders	packages/contracts/src/rpc.ts#L501	apps/server/src/ws.ts#L3137	task-folders	GET folders	cargo test --locked --test chat_restart -- workbench-projects	c2c283f	实现已集成，待统一验收
+workspace.scanFolders	packages/contracts/src/rpc.ts#L502	apps/server/src/ws.ts#L3138	task-folders	GET folders/scan	cargo test --locked --test chat_restart -- workbench-projects	c2c283f	实现已集成，待统一验收
 workspace.taskFolder	packages/contracts/src/rpc.ts#L503	apps/server/src/ws.ts#L3139	task-folders				已登记差异
 workspace.addTaskFolderRepository	packages/contracts/src/rpc.ts#L504	apps/server/src/ws.ts#L3141	task-folders				已登记差异
-filesystem.getMetadata	packages/contracts/src/rpc.ts#L505	apps/server/src/ws.ts#L3125	filesystem-inspection				已登记差异
+filesystem.getMetadata	packages/contracts/src/rpc.ts#L505	apps/server/src/ws.ts#L3125	filesystem-inspection	POST /filesystem/metadata	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
 agentSessions.scan	packages/contracts/src/rpc.ts#L506	apps/server/src/ws.ts#L3144					待源码核对
 agentSessions.import	packages/contracts/src/rpc.ts#L507	apps/server/src/ws.ts#L3145					待源码核对
 assets.createUrl	packages/contracts/src/rpc.ts#L508	apps/server/src/ws.ts#L3147					待源码核对
@@ -52,7 +52,7 @@ vcs.removeWorktree	packages/contracts/src/rpc.ts#L541	apps/server/src/ws.ts#L332
 vcs.createRef	packages/contracts/src/rpc.ts#L542	apps/server/src/ws.ts#L3349	git-ref-actions	projects/{project}/POST git op=create_branch	cargo test --locked --test workbench_git	b091774	实现已集成，待统一验收
 vcs.switchRef	packages/contracts/src/rpc.ts#L543	apps/server/src/ws.ts#L3361	git-ref-actions	projects/{project}/POST git op=switch_branch	cargo test --locked --test workbench_git	b091774	实现已集成，待统一验收
 vcs.init	packages/contracts/src/rpc.ts#L544	apps/server/src/ws.ts#L3366	git-init	projects/{project}/POST git op=init	cargo test --locked --test workbench_git	b091774	实现已集成，待统一验收
-git.runStackedAction	packages/contracts/src/rpc.ts#L546	apps/server/src/ws.ts#L3250	git-stacked				已登记差异
+git.runStackedAction	packages/contracts/src/rpc.ts#L546	apps/server/src/ws.ts#L3250	git-stacked	POST git/actions	cargo test --locked --test workbench_forge	6e355b6	实现已集成，待统一验收
 git.resolvePullRequest	packages/contracts/src/rpc.ts#L547	apps/server/src/ws.ts#L3297					待源码核对
 git.preparePullRequestThread	packages/contracts/src/rpc.ts#L548	apps/server/src/ws.ts#L3298					待源码核对
 review.getBranchCommits	packages/contracts/src/rpc.ts#L550	apps/server/src/ws.ts#L3368					待源码核对
@@ -66,13 +66,13 @@ terminal.resize	packages/contracts/src/rpc.ts#L558	apps/server/src/ws.ts#L3391		
 terminal.clear	packages/contracts/src/rpc.ts#L559	apps/server/src/ws.ts#L3393	terminal-clear	projects/{project}/POST terminals/{id}/clear	cargo test --locked --test workbench_terminal_preview	1072da0	实现已集成，待统一验收
 terminal.close	packages/contracts/src/rpc.ts#L560	apps/server/src/ws.ts#L3394					待源码核对
 preview.open	packages/contracts/src/rpc.ts#L562	apps/server/src/ws.ts#L3409					待源码核对
-preview.resize	packages/contracts/src/rpc.ts#L563	apps/server/src/ws.ts#L3410	preview-controls				已登记差异
-preview.adjust	packages/contracts/src/rpc.ts#L564	apps/server/src/ws.ts#L3411	preview-controls				已登记差异
+preview.resize	packages/contracts/src/rpc.ts#L563	apps/server/src/ws.ts#L3410	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	95203f8	实现已集成，待统一验收
+preview.adjust	packages/contracts/src/rpc.ts#L564	apps/server/src/ws.ts#L3411	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	95203f8	实现已集成，待统一验收
 preview.close	packages/contracts/src/rpc.ts#L565	apps/server/src/ws.ts#L3412					待源码核对
 preview.list	packages/contracts/src/rpc.ts#L566	apps/server/src/ws.ts#L3413					待源码核对
-preview.clearProfile	packages/contracts/src/rpc.ts#L567	apps/server/src/ws.ts#L3414	preview-controls				已登记差异
-preview.reportProfiles	packages/contracts/src/rpc.ts#L568	apps/server/src/ws.ts#L3415					待源码核对
-preview.reportStatus	packages/contracts/src/rpc.ts#L569	apps/server/src/ws.ts#L3416					待源码核对
+preview.clearProfile	packages/contracts/src/rpc.ts#L567	apps/server/src/ws.ts#L3414	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	95203f8	实现已集成，待统一验收
+preview.reportProfiles	packages/contracts/src/rpc.ts#L568	apps/server/src/ws.ts#L3415	preview-reports	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	357a2fb	实现已集成，待统一验收
+preview.reportStatus	packages/contracts/src/rpc.ts#L569	apps/server/src/ws.ts#L3416	preview-reports	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	357a2fb	实现已集成，待统一验收
 preview.stopLocalServer	packages/contracts/src/rpc.ts#L570	apps/server/src/ws.ts#L3442	preview-stop	projects/{project}/POST terminals/{id}/ports/stop	cargo test --locked --test workbench_terminal_preview	56fd8c0	实现已集成，待统一验收
 device.configure	packages/contracts/src/rpc.ts#L572	apps/server/src/ws.ts#L3418					待源码核对
 device.list	packages/contracts/src/rpc.ts#L573	apps/server/src/ws.ts#L3422					待源码核对
@@ -150,12 +150,12 @@ scheduledTasks.upsert	packages/contracts/src/rpc.ts#L647	apps/server/src/ws.ts#L
 scheduledTasks.setEnabled	packages/contracts/src/rpc.ts#L648	apps/server/src/ws.ts#L2396					待源码核对
 scheduledTasks.delete	packages/contracts/src/rpc.ts#L649	apps/server/src/ws.ts#L2400					待源码核对
 scheduledTasks.runNow	packages/contracts/src/rpc.ts#L650	apps/server/src/ws.ts#L2404					待源码核对
-scheduledTasks.rotateWebhookToken	packages/contracts/src/rpc.ts#L651	apps/server/src/ws.ts#L2408	webhook-management				已登记差异
+scheduledTasks.rotateWebhookToken	packages/contracts/src/rpc.ts#L651	apps/server/src/ws.ts#L2408	webhook-management	POST workflows/{id}/webhook/rotate	cargo test --locked --test workbench_workflows	7e196b3	实现已集成，待统一验收
 secrets.answerRequest	packages/contracts/src/rpc.ts#L652	apps/server/src/ws.ts#L2416					待源码核对
 agentFeedback.answerRequest	packages/contracts/src/rpc.ts#L653	apps/server/src/ws.ts#L2420					待源码核对
 guestShare.create	packages/contracts/src/rpc.ts#L654	apps/server/src/ws.ts#L2412					待源码核对
-scheduledTasks.listWebhookDeliveries	packages/contracts/src/rpc.ts#L655	apps/server/src/ws.ts#L2421	webhook-management				已登记差异
-scheduledTasks.getWebhookDelivery	packages/contracts/src/rpc.ts#L656	apps/server/src/ws.ts#L2425	webhook-management				已登记差异
+scheduledTasks.listWebhookDeliveries	packages/contracts/src/rpc.ts#L655	apps/server/src/ws.ts#L2421	webhook-management	GET workflows/{id}/deliveries	cargo test --locked --test workbench_workflows	7e196b3	实现已集成，待统一验收
+scheduledTasks.getWebhookDelivery	packages/contracts/src/rpc.ts#L656	apps/server/src/ws.ts#L2425	webhook-management	GET workflows/{id}/deliveries/{delivery}	cargo test --locked --test workbench_workflows	7e196b3	实现已集成，待统一验收
 cloud.getRelayClientStatus	packages/contracts/src/rpc.ts#L658	apps/server/src/ws.ts#L2838					待源码核对
 cloud.installRelayClient	packages/contracts/src/rpc.ts#L659	apps/server/src/ws.ts#L2839					待源码核对
 pullRequests.list	packages/contracts/src/rpc.ts#L661	apps/server/src/ws.ts#L2864					待源码核对
@@ -181,9 +181,9 @@ pullRequests.runAction	packages/contracts/src/rpc.ts#L680	apps/server/src/ws.ts#
 pullRequests.update	packages/contracts/src/rpc.ts#L681	apps/server/src/ws.ts#L2915					待源码核对
 pullRequests.comment	packages/contracts/src/rpc.ts#L682	apps/server/src/ws.ts#L2917					待源码核对
 pullRequests.updateComment	packages/contracts/src/rpc.ts#L683	apps/server/src/ws.ts#L2919					待源码核对
-pullRequests.submitReview	packages/contracts/src/rpc.ts#L684	apps/server/src/ws.ts#L2921	review-actions				已登记差异
-pullRequests.replyToThread	packages/contracts/src/rpc.ts#L685	apps/server/src/ws.ts#L2923	review-actions				已登记差异
-pullRequests.setThreadResolution	packages/contracts/src/rpc.ts#L686	apps/server/src/ws.ts#L2925	review-actions				已登记差异
+pullRequests.submitReview	packages/contracts/src/rpc.ts#L684	apps/server/src/ws.ts#L2921	review-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	6c92ff9	实现已集成，待统一验收
+pullRequests.replyToThread	packages/contracts/src/rpc.ts#L685	apps/server/src/ws.ts#L2923	review-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	6c92ff9	实现已集成，待统一验收
+pullRequests.setThreadResolution	packages/contracts/src/rpc.ts#L686	apps/server/src/ws.ts#L2925	review-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	6c92ff9	实现已集成，待统一验收
 pullRequests.setReaction	packages/contracts/src/rpc.ts#L687	apps/server/src/ws.ts#L2927					待源码核对
 pullRequests.invalidate	packages/contracts/src/rpc.ts#L688	apps/server/src/ws.ts#L2930					待源码核对
 pullRequests.reportState	packages/contracts/src/rpc.ts#L689	apps/server/src/ws.ts#L2929					待源码核对
@@ -195,11 +195,11 @@ pullRequests.labelCandidates	packages/contracts/src/rpc.ts#L694	apps/server/src/
 pullRequests.setLabels	packages/contracts/src/rpc.ts#L695	apps/server/src/ws.ts#L2953					待源码核对
 issues.list	packages/contracts/src/rpc.ts#L698	apps/server/src/ws.ts#L2009					待源码核对
 issues.detail	packages/contracts/src/rpc.ts#L699	apps/server/src/ws.ts#L2010					待源码核对
-issues.comments	packages/contracts/src/rpc.ts#L700	apps/server/src/ws.ts#L2011	issue-actions				已登记差异
+issues.comments	packages/contracts/src/rpc.ts#L700	apps/server/src/ws.ts#L2011	issue-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	9172da1	实现已集成，待统一验收
 issues.templates	packages/contracts/src/rpc.ts#L701	apps/server/src/ws.ts#L2012					待源码核对
 issues.candidates	packages/contracts/src/rpc.ts#L702	apps/server/src/ws.ts#L2013					待源码核对
-issues.create	packages/contracts/src/rpc.ts#L703	apps/server/src/ws.ts#L2015	issue-actions				已登记差异
-issues.comment	packages/contracts/src/rpc.ts#L704	apps/server/src/ws.ts#L2016	issue-actions				已登记差异
+issues.create	packages/contracts/src/rpc.ts#L703	apps/server/src/ws.ts#L2015	issue-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	9172da1	实现已集成，待统一验收
+issues.comment	packages/contracts/src/rpc.ts#L704	apps/server/src/ws.ts#L2016	issue-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	9172da1	实现已集成，待统一验收
 issues.update	packages/contracts/src/rpc.ts#L705	apps/server/src/ws.ts#L2017					待源码核对
 issues.setState	packages/contracts/src/rpc.ts#L706	apps/server/src/ws.ts#L2018					待源码核对
 issues.react	packages/contracts/src/rpc.ts#L707	apps/server/src/ws.ts#L2019					待源码核对
@@ -226,7 +226,7 @@ vcs.refreshBranch	packages/contracts/src/rpc.ts#L729	apps/server/src/ws.ts#L3232
 subscribeWorktreeSetup	packages/contracts/src/rpc.ts#L730	apps/server/src/ws.ts#L3235					待源码核对
 worktreeSetup.cancel	packages/contracts/src/rpc.ts#L731	apps/server/src/ws.ts#L3236					待源码核对
 subscribeTerminalMetadata	packages/contracts/src/rpc.ts#L732	apps/server/src/ws.ts#L3402					待源码核对
-subscribePreviewEvents	packages/contracts/src/rpc.ts#L733	apps/server/src/ws.ts#L3417					待源码核对
+subscribePreviewEvents	packages/contracts/src/rpc.ts#L733	apps/server/src/ws.ts#L3417	preview-reports	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	357a2fb	实现已集成，待统一验收
 subscribeDiscoveredLocalServers	packages/contracts/src/rpc.ts#L734	apps/server/src/ws.ts#L3443					待源码核对
 subscribeDeviceState	packages/contracts/src/rpc.ts#L735	apps/server/src/ws.ts#L3441					待源码核对
 subscribeServerConfig	packages/contracts/src/rpc.ts#L736	apps/server/src/ws.ts#L3469					待源码核对

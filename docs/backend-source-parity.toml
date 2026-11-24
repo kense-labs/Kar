@@ -5,6 +5,8 @@ workbench_commit = "2808e878de91aacc7fb82887f18414976be7ae34"
 initial_kar_comparison = "deb7091eaccefacef2221a0489d7b73499cfe24e"
 runtime_inventory = "backend-source-index.tsv"
 workbench_rpc_inventory = "backend-workbench-source-index.tsv"
+sdk_member_mapping = "backend-sdk-map.tsv"
+forge_driver_mapping = "backend-workbench-forge-source-map.tsv"
 path_convention = "upstream 路径相对相应固定提交的仓库根；sdk: 相对运行时发布包根目录，由导出 ./agents 且含 src/contracts 的包定位。kar 路径相对 Kar 仓库根。"
 
 [process]
@@ -24,7 +26,8 @@ phase = 1
 name = "子任务默认追加指令"
 upstream = ["sdk:src/agents/subagent.ts","packages/cli/src/mcp-tools.ts"]
 kar = ["src/agents.rs","src/mcp.rs"]
-status = "待补齐或对照现有实现核销"
+status = "默认追加路径与回执处理已集成，待统一验收"
+implementation_ref = "85dc5e3"
 test_target = "cargo test --locked --test protocol"
 accept = "用同一个子任务分别处于空闲、忙碌可插话、忙碌只可排队时调用默认 send；比较原生请求、落点和次数。再令会话在状态读取后变忙，核对回退与拒绝原因。显式 steer、queue 的语义按源码分别验证。"
 
@@ -45,7 +48,8 @@ phase = 1
 name = "在 MCP 的 run 和 spawn 中按子任务配置启动参数"
 upstream = ["packages/cli/src/mcp-tools.ts","sdk:src/agents/types.ts"]
 kar = ["src/mcp.rs","src/agents.rs"]
-status = "待补齐或对照现有实现核销"
+status = "会话级目录、模型、推理强度和服务档位已集成，待统一验收"
+implementation_ref = "fcd3956"
 test_target = "cargo test --locked --test protocol"
 accept = "给两个子任务指定不同工作目录、模型、推理强度及服务档位，同时检查省略参数的默认值。从供应商握手、实际请求或原生读回确认归属，核对无效参数的拒绝，不将一方设置传给另一方。"
 
@@ -55,8 +59,8 @@ phase = 1
 name = "子任务嵌套深度和可用运行时选择"
 upstream = ["packages/cli/src/mcp-command.ts","packages/cli/src/mcp-tools.ts","sdk:src/agents/crew.ts"]
 kar = ["src/main.rs","src/mcp.rs"]
-status = "嵌套深度已集成，运行时允许列表及默认值待对照"
-implementation_ref = "739d0b3"
+status = "嵌套深度、默认运行时及显式允许列表已集成，待统一验收"
+implementation_ref = "fcd3956"
 test_target = "cargo test --locked --test protocol"
 accept = "分别使用默认深度和显式深度 2 逐层委派，最后一层返回规定的拒绝。对默认运行时集合及显式允许列表分别查询和启动，核对实际可派生的运行时及拒绝原因。"
 
@@ -76,9 +80,9 @@ id = "models-all"
 phase = 1
 name = "从 CLI 聚合已安装运行时的模型、指定工作区及单运行时超时"
 upstream = ["packages/cli/src/index.ts","packages/cli/src/models.ts","packages/cli/src/each-runtime.ts"]
-kar = ["src/main.rs","src/inventory/mod.rs"]
-status = "批量查询与超时已有实现，显式 all、输出和失败退出语义待对照"
-implementation_ref = "98f4895"
+kar = ["src/models_cli.rs","src/grok.rs"]
+status = "单项、隐式及显式全部、文本和 JSON 数组、超时与独立失败处理已集成，待统一验收"
+implementation_ref = "bae800b"
 test_target = "cargo test --locked --test setup_cli"
 accept = "分别省略运行时、选择全部、指定单一运行时；设置项目目录、不同原生模型目录和单运行时超时，混入缺程序、查询超时和查询成功的情形。比较逐项结果、错误归属、输出模式和进程退出码。先核对主线已有模型查询改动。"
 
@@ -88,8 +92,8 @@ phase = 1
 name = "在同一 CLI 查询中按工作区汇总各运行时原生清单"
 upstream = ["packages/cli/src/index.ts","packages/cli/src/each-runtime.ts"]
 kar = ["src/main.rs","src/inventory/mod.rs"]
-status = "四种批量清单入口已有实现，逐项输出和失败退出语义待对照"
-implementation_ref = "f4a54ae"
+status = "四种清单支持单项及全部的 JSON 数组、已有原生输出和部分失败状态，待统一验收"
+implementation_ref = "4062021"
 test_target = "cargo test --locked --test setup_cli"
 accept = "分别查询技能、命令、MCP 服务器和工具。用两个可区分的运行时及一个缺失的程序，覆盖单个与全部查询、项目目录和超时，核对每行安装状态、清单归属及失败退出语义。"
 
@@ -132,7 +136,8 @@ phase = 2
 name = "组合提交、推送、创建 PR 并订阅各阶段进度"
 upstream = ["packages/contracts/src/git.ts","apps/server/src/git/GitWorkflowService.ts","apps/server/src/git/GitManager.ts"]
 kar = ["src/workbench/git.rs","src/workbench/forge/routes.rs"]
-status = "待补齐或对照现有实现核销"
+status = "五种组合操作、文件选择、Git 钩子进度、重连和重启后查询已集成；多远端发布及模型写作策略仍在对照"
+implementation_ref = "6e355b6"
 test_target = "cargo test --locked --test workbench_forge"
 accept = "覆盖 commit、push、create_pr、commit_push、commit_push_pr；带入选定文件和可选新分支。订阅带操作 ID 的阶段、钩子输出与终态；分别核对无变化、已推送、已有 PR 和推送被拒时的远端提交、PR 数量及步骤结果。"
 
@@ -142,7 +147,8 @@ phase = 2
 name = "扫描项目中的仓库并为一个任务关联多个仓库"
 upstream = ["packages/contracts/src/workspaceFolders.ts","apps/server/src/workspace/TaskFolders.ts","apps/server/src/workspace/TaskFolderStore.ts"]
 kar = ["src/workbench/mod.rs","src/workbench/git.rs"]
-status = "待补齐或对照现有实现核销"
+status = "目录发现和跟踪已集成，任务工作树及设置订阅在开发"
+implementation_ref = "c2c283f"
 test_target = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = "用含两个仓库及工作区描述文件的项目，核对列举、扫描、跟踪目录和来源。为同一任务建立工作目录并追加另一个已跟踪仓库，从任务子目录及重启后读回映射；分别检查重复加入、非跟踪仓库和目标目录已有文件的处理及数据保留。"
 
@@ -163,7 +169,8 @@ phase = 2
 name = "管理预览视口、显示设置与独立浏览器配置"
 upstream = ["packages/contracts/src/preview.ts","apps/server/src/preview/ServerBrowser.ts","apps/server/src/ws.ts"]
 kar = ["src/workbench/terminal_preview/routes.rs","src/workbench/terminal_preview/preview.rs"]
-status = "待补齐或对照现有实现核销"
+status = "项目、设备及配置隔离的 Chromium 控制已集成，待统一验收"
+implementation_ref = "95203f8"
 test_target = "cargo test --locked --test workbench_terminal_preview"
 accept = "对指定预览标签调整视口、缩放和配色，核对硬刷新、清指定 cookies 或缓存。用两个浏览器配置设置不同数据，清一个后核实另一个的内容；核对固定后端支持的状态和访问限制。"
 
@@ -184,7 +191,8 @@ phase = 2
 name = "托管平台上的 PR 审阅、线程回复及解决状态"
 upstream = ["packages/contracts/src/rpc.ts","apps/server/src/ws.ts"]
 kar = ["src/workbench/forge/routes.rs"]
-status = "待补齐或对照现有实现核销"
+status = "按驱动写入审阅、线程回复及解决状态已集成，真实托管入口见 6cc761c，待统一验收"
+implementation_ref = "6c92ff9"
 test_target = "cargo test --locked --test workbench_forge"
 accept = "按上游注册驱动分别核对支持的动作。对同一测试 PR 提交审阅、回复审阅线程、解决及重新打开线程，从远端重新查询作者、内容、对象 ID 和解决状态；记录只读凭据和驱动不支持时的结果。"
 
@@ -194,7 +202,8 @@ phase = 2
 name = "创建 Issue、查询评论及发表评论"
 upstream = ["packages/contracts/src/rpc.ts","apps/server/src/ws.ts"]
 kar = ["src/workbench/forge/routes.rs"]
-status = "待补齐或对照现有实现核销"
+status = "六种驱动的创建 Issue、评论查询及发表评论已集成，真实托管入口见 6cc761c，待统一验收"
+implementation_ref = "9172da1"
 test_target = "cargo test --locked --test workbench_forge"
 accept = "在支持操作的测试仓库或团队创建 Issue，发一条有唯一标记的评论，再从远端读取 Issue 和评论列表核对对象、作者和正文。按驱动分别核对错误、权限和实际副作用。"
 
@@ -204,7 +213,8 @@ phase = 2
 name = "轮换定时任务的 Webhook 凭证、列举并读取投递记录"
 upstream = ["packages/contracts/src/rpc.ts","apps/server/src/ws.ts"]
 kar = ["src/workbench/workflows/routes.rs","src/workbench/workflows/mod.rs"]
-status = "待补齐或对照现有实现核销"
+status = "可轮换独立 URL 令牌，持久保存逐次投递、校验结果和执行 ID，待统一验收"
+implementation_ref = "7e196b3"
 test_target = "cargo test --locked --test workbench_workflows"
 accept = "经公共接口轮换令牌，用旧、新令牌分别投递；按上游语义核对接纳结果、记录列表、单条详情及实际触发次数。对另一任务核对可见范围。"
 
@@ -214,7 +224,8 @@ phase = 2
 name = "项目目录的直接子项和 Git 忽略文件"
 upstream = ["apps/server/src/workspace/WorkspaceEntries.ts"]
 kar = ["src/workbench/files.rs"]
-status = "已从固定源码定位，待补齐"
+status = "目录和 Git 忽略文件查询已接入，待统一验收"
+implementation_ref = "3cf229a"
 test_target = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = "列出根目录及子目录的直接文件和目录。用混合大小写查询已忽略的单文件，核对字节数、截断和整个被忽略目录的排除。"
 
@@ -224,7 +235,8 @@ phase = 2
 name = "目录补全和有序批量元数据"
 upstream = ["apps/server/src/workspace/WorkspaceEntries.ts", "apps/server/src/workspace/WorkspaceFileSystem.ts", "packages/contracts/src/filesystem.ts"]
 kar = ["src/workbench/files.rs"]
-status = "已从固定源码定位，待补齐"
+status = "目录补全和批量路径元数据已接入，待统一验收"
+implementation_ref = "3cf229a"
 test_target = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = "补全绝对和当前项目相对路径；按输入原序返回文件类型、大小和 MIME，核对缺失、不可读、越界、目录和 64 个条目的上限。"
 
@@ -234,7 +246,8 @@ phase = 2
 name = "可选文件读取、截断及字节数"
 upstream = ["apps/server/src/workspace/WorkspaceFileSystem.ts", "packages/contracts/src/project.ts"]
 kar = ["src/workbench/files.rs"]
-status = "已从固定源码定位，待补齐"
+status = "按原始大小返回预览及截断标记，可选文件、授权绝对路径和保存 BOM 已接入，待统一验收"
+implementation_ref = "162d633"
 test_target = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = "读取缺失的可选文件、非文本内容、超过预览上限的 UTF-8 文件及授权根下的绝对路径，独立核对字节数、截断标记、存在性和文件内容。"
 
@@ -267,3 +280,45 @@ kar = ["src/workbench/workflows/mod.rs", "src/workbench/workflows/routes.rs"]
 status = "已从固定源码定位，待补齐"
 test_target = "cargo test --locked --test workbench_workflows"
 accept = "对同一任务发送签名格式不同、符合筛选、被过滤、过期和重复的事件，重启后核对重放键、合并窗口、实际执行次数、限流及脱敏明细。"
+
+[[gap]]
+id = "sdk-orientation"
+phase = 1
+name = "不开会话的 SDK 定向探测"
+upstream = ["sdk:src/orient/index.ts"]
+kar = ["src/orientation/mod.rs", "src/orientation/customization.rs"]
+status = "SDK 与 CLI 已集成，待统一验收"
+implementation_ref = "eb9df4d"
+test_target = "cargo test --locked --test protocol"
+accept = "逐项比较 local、account 和 models 模式下的来源顺序、成本上限、取消、去重、自定义目录及凭据脱敏。"
+
+[[gap]]
+id = "preview-reports"
+phase = 2
+name = "合并客户端浏览器配置和状态，重放预览事件"
+upstream = ["packages/contracts/src/preview.ts", "apps/server/src/preview/ServerBrowser.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/terminal_preview/events.rs", "src/workbench/terminal_preview/browser/profiles.rs"]
+status = "已集成，待统一验收"
+implementation_ref = "357a2fb"
+test_target = "cargo test --locked --test workbench_terminal_preview"
+accept = "连接两个观察者，报告不同配置和标签，验证断开、重新加入和重启后的配置。按持久游标读回事件，并拒绝覆盖服务端所有的标签状态。"
+
+[[gap]]
+id = "project-search-options"
+phase = 2
+name = "路径类型和图片过滤，全文正则及范围"
+upstream = ["packages/contracts/src/project.ts", "apps/server/src/workspace/WorkspaceEntries.ts", "apps/server/src/workspace/WorkspaceSearchIndex.ts"]
+kar = ["src/workbench/search.rs", "src/workbench/files/inspection.rs"]
+status = "已定位到普通搜索以外的参数差异，待补齐"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+accept = "覆盖目录、文件、仅图片、空路径搜索、大小写、全词、正则错误回退、含非 ASCII 文本的匹配范围和截断标记。"
+
+[[gap]]
+id = "git-publish-target"
+phase = 2
+name = "组合操作的独立推送远端与分支基线"
+upstream = ["apps/server/src/vcs/GitVcsDriverCore.ts", "apps/server/src/git/GitManager.ts"]
+kar = ["src/workbench_git/stacked.rs", "src/workbench/git_actions.rs"]
+status = "普通组合操作已接入，独立发布目标待补齐"
+test_target = "cargo test --locked --test workbench_forge"
+accept = "在具有独立 branch.pushRemote 和不同拉取基线的仓库执行 create_pr。检查真实发布分支与原拉取跟踪配置、已存在的分叉 PR 及同名外部 PR 的区分。"
