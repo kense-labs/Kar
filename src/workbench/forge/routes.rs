@@ -8,7 +8,7 @@ use axum::{
 
 async fn drivers() -> Json<Value> {
     Json(json!(DRIVER_KINDS.iter().map(|kind|json!({
-        "kind":kind,"issues_in_upstream":matches!(*kind,"github"|"gitlab"|"tanstack-source"|"forgejo"|"azure-devops"|"linear"),
+        "kind":kind,"upstream_pull_actions":declared_pull_actions(kind),"issues_in_upstream":matches!(*kind,"github"|"gitlab"|"tanstack-source"|"forgejo"|"azure-devops"|"linear"),
         "pulls_in_upstream":*kind!="linear","enabled":*kind!="tanstack-source" || std::env::var("KAR_TANSTACK_SOURCE").as_deref()==Ok("1")
     })).collect::<Vec<_>>()))
 }
@@ -235,8 +235,11 @@ async fn link(
         repository: c.identity(),
         number: input.number,
     };
+    save_binding(&app, input.id, binding)
+}
+fn save_binding(app: &Workbench, id: Uuid, binding: Binding) -> Reply<Binding> {
     Ok(Json(app.update(|db| {
-        if let Some(old) = db.forge.bindings.get(&input.id) {
+        if let Some(old) = db.forge.bindings.get(&id) {
             if old == &binding {
                 return Ok(old.clone());
             }
@@ -244,14 +247,47 @@ async fn link(
                 "binding ID already belongs to another request".into(),
             ));
         }
-        if db.forge.operations.contains_key(&input.id) {
+        if db.forge.operations.contains_key(&id) {
             return Err(Error::Refused(
                 "binding ID already belongs to an operation".into(),
             ));
         }
-        db.forge.bindings.insert(input.id, binding.clone());
+        db.forge.bindings.insert(id, binding.clone());
         Ok(binding)
     })?))
+}
+
+#[derive(Deserialize)]
+struct OpenIssue {
+    id: Uuid,
+    runtime: String,
+    model: Option<String>,
+}
+async fn issue_chat(
+    State(app): State<Workbench>,
+    Path((project, n)): Path<(Uuid, u64)>,
+    Json(input): Json<OpenIssue>,
+) -> Reply<Value> {
+    let c = Context::open(app.clone(), project).await?;
+    let issue = c.execute(&Operation::Issue { number: n }).await?;
+    if checked_number(&issue)? != n {
+        return Err(ForgeError::remote(502, "issue identity mismatch"));
+    }
+    let chat = app
+        .create_chat(project, input.id, &input.runtime, input.model)
+        .await?;
+    let Json(binding) = save_binding(
+        &app,
+        input.id,
+        Binding {
+            project,
+            chat: input.id,
+            kind: "issue".into(),
+            repository: c.identity(),
+            number: n,
+        },
+    )?;
+    Ok(Json(json!({"chat":chat,"issue":issue,"binding":binding})))
 }
 async fn links(State(app): State<Workbench>, Path(project): Path<Uuid>) -> Reply<Value> {
     app.project(project)?;
@@ -356,6 +392,10 @@ pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .route("/forge/drivers", get(drivers))
         .route("/projects/{project}/forge/query", post(read))
+        .route(
+            "/projects/{project}/forge/issues/{number}/chat",
+            post(issue_chat),
+        )
         .route("/projects/{project}/forge/operations", post(mutate))
         .route("/projects/{project}/forge/operations/{id}", get(operation))
         .route(

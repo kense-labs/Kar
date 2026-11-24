@@ -45,7 +45,9 @@ impl IntoResponse for ApiError {
 }
 type Reply<T> = std::result::Result<Json<T>, ApiError>;
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Reply<T> {
+pub(super) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Reply<T> {
     Ok(Json(
         tokio::task::spawn_blocking(f)
             .await
@@ -72,6 +74,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
         .merge(super::documents::routes())
         .merge(super::forge::routes())
+        .merge(super::git::routes())
         .merge(super::terminal_preview::routes())
         .route("/projects/{project}/search", get(search_project))
         .route("/search/chats", get(search_chats))

@@ -77,6 +77,11 @@ path = "tests/chat_restart.rs"
 harness = false
 
 [[test]]
+name = "workbench_forge"
+path = "tests/workbench_forge.rs"
+harness = false
+
+[[test]]
 name = "workbench_remote_access"
 path = "tests/workbench_remote_access.rs"
 harness = false

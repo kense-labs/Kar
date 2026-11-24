@@ -170,6 +170,69 @@ const DRIVER_KINDS: &[&str] = &[
     "azure-devops",
     "linear",
 ];
+// Actions offered by each fixed upstream definition. The Kar call surface is reported separately.
+fn declared_pull_actions(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "github" => &[
+            "merge",
+            "ready",
+            "draft",
+            "close",
+            "reopen",
+            "delete-branch",
+            "update-branch",
+            "enable-auto-merge",
+            "disable-auto-merge",
+            "revert",
+            "approve-workflows",
+        ],
+        "cursor-origin" => &["merge", "ready", "draft", "close", "reopen"],
+        "gitlab" => &[
+            "merge",
+            "ready",
+            "draft",
+            "close",
+            "reopen",
+            "update-branch",
+            "enable-auto-merge",
+            "disable-auto-merge",
+            "revert",
+            "delete-branch",
+        ],
+        "gitcafe" => &[
+            "ready",
+            "draft",
+            "close",
+            "reopen",
+            "merge",
+            "update-branch",
+        ],
+        "tanstack-source" => &[
+            "merge",
+            "ready",
+            "draft",
+            "close",
+            "reopen",
+            "update-branch",
+            "enable-auto-merge",
+            "disable-auto-merge",
+            "revert",
+        ],
+        "forgejo" => &["merge", "close", "reopen", "update-branch"],
+        "bitbucket" => &["merge", "close"],
+        "azure-devops" => &[
+            "merge",
+            "ready",
+            "draft",
+            "close",
+            "reopen",
+            "enable-auto-merge",
+            "disable-auto-merge",
+        ],
+        _ => &[],
+    }
+}
+
 fn default_host(host: &str) -> Option<(&'static str, String)> {
     let (kind, base) = match host {
         "github.com" => ("github", "https://api.github.com".into()),
@@ -232,12 +295,7 @@ fn remote_identity(remote: &str) -> Result<(String, String), ForgeError> {
 impl Context {
     async fn open(app: Workbench, project: Uuid) -> Result<Self, ForgeError> {
         tokio::task::spawn_blocking(move || {
-            let project = app.project(project)?;
-            app.workspace(&project)?;
-            let repo = Repository::open(&project.root)?;
-            if repo.root() != project.root {
-                return Err(ForgeError::bad("project root is not the repository root"));
-            }
+            let repo = app.repository(project)?;
             let remote = crate::workbench_git::git(repo.root(), &["remote", "get-url", "origin"])?;
             let (host, repository) = remote_identity(
                 std::str::from_utf8(&remote)
@@ -312,7 +370,7 @@ impl Context {
                 api_base,
                 token,
                 client,
-                cwd: project.root,
+                cwd: repo.root().into(),
             })
         })
         .await

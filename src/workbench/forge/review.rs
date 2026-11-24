@@ -153,19 +153,7 @@ pub(super) fn worktree(
     id: Uuid,
     path: PathBuf,
 ) -> Result<ManagedWorktree, ForgeError> {
-    if !path.is_absolute() {
-        return Err(ForgeError::bad("expected an absolute worktree path"));
-    }
-    let parent = path
-        .parent()
-        .ok_or_else(|| ForgeError::bad("invalid worktree directory"))?
-        .canonicalize()
-        .map_err(Error::Io)?;
-    let name = path
-        .file_name()
-        .ok_or_else(|| ForgeError::bad("expected a worktree directory name"))?;
-    let path = parent.join(name);
-    app.allowed(&path)?;
+    let path = app.destination(&path)?;
     let (_, head) = fetch(c, number, pull)?;
     Ok(Repository::open(&c.cwd)?.create_worktree(
         id,

@@ -7,6 +7,15 @@ use tokio::{
 };
 
 pub(crate) async fn serve(state: &Path, projects: &Path, native: &Path) -> (Child, String) {
+    serve_with_env(state, projects, native, &[]).await
+}
+
+pub(crate) async fn serve_with_env(
+    state: &Path,
+    projects: &Path,
+    native: &Path,
+    vars: &[(&str, &std::ffi::OsStr)],
+) -> (Child, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_kar"))
         .args(["workbench", "--state"])
         .arg(state)
@@ -15,6 +24,7 @@ pub(crate) async fn serve(state: &Path, projects: &Path, native: &Path) -> (Chil
         .env("KAR_CODEX_BIN", std::env::current_exe().unwrap())
         .env("KAR_WORKBENCH_TOKEN", "kar-workbench-fixture")
         .env("FIXTURE_NATIVE_DB", native)
+        .envs(vars.iter().copied())
         .stdout(Stdio::piped())
         .kill_on_drop(true)
         .spawn()

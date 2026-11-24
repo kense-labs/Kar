@@ -3,6 +3,7 @@ mod access;
 mod documents;
 mod files;
 mod forge;
+mod git;
 mod handoff;
 mod http;
 mod search;
@@ -120,7 +121,11 @@ impl Workbench {
     }
 
     fn allowed(&self, path: &Path) -> Result<&Root> {
-        if path.starts_with(self.0.chats.directory()) {
+        if path.starts_with(self.0.chats.directory())
+            || path
+                .components()
+                .any(|p| p.as_os_str().eq_ignore_ascii_case(".git"))
+        {
             return Err(denied());
         }
         self.0

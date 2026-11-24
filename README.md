@@ -401,6 +401,19 @@ kar workbench --root "$PWD"
 | 读取或保存普通文本文件 | `GET` 或 `PUT /projects/{p}/file?path=relative/path`，正文使用 `{"text":"…"}`。 |
 | 搜索 | `GET /projects/{p}/search?q=关键词&kind=paths`，也可选 `content` 或 `messages`。跨可见项目查聊天用 `GET /search/chats?q=关键词`。 |
 
+### 仓库、PR 与 Issue
+
+在已注册的仓库项目上，`GET /projects/{p}/git` 查看 Git 状态，`/git/events` 订阅状态变更。向同一 `/git` 接口提交 `stage`、`commit`、`push`、`pull`、`worktree_add` 或 `worktree_remove` 操作。也可向 `POST /projects/clone` 提交 `source`、`directory` 和 `name`，把仓库克隆到已授权目录并注册为项目。
+
+工作台从项目的 `origin` 识别代码托管平台。GitHub 公有库可匿名读取。需要写入或查询身份时，给工作台进程设置 `GH_TOKEN`。自托管站点可在 `KAR_FORGE_CONFIG` 指定的 TOML 文件用 `[[hosts]]` 声明 `host`、`kind`、`api_base` 和保存凭证的环境变量名 `token_env`。
+
+| 操作 | 项目的 `/forge` 子路径 |
+| --- | --- |
+| 查询身份、PR 或 Issue | 向 `POST /query` 发送 `{"op":"identity"}`、`{"op":"pull","number":1}` 或 `{"op":"issue","number":7}`。列表使用 `pulls`、`issues`。 |
+| 从聊天创建 PR、修改 Issue 状态 | `POST /operations` 使用稳定请求 UUID `id`、聊天 UUID `chat` 和 `op`。创建 PR 另给 `head`、`base`、`title`、`body`。在远端确认之前丢失回执时，可用 `POST /operations/{id}/reconcile` 和远端编号对账。 |
+| 从 Issue 打开聊天 | `POST /issues/{number}/chat` 接受聊天 UUID `id` 及 `runtime`。`GET /links` 返回项目内的聊天绑定。 |
+| 准备和审阅 PR | `GET /pulls/{number}/diff` 列出文件，用 `?path=…` 取单个补丁。`PUT /pulls/{number}/reviewed` 按 `head`、`path`、`reviewed` 保存标记。`POST /pulls/{number}/worktree` 接受稳定 UUID `id`、`head`、授权目录下的绝对路径 `directory`。 |
+
 ### 配对设备和访客
 
 工作台默认监听回环地址。要从另一台 Mac 使用同一服务，可在宿主启动 `kar workbench --root "$PWD" --port 4777`，在已获 SSH 访问权的客户端运行 `ssh -N -L 4777:127.0.0.1:4777 用户@宿主`，然后访问客户端的 `http://127.0.0.1:4777`。
