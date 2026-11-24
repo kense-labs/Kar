@@ -1,5 +1,6 @@
 //! REST and native CLI drivers for non-GitHub hosts in the fixed workbench contract.
 pub(super) mod azure;
+pub(in crate::workbench::forge) mod create_repo;
 pub(super) mod credentials;
 pub(in crate::workbench::forge) mod file_stats;
 pub(super) mod hosted;

@@ -97,6 +97,57 @@ fn linear(data: &mut Data, body: &Value) -> Response {
     };
     Json(json!({"data":result})).into_response()
 }
+fn publication_peer(kind: &str, path: &str, method: &Method, b: &Value) -> Option<Value> {
+    let name = "new-repo";
+    let owner = "team";
+    let url = format!("https://{kind}.example/{owner}/{name}.git");
+    let ssh = format!("git@{kind}.example:{owner}/{name}.git");
+    Some(match (kind, path, method.as_str()) {
+        ("gitlab", "namespaces/team", "GET") => json!({"id":22}),
+        ("gitlab", "projects", "POST") if b["name"] == name => {
+            assert_eq!(b["namespace_id"], 22);
+            assert_eq!(b["visibility"], "private");
+            json!({"path_with_namespace":"team/new-repo","web_url":url,"ssh_url_to_repo":ssh})
+        }
+        ("forgejo", "orgs/team/repos", "POST") if b["name"] == name => {
+            assert_eq!(b["private"], true);
+            assert_eq!(b["auto_init"], false);
+            json!({"full_name":"team/new-repo","clone_url":url,"ssh_url":ssh})
+        }
+        ("bitbucket", "repositories/team/new-repo", "POST") => {
+            assert_eq!(b["is_private"], true);
+            json!({"full_name":"team/new-repo","links":{"clone":[{"name":"https","href":url},{"name":"ssh","href":ssh}]}})
+        }
+        ("gitcafe", "orgs/team/repos", "POST") if b["name"] == name => {
+            assert_eq!(b["visibility"], "private");
+            assert!(b["requestKey"].is_string());
+            json!({"repoId":"A","state":"pending","owner":owner,"name":name})
+        }
+        ("gitcafe", "orgs/team/admissions/A", "GET") => {
+            json!({"repoId":"A","state":"complete","owner":owner,"name":name})
+        }
+        ("cursor-origin", "repos/team", "POST") => json!({"name":name,"fullName":"team/new-repo"}),
+        ("cursor-origin", "repos/team/new-repo", "PATCH") => {
+            assert_eq!(b["visibility"], "private");
+            json!({"name":name,"fullName":"team/new-repo","cloneUrl":url})
+        }
+        ("tanstack-source", "repos", "POST") if b["name"] == name => {
+            assert_eq!(b["visibility"], "private");
+            assert_eq!(b["owner"], owner);
+            json!({"name":name,"owner":owner,"cloneUrl":url})
+        }
+        ("azure-devops", "org/_apis/projects/proj", "GET") => {
+            json!({"id":"project-id","visibility":"private"})
+        }
+        ("azure-devops", "org/proj/_apis/git/repositories", "POST") => {
+            assert_eq!(b["project"]["id"], "project-id");
+            assert_eq!(b["name"], name);
+            let clone = "https://azure-devops.example/org/proj/_git/new-repo";
+            json!({"name":name,"project":{"name":"proj"},"remoteUrl":clone,"sshUrl":clone})
+        }
+        _ => return None,
+    })
+}
 async fn peer(
     State(shared): State<Shared>,
     method: Method,
@@ -160,6 +211,9 @@ async fn peer(
     }
     if kind == "tanstack-source" && path.ends_with("/files") {
         return Json(json!({"files":[{"path":"docs/readme.md","additions":7,"deletions":3}],"truncated":path.contains("/9/")})).into_response();
+    }
+    if let Some(r) = publication_peer(kind, path, &method, &b) {
+        return Json(r).into_response();
     }
     let resource = if path == repo && method == Method::GET {
         match kind {
@@ -374,6 +428,24 @@ pub(super) async fn run() {
             .json(&json!({"id":chat,"runtime":"codex"})))
         .await;
         if kind != "linear" {
+            let repo_name = if kind == "azure-devops" {
+                "org/proj/_git/new-repo"
+            } else {
+                "team/new-repo"
+            };
+            let endpoint = format!("{base}/projects/{p}/forge/publish");
+            let publish = json!({"id":Uuid::new_v4(),"visibility":"private","protocol":"https","host":format!("{kind}.example"),"provider":kind,"repository":repo_name});
+            let result = ok(client.post(&endpoint).json(&publish)).await;
+            assert_eq!(result["status"], "remote_added", "{kind}");
+            assert_eq!(result["remoteName"], "origin-2");
+            if kind == "cursor-origin" || kind == "azure-devops" {
+                let mut denied = publish.clone();
+                denied["visibility"] = json!("public");
+                denied["id"] = json!(Uuid::new_v4());
+                let response = client.post(&endpoint).json(&denied).send().await.unwrap();
+                assert!(!response.status().is_success(), "{kind}");
+            }
+
             let stats = ok(client.get(format!("{url}/pulls/2/change-breakdown"))).await;
             if matches!(kind, "gitlab" | "tanstack-source") {
                 assert_eq!(stats["docs"], json!({"additions":7,"deletions":3}));

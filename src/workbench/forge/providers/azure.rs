@@ -407,3 +407,33 @@ pub(super) async fn candidates(c: &Context) -> Result<Value, ForgeError> {
         json!({"labels":labels,"assignees":users.into_values().collect::<Vec<_>>(),"truncated":true}),
     )
 }
+
+pub(super) async fn create_repository(c: &Context, private: bool) -> Result<Value, ForgeError> {
+    let l = Location::from(c)?;
+    // Azure sets visibility on the project. Check it before publishing a repository into it.
+    let project = get(c, l.url(c, false, "projects", &[l.project])?).await?;
+    let expected = if private { "private" } else { "public" };
+    if !project["visibility"]
+        .as_str()
+        .is_some_and(|v| v.eq_ignore_ascii_case(expected))
+    {
+        return Err(ForgeError::bad(format!(
+            "Azure project does not confirm {expected} visibility"
+        )));
+    }
+    let id = project["id"]
+        .as_str()
+        .ok_or_else(|| invalid("Azure project ID"))?;
+    let raw = send(
+        c,
+        Method::POST,
+        l.url(c, true, "git", &["repositories"])?,
+        Some(json!({"name":l.repo,"project":{"id":id}})),
+        true,
+    )
+    .await?;
+    l.check_repo(&raw).map_err(|_| {
+        ForgeError::uncertain("Azure did not confirm the requested repository identity")
+    })?;
+    Ok(raw)
+}

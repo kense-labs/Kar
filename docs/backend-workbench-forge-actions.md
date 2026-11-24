@@ -45,3 +45,11 @@ Issue 成功场景还需 `KAR_FORGE_ACTION_CLOSE_STATE`（例如 GitHub 的 `clo
 PR 在主仓库中查询和创建，匹配源仓库和源分支。同名的外部 PR 不会被误认。GitHub 发送 owner、分支及源仓库名，GitLab 从源项目创建并传递目标项目 ID，Bitbucket 传完整源仓库名，GitCafe 读取源仓库 ID，Forgejo 发送 owner:branch。TanStack Source 的固定驱动明确拒绝跨仓库创建。Cursor Origin 和 Azure 固定创建路径只接收分支名，Kar 在跨仓库请求下返回 unsupported。此限制取自固定驱动的请求契约。
 
 固定工作台源码 `apps/server/src/vcs/GitVcsDriverCore.ts` 的 `resolvePushDestination`、`pushCurrentBranch` 和 `apps/server/src/git/GitManager.ts` 的 `resolveBranchHeadContext`、`openPrFromBranch`。macOS 统一复验命令为 `cargo test --locked --test workbench_forge`。用例在本地裸仓检查跟踪配置、分叉删除后的重新发布、异仓同名 PR、同名头和基线与各驱动的 HTTP 请求。它使用协议 fixture；真实托管请求仍待统一验收。
+
+## 发布仓库
+
+`POST /projects/{project}/forge/publish` 在已登记的工作树发布当前分支。请求包含 UUID `id`、`provider`、`repository` 和 `visibility`（public 或 private），可指定 `host`、`remote_name`、`protocol`（auto、https 或 ssh）。公开与私有仓库均由主机所有者通过工作台凭据创建。GitHub 接受个人仓库名称或组织/名称。GitLab 支持嵌套命名空间；Azure 使用明确的组织、项目和仓库路径，其项目必须具有请求的可见性。
+
+创建返回的仓库身份和地址会记入 Kar 状态。空仓返回 `remote_added`，已有提交成功推送后返回 `pushed`。名称冲突时保留原远端，选择可用名称。auto 首选 SSH，发生认证或主机密钥拒绝时改用仓库提供的 HTTPS 地址。若推送失败，修复 Git 访问条件后可用同 UUID 重试；已确认创建的远端不会被重复创建。创建请求回执不确定时，Kar 返回 `needs_reconciliation`，仓库可用 `POST /forge/repositories/lookup` 核实。
+
+GitCafe 的创建需等待 admission；Cursor Origin 仅允许私有仓库，先创建、再修改可见性，若修改失败会报告仓库可能仍对团队可见。macOS 的 `cargo test --locked --test workbench_forge` 覆盖八种驱动的 HTTP 请求、空仓、独立本地 Git 裸仓、失去创建回执，以及远端创建完成后重启续推。上述场景已编译，统一验收和实际托管发布另行记录。

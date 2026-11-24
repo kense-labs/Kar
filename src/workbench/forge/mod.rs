@@ -194,6 +194,8 @@ type Reply<T> = Result<Json<T>, ForgeError>;
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct ForgeState {
     #[serde(default)]
+    publications: BTreeMap<Uuid, repository::publication::Record>,
+    #[serde(default)]
     clones: BTreeMap<Uuid, clone_jobs::Job>,
     #[serde(default)]
     clone_seq: u64,

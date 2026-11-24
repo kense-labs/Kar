@@ -28,6 +28,7 @@ struct Forge {
     head: String,
     base: String,
     mutations: usize,
+    publications: usize,
     comments: Vec<Value>,
     review_comments: Vec<Value>,
     resolved: bool,
@@ -165,6 +166,7 @@ async fn scenario() {
         head: String::new(),
         pulls: vec![],
         mutations: 0,
+        publications: 0,
         comments: vec![],
         review_comments: vec![],
         resolved: false,
@@ -177,6 +179,10 @@ async fn scenario() {
         .route(
             "/user/starred/team/repo",
             get(actions::starred).put(actions::star),
+        )
+        .route(
+            "/orgs/{org}/repos",
+            axum::routing::post(publication::create),
         )
         .route("/repos/team/repo", get(identity))
         .route("/repos/team/repo/pulls", get(pulls).post(create_pull))
@@ -319,8 +325,10 @@ async fn scenario() {
         .await
         .unwrap();
     assert_eq!(result.status(), StatusCode::CONFLICT);
+    let later = publication::first(&a, &url, &root, &mock).await;
     process.kill().await.unwrap();
     let (mut process, url) = server::serve_with_env(&state, &root, &native, &env).await;
+    publication::after_restart(&a, &url, &mock, later).await;
     let forge = format!("{url}/projects/{p}/forge");
     assert_eq!(
         ok(a.post(format!("{forge}/operations")).json(&input)).await,
@@ -424,3 +432,6 @@ fn main() {
         }),
     }
 }
+
+#[path = "workbench_forge/publication.rs"]
+mod publication;

@@ -1,8 +1,9 @@
 use super::*;
+pub(in crate::workbench::forge) mod publication;
 use axum::{Router, extract::State, routing::post};
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Lookup {
     provider: String,
@@ -89,30 +90,36 @@ async fn resolve(c: &Context) -> Result<CloneUrls, ForgeError> {
         }
         _ => providers::get(c, providers::rest::project(c)?).await?,
     };
+    clone_urls(c, &r)
+}
+pub(in crate::workbench::forge) fn clone_urls(
+    c: &Context,
+    r: &Value,
+) -> Result<CloneUrls, ForgeError> {
     let (name, url, ssh) = match c.kind.as_str() {
         "github" => (
-            text_field(&r, "full_name")?.to_owned(),
-            text_field(&r, "html_url")?.to_owned(),
-            text_field(&r, "ssh_url")?.to_owned(),
+            text_field(r, "full_name")?.to_owned(),
+            text_field(r, "html_url")?.to_owned(),
+            text_field(r, "ssh_url")?.to_owned(),
         ),
         "gitlab" => (
-            text_field(&r, "path_with_namespace")?.into(),
-            text_field(&r, "web_url")?.into(),
-            text_field(&r, "ssh_url_to_repo")?.into(),
+            text_field(r, "path_with_namespace")?.into(),
+            text_field(r, "web_url")?.into(),
+            text_field(r, "ssh_url_to_repo")?.into(),
         ),
         "forgejo" => (
-            text_field(&r, "full_name")?.into(),
-            text_field(&r, "clone_url")?.into(),
-            text_field(&r, "ssh_url")?.into(),
+            text_field(r, "full_name")?.into(),
+            text_field(r, "clone_url")?.into(),
+            text_field(r, "ssh_url")?.into(),
         ),
         "azure-devops" => (
             format!(
                 "{}/{}",
                 text_field(&r["project"], "name")?,
-                text_field(&r, "name")?
+                text_field(r, "name")?
             ),
-            text_field(&r, "remoteUrl")?.into(),
-            text_field(&r, "sshUrl")?.into(),
+            text_field(r, "remoteUrl")?.into(),
+            text_field(r, "sshUrl")?.into(),
         ),
         "gitcafe" => {
             let name = c.repository.clone();
@@ -129,7 +136,7 @@ async fn resolve(c: &Context) -> Result<CloneUrls, ForgeError> {
             )
         }
         "bitbucket" => {
-            let name = text_field(&r, "full_name")?.to_owned();
+            let name = text_field(r, "full_name")?.to_owned();
             let clone = |k: &str| {
                 r["links"]["clone"].as_array()?.iter().find(|link| {
                     link["name"]
@@ -145,7 +152,7 @@ async fn resolve(c: &Context) -> Result<CloneUrls, ForgeError> {
         }
         "tanstack-source" | "cursor-origin" => {
             let name = if c.kind == "tanstack-source" {
-                format!("{}/{}", text_field(&r, "owner")?, text_field(&r, "name")?)
+                format!("{}/{}", text_field(r, "owner")?, text_field(r, "name")?)
             } else {
                 r["fullName"]
                     .as_str()
@@ -187,7 +194,7 @@ async fn resolve(c: &Context) -> Result<CloneUrls, ForgeError> {
     })
 }
 
-#[derive(Deserialize, Clone, Copy, Default)]
+#[derive(Deserialize, Serialize, Clone, Copy, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum Protocol {
     #[default]
@@ -322,6 +329,10 @@ async fn clone(State(app): State<Workbench>, Json(req): Json<CloneInput>) -> Rep
 }
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
+        .route(
+            "/projects/{project}/forge/publish",
+            post(publication::publish),
+        )
         .route("/forge/repositories/lookup", post(lookup))
         .route("/forge/repositories/clone", post(clone))
 }
