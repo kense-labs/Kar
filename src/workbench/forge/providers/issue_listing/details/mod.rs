@@ -4,6 +4,7 @@ use axum::extract::{Path, Query};
 mod azure;
 mod forgejo;
 mod github;
+mod gitlab;
 mod linear;
 mod source;
 
@@ -94,6 +95,7 @@ pub(in crate::workbench::forge) async fn read(
     let (s, writable) = resolve(&app, p, &q).await?;
     let mut result = match s.ctx.kind.as_str() {
         "azure-devops" => azure::read(&s.ctx, &s.scope, n).await?,
+        "gitlab" => gitlab::read(&s.ctx, n).await?,
         "github" => github::read(&s.ctx, n).await?,
         "forgejo" => forgejo::read(&s.ctx, n, None, false).await?,
         "linear" => linear::read(&s.ctx, &s.scope.to_ascii_uppercase(), n).await?,
@@ -128,6 +130,9 @@ pub(in crate::workbench::forge) async fn comments(
     let (s, _) = resolve(&app, p, &q).await?;
     match s.ctx.kind.as_str() {
         "azure-devops" => azure::comments(&s.ctx, &s.scope, n, q.cursor.as_deref())
+            .await
+            .map(Json),
+        "gitlab" => gitlab::comments(&s.ctx, n, q.cursor.as_deref())
             .await
             .map(Json),
         "forgejo" => forgejo::read(&s.ctx, n, q.cursor.as_deref(), true)

@@ -132,15 +132,11 @@ async fn github_files(c: &Context, n: u64) -> Result<Option<Vec<FileStat>>, Forg
 }
 
 async fn gitlab_files(c: &Context, n: u64) -> Result<Option<Vec<FileStat>>, ForgeError> {
-    let mut url = c.api_base.clone();
-    if url.path().trim_end_matches('/').ends_with("/v4") {
-        url.path_segments_mut().unwrap().pop_if_empty().pop();
-    }
     const QUERY: &str = "query KarFileStats($fullPath:ID!,$iid:String!){project(fullPath:$fullPath){mergeRequest(iid:$iid){diffStatsSummary{fileCount} diffStats{path additions deletions}}}}";
     let v = send(
         c,
         Method::POST,
-        child(url, &["graphql"]),
+        super::rest::gitlab_graphql(c),
         Some(json!({"query":QUERY,"variables":{"fullPath":c.repository,"iid":n.to_string()}})),
         false,
     )

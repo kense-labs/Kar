@@ -22,6 +22,13 @@ pub(in crate::workbench::forge) fn project(c: &Context) -> Result<Url, ForgeErro
         ],
     )
 }
+pub(super) fn gitlab_graphql(c: &Context) -> Url {
+    let mut url = c.api_base.clone();
+    if url.path().trim_end_matches('/').ends_with("/v4") {
+        url.path_segments_mut().unwrap().pop_if_empty().pop();
+    }
+    super::issue::child(url, &["graphql"])
+}
 fn project_resource(c: &Context, collection: &str, n: Option<u64>) -> Result<Url, ForgeError> {
     let mut u = project(c)?;
     let mut p = u.path_segments_mut().unwrap();

@@ -24,7 +24,7 @@ pub(super) fn awards(rows: &Value, viewer: &str, gitlab: bool) -> Result<Vec<Val
         let name = r[if gitlab { "name" } else { "content" }]
             .as_str()
             .unwrap_or("");
-        let Some(content) = Content::from_host(name, gitlab) else {
+        let Some(content) = Content::from_host(&name.trim().to_ascii_lowercase(), gitlab) else {
             continue;
         };
         let key = serde_json::to_value(content)
@@ -32,9 +32,16 @@ pub(super) fn awards(rows: &Value, viewer: &str, gitlab: bool) -> Result<Vec<Val
             .as_str()
             .unwrap()
             .to_owned();
+        let who = r["user"][if gitlab { "username" } else { "login" }]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if who.is_none() && gitlab {
+            continue;
+        }
         let g = grouped.entry(key).or_default();
         g.0 += 1;
-        if let Some(who) = r["user"][if gitlab { "username" } else { "login" }].as_str() {
+        if let Some(who) = who {
             if viewer.eq_ignore_ascii_case(who) {
                 g.2 = true
             } else {

@@ -109,3 +109,5 @@ Linear 的相同详情和评论入口验证 workspace、team 和原生编号，�
 Forgejo 的扩展工单入口通过原生 timeline 读取事件和跨仓库 PR 引用，按引用仓库和编号去重。评论从原生整表每次取 50 项，再并行读取本页各条评论的反应。写权限同时取决于仓库归档、push 权限、作者和工单锁定状态。macOS 协议场景位于 `tests/workbench_forge/providers.rs`，覆盖锁定工单、51 条评论、两位反应者和重复的跨仓引用。统一执行命令为 `cargo test --locked --test workbench_forge`，本批仅编译。
 
 Azure DevOps 从工单类型读取可选状态和自定义完成态，按所选项目校验工单编号，读取最多五页原生 revisions，去重解析最多十个关联 PR。评论从最新一页向前翻，每页按时间正序展示；保留六种原生计数及当前账号是否已反应，Azure 未返回反应者名单。正常 HTTP 场景覆盖复现步骤字段、自定义完成态、修订生成的五类事件、评论续页及跨项目拒绝，命令为 `cargo test --locked --test workbench_forge`。待统一执行与托管账号验证。
+
+GitLab 工单详情用 `iids[]` 读取带颜色的标签，用独立的 activity 分页还原系统事件，解析自托管子路径下的引用，并优先保留有关闭关系的关联 MR。评论的 REST 页号与 GraphQL awardEmoji 游标随同传递，短页按 X-Next-Page 续读。旧版本明确拒绝 awardEmoji 字段时保留评论，权限拒绝保留为错误。正常 HTTP 场景覆盖上述边界，统一执行 `cargo test --locked --test workbench_forge`；本批证据为 macOS 全目标编译，托管实机待验。

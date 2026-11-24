@@ -563,6 +563,84 @@ fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Res
         .into_owned()
         .collect::<HashMap<_, _>>();
     let date = "2026-11-01T00:00:00Z";
+    if kind == "gitlab" {
+        let issue_url = "https://gitlab.example/root/team/repo/-/issues/72";
+        let note = |id: u64, body: &str, system: bool| json!({"id":id,"body":body,"system":system,"created_at":date,"author":{"username":"viewer"}});
+        let native = match path {
+            "projects/team%2Frepo/issues" if params.get("iids[]").is_some_and(|n| n == "72") => {
+                assert_eq!(params["with_labels_details"], "true");
+                assert_eq!(params["per_page"], "1");
+                Some(
+                    json!([{"iid":72,"title":"read","description":"body","state":"opened","web_url":issue_url,"created_at":date,"updated_at":date,"labels":[{"name":"red","color":"#ff0000"}]}]),
+                )
+            }
+            "projects/team%2Frepo/issues/72/notes" => {
+                assert_eq!(params["sort"], "asc");
+                assert_eq!(params["order_by"], "created_at");
+                let activity = params.contains_key("activity_filter");
+                let first = params["page"] == "1";
+                let rows = match (activity, first) {
+                    (true, true) => json!([note(30, "assigned to @viewer", true)]),
+                    (true, false) => {
+                        json!([note(31, "mentioned in merge request sibling!4", true)])
+                    }
+                    (false, true) => json!([
+                        note(7, "first", false),
+                        note(30, "assigned to @viewer", true)
+                    ]),
+                    (false, false) => json!([note(8, "second", false)]),
+                };
+                let mut res = Json(rows).into_response();
+                res.headers_mut()
+                    .insert("x-next-page", if first { "2" } else { "" }.parse().unwrap());
+                return Some(res);
+            }
+            "projects/team%2Frepo/issues/72/resource_label_events" => {
+                Some(json!([{"id":30,"action":"add","label":{"name":"red"},"created_at":date}]))
+            }
+            "projects/team%2Frepo/issues/72/closed_by"
+            | "projects/team%2Frepo/issues/72/related_merge_requests" => Some(
+                json!([{"iid":4,"references":{"full":"team/sibling!4"},"title":"fix","web_url":"https://sample/fix","state":"merged"}]),
+            ),
+            "projects/team%2Frepo/issues/72/award_emoji" => {
+                Some(json!([{"id":88,"name":"thumbsup","user":{"username":"other"}}]))
+            }
+            "projects/team%2Frepo/issues/74/notes" | "projects/team%2Frepo/issues/75/notes" => {
+                Some(json!([note(7, "works with old GitLab", false)]))
+            }
+            "graphql"
+                if b["query"]
+                    .as_str()
+                    .is_some_and(|q| q.starts_with("query KarIssueAwards")) =>
+            {
+                assert_eq!(b["variables"]["fullPath"], "team/repo");
+                let page = &b["variables"]["cursor"];
+                if b["variables"]["iid"] == "74" {
+                    Some(
+                        json!({"errors":[{"message":"Field 'awardEmoji' doesn't exist on type 'Note'"}]}),
+                    )
+                } else if b["variables"]["iid"] == "75" {
+                    return Some(StatusCode::FORBIDDEN.into_response());
+                } else {
+                    assert_eq!(b["variables"]["iid"], "72");
+                    let id = if page.is_null() {
+                        7
+                    } else {
+                        assert_eq!(page, "notes:+/");
+                        8
+                    };
+                    Some(
+                        json!({"data":{"currentUser":{"username":"viewer"},"project":{"issue":{"notes":{"pageInfo":{"hasNextPage":page.is_null(),"endCursor":"notes:+/"},
+                        "nodes":[{"id":format!("gid://gitlab/Note/{id}"),"awardEmoji":{"nodes":[{"name":"heart","user":{"username":"viewer"}}]}}]}}}}}),
+                    )
+                }
+            }
+            _ => None,
+        };
+        if let Some(v) = native {
+            return Some(Json(v).into_response());
+        }
+    }
     if kind == "forgejo" {
         let reactions = json!([{"content":"+1","user":{"login":"viewer"}},{"content":"+1","user":{"login":"reader"}}]);
         let native = match path {
@@ -682,6 +760,58 @@ fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Res
     Some(res)
 }
 async fn verify_search(c: &reqwest::Client, base: &str, project: &str, kind: &str) {
+    if kind == "gitlab" {
+        let root = format!("{base}/projects/{project}/forge/issues");
+        let url = format!("{root}/72");
+        let detail = ok(c.get(format!("{url}/detail"))).await;
+        assert_eq!(detail["comments"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            detail["comments"][0]["reactions"][0]["viewerHasReacted"],
+            true
+        );
+        assert_eq!(detail["commentsCursor"], "2:notes:+/");
+        assert_eq!(detail["labels"][0]["color"], "#ff0000");
+        assert_eq!(detail["reactions"][0]["actors"], json!(["other"]));
+        let events = detail["events"].as_array().unwrap();
+        assert_eq!(events.len(), 3);
+        let reference = events.iter().find(|r| r["id"] == "note-31").unwrap();
+        assert_eq!(
+            reference["reference"]["url"],
+            "https://gitlab.example/root/team/sibling/-/merge_requests/4"
+        );
+        assert!(events.iter().any(|r| r["id"] == "label-30"));
+        let links = detail["linkedPullRequests"].as_array().unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0]["closesIssue"], true);
+        let older = ok(c
+            .get(format!("{url}/comments"))
+            .query(&[("cursor", detail["commentsCursor"].as_str().unwrap())]))
+        .await;
+        assert_eq!(older["comments"][0]["id"], "8");
+        assert_eq!(older["comments"][0]["reactions"][0]["content"], "heart");
+        assert!(older["nextCursor"].is_null());
+        let unavailable = ok(c.get(format!("{root}/74/comments"))).await;
+        assert_eq!(unavailable["comments"][0]["reactions"], json!([]));
+        assert_eq!(
+            c.get(format!("{root}/75/comments"))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16(),
+            403
+        );
+        assert_eq!(
+            c.get(format!("{url}/comments"))
+                .query(&[("cursor", "0:x")])
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16(),
+            400
+        );
+    }
     if kind == "azure-devops" {
         let issue = format!("{base}/projects/{project}/forge/issues/72");
         let detail = ok(c.get(format!("{issue}/detail"))).await;
