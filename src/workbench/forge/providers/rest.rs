@@ -47,7 +47,7 @@ fn state(raw: &Value) -> Result<&'static str, ForgeError> {
         _ => Err(invalid("PR or issue state")),
     }
 }
-fn item(c: &Context, raw: &Value, pull: bool) -> Result<Value, ForgeError> {
+pub(in crate::workbench::forge) fn item(c: &Context, raw: &Value, pull: bool) -> Result<Value, ForgeError> {
     let v = raw;
     let gitlab = c.kind == "gitlab";
     let bitbucket = c.kind == "bitbucket";

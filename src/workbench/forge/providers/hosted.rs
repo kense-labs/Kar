@@ -27,7 +27,7 @@ pub(in crate::workbench::forge) fn resource(
     }
     Ok(url)
 }
-fn item(c: &Context, v: &Value, pull: bool) -> Result<Value, ForgeError> {
+pub(in crate::workbench::forge) fn item(c: &Context, v: &Value, pull: bool) -> Result<Value, ForgeError> {
     let cafe = c.kind == "gitcafe";
     let origin = c.kind == "cursor-origin";
     let n = number(&v["number"])?;

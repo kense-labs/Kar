@@ -45,9 +45,10 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
     let calls = Calls::default();
     let pull = json!({"number":19,"title":"Scoped pull","state":"open","html_url":"https://models.example/kar/demo/pull/19","head":{"ref":"feature","sha":"abc"},"base":{"ref":"main","sha":"def"}});
     let detail = pull.clone();
+    let mut other=pull.clone();other["number"]=json!(21);other["title"]=json!("Second pull");
     let ci = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let api = Router::new()
-        .route("/repos/kar/demo/pulls",get(move||async move{Json(json!([pull]))}).post(|Json(body):Json<Value>|async move{
+        .route("/repos/kar/demo/pulls",get(move||async move{Json(json!([pull,other]))}).post(|Json(body):Json<Value>|async move{
             assert_eq!(body["head"],"main");assert_eq!(body["base"],"release");assert_eq!(body["draft"],true);
             Json(json!({"number":20,"title":body["title"],"body":body["body"],"state":"open","html_url":"https://models.example/kar/demo/pull/20","head":{"ref":"main","repo":{"full_name":"kar/demo"}},"base":{"ref":"release"}}))
         }))
@@ -210,6 +211,15 @@ pub(super) async fn exercise(
             true
         );
     }
+    let first=server::json(make("kar_pull_request",json!({"action":"list_page","limit":1}))).await;
+    let page=&first["result"]["structuredContent"];
+    assert_eq!(page["entries"][0]["number"],19);
+    let rest=server::json(make("kar_pull_request",json!({"action":"list","cursor":page["next_cursor"],"limit":1}))).await;
+    assert_eq!(rest["result"]["structuredContent"]["entries"][0]["number"],21);
+    assert!(rest["result"]["structuredContent"]["next_cursor"].is_null());
+    assert!(denied(&server::json(make("kar_pull_request",json!({"action":"list","query":"Second","cursor":page["next_cursor"]}))).await));
+    let sections=server::json(make("kar_pull_request",json!({"action":"read","number":19,"include":["comments"],"limit":1}))).await;
+    assert!(sections["result"]["structuredContent"]["comments"]["items"].is_array());
     let bare=root.join(".git/workbench-publication-fixture.git");
     git(root,&["init","--bare",bare.to_str().unwrap()]);
     git(root,&["remote","set-url","--push","origin",bare.to_str().unwrap()]);

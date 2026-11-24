@@ -3,6 +3,7 @@ mod actions;
 pub(super) mod clone_jobs;
 mod github;
 mod linked_chats;
+pub(in crate::workbench) mod model_reads;
 pub(in crate::workbench) mod model;
 mod providers;
 pub(in crate::workbench) use providers::pull_tools::Request as PullCommand;

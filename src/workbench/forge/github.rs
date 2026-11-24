@@ -1,7 +1,7 @@
 use super::*;
 use reqwest::Method;
 
-fn pull(v: &Value) -> Result<Value, ForgeError> {
+pub(super) fn pull(v: &Value) -> Result<Value, ForgeError> {
     let number = checked_number(v)?;
     let state = if v["merged_at"].is_string() || v["merged"] == true {
         "merged"
