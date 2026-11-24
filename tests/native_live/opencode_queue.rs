@@ -10,12 +10,7 @@ mod native_group;
 use native_group::{NativeGroup, wait};
 use nix::sys::signal::Signal;
 
-async fn native_users(
-    program: &Path,
-    opts: &SessionOptions,
-    root: &str,
-    v2: bool,
-) -> Vec<(String, String)> {
+pub(super) async fn archive(program: &Path, opts: &SessionOptions, root: &str, v2: bool) -> Value {
     let route = format!("/api/session/{root}/message?order=asc&limit=32");
     let mut command = tokio::process::Command::new(program);
     command
@@ -40,8 +35,33 @@ async fn native_users(
         .unwrap()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let doc: Value =
-        serde_json::from_reader(std::io::BufReader::new(dump.reopen().unwrap())).unwrap();
+    serde_json::from_reader(std::io::BufReader::new(dump.reopen().unwrap())).unwrap()
+}
+
+pub(super) fn version(program: &Path) -> (String, bool) {
+    let out = std::process::Command::new(program)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let version = String::from_utf8(out.stdout)
+        .unwrap()
+        .trim()
+        .trim_start_matches("opencode ")
+        .trim_start_matches('v')
+        .to_owned();
+    let major = semver::Version::parse(&version).unwrap().major;
+    assert!([1, 2].contains(&major));
+    (version, major == 2)
+}
+
+async fn native_users(
+    program: &Path,
+    opts: &SessionOptions,
+    root: &str,
+    v2: bool,
+) -> Vec<(String, String)> {
+    let doc = archive(program, opts, root, v2).await;
     if v2 {
         return doc["data"]
             .as_array()
@@ -88,12 +108,7 @@ async fn two_clients_and_fifo_after_native_receive_before_host_receipt() {
     )
     .unwrap();
     let program = std::path::PathBuf::from(std::env::var_os("KAR_OPENCODE_BIN").unwrap());
-    let ver = std::process::Command::new(&program)
-        .arg("--version")
-        .output()
-        .unwrap();
-    let version = String::from_utf8(ver.stdout).unwrap();
-    let v2 = version.trim().starts_with("opencode v2.") || version.trim().starts_with("2.");
+    let (version, v2) = version(&program);
     let dir = base.join("chats");
     let store = ChatStore::open(&dir).unwrap();
     let chat = store
@@ -335,7 +350,7 @@ async fn two_clients_and_fifo_after_native_receive_before_host_receipt() {
     assert_eq!(dispatched, [0, 1, 2]);
     println!(
         "OpenCode {}: native IDs independently confirmed one user row per input; model calls in queue order {dispatched:?}; both clients matched {} durable events. First receipt remains uncertain.",
-        version.trim().trim_start_matches("opencode "),
+        version,
         canonical.len()
     );
 }

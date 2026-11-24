@@ -295,7 +295,12 @@ fn respond_observed(
             && last.contains("KAR-LIVE-SECOND")
             && !last.contains("tool_result");
         let fork_read = workspace.is_some() && last.contains("KAR-FORK-READ-SHARED");
-        let queue_read = workspace.is_some() && last.contains("KAR-QUEUE-READ-LOCAL");
+        let queue_read = workspace.is_some()
+            && !summarizing
+            && last.contains("KAR-QUEUE-READ-LOCAL")
+            && request["tools"]
+                .as_array()
+                .is_some_and(|tools| tools.iter().any(|t| t["name"] == "read"));
         if target.is_some()
             || schema_turn
             || spawn_probe
@@ -1326,6 +1331,13 @@ async fn real_protocol_turn(provider_id: &str) {
         missing_target(&runtime, &opts).await;
     }
     let session = runtime.open(opts.clone()).await.unwrap();
+    let opencode1 = provider_id == "opencode"
+        && session.records().iter().any(|r| {
+            r.native
+                .pointer("/result/agentInfo/version")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.trim_start_matches('v').starts_with("1."))
+        });
     let outcome = tokio::time::timeout(
         Duration::from_secs(35),
         session
@@ -1360,11 +1372,15 @@ async fn real_protocol_turn(provider_id: &str) {
             .flat_map(|r| &r.events)
             .any(|e| matches!(e,Event::TextDelta{text} if text.contains("rust-wire-ok")))
     );
-    let measured = session
-        .usage()
-        .total
-        .expect("native Pi or OpenCode token report");
-    assert_eq!((measured.input, measured.output), (3, 3));
+    if opencode1 {
+        // v1 returns only its final model step. Preserve the whole-prompt
+        // meter as unknown while exposing the separately reported context.
+        assert!(session.usage().total.is_none());
+        assert_eq!(session.current_context().unwrap().tokens, Some(3));
+    } else {
+        let measured = session.usage().total.expect("whole-prompt token report");
+        assert_eq!((measured.input, measured.output), (3, 3));
+    }
     if provider_id == "pi" {
         assert!(
             session
@@ -1419,6 +1435,11 @@ async fn real_protocol_turn(provider_id: &str) {
             "{e}"
         );
         let mut missing = opts.clone();
+        // With a custom v1 agent prompt, opening first reads the specified
+        // session's saved agent. Exercise the directory lookup independently.
+        if opencode1 {
+            missing.settings.system_prompt = None;
+        }
         missing.resume = Some(format!("ses_{}", uuid::Uuid::new_v4().simple()));
         let e = runtime
             .open(missing)
@@ -1440,6 +1461,22 @@ async fn real_protocol_turn(provider_id: &str) {
             .await
             .unwrap();
         assert_eq!(r.text, "rust-wire-ok");
+        if opencode1 {
+            assert_eq!(resumed.id(), session.id());
+            assert!(resumed.usage().total.is_none());
+            assert!(!resumed.capabilities().manual_compaction);
+            assert!(matches!(
+                resumed.start_compaction().await,
+                Err(kar::Error::Unsupported(_))
+            ));
+            resumed.close().await.unwrap();
+            return;
+        }
+        let extended_children = resumed.records().iter().any(|r| {
+            r.native
+                .pointer("/params/clientCapabilities/_meta/opencode~1child-session-updates")
+                == Some(&Value::Bool(true))
+        });
         let cursor = resumed.records().last().unwrap().cursor();
         let mut observed = resumed.subscribe(Some(&cursor)).unwrap();
         let parent = resumed
@@ -1450,57 +1487,78 @@ async fn real_protocol_turn(provider_id: &str) {
             .await
             .unwrap();
         assert_eq!(parent.outcome, Outcome::Completed);
-        let mut child_text = Vec::new();
-        let mut root_ended = false;
-        let child = tokio::time::timeout(Duration::from_secs(12), async {
-            while let Some(record) = observed.next().await {
-                for event in &record.events {
-                    if record.session_id.as_deref() == Some(resumed.id())
-                        && matches!(
-                            event,
-                            Event::TurnEnded {
-                                outcome: Outcome::Completed
-                            }
-                        )
-                    {
-                        root_ended = true;
-                    }
-                    if let Event::TextDelta { text } = event
-                        && text.contains("open-child-finished")
-                    {
-                        assert!(
-                            root_ended,
-                            "background child fixture must exercise the post-turn path"
-                        );
-                        child_text.push(record.session_id.clone());
-                    }
-                    if let Event::Task {
-                        id,
-                        change:
-                            kar::TaskChange::Ended {
-                                status: kar::TaskStatus::Completed,
-                                ..
-                            },
-                    } = event
-                    {
-                        return id.clone();
+        if !extended_children {
+            let child = resumed
+                .records()
+                .into_iter()
+                .find(|r| {
+                    r.events.iter().any(|e|
+                matches!(e,Event::TextDelta{text} if text.contains("open-child-finished")))
+                })
+                .expect("nested child output");
+            let child = child.session_id.as_deref().unwrap();
+            assert_ne!(child, resumed.id());
+            assert!(
+                resumed
+                    .snapshot()
+                    .graph
+                    .edges
+                    .iter()
+                    .any(|e| e.parent == resumed.id() && e.child == child)
+            );
+        } else {
+            let mut child_text = Vec::new();
+            let mut root_ended = false;
+            let child = tokio::time::timeout(Duration::from_secs(12), async {
+                while let Some(record) = observed.next().await {
+                    for event in &record.events {
+                        if record.session_id.as_deref() == Some(resumed.id())
+                            && matches!(
+                                event,
+                                Event::TurnEnded {
+                                    outcome: Outcome::Completed
+                                }
+                            )
+                        {
+                            root_ended = true;
+                        }
+                        if let Event::TextDelta { text } = event
+                            && text.contains("open-child-finished")
+                        {
+                            assert!(
+                                root_ended,
+                                "background child fixture must exercise the post-turn path"
+                            );
+                            child_text.push(record.session_id.clone());
+                        }
+                        if let Event::Task {
+                            id,
+                            change:
+                                kar::TaskChange::Ended {
+                                    status: kar::TaskStatus::Completed,
+                                    ..
+                                },
+                        } = event
+                        {
+                            return id.clone();
+                        }
                     }
                 }
-            }
-            panic!("OpenCode exited before its background child");
-        })
-        .await
-        .expect("OpenCode did not report its background child");
-        assert_ne!(child, resumed.id());
-        assert_eq!(child_text, [Some(child.clone())]);
-        assert!(
-            resumed
-                .snapshot()
-                .graph
-                .edges
-                .iter()
-                .any(|edge| edge.parent == resumed.id() && edge.child == child)
-        );
+                panic!("OpenCode exited before its background child");
+            })
+            .await
+            .expect("OpenCode did not report its background child");
+            assert_ne!(child, resumed.id());
+            assert_eq!(child_text, [Some(child.clone())]);
+            assert!(
+                resumed
+                    .snapshot()
+                    .graph
+                    .edges
+                    .iter()
+                    .any(|edge| edge.parent == resumed.id() && edge.child == child)
+            );
+        }
     }
     if provider_id == "pi" {
         assert_eq!(

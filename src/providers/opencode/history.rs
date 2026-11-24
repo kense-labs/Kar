@@ -12,6 +12,7 @@ use std::{collections::HashSet, path::Path};
 pub(crate) enum Witness<'a> {
     Message(&'a str),
     Tool(&'a str),
+    ReasoningPart(&'a str),
 }
 
 impl<'a> Witness<'a> {
@@ -37,6 +38,8 @@ impl<'a> Witness<'a> {
                         && n.parse::<u64>().is_ok()
                     {
                         fallback = Some(Self::Message(id));
+                    } else if fallback.is_none() {
+                        fallback = Some(Self::ReasoningPart(id));
                     }
                 }
                 Item::Tool { id, .. } if fallback.is_none() => fallback = Some(Self::Tool(id)),
@@ -49,6 +52,7 @@ impl<'a> Witness<'a> {
     }
     pub(super) fn matches(&self, row: &Value) -> bool {
         match self {
+            Self::ReasoningPart(_) => false, // OpenCode 2 scopes reasoning to assistant message IDs.
             Self::Message(id) => row["id"].as_str() == Some(*id),
             Self::Tool(id) => {
                 row["type"] == "assistant"

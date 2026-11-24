@@ -871,8 +871,7 @@ impl Session {
                         ));
                     }
                     params["sessionId"] = resume.clone().into();
-                    let load_history =
-                        replay && !opencode_v1 && init["agentCapabilities"]["loadSession"] == true;
+                    let load_history = replay && init["agentCapabilities"]["loadSession"] == true;
                     let method = if resume_rpc && !load_history {
                         "session/resume"
                     } else {

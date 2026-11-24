@@ -255,7 +255,12 @@ fn fixture(dir: &std::path::Path) -> (SessionOptions, Arc<Mutex<Vec<Value>>>) {
             let log = log.clone();
             let folder = folder.clone();
             std::thread::spawn(move || {
-                let _ = respond_in_workspace(conn, None, Some(&log), Some(&folder), false);
+                let _ = respond_observed(conn, None, None, Some(&folder), false, |_, request| {
+                    // Keep session agent requests; OpenCode also makes independent title requests.
+                    if request["tools"].as_array().is_some_and(|t| !t.is_empty()) {
+                        log.lock().unwrap().push(request["messages"].clone());
+                    }
+                });
             });
         }
     });
@@ -532,7 +537,7 @@ async fn recover_failed_turn_after_tool() {
 
 #[cfg(unix)]
 #[tokio::test]
-#[ignore = "requires OpenCode 2 and Unix signals; kills only the test controller after a real native commit"]
+#[ignore = "requires OpenCode 1 or 2 and Unix signals; kills only the test controller after a real native commit"]
 async fn kill_controller_after_native_end_and_deliver_queue() {
     use kar::chat::{ChatEdit, ChatUpdate, Item};
     use nix::{
@@ -545,13 +550,11 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
     let base = temp.path().canonicalize().unwrap();
     let (mut opts, calls) = fixture(&base);
     opts.model = Some("fixture/fixture".into());
-    opts.settings
-        .additional_directories
-        .push(base.join("shared"));
-    std::fs::write(base.join("shared/grant.txt"), "KAR-CRASH-AFTER-READ").unwrap();
+    std::fs::write(opts.cwd.join("queue-read.txt"), "KAR-CRASH-AFTER-READ").unwrap();
     let dir = base.join("chats");
     let store = ChatStore::open(&dir).unwrap();
-    let program = std::env::var_os("KAR_OPENCODE_BIN").unwrap();
+    let program = std::path::PathBuf::from(std::env::var_os("KAR_OPENCODE_BIN").unwrap());
+    let (version, v2) = queue_crash::version(&program);
     let session = store
         .create(
             "opencode",
@@ -565,7 +568,7 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
     session.close().await.unwrap();
     let request = Uuid::new_v4();
     let queued = Uuid::new_v4();
-    let prompt = "read it KAR-FORK-READ-SHARED";
+    let prompt = "read it KAR-QUEUE-READ-LOCAL";
     let next = "queued after hard kill";
     let mut events = store
         .follow(id, Some(store.feed_snapshot(id).unwrap().cursor))
@@ -603,26 +606,24 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
     )
     .unwrap();
     std::fs::write(base.join("model-finish"), "").unwrap();
-    let route = format!("/api/session/{root}/message?order=desc&limit=1");
-    let idle = tokio::time::timeout(Duration::from_secs(20), async {
+    let terminal = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let read = tokio::process::Command::new(&program)
-                .current_dir(&opts.cwd)
-                .envs(&opts.env)
-                .args(["api", "--standalone", "GET", &route])
-                .kill_on_drop(true)
-                .output()
-                .await
-                .unwrap();
-            assert!(
-                read.status.success(),
-                "{}",
-                String::from_utf8_lossy(&read.stderr)
-            );
-            let page: Value = serde_json::from_slice(&read.stdout).unwrap();
-            let msg = &page["data"][0];
-            if msg["type"] == "idle" && msg["outcome"] == "succeeded" {
-                break msg["id"].as_str().unwrap().to_owned();
+            let archive = queue_crash::archive(&program, &opts, &root, v2).await;
+            if v2 {
+                if let Some(msg) = archive["data"].as_array().unwrap().last()
+                    && msg["type"] == "idle"
+                    && msg["outcome"] == "succeeded"
+                {
+                    break msg["id"].as_str().unwrap().to_owned();
+                }
+            } else {
+                let last = &archive["messages"].as_array().unwrap().last().unwrap()["info"];
+                if last["role"] == "assistant"
+                    && last["finish"] == "stop"
+                    && last["time"]["completed"].is_number()
+                {
+                    break last["parentID"].as_str().unwrap().to_owned();
+                }
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -641,15 +642,16 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
     resumed.drain_queue().await.unwrap();
     let original = resumed.send(request, prompt).await.unwrap();
     assert_eq!(original.status, TurnStatus::Completed);
-    assert_eq!(original.fork_anchor.as_deref(), Some(idle.as_str()));
-    assert_eq!(
-        original
-            .items
-            .iter()
-            .filter(|i| matches!(&i.item, Item::Tool { .. }))
-            .count(),
-        1
+    if v2 {
+        assert_eq!(original.fork_anchor.as_deref(), Some(terminal.as_str()));
+    } else {
+        assert_eq!(original.native_turn_id.as_deref(), Some(terminal.as_str()));
+        assert!(original.fork_anchor.is_none());
+    }
+    println!(
+        "OpenCode {version}: recovered terminal outcome, native identity and tool result after SIGKILL"
     );
+    assert_eq!(original.items.iter().filter(|i|matches!(&i.item, Item::Tool{activity,..} if activity.name.as_deref()==Some("read") && activity.result.as_ref().and_then(|r|r.text()).is_some_and(|s| s.contains("KAR-CRASH-AFTER-READ")))).count(),1);
     assert!(
         original
             .items

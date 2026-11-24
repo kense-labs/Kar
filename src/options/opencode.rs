@@ -1,11 +1,12 @@
 //! Prompt overlays for OpenCode's two native configuration formats.
 use super::env_path;
-use crate::{Error, Result, Runtime, SessionOptions};
+use crate::{Error, Result, Runtime, SessionOptions, process::OwnedProcess};
 use serde_json::{Value, value::RawValue};
 use std::{
     collections::BTreeMap,
-    io::Write,
+    io::{BufReader, Seek, Write},
     path::{Path, PathBuf},
+    process::Stdio,
     sync::{Arc, Mutex, OnceLock, Weak},
     time::Duration,
 };
@@ -71,6 +72,41 @@ async fn run(
     }
     Ok(result.stdout)
 }
+pub(crate) async fn export(
+    program: &Path,
+    opts: &SessionOptions,
+    root: &str,
+    sanitize: bool,
+) -> Result<Value> {
+    // This CLI can exit with a partially flushed stdout pipe. Keep the private
+    // export in an anonymous file and rewind it after the process exits.
+    let mut file = tempfile::tempfile()?;
+    let mut cmd = opts.command(program)?;
+    cmd.args(["export", root]);
+    if sanitize {
+        cmd.arg("--sanitize");
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(file.try_clone()?)
+        .stderr(Stdio::null());
+    let mut child = OwnedProcess::spawn(cmd)?;
+    if !tokio::time::timeout(opts.handshake_timeout, child.wait())
+        .await
+        .map_err(|_| Error::Timeout("OpenCode export".into()))??
+        .success()
+    {
+        return Err(Error::Refused(
+            "OpenCode could not export the original session".into(),
+        ));
+    }
+    tokio::task::spawn_blocking(move || {
+        file.rewind()?;
+        Ok(serde_json::from_reader(BufReader::new(file))?)
+    })
+    .await
+    .map_err(|e| Error::Closed(e.to_string()))?
+}
+
 async fn query(
     rt: &Runtime,
     opts: &SessionOptions,
@@ -241,7 +277,7 @@ pub(crate) async fn prepare(
         } else {
             let config = query(rt, opts, &["debug", "config"], None).await?;
             let saved = if let Some(id) = fork_source.or(opts.resume.as_deref()) {
-                saved_agent(&query(rt, opts, &["export", id, "--sanitize"], None).await?)
+                saved_agent(&export(&rt.program, opts, id, true).await?)
             } else {
                 None
             };

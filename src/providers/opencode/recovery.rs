@@ -1,13 +1,15 @@
 //! ACP load replays the provider's own tool cards. The native archive supplies the
 //! user/assistant identities and the execution boundary that ACP omits on replay.
 use super::history::{self, Witness};
+#[path = "recovery_v1.rs"]
+mod v1;
 use crate::{
     Error, Event, Outcome, Result, Session, SessionOptions,
     chat::{ChatEdit, ChatFrame, ChatInfo, ChatTurn, Item, Role},
     observe::Tool,
 };
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub(crate) fn has_witness(turn: &ChatTurn, root: &str) -> bool {
     turn.prompt().is_some() && Witness::for_turn(turn, root).is_ok()
@@ -23,10 +25,31 @@ struct Turn {
     steered_users: Vec<String>,
     failure: Option<crate::TurnFailure>,
     parts: Vec<Part>,
-    tools: HashSet<String>,
+    tools: HashMap<String, Option<String>>,
 }
 
 impl Turn {
+    fn new(user: &str) -> Self {
+        Self {
+            user: user.into(),
+            steered_users: vec![],
+            failure: None,
+            parts: vec![],
+            tools: HashMap::new(),
+        }
+    }
+
+    fn assistant_text(&mut self, slot: &mut Option<usize>, message: &str, text: &str) {
+        // ACP uses the assistant message ID for every text span in this model step.
+        if let Some(Part::Text(_, _, existing)) = slot.and_then(|i| self.parts.get_mut(i)) {
+            existing.push_str(text);
+        } else {
+            *slot = Some(self.parts.len());
+            self.parts
+                .push(Part::Text(Role::Assistant, message.into(), text.into()));
+        }
+    }
+
     fn assistant(&mut self, row: &Value) -> Option<()> {
         let message = row["id"].as_str()?;
         let mut ordinal = 0;
@@ -34,17 +57,7 @@ impl Turn {
         for part in row["content"].as_array()? {
             match part["type"].as_str()? {
                 "text" => {
-                    let text = part["text"].as_str()?;
-                    // ACP uses the assistant message ID for all text spans in the step.
-                    if let Some(Part::Text(_, _, existing)) =
-                        text_slot.and_then(|i: usize| self.parts.get_mut(i))
-                    {
-                        existing.push_str(text);
-                    } else {
-                        text_slot = Some(self.parts.len());
-                        self.parts
-                            .push(Part::Text(Role::Assistant, message.into(), text.into()));
-                    }
+                    self.assistant_text(&mut text_slot, message, part["text"].as_str()?);
                 }
                 "reasoning" => {
                     let key = format!("{message}:reasoning:{ordinal}");
@@ -60,7 +73,7 @@ impl Turn {
                     if !matches!(
                         part["state"]["status"].as_str(),
                         Some("completed" | "error")
-                    ) || !self.tools.insert(id.into())
+                    ) || self.tools.insert(id.into(), None).is_some()
                     {
                         return None;
                     }
@@ -117,13 +130,7 @@ impl<'a> Archive<'a> {
         match kind {
             "user" => {
                 if !self.in_turn && row["text"] == self.prompt {
-                    self.current = Some(Turn {
-                        user: id.into(),
-                        steered_users: Vec::new(),
-                        failure: None,
-                        parts: Vec::new(),
-                        tools: HashSet::new(),
-                    });
+                    self.current = Some(Turn::new(id));
                 } else if let Some(turn) = &mut self.current {
                     if self
                         .accepted
@@ -220,7 +227,7 @@ fn replayed_tools(
             }
             Some("tool_call" | "tool_call_update") if inside => {
                 let id = update["toolCallId"].as_str()?;
-                if !turn.tools.contains(id) {
+                if !turn.tools.contains_key(id) {
                     continue;
                 }
                 let tool = tools.entry(id.into()).or_default();
@@ -328,11 +335,11 @@ pub(crate) async fn recover(
         return Ok(None);
     }
     let rt = info.launch_runtime(opts).await?;
-    if crate::account::release(&rt.launch_version(opts).await?).is_none_or(|v| v.0 != 2) {
+    let major = crate::account::release(&rt.launch_version(opts).await?).map(|v| v.0);
+    if !matches!(major, Some(1 | 2)) {
         return Ok(None);
     }
     let read = async {
-        let (server, _) = history::open(&rt.program, opts, root).await?;
         let accepted = local
             .items
             .iter()
@@ -353,11 +360,27 @@ pub(crate) async fn recover(
                 (local.steered_inputs.get(&key) == Some(&crate::SteerStatus::Accepted))
                     .then_some(text.as_str())
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if major == Some(1) {
+            // OpenCode 1 stores assistant steps under their native user parent.
+            // Its archive has no turn-position fork anchor.
+            let export = crate::options::opencode::export(&rt.program, opts, root, false).await?;
+            let settled = if accepted.is_empty() {
+                v1::settled(&export, root, opts, &witness, prompt)
+            } else {
+                None
+            };
+            return Ok(settled.map(|(turn, outcome)| (turn, None, outcome)));
+        }
+        let (server, _) = history::open(&rt.program, opts, root).await?;
         let mut archive = Archive::new(witness, prompt, accepted);
         history::visit(&server, root, |row| archive.row(row)).await?;
         server.stop().await;
-        Ok::<_, Error>(archive.finish())
+        Ok::<_, Error>(
+            archive
+                .finish()
+                .map(|(turn, anchor, outcome)| (turn, Some(anchor), outcome)),
+        )
     };
     let Some((turn, idle, outcome)) =
         tokio::time::timeout(opts.handshake_timeout, read)
@@ -386,9 +409,13 @@ pub(crate) async fn recover(
                 final_text: true,
             },
             Part::Tool(id) => {
-                let Some(activity) = tools.remove(&id) else {
+                let Some(mut activity) = tools.remove(&id) else {
                     return Ok(None);
                 };
+                // v1 replay can replace the tool name with its display title.
+                if let Some(Some(name)) = turn.tools.get(&id) {
+                    activity.name = Some(name.clone());
+                }
                 ChatEdit::ToolSnapshot { id, activity }
             }
         };
@@ -399,9 +426,11 @@ pub(crate) async fn recover(
             event: Event::TurnFailure { failure },
         });
     }
-    edits.push(ChatEdit::Activity {
-        event: Event::ForkAnchor { anchor: idle },
-    });
+    if let Some(anchor) = idle {
+        edits.push(ChatEdit::Activity {
+            event: Event::ForkAnchor { anchor },
+        });
+    }
     edits.push(ChatEdit::Activity {
         event: Event::TurnEnded { outcome },
     });
