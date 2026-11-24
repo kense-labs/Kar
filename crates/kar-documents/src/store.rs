@@ -573,6 +573,29 @@ impl DocumentStore {
         }
     }
 
+    #[cfg(unix)]
+    pub(crate) fn native_state_dir(&self) -> &Path {
+        &self.dir
+    }
+    #[cfg(unix)]
+    pub(crate) fn native_file_extension(&self) -> Result<String> {
+        self.empty_edits()?;
+        Ok(self
+            .file
+            .extension()
+            .and_then(|v| v.to_str())
+            .context("missing document extension")?
+            .to_ascii_lowercase())
+    }
+    #[cfg(unix)]
+    pub(crate) fn operation_exists(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .load()?
+            .records
+            .iter()
+            .any(|r| r.receipt.operation_id.as_deref() == Some(id)))
+    }
+
     pub fn submit(&mut self, command: Command) -> Result<Receipt> {
         ensure!(
             !command.author.trim().is_empty() && !command.operation_id.trim().is_empty(),
@@ -589,6 +612,8 @@ impl DocumentStore {
             }
             return Ok(old.receipt.clone());
         }
+        #[cfg(unix)]
+        crate::native::check_reservation(&self.dir, &command)?;
         m.revision(command.base_revision)?;
         let result = self.candidate(&m, &command);
         let (candidate, conflict) = match result {
@@ -677,7 +702,7 @@ impl DocumentStore {
     }
 }
 
-fn hash(bytes: &[u8]) -> String {
+pub(crate) fn hash(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut value = String::with_capacity(64);
     for byte in Sha256::digest(bytes) {
@@ -686,7 +711,7 @@ fn hash(bytes: &[u8]) -> String {
     value
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("file has no parent")?;
     let mut tmp = NamedTempFile::new_in(parent)?;
     if let Ok(meta) = fs::metadata(path) {

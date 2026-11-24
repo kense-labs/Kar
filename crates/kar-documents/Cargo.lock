@@ -1175,6 +1175,7 @@ dependencies = [
  "docs_engine",
  "getrandom 0.4.3",
  "roxmltree 0.21.2",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -1185,6 +1186,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "uuid",
  "zip 9.8.2",
 ]
 

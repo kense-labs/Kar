@@ -7,6 +7,8 @@ pub use grid_history::{GridAction, GridChange};
 pub mod excel;
 pub mod http;
 mod merge;
+#[cfg(unix)]
+pub mod native;
 pub mod slides;
 pub mod store;
 pub mod text;
