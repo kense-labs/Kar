@@ -80,6 +80,27 @@ impl Runtime {
         }
     }
 
+    fn validate_placement(&self) -> Result<()> {
+        if self.placement == crate::PlacementRequest::Shared && self.protocol == Protocol::Acp {
+            let reason = match self.id.as_str() {
+                "opencode" => Some(
+                    "configured plugins can start children in the shared process HOME instead of the session directory",
+                ),
+                "grok" => Some(
+                    "configured stdio MCP servers can start in the shared process HOME instead of the session directory",
+                ),
+                _ => None,
+            };
+            if let Some(reason) = reason {
+                return Err(Error::Unsupported(format!(
+                    "placement: {} requires an isolated native process because {reason}",
+                    self.id
+                )));
+            }
+        }
+        self.placement.resolve(self.execution()).map(|_| ())
+    }
+
     pub(crate) fn session_journal(
         &self,
         retained_bytes: Option<usize>,
@@ -88,7 +109,7 @@ impl Runtime {
     }
 
     pub async fn open(&self, options: SessionOptions) -> Result<Session> {
-        self.placement.resolve(self.execution())?;
+        self.validate_placement()?;
         let (rt, version) = self.selected_with_version(&options).await?;
         rt.open_selected_with_version(options, version.as_deref())
             .await
@@ -101,7 +122,7 @@ impl Runtime {
         options: SessionOptions,
         version: Option<&str>,
     ) -> Result<Session> {
-        self.placement.resolve(self.execution())?;
+        self.validate_placement()?;
         crate::options::launch_args::validate(self, &options, false)?;
         if self.protocol == Protocol::Dsh {
             let release = crate::dsh::release(self, &options, version).await?;
@@ -144,7 +165,7 @@ impl Runtime {
         options: SessionOptions,
         child: Option<uuid::Uuid>,
     ) -> Result<Session> {
-        self.placement.resolve(self.execution())?;
+        self.validate_placement()?;
         self.selected(&options)
             .await?
             .fork_selected(source, through, options, child)
@@ -157,7 +178,7 @@ impl Runtime {
         options: SessionOptions,
         child: Option<uuid::Uuid>,
     ) -> Result<Session> {
-        self.placement.resolve(self.execution())?;
+        self.validate_placement()?;
         crate::options::launch_args::validate(self, &options, true)?;
         if source.trim().is_empty()
             || through.is_some_and(|s| s.trim().is_empty())

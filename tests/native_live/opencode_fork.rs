@@ -762,3 +762,16 @@ async fn native_retry_is_projected_once_and_replayed_at_its_original_time() {
         vec![turn]
     );
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "requires an installed OpenCode CLI, isolated home and loopback model"]
+async fn native_process_placement_keeps_two_workspaces_independent() {
+    let root = tempfile::tempdir().unwrap();
+    let (opts, _) = fixture(&root.path().canonicalize().unwrap());
+    let mut rt = kar::runtime("opencode").unwrap();
+    rt.program = std::env::var_os("KAR_OPENCODE_BIN")
+        .expect("set KAR_OPENCODE_BIN")
+        .into();
+    super::isolated_placement::verify(rt, opts).await;
+}

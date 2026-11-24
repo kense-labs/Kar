@@ -658,3 +658,33 @@ async fn host_tool_is_ready_on_the_first_turn() {
     host.close().await;
     server.abort();
 }
+
+#[cfg(target_os = "macos")]
+#[path = "support/isolated_placement.rs"]
+mod isolated_placement;
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "requires a real Grok ACP CLI, isolated home and loopback model"]
+async fn native_process_placement_keeps_two_workspaces_independent() {
+    use axum::{Json, Router, routing::post};
+    async fn model(Json(body): Json<Value>) -> axum::response::Response {
+        completion(
+            &body,
+            json!({"role":"assistant","content":"complete"}),
+            "stop",
+        )
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/v1/chat/completions", post(model));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let root = tempfile::tempdir().unwrap();
+    let opts = local_options(&root, addr);
+    let mut rt = kar::runtime("grok").unwrap();
+    rt.program = std::env::var_os("KAR_GROK_BIN")
+        .expect("set KAR_GROK_BIN")
+        .into();
+    isolated_placement::verify(rt, opts).await;
+    server.abort();
+}

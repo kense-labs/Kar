@@ -125,3 +125,34 @@ mod tests {
         assert_eq!(PlacementRequest::Auto.resolve(None).unwrap(), None);
     }
 }
+
+#[cfg(test)]
+mod acp_admission_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn production_shared_refusals_precede_open_resume_and_fork() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, reason) in [
+            ("opencode", "configured plugins"),
+            ("grok", "configured stdio MCP servers"),
+        ] {
+            let mut rt = crate::runtime(name)
+                .unwrap()
+                .with_placement(PlacementRequest::Shared);
+            rt.program = dir.path().join("never-started");
+            let opts = crate::SessionOptions::new(dir.path());
+            let mut resume = opts.clone();
+            resume.resume = Some("previous".into());
+            for result in [
+                rt.open(opts.clone()).await,
+                rt.open(resume).await,
+                rt.fork("parent", None, opts).await,
+            ] {
+                assert!(
+                    matches!(result, Err(Error::Unsupported(detail)) if detail.contains("placement") && detail.contains(reason))
+                );
+            }
+        }
+    }
+}

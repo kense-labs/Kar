@@ -1277,6 +1277,10 @@ async fn missing_target(runtime: &kar::Runtime, opts: &SessionOptions) {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[path = "support/isolated_placement.rs"]
+mod isolated_placement;
+
 #[path = "native_live/opencode_fork.rs"]
 mod opencode_fork;
 
