@@ -1,4 +1,5 @@
 //! REST and native CLI drivers for non-GitHub hosts in the fixed workbench contract.
+mod azure;
 mod hosted;
 pub(super) mod linear;
 mod rest;
@@ -38,9 +39,18 @@ async fn send(
     body: Option<Value>,
     mutation: bool,
 ) -> Result<Value, ForgeError> {
+    let azure_patch = c.kind == "azure-devops" && method == Method::PATCH;
     let mut req = c.client.request(method, url);
+    if azure_patch {
+        req = req.header("Content-Type", "application/json-patch+json");
+    }
     if let Some(token) = &c.token {
         req = match c.kind.as_str() {
+            "bitbucket" if std::env::var_os("KAR_BITBUCKET_EMAIL").is_some() => {
+                let email = std::env::var("KAR_BITBUCKET_EMAIL")
+                    .map_err(|_| ForgeError::bad("invalid Bitbucket account email"))?;
+                req.basic_auth(email, Some(token))
+            }
             "linear" => req.header("Authorization", token),
             "azure-devops" => req.basic_auth("", Some(token)),
             _ => req.bearer_auth(token),
@@ -106,6 +116,7 @@ fn account(v: &Value, field: &str) -> Result<Value, ForgeError> {
 pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeError> {
     match c.kind.as_str() {
         "gitcafe" | "cursor-origin" | "tanstack-source" => hosted::execute(c, op).await,
+        "azure-devops" => azure::execute(c, op).await,
         "linear" => linear::execute(c, op).await,
         "gitlab" | "bitbucket" | "forgejo" => rest::execute(c, op).await,
         _ => Err(ForgeError::unsupported(format!(
