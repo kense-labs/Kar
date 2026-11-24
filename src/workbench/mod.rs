@@ -1,5 +1,6 @@
 //! A local workbench that shares Kar's saved chats, their native sessions and event cursors.
 mod access;
+mod relay_client;
 pub(crate) mod acp_registry;
 mod agent_sessions;
 mod assets;

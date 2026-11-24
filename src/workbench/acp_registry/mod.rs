@@ -515,3 +515,15 @@ async fn uninstall_binary(State(app): State<Workbench>, Param(agent): Param<Stri
     })
     .await
 }
+
+/// Prepare a trusted release archive with the same checked extraction as managed ACP launchers.
+pub(in crate::workbench) async fn pinned_executable(
+    dir: &Path, source: url::Url, executable: &str, checksum: &str,
+    stage: impl Fn(&'static str) + Send + Sync,
+) -> Result<PathBuf> {
+    let archive = catalog::Binary {
+        archive:source.to_string(), cmd:executable.into(), sha256:Some(checksum.into()), launch:Default::default()
+    };
+    let (relative,_) = archive::install_with_progress(dir, &source, &archive, stage).await?;
+    Ok(dir.join(relative))
+}

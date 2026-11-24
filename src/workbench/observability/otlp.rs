@@ -147,7 +147,14 @@ pub(super) async fn browser_traces(
                             record[key] = v.clone();
                         }
                     }
-                    spans.push(record);
+                    let ns = |key: &str| span[key].as_str().and_then(|n| n.parse::<u64>().ok());
+                    if let Some(duration) = ns("endTimeUnixNano")
+                        .zip(ns("startTimeUnixNano"))
+                        .and_then(|(end, start)| end.checked_sub(start))
+                    {
+                        record["durationMs"] = json!(duration as f64 / 1_000_000.0);
+                        spans.push(record);
+                    }
                 }
             }
         }

@@ -162,15 +162,6 @@ pub(in crate::workbench) fn clean(state: &Path) -> Result<()> {
     Ok(())
 }
 impl Workbench {
-    pub(in crate::workbench) fn take_model_secret(
-        &self,
-        project: Uuid,
-        chat: Uuid,
-        reference: Uuid,
-    ) -> Result<String> {
-        self.with_model_secret(project, chat, reference, |secret| Ok(secret.to_owned()))
-    }
-
     pub(in crate::workbench) fn with_model_secret<T>(
         &self,
         project: Uuid,

@@ -35,6 +35,10 @@ pub(super) fn relative(raw: &str) -> Result<PathBuf> {
     Ok(path)
 }
 pub(super) async fn install(root: &Path, source: &Url, b: &Binary) -> Result<(PathBuf, String)> {
+    install_with_progress(root, source, b, |_| {}).await
+}
+pub(super) async fn install_with_progress(root: &Path, source: &Url, b: &Binary, stage: impl Fn(&'static str) + Send + Sync) -> Result<(PathBuf, String)> {
+    stage("downloading");
     let url = Url::parse(&b.archive).map_err(|_| bad("invalid archive URL"))?;
     let mut r = catalog::client(source)?
         .get(url.clone())
@@ -56,6 +60,7 @@ pub(super) async fn install(root: &Path, source: &Url, b: &Binary) -> Result<(Pa
     }
     file.flush().await?;
     drop(file);
+    stage("verifying");
     let digest = format!("{:x}", digest.finalize());
     if b.sha256
         .as_ref()
@@ -63,6 +68,7 @@ pub(super) async fn install(root: &Path, source: &Url, b: &Binary) -> Result<(Pa
     {
         return Err(bad("ACP archive SHA-256 mismatch"));
     }
+    stage("installing");
     let path = url.path().to_ascii_lowercase();
     let command = relative(&b.cmd)?;
     let dest = root.join("payload");

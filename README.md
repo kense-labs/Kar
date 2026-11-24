@@ -788,3 +788,5 @@ cargo test --locked --test skill_inventory_live pi_registered_tools -- --ignored
 To serve a built web client from the workbench, set `KAR_STATIC_DIR` to its distribution directory when starting Kar. Client navigation falls back to its `index.html`. Static files and signed attachment downloads support conditional reads and byte ranges. The signed URL must still authorize the attachment on each request.
 
 Authenticated clients can submit browser OTLP JSON to `POST /telemetry/v1/traces`. Kar records span summaries locally. Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` to also send the batch to an HTTP collector.
+
+The owner can query `GET /access/relay-client` and subscribe to an installation with `POST /access/relay-client` (server-sent events). Kar checks the executable identified by `KAR_CLOUDFLARED_PATH`, its managed copy, or the host PATH. On macOS the managed release is cloudflared 2026.10.4. Kar verifies the architecture-specific archive digest and the extracted program's version before activation.

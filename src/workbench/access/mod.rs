@@ -331,6 +331,7 @@ async fn revoke(State(app): State<Workbench>, Path(id): Path<Uuid>) -> AccessRes
 
 pub(super) fn routes(app: Workbench, auth: Auth) -> Router {
     let admin = guest::admin()
+        .merge(super::relay_client::routes())
         .merge(super::acp_registry::owner_routes())
         .merge(super::mcp::collaboration_tools::environment::owner_routes())
         .route("/access/pairings", post(grant))
