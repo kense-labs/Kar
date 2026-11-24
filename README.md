@@ -200,6 +200,14 @@ DSH 0.2.2-rc.3 起在 macOS 和 Linux 上支持 `--add-dir`。目录按会话加
 
 其余适配器目前没有这项时机声明。`ChatStore::resume` 会重新传入聊天保存的配置，因此表中的“省略”适用于直接打开原生会话的调用者。Pi Durable 需要等正在执行的回合结束后才能修改指令，宿主通过 `PiDurable.sessionCapabilities()` 查询。
 
+### ACP 历史载入与会话模式
+
+ACP 的 `session/load` 默认最多等 60 秒；普通请求设置得更长时，载入历史沿用更长的时限。Kimi 的 `session/new`、`session/resume` 和 `session/fork` 默认最多等 630 秒，认证和配置请求各等 30 秒。Grok 加载会话并等待宿主 MCP 服务就绪共用同一段时间。打开请求超时后，Kar 关闭这次启动的进程，调用方可用原聊天 ID 重试。
+
+Rust 宿主可用 `SessionOptions.acp_timeouts` 分别设置 `request`、`session_start` 和 `session_load`。已有调用方设置的非默认 `handshake_timeout` 会用于没有单独指定时限的操作。若要明确设为 20 秒，可直接设置对应的 ACP 字段。
+
+需要指定 ACP 会话模式时，可在创建聊天时传 `--acp-mode <原生模式 ID>`，或在 SDK 设置 `SessionSettings.acp_mode`。Kar 核对供应商公布的选项并等待原生回执，恢复聊天时再次应用保存的选择。省略该选项会沿用原生会话的模式。
+
 ### 恢复被拒绝时
 
 新建、恢复或分叉时，如果运行时报告的模型与请求不一致，宿主可以读取 `OpenError::ModelConfirmation` 的 `requested` 和 `reported`。Codex、Pi RPC、Factory、Kimi KAP、DSH、Qoder 和 Antigravity 按各自的协议核对。Pi Durable 的浏览器接口通过 `ModelConfirmationError` 返回这两个字段。Qoder 会保留最后一次成功读取的目录选项 ID，目录查询失败时还附带查询阶段和错误。模型字段或目录没有原生读数时，调用方可区分缺失的读数与空目录。

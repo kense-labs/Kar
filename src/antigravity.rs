@@ -63,8 +63,8 @@ async fn set(
         .ok_or_else(|| Error::Protocol("Antigravity omitted its config option ID".into()))?;
     let since = session.records().last().map(|r| r.cursor());
     let mut records = session.subscribe(since.as_ref())?;
-    let deadline = Instant::now() + opts.handshake_timeout;
     let method = "session/set_config_option";
+    let deadline = Instant::now() + opts.acp_timeout("antigravity", method);
     let args = json!({"sessionId":id,"configId":key,"value":value});
     let is_model = key == "model" || selected["category"] == "model";
     let result = if is_model {

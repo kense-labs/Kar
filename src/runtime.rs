@@ -305,6 +305,20 @@ pub enum ApprovalMode {
     Host,
 }
 
+const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Per-operation deadlines for an ACP connection. Unset fields use the runtime's
+/// profile or a non-default legacy `SessionOptions::handshake_timeout`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AcpTimeouts {
+    /// Other requests, including authentication, settings and model selection.
+    pub request: Option<Duration>,
+    /// New sessions, lightweight resume and native forks. Kimi defaults to 630 seconds.
+    pub session_start: Option<Duration>,
+    /// History replay and its readiness handshake. Defaults to at least 60 seconds.
+    pub session_load: Option<Duration>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
     pub cwd: PathBuf,
@@ -319,8 +333,35 @@ pub struct SessionOptions {
     /// Positive byte budget for retained native and tool payloads. Live subscribers and the newest frame stay complete.
     pub retained_bytes: Option<usize>,
     pub handshake_timeout: Duration,
+    pub acp_timeouts: AcpTimeouts,
 }
 impl SessionOptions {
+    pub(crate) fn acp_timeout(&self, runtime: &str, method: &str) -> Duration {
+        let legacy =
+            (self.handshake_timeout != DEFAULT_HANDSHAKE_TIMEOUT).then_some(self.handshake_timeout);
+        let settings = self.acp_timeouts;
+        let request = settings.request.or(legacy).unwrap_or_else(|| {
+            Duration::from_secs(match runtime {
+                "antigravity" | "codebuddy" | "devin" | "grok" | "kimi" | "opencode" => 30,
+                _ => 15,
+            })
+        });
+        match method {
+            "session/load" => settings
+                .session_load
+                .or(legacy)
+                .unwrap_or(request.max(Duration::from_secs(60))),
+            "session/new" | "session/resume" | "session/fork" => settings
+                .session_start
+                .or(legacy)
+                .unwrap_or(if runtime == "kimi" {
+                    Duration::from_secs(630)
+                } else {
+                    request
+                }),
+            _ => request,
+        }
+    }
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
             cwd: cwd.into(),
@@ -332,7 +373,8 @@ impl SessionOptions {
             unset_env: Default::default(),
             approvals: ApprovalMode::Deny,
             retained_bytes: None,
-            handshake_timeout: Duration::from_secs(20),
+            handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
+            acp_timeouts: AcpTimeouts::default(),
         }
     }
 }

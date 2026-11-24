@@ -576,7 +576,11 @@ impl Session {
             acp_steering: false,
             supports_output_schema: runtime.protocol.supports_output_schema(&runtime.id),
             native_fork: matches!(runtime.protocol, Protocol::Codex | Protocol::Claude),
-            timeout: options.handshake_timeout,
+            timeout: if runtime.protocol == Protocol::Acp {
+                options.acp_timeout(&runtime.id, "initialize")
+            } else {
+                options.handshake_timeout
+            },
         };
         if let Some(path) = receipt
             && let Err(err) = path
@@ -767,7 +771,17 @@ impl Session {
                 if init["protocolVersion"] != 1 {
                     return Err(Error::Protocol("ACP version 1 was not negotiated".into()));
                 }
-                if grok && let Some(id) = crate::grok::auth_method(&init) {
+                let auth_method = match runtime.id.as_str() {
+                    "grok" => crate::grok::auth_method(&init),
+                    "kimi" => init["authMethods"].as_array().and_then(|methods| {
+                        methods
+                            .iter()
+                            .any(|m| m["id"] == "login")
+                            .then_some("login")
+                    }),
+                    _ => None,
+                };
+                if let Some(id) = auth_method {
                     session
                         .open_rpc("authenticate", json!({"methodId":id}), OpenStep::Open)
                         .await?;
@@ -808,6 +822,7 @@ impl Session {
                     }
                     params["_meta"] = json!({"antigravity":{"systemPrompt":{"append":append}}});
                 }
+                let started_at = tokio::time::Instant::now();
                 let source = fork.map(|(s, _)| s).or(options.resume.as_deref());
                 if let Some(source) = source
                     && matches!(
@@ -829,23 +844,15 @@ impl Session {
                     )
                     .await?;
                 }
-                if let Some((source, _)) = fork {
+                let (method, step) = if let Some((source, _)) = fork {
                     if !session.native_fork {
                         return Err(Error::Unsupported(
                             "ACP agent did not advertise session/fork".into(),
                         ));
                     }
                     params["sessionId"] = source.into();
-                    session.info = session
-                        .open_rpc("session/fork", params, OpenStep::Target(source.into()))
-                        .await?;
-                    id = required_id(&session.info, "/sessionId")?;
-                    if id == source {
-                        return Err(Error::Protocol(
-                            "fork returned the source session id".into(),
-                        ));
-                    }
-                } else if let Some(resume) = options.resume.clone() {
+                    ("session/fork", OpenStep::Target(source.into()))
+                } else if let Some(resume) = &options.resume {
                     if !session.native_resume {
                         return Err(Error::Unsupported(
                             "agent does not advertise native session resume".into(),
@@ -859,9 +866,20 @@ impl Session {
                     } else {
                         "session/load"
                     };
-                    session.info = session
-                        .open_rpc(method, params, OpenStep::Target(resume.clone()))
-                        .await?;
+                    (method, OpenStep::Target(resume.clone()))
+                } else {
+                    if let Some(binding) = &agent_binding {
+                        binding.begin()?;
+                    }
+                    ("session/new", OpenStep::Open)
+                };
+                let open_limit = options.acp_timeout(&runtime.id, method);
+                session.info = session
+                    .acp_rpc(method, params, Some(step), open_limit)
+                    .await?;
+                if let Some(resume) = &options.resume
+                    && fork.is_none()
+                {
                     if !session.info.is_object() {
                         return Err(Error::Protocol(
                             "expected an ACP resume result object".into(),
@@ -870,29 +888,55 @@ impl Session {
                     if session
                         .info
                         .get("sessionId")
-                        .is_some_and(|native| native.as_str() != Some(&resume))
+                        .is_some_and(|native| native.as_str() != Some(resume))
                     {
                         return Err(Error::Protocol(
                             "agent did not confirm the requested session id".into(),
                         ));
                     }
-                    id = resume;
+                    id = resume.clone();
                 } else {
-                    if let Some(binding) = &agent_binding {
-                        binding.begin()?;
-                    }
-                    session.info = session
-                        .open_rpc("session/new", params, OpenStep::Open)
-                        .await?;
                     id = required_id(&session.info, "/sessionId")?;
+                    if Some(id.as_str()) == source {
+                        return Err(Error::Protocol(
+                            "fork returned the source session id".into(),
+                        ));
+                    }
                 }
                 if let Some(startup) = grok_mcp
-                    && let Err(err) = startup.wait(&id, options.handshake_timeout).await
+                    && let Err(err) = startup.wait(&id, started_at, open_limit).await
                 {
                     let _ = session.close().await;
                     return Err(err);
                 }
                 crate::options::opencode::confirm(&session.info, &opencode_agents)?;
+                if let Some(mode) = &options.settings.acp_mode {
+                    if !crate::options::acp_mode_advertised(&session.info, &runtime.id, mode) {
+                        return Err(Error::Unsupported(format!(
+                            "ACP did not advertise session mode {mode:?}"
+                        )));
+                    }
+                    session
+                        .open_rpc(
+                            "session/set_mode",
+                            json!({"sessionId":id,"modeId":mode}),
+                            OpenStep::Open,
+                        )
+                        .await?;
+                    if let Some(modes) =
+                        session.info.get_mut("modes").and_then(Value::as_object_mut)
+                    {
+                        modes.insert("currentModeId".into(), json!(mode));
+                    }
+                    if let Some(option) = session
+                        .info
+                        .get_mut("configOptions")
+                        .and_then(Value::as_array_mut)
+                        .and_then(|opts| opts.iter_mut().find(|o| o["id"] == "mode"))
+                    {
+                        option["currentValue"] = json!(mode);
+                    }
+                }
                 let antigravity = runtime.id == "antigravity";
                 if antigravity {
                     session.info =
@@ -1192,7 +1236,36 @@ impl Session {
         };
         reply.map_err(|_| Error::Closed("runtime stopped before replying".into()))?
     }
+    async fn acp_rpc(
+        &self,
+        method: &str,
+        params: Value,
+        step: Option<crate::opening::OpenStep>,
+        limit: Duration,
+    ) -> Result<Value> {
+        let response = tokio::time::timeout(
+            limit,
+            self.call_with_timeout(None, |tx| Command::Rpc(method.into(), params, step, tx)),
+        )
+        .await;
+        match response {
+            Ok(result) => result,
+            Err(_) => {
+                if self.id.is_empty() {
+                    // Opening failed. Reap this process before exposing the timeout to a caller that may retry.
+                    let _ = self.close().await;
+                }
+                Err(Error::Timeout(format!(
+                    "{method} ({} ms)",
+                    limit.as_millis()
+                )))
+            }
+        }
+    }
     pub(crate) async fn rpc(&self, method: &str, params: Value) -> Result<Value> {
+        if self.protocol == Protocol::Acp {
+            return self.acp_rpc(method, params, None, self.timeout).await;
+        }
         self.call(|tx| Command::Rpc(method.into(), params, None, tx))
             .await
     }
@@ -1202,6 +1275,9 @@ impl Session {
         params: Value,
         step: crate::opening::OpenStep,
     ) -> Result<Value> {
+        if self.protocol == Protocol::Acp {
+            return self.acp_rpc(method, params, Some(step), self.timeout).await;
+        }
         self.call(|tx| Command::Rpc(method.into(), params, Some(step), tx))
             .await
     }

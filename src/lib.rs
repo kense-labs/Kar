@@ -113,7 +113,8 @@ mod wire;
 pub use error::{Error, Result};
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::{
-    ApprovalMode, McpToolsListChanged, Protocol, Runtime, SessionOptions, runtime, runtimes,
+    AcpTimeouts, ApprovalMode, McpToolsListChanged, Protocol, Runtime, SessionOptions, runtime,
+    runtimes,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use session::{Capabilities, Delivery, Session, Turn, TurnReport};

@@ -24,8 +24,13 @@ impl Startup {
         }))
     }
 
-    pub(crate) async fn wait(mut self, id: &str, timeout: Duration) -> Result<()> {
-        tokio::time::timeout(timeout, async {
+    pub(crate) async fn wait(
+        mut self,
+        id: &str,
+        started_at: tokio::time::Instant,
+        timeout: Duration,
+    ) -> Result<()> {
+        tokio::time::timeout(timeout.saturating_sub(started_at.elapsed()), async {
             let mut initialized = false;
             let mut ready = BTreeSet::new();
             while let Some(record) = self.records.next().await {
@@ -67,7 +72,12 @@ impl Startup {
             Err(Error::Closed("Grok exited during MCP startup".into()))
         })
         .await
-        .map_err(|_| Error::Timeout("Grok MCP startup".into()))?
+        .map_err(|_| {
+            Error::Timeout(format!(
+                "_x.ai/mcp_initialized ({} ms)",
+                timeout.as_millis()
+            ))
+        })?
     }
 }
 
@@ -124,7 +134,8 @@ mod tests {
             } else {
                 send(&journal, "chat", Some("second"), "ready");
             }
-            let mut waiting = Box::pin(startup.wait("chat", Duration::from_secs(2)));
+            let mut waiting =
+                Box::pin(startup.wait("chat", tokio::time::Instant::now(), Duration::from_secs(2)));
             tokio::select! { biased; _ = &mut waiting => panic!("startup completed early"), _ = std::future::ready(()) => {} }
             if early_init {
                 send(&journal, "chat", Some("second"), "ready");
@@ -141,18 +152,25 @@ mod tests {
         send(&j, "chat", Some("first"), "ready");
         send(&j, "chat", Some("first"), "failed");
         assert!(matches!(
-            s.wait("chat", Duration::from_secs(1)).await,
+            s.wait("chat", tokio::time::Instant::now(), Duration::from_secs(1))
+                .await,
             Err(Error::Refused(_))
         ));
         let (j, s) = setup();
         j.close();
         assert!(matches!(
-            s.wait("chat", Duration::from_secs(1)).await,
+            s.wait("chat", tokio::time::Instant::now(), Duration::from_secs(1))
+                .await,
             Err(Error::Closed(_))
         ));
         let (_j, s) = setup();
         assert!(matches!(
-            s.wait("chat", Duration::from_millis(1)).await,
+            s.wait(
+                "chat",
+                tokio::time::Instant::now(),
+                Duration::from_millis(1)
+            )
+            .await,
             Err(Error::Timeout(_))
         ));
     }

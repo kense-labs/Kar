@@ -11,7 +11,7 @@ struct Setting {
     supplied: fn(&SessionSettings) -> bool,
 }
 
-fn rules(protocol: Protocol, id: &str) -> [Setting; 15] {
+fn rules(protocol: Protocol, id: &str) -> [Setting; 16] {
     use Protocol::*;
     let core = matches!(protocol, Codex | Claude | Pi | Qwen | Qoder);
     let acp = protocol == Acp;
@@ -96,6 +96,9 @@ fn rules(protocol: Protocol, id: &str) -> [Setting; 15] {
             "native goal controls on this adapter",
             |s| s.goals,
         ),
+        rule("acp_mode", acp, "native session mode requires ACP", |s| {
+            s.acp_mode.is_some()
+        }),
         rule(
             "effort",
             !matches!(protocol, Cybion | Morph),

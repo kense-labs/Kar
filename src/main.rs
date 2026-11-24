@@ -244,6 +244,9 @@ struct NativeSettings {
     /// Enable and confirm native session goals.
     #[arg(long)]
     goals: bool,
+    /// Select a mode advertised by the native ACP session.
+    #[arg(long)]
+    acp_mode: Option<String>,
     /// Native reasoning effort, confirmed at startup.
     #[arg(long)]
     effort: Option<String>,
@@ -281,6 +284,7 @@ impl NativeSettings {
             pi_project_trusted: self.pi_project_trusted,
             name: self.name,
             effort: self.effort,
+            acp_mode: self.acp_mode,
             service_tier: self.service_tier,
             additional_directories: self.additional_directories,
         };

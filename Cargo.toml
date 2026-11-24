@@ -85,6 +85,7 @@ process-wrap = { version = "8.2.1", default-features = false, features = ["tokio
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { version = "0.8", default-features = false, features = ["json", "http1", "http2", "tokio", "ws", "query"] }
+tokio = { version = "1", features = ["test-util"] }
 prost = "0.14"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
@@ -95,4 +96,9 @@ nix = { version = "0.31", features = ["term"] }
 [[test]]
 name = "claude_reset"
 path = "tests/claude_reset.rs"
+harness = false
+
+[[test]]
+name = "acp_deadlines"
+path = "tests/acp_deadlines.rs"
 harness = false

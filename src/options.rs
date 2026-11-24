@@ -246,6 +246,19 @@ pub(crate) fn acp_model_option(info: &Value) -> Option<&Value> {
         .find(|opt| opt["category"] == "model" || opt["id"] == "model")
 }
 
+pub(crate) fn acp_mode_advertised(info: &Value, runtime: &str, mode: &str) -> bool {
+    if let Some(modes) = info["modes"]["availableModes"].as_array() {
+        return modes.iter().any(|entry| entry["id"] == mode);
+    }
+    // Earlier Kimi ACP versions expose set_mode choices only as config options.
+    runtime == "kimi"
+        && info["configOptions"]
+            .as_array()
+            .and_then(|options| options.iter().find(|option| option["id"] == "mode"))
+            .and_then(|option| option["options"].as_array())
+            .is_some_and(|values| values.iter().any(|entry| entry["value"] == mode))
+}
+
 pub(crate) fn acp_effort_option(info: &Value, cursor: bool) -> Option<&Value> {
     if cursor && let Some(option) = crate::cursor_models::effort(info) {
         return Some(option);
@@ -401,6 +414,9 @@ pub struct SessionSettings {
     pub exclude_user_configuration: std::collections::BTreeSet<UserConfigurationCategory>,
     pub name: Option<String>,
     pub effort: Option<String>,
+    /// Native ACP session mode to select on each open, including resume.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acp_mode: Option<String>,
     pub service_tier: Option<String>,
     pub additional_directories: Vec<PathBuf>,
     /// Native final-output JSON Schema for turns started by this host.
@@ -411,6 +427,15 @@ impl SessionSettings {
     pub(crate) fn validate(&self, protocol: crate::Protocol, runtime: &str) -> Result<()> {
         availability::validate(self, protocol, runtime)?;
         instructions::validate(self, protocol, runtime)?;
+        if self
+            .acp_mode
+            .as_deref()
+            .is_some_and(|mode| mode.trim().is_empty() || mode.contains('\0'))
+        {
+            return Err(Error::Refused(
+                "ACP mode requires a nonempty native ID without NUL".into(),
+            ));
+        }
         if self
             .effort
             .as_ref()

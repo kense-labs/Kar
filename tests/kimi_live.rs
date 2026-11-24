@@ -111,6 +111,31 @@ async fn serve_chat(store: &ChatStore, id: Uuid) -> (String, tokio::task::JoinHa
     )
 }
 
+async fn check_acp_mode(chat: &kar::chat::ChatSession) {
+    assert_eq!(chat.info().settings.acp_mode.as_deref(), Some("default"));
+    let mut stream = chat.subscribe(None).unwrap();
+    let mut request = None;
+    let end = chat.snapshot().cursor.unwrap().after_seq;
+    while let Some(record) = stream.next().await {
+        let frame = &record.native;
+        if record.direction == kar::Direction::ToRuntime && frame["method"] == "session/set_mode" {
+            assert_eq!(frame["params"]["modeId"], "default");
+            assert_eq!(frame["params"]["sessionId"], chat.info().native_id);
+            request = Some(frame["id"].clone());
+        } else if record.direction == kar::Direction::FromRuntime
+            && request.as_ref() == frame.get("id")
+            && request.is_some()
+        {
+            assert!(frame["result"].is_object(), "{frame}");
+            return;
+        }
+        if record.seq == end {
+            break;
+        }
+    }
+    panic!("native ACP set_mode receipt missing from this open");
+}
+
 async fn exercise(kap: bool) {
     let requests = Requests::default();
     let app = Router::new()
@@ -158,6 +183,8 @@ async fn exercise(kap: bool) {
     opts.settings.additional_directories.push(extra.clone());
     if kap {
         opts.settings.append_system_prompt = Some("KAP_APPEND_INSTRUCTION".into());
+    } else {
+        opts.settings.acp_mode = Some("default".into());
     }
     opts.model = Some("fixture".into());
     opts.approvals = kar::ApprovalMode::Host;
@@ -194,6 +221,7 @@ async fn exercise(kap: bool) {
     }
     if !kap {
         assert_eq!(session.info().protocol, Protocol::Acp);
+        check_acp_mode(&session).await;
         let id = session.info().id;
         session
             .send(Uuid::new_v4(), "KAP_SECOND before ACP restart")
@@ -214,6 +242,7 @@ async fn exercise(kap: bool) {
             .resume_with(id, |o| o.env = opts.env.clone())
             .await
             .unwrap();
+        check_acp_mode(&resumed).await;
         resumed
             .send(Uuid::new_v4(), "KAP_SECOND after ACP restart")
             .await
