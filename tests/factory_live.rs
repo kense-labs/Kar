@@ -6,6 +6,12 @@ mod busy_prompt;
 mod declaration;
 #[path = "support/mid_turn_steer.rs"]
 mod mid_turn_steer;
+#[cfg(unix)]
+#[path = "factory_live/queue_crash.rs"]
+mod queue_crash;
+#[cfg(unix)]
+#[path = "support/sse.rs"]
+mod sse;
 
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command};
@@ -119,7 +125,14 @@ async fn completion(State(model): State<Model>, Json(body): Json<Value>) -> impl
         .and_then(|m| m.iter().rev().find(|m| m["role"] == "user"))
         .map(|m| m["content"].to_string())
         .unwrap_or_default();
-    let delta = if main && mcp_prompt.contains("KAR_FACTORY_MCP") {
+    let delta = if main && mcp_prompt.contains("KAR_RECEIPT_") {
+        if mcp_prompt.contains("KAR_RECEIPT_FIRST") {
+            let mut released = model.release.subscribe();
+            model.held.notify_one();
+            released.wait_for(|allow| *allow).await.unwrap();
+        }
+        json!({"content":"receipt probe complete"})
+    } else if main && mcp_prompt.contains("KAR_FACTORY_MCP") {
         if body["messages"]
             .as_array()
             .and_then(|m| m.last())

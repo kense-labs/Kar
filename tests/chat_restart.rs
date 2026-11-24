@@ -951,6 +951,18 @@ async fn live_feed() {
         }
     }
     assert_eq!(two.turns().last().unwrap().status, TurnStatus::Running);
+    {
+        let reader = fs::File::open(base.join("store").join(format!("{id}.karchat"))).unwrap();
+        reader.lock_shared().unwrap();
+        let snapshot = tokio::time::timeout(Duration::from_secs(3), remote.snapshot())
+            .await
+            .expect("a second reader blocked a live HTTP snapshot")
+            .unwrap();
+        assert_eq!(
+            snapshot.history.turns.last().unwrap().status,
+            TurnStatus::Running
+        );
+    }
     drop(b);
     fs::write(base.join("native/release-stream-tool"), "").unwrap();
     assert!(sending.wait().unwrap().success());

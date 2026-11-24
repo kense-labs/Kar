@@ -2,45 +2,12 @@
 //! a shared journal lock then keeps the receipt out of Kar until the CLI dies.
 use super::*;
 use kar::chat::InputStatus;
-use nix::{
-    sys::signal::{Signal, killpg},
-    unistd::{Pid, getpgid},
-};
+#[path = "../support/native_group.rs"]
+mod native_group;
+use native_group::{NativeGroup, wait};
+use nix::sys::signal::Signal;
 use std::{fs, path::Path, process::Stdio};
 use tokio::io::{AsyncBufReadExt, BufReader};
-
-struct NativeGroup(Pid);
-impl NativeGroup {
-    fn of(controller: u32) -> Self {
-        let children = std::process::Command::new("pgrep")
-            .args(["-P", &controller.to_string()])
-            .output()
-            .unwrap();
-        assert!(children.status.success(), "DSH controller has no child");
-        let pid = String::from_utf8(children.stdout).unwrap();
-        let pid = Pid::from_raw(pid.trim().parse().expect("one native process group"));
-        assert_eq!(getpgid(Some(pid)).unwrap(), pid);
-        Self(pid)
-    }
-    fn signal(&self, signal: Signal) {
-        killpg(self.0, signal).unwrap();
-    }
-}
-impl Drop for NativeGroup {
-    fn drop(&mut self) {
-        let _ = killpg(self.0, Signal::SIGKILL);
-    }
-}
-
-async fn wait(mut ready: impl FnMut() -> bool, what: &str) {
-    tokio::time::timeout(Duration::from_secs(20), async {
-        while !ready() {
-            tokio::time::sleep(Duration::from_millis(15)).await;
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
-}
 
 // Only complete JSONL lines can serve as independent proof at this cut.
 fn native_turn(path: &Path, request: Uuid) -> Option<(u64, Option<Value>)> {

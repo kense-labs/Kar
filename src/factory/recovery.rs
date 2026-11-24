@@ -114,13 +114,18 @@ fn message(row: &Value, edits: &mut Vec<ChatEdit>, projection: &mut Projection) 
     Some(())
 }
 
-fn completed(
+enum Transcript {
+    Admitted,
+    Settled(Vec<ChatEdit>),
+}
+
+fn read_turn(
     path: &Path,
     session: &str,
     cwd: &Path,
     turn: &str,
     prompt: &str,
-) -> Result<Option<Vec<ChatEdit>>> {
+) -> Result<Option<Transcript>> {
     let file = File::open(path)?;
     let cut = file.metadata()?.len();
     let mut reader = BufReader::new(file.take(cut));
@@ -130,13 +135,15 @@ fn completed(
     let mut previous: Option<(String, u64)> = None;
     let mut edits = Vec::new();
     let mut projection = Projection::default();
-    let mut line = String::new();
+    let mut line = Vec::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line)? == 0 || !line.ends_with('\n') {
-            return Ok(None);
+        if reader.read_until(b'\n', &mut line)? == 0 || !line.ends_with(b"\n") {
+            // The opener carries the exact submitted messageId even when the
+            // process never writes its outcome. Later rows may be incomplete.
+            return Ok(previous.is_some().then_some(Transcript::Admitted));
         }
-        let Ok(row) = serde_json::from_str::<Value>(&line) else {
+        let Ok(row) = serde_json::from_slice::<Value>(&line) else {
             return Ok(None);
         };
         if row["type"] == "agent_turn_outcome" && previous.is_some() {
@@ -149,7 +156,7 @@ fn completed(
             let mut events = Vec::new();
             terminal(reason, None, &mut events);
             edits.extend(events.into_iter().map(|event| ChatEdit::Activity { event }));
-            return Ok(Some(edits));
+            return Ok(Some(Transcript::Settled(edits)));
         }
         if row["type"] != "message" {
             continue;
@@ -169,14 +176,21 @@ fn completed(
                 return Ok(None);
             }
         } else {
-            let texts = msg["content"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|b| b["type"] == "text")
-                .filter_map(|b| b["text"].as_str())
-                .collect::<String>();
-            if msg["role"] != "user" || texts != prompt {
+            let Some(blocks) = msg["content"].as_array() else {
+                return Ok(None);
+            };
+            if msg["role"] != "user"
+                || msg.get("visibility").is_some()
+                || blocks.is_empty()
+                || !blocks
+                    .iter()
+                    .all(|b| b["type"] == "text" && b["text"].is_string())
+                || blocks
+                    .iter()
+                    .filter_map(|b| b["text"].as_str())
+                    .collect::<String>()
+                    != prompt
+            {
                 return Ok(None);
             }
         }
@@ -209,12 +223,16 @@ pub(crate) async fn recover(
         let Some(path) = locate(&dir, &root_id, &workspace)? else {
             return Ok(None);
         };
-        completed(&path, &root_id, &workspace, &request, &input)
+        read_turn(&path, &root_id, &workspace, &request, &input)
     })
     .await
     .map_err(|e| Error::Closed(e.to_string()))??;
-    let Some(edits) = captured else {
-        return Ok(None);
+    let edits = match captured {
+        Some(Transcript::Settled(edits)) => edits,
+        Some(Transcript::Admitted) if !local.input_sent || local.native_turn_id.is_none() => {
+            Vec::new()
+        }
+        _ => return Ok(None),
     };
     ChatFrame::transcript(
         journal,
@@ -234,7 +252,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn only_restore_a_complete_contiguous_turn_in_its_workspace() {
+    fn distinguish_a_matching_native_opener_from_a_completed_turn() {
         let dir = tempfile::tempdir().unwrap();
         let cwd = std::fs::canonicalize(dir.path()).unwrap();
         let root = uuid::Uuid::new_v4().to_string();
@@ -250,10 +268,49 @@ mod tests {
             for row in rows {
                 writeln!(f, "{row}").unwrap();
             }
-            completed(&file, session, &cwd, &turn, prompt).unwrap()
+            read_turn(&file, session, &cwd, &turn, prompt).unwrap()
         };
-        assert!(read(&rows, &root, "hello").is_some());
-        assert!(read(&rows[..3], &root, "hello").is_none());
+        assert!(matches!(
+            read(&rows, &root, "hello"),
+            Some(Transcript::Settled(_))
+        ));
+        assert!(matches!(
+            read(&rows[..3], &root, "hello"),
+            Some(Transcript::Admitted)
+        ));
+        assert!(matches!(
+            read(&rows[..2], &root, "hello"),
+            Some(Transcript::Admitted)
+        ));
+        assert!(read(&rows[..1], &root, "hello").is_none());
+        let mut partial = rows[..2].to_vec();
+        partial[1]["id"] = json!(uuid::Uuid::new_v4());
+        assert!(read(&partial, &root, "hello").is_none());
+        partial[1] = rows[1].clone();
+        partial[1]["message"]["visibility"] = json!("hidden");
+        assert!(read(&partial, &root, "hello").is_none());
+        partial[1] = rows[1].clone();
+        partial[1]["message"]["content"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"tool_result","content":"other"}));
+        assert!(read(&partial, &root, "hello").is_none());
+        assert!(matches!(
+            read(&rows[..2], &root, "hello"),
+            Some(Transcript::Admitted)
+        ));
+        // Even an interrupted UTF-8 code point in the next row cannot erase
+        // the already persisted input or provide a terminal outcome.
+        File::options()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(b"{\"text\":\"\xe4")
+            .unwrap();
+        assert!(matches!(
+            read_turn(&file, &root, &cwd, &turn, "hello").unwrap(),
+            Some(Transcript::Admitted)
+        ));
         assert!(read(&rows, &root, "different").is_none());
         assert!(read(&rows, "unrelated", "hello").is_none());
         for (index, key, value) in [
@@ -266,7 +323,7 @@ mod tests {
             assert!(read(&broken, &root, "hello").is_none());
         }
         assert!(
-            completed(&file, &root, &cwd.join("other-workspace"), &turn, "hello")
+            read_turn(&file, &root, &cwd.join("other-workspace"), &turn, "hello")
                 .unwrap()
                 .is_none()
         );

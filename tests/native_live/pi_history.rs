@@ -3,6 +3,8 @@ use super::abort_turn;
 mod adapter_queue;
 #[path = "../support/busy_prompt.rs"]
 mod busy_prompt;
+#[path = "../support/chat_replay.rs"]
+mod chat_replay;
 #[path = "pi_history/extension_runs.rs"]
 mod extension_runs;
 use super::{interrupted_copy, respond_in_workspace, sse::SseClient};
@@ -1056,28 +1058,8 @@ async fn public_prompt_readbacks() {
 #[tokio::test]
 #[ignore = "requires KAR_PI_BIN; hard-kills a Kar CLI during a real Pi model request"]
 async fn queued_inputs_and_two_http_clients_survive_controller_kill() {
-    use kar::chat::{ChatCursor, InputStatus};
-
-    async fn serve(store: &ChatStore, id: Uuid) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let router = kar::chat::event_router(store.clone(), id);
-        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        (url, server)
-    }
-    async fn receive(
-        sub: &mut SseClient,
-        replica: &mut ChatReplica,
-        observed: &mut Vec<Value>,
-        through: ChatCursor,
-    ) {
-        while replica.cursor() != through {
-            let event = sub.next().await;
-            observed.push(serde_json::to_value(&event).unwrap());
-            assert!(replica.apply(event.clone()).unwrap());
-            assert!(!replica.apply(event).unwrap());
-        }
-    }
+    use chat_replay::{receive, serve};
+    use kar::chat::InputStatus;
 
     let f = fixture(true).await;
     let path = f.temp.path().join("chats");

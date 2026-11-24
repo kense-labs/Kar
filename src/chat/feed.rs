@@ -204,6 +204,21 @@ impl ChatStore {
     // interruption even when several readers notice a killed process at the same time.
     fn settle_abandoned(&self, chat: Uuid) -> Result<bool> {
         let lease = File::open(self.dir.join(format!("{chat}.lock")))?;
+        let has_controller = || -> Result<bool> {
+            match lease.try_lock_shared() {
+                Ok(()) => {
+                    lease.unlock()?;
+                    Ok(false)
+                }
+                Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+                Err(std::fs::TryLockError::Error(err)) => Err(err.into()),
+            }
+        };
+        // A live snapshot only reads committed records. Other readers may
+        // still hold a shared journal lock while the controller is active.
+        if has_controller()? {
+            return Ok(true);
+        }
         let mut file = match File::options().read(true).write(true).open(self.path(chat)) {
             Ok(file) => file,
             // Read-only mounts can follow all durable events. A writable observer or
@@ -219,10 +234,9 @@ impl ChatStore {
             Err(e) => return Err(e.into()),
         };
         log::with_lock(&mut file, true, |file| {
-            match lease.try_lock_shared() {
-                Ok(()) => lease.unlock()?,
-                Err(std::fs::TryLockError::WouldBlock) => return Ok(true),
-                Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+            // A new controller may have opened while we waited for the journal.
+            if has_controller()? {
+                return Ok(true);
             }
             let (state, valid) = log::read_locked(file, chat)?;
             if state.needs_controller() {
