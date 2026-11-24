@@ -1789,6 +1789,19 @@ impl Session {
             .await
             .map(|_| ())
     }
+    /// Mark live background work on this controller; the native model turn may already have ended.
+    pub async fn await_background_tasks(
+        &self,
+        req: crate::BackgroundWaitRequest,
+    ) -> Result<crate::BackgroundWaitReceipt> {
+        if self.protocol != Protocol::Claude {
+            return Err(Error::Unsupported("background waits on this runtime".into()));
+        }
+        req.validate()?;
+        let receipt = self.rpc("kar/background/wait", serde_json::to_value(req)?).await?;
+        Ok(serde_json::from_value(receipt)?)
+    }
+
     /// Stop the selected running workflow in its original Claude process.
     pub async fn stop_workflow(&self, id: &str, occurrence: crate::Cursor) -> Result<()> {
         if self.protocol() != Protocol::Claude {

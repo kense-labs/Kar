@@ -193,6 +193,8 @@ pub struct ChatHistory {
     pub goal: Option<Option<crate::GoalSnapshot>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<crate::NativeTask>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub background_working: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<crate::ContextUsage>,
     /// Latest reported token usage per controller stream, in open order.
@@ -389,6 +391,8 @@ impl ChatStore {
                 match lease.try_lock_shared() {
                     Ok(()) => {
                         lease.unlock()?;
+                        let tasks = crate::tasks::background::controller_lost(&state.tasks);
+                        crate::tasks::merge(&mut state.tasks, tasks);
                         state.pending_requests.clear();
                         state.interrupt_notifications();
                         state.unconfirm_steering();
@@ -424,6 +428,7 @@ impl ChatStore {
             chat: state.info,
             turns: state.turns,
             goal: state.goal,
+            background_working: state.tasks.iter().any(crate::NativeTask::blocking_background),
             tasks: state.tasks,
             notifications: state.notifications,
             context_usage: state.context_usage,
@@ -686,6 +691,7 @@ impl ChatSession {
             cursor: log.state.cursor(),
             turns: log.state.turns.clone(),
             goal: log.state.goal.clone(),
+            background_working: log.state.tasks.iter().any(crate::NativeTask::blocking_background),
             tasks: log.state.tasks.clone(),
             notifications: log.state.notifications.clone(),
             context_usage: log.state.context_usage.clone(),
@@ -741,6 +747,14 @@ impl ChatSession {
         let log = self.sender.sink.0.lock().unwrap();
         log.healthy()?;
         Ok(log.state.tasks.clone())
+    }
+    pub async fn await_background_tasks(
+        &self,
+        req: crate::BackgroundWaitRequest,
+    ) -> Result<crate::BackgroundWaitReceipt> {
+        let receipt = self.sender.session.await_background_tasks(req).await?;
+        self.sender.sink.0.lock().unwrap().healthy()?;
+        Ok(receipt)
     }
     pub async fn stop_task(&self, id: &str) -> Result<()> {
         self.sender.session.stop_task(id).await

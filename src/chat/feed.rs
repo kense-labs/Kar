@@ -143,6 +143,9 @@ impl ChatReplica {
     pub fn notifications(&self) -> &[super::ChatNotification] {
         &self.state.notifications
     }
+    pub fn background_working(&self) -> bool {
+        self.state.tasks.iter().any(crate::NativeTask::blocking_background)
+    }
     pub fn tasks(&self) -> &[crate::NativeTask] {
         &self.state.tasks
     }
@@ -172,6 +175,7 @@ impl ChatReplica {
 pub struct ChatFeed {
     store: ChatStore,
     may_be_running: bool,
+    may_have_background: bool,
     may_have_requests: bool,
     may_have_compaction: bool,
     may_have_notification: bool,
@@ -222,6 +226,7 @@ impl ChatStore {
         Ok(ChatFeed {
             store: self.clone(),
             may_be_running: true,
+            may_have_background: true,
             may_have_requests: true,
             may_have_compaction: true,
             may_have_notification: true,
@@ -275,6 +280,10 @@ impl ChatStore {
                 file.set_len(valid)?;
                 file.seek(SeekFrom::Start(valid))?;
             }
+            let tasks = crate::tasks::background::controller_lost(&state.tasks);
+            if !tasks.is_empty() {
+                log::append_locked(file, &ChatUpdate::TasksChanged { tasks })?;
+            }
             if let Some(report) = state.abandoned_compaction() {
                 log::append_locked(file, &ChatUpdate::ManualCompaction { report })?;
             }
@@ -326,6 +335,9 @@ impl ChatFeed {
                     ChatUpdate::RequestsChanged { requests } => {
                         self.may_have_requests = !requests.is_empty()
                     }
+                    ChatUpdate::TasksChanged { tasks } => {
+                        self.may_have_background |= tasks.iter().any(crate::NativeTask::pending_background);
+                    }
                     ChatUpdate::ManualCompaction { report } => {
                         self.may_have_compaction = report.status.is_pending()
                     }
@@ -349,6 +361,7 @@ impl ChatFeed {
                             matches!(event.update, ChatUpdate::MorphReattached { .. });
                         self.may_have_notification = false;
                         self.may_have_steering = false;
+                        self.may_have_background = false;
                         self.may_have_requests = false;
                         self.may_have_compaction = false;
                     }
@@ -381,6 +394,7 @@ impl ChatFeed {
             let cursor = self.cursor;
             let store = self.store.clone();
             let check_owner = self.may_be_running
+                || self.may_have_background
                 || self.may_have_requests
                 || self.may_have_compaction
                 || self.may_have_notification
@@ -400,6 +414,7 @@ impl ChatFeed {
                 .await
                 .map_err(|e| Error::Closed(e.to_string()))??;
             if !self.may_be_running && self.ready.is_empty() {
+                self.may_have_background = false;
                 self.may_have_notification = false;
                 self.may_have_steering = false;
                 self.may_have_requests = false;

@@ -273,6 +273,7 @@ impl State {
     pub fn needs_controller(&self) -> bool {
         self.active().is_some()
             || !self.pending_requests.is_empty()
+            || self.tasks.iter().any(crate::NativeTask::pending_background)
             || self.compacting()
             || self.observing_notifications()
             || self.waiting_steering()
@@ -1351,6 +1352,10 @@ impl Log {
         result
     }
     pub fn settle_abandoned_controls(&mut self) -> Result<()> {
+        let tasks = crate::tasks::background::controller_lost(&self.state.tasks);
+        if !tasks.is_empty() {
+            self.commit(ChatUpdate::TasksChanged { tasks })?;
+        }
         if let Some(report) = self.state.abandoned_compaction() {
             self.commit(ChatUpdate::ManualCompaction { report })?;
         }

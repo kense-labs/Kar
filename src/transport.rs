@@ -1,3 +1,4 @@
+mod background;
 mod codex_admission;
 mod codex_processes;
 mod codex_queue;
@@ -312,6 +313,7 @@ pub(crate) struct Launch {
 
 pub(crate) struct Actor {
     output_schema: Option<serde_json::Map<String, Value>>,
+    background: background::ClaudeBackground,
     acp_failures: wire::failure::AcpFailures,
     superseding: SupersedingPrompts,
     grok: Option<GrokTurns>,
@@ -397,6 +399,7 @@ impl Actor {
             startup_stderr.spawn(crate::process::diagnostic::startup_tail(stderr, sensitive));
         }
         let actor = Self {
+            background: Default::default(),
             close_ack: None,
             protocol: runtime.protocol,
             usage: wire::usage::Projection::new(
@@ -1078,6 +1081,14 @@ impl Actor {
             Command::Close(tx) => {
                 self.close_ack = Some((self.journal.request_dispose(), tx));
                 return Ok(false);
+            }
+            Command::Rpc(method, params, _, tx) if method == background::WAIT => {
+                if !tx.is_closed() {
+                    let result = serde_json::from_value(params).map_err(Error::from)
+                        .and_then(|req| self.background_wait(req))
+                        .and_then(|receipt| serde_json::to_value(receipt).map_err(Error::from));
+                    let _ = tx.send(result);
+                }
             }
             Command::Rpc(method, params, open, tx) => {
                 if self.protocol == Protocol::Claude
@@ -2963,6 +2974,9 @@ impl Actor {
             if outcome.is_some() {
                 self.pi_independent = None;
             }
+        }
+        if is_root {
+            self.background_frame(&v, &mut events);
         }
         // A correlated wire reply is native evidence. The host's admission
         // decision is a separate response with its own sequence position.

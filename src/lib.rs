@@ -92,7 +92,7 @@ pub use usage::{
     AgentTokens, CacheWriteByTtl, SessionUsage, TokenReading, TokenTotals, UsageSnapshot,
 };
 mod tool_activity;
-pub use tasks::{NativeTask, TaskChange, TaskDetails, TaskStatus, TaskType};
+pub use tasks::{BackgroundKind, BackgroundWaitReceipt, BackgroundWaitRequest, BackgroundWork, NativeTask, TaskChange, TaskDetails, TaskStatus, TaskType};
 pub use tool_activity::{ChangeKind, FileChange, OutputPart, ToolResult, ToolStatus};
 #[cfg(not(target_arch = "wasm32"))]
 mod dsh;
