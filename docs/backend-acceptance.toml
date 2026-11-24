@@ -1,0 +1,127 @@
+# Kar 后端验收基线
+# 本文件固定验收口径。实现进度和实机结果另行逐项记录。
+product = "Kar"
+implementation = "Kar 自有后端、适配器、持久化、CLI 和服务逻辑使用纯 Rust。供应商原生程序通过其协议接入。"
+priority = "先完成同一聊天的多客户端实时订阅、断线续收和控制器重启恢复，再持续完成其余可做的后端项。"
+excluded_validation = ["Windows 实机验证"]
+statuses = ["已验收", "未完成或失败", "供应商不支持", "缺环境待验证", "本轮排除：Windows 实机验证"]
+
+[baseline.runtime]
+version = "0.130.1"
+commit = "2b15859a13dcc50e8b66cbaee5a007832aa00e08"
+initial_version = "0.129.1"
+initial_commit = "2582c9018b539b43a7fa271201ddbc80691ad209"
+includes = ["发布包的公开后端契约及 CLI", "docs/spec", "docs/runtimes 中实际提供的适配器", "sea-trial/cases/suite.ts 注册的 20 个公共用例", "sea-trial/vendor 中适用的供应商断言"]
+
+[baseline.workbench]
+commit = "2808e878de91aacc7fb82887f18414976be7ae34"
+includes = ["聊天事件与会话恢复", "Git 检查点", "按回合回滚", "按回合分叉"]
+
+# 公共用例 ID 与固定版本的 suite 一一对应。专有断言以对应供应商文件为准。
+[shared_cases]
+"installation.snapshot" = "查询安装快照；可用的命令型安装能定位可执行文件，不支持时返回原因。"
+"account-usage.snapshot" = "查询支持的账号额度；核对结果类型、原生窗口和使用比例范围。"
+"session.query-readbacks-carry-stream-seq" = "显式传入和省略输入 UUID 各跑一轮，核对原值或自动生成值；模型、用量和上下文读回均返回值及各自已消费的最后记录序号。"
+"session.framing-and-attribution" = "执行完整回合，核对请求、答复、原生事件、会话与 agent 归属以及结束边界。"
+"session.single-active-turn" = "在慢回合执行中再发普通输入，检验第二次请求的拒绝与第一轮的正常结算。"
+"session.abort-settles-and-is-idempotent" = "中止运行中的回合并重复中止，检查回执、终态和后续操作。"
+"session.steer-after-end" = "回合结束后尝试插话，检查返回拒绝。"
+"session.observer-isolation" = "一个观察者在回调中失败，另一个仍收到后续事件，原回合正常完成。"
+"session.multi-turn-conversation" = "在同一会话运行多个回合，核对会话身份、终态与全程递增的记录序号。"
+"session.steer-mid-turn" = "在活动回合插话，保存原生接纳或拒绝；核对该动作与原回合的终态。"
+"session.queue-runs-after-turn" = "慢回合中排入下一条消息；先结束第一轮，再观察到排队输入自己的回合结束。"
+"session.cursor-replays-without-loss-or-duplication" = "用已提交序号重订阅，逐条比较其后的历史和随后的实时记录。"
+"session.dispose-is-recorded" = "关闭会话，核对关闭请求和对应的退出或释放回执，检查此后的控制被拒绝。"
+"session.resume-or-loud-rejection" = "用原生 ID 恢复并续聊；不支持恢复的实现须明确说明恢复失败。"
+"session.capabilities-match-declaration" = "逐项对比安装时能力声明和打开后的实测行为，对受版本或握手限制的能力分别验证。"
+"session.dispose-mid-turn-settles" = "执行慢回合时关闭，核对在用例规定时限内完成、对应回执以及关闭后的拒绝。"
+"session.effort-never-substituted" = "请求未列出的推理强度；原生拒绝时须明确返回，若原生允许则读回值须与请求完全相同。"
+"session.effort-listed-levels-apply-across-resume" = "对声明可选的档位分别设置并恢复会话，核对原生确认的值。"
+"session.images-travel-with-input" = "发送带图输入并覆盖仅图片和空输入，检查图像归属及能力匹配的拒绝。"
+"session.withdraw-before-dispatch" = "消息投递前撤回，核对回执、队列状态和原生执行次数。"
+
+[release_delta]
+kimi = "输入分片和最终工具参数各自只归并一次；回合中止清除待处理插话，插话间隙可中止；启动失败能及时返回并释放计时器。"
+agents = "供应商提供子任务所用模型时，核对其只归到相应子任务；未上报时保留未知。"
+credentials = "用隔离测试凭据验证 Pi 的私有启动配置和 Claude 在适用平台的私有文件传递；检查日志、参数和跨会话泄露。"
+resume = "模拟慢速 ACP 恢复、Grok 打开及超时拒绝，验证固定版本的等待边界和出错后的清理。"
+inventory = "在有对应版本时核对 Antigravity 1.5.14、1.5.15 的工作区技能发现；无版本时保留可复跑的协议测试及环境记录。"
+browser_cli = "用嵌套调用对比浏览器持久化工具输入；分别从 CLI 指定不同运行时，核对真正收到请求的运行时。"
+
+[baseline.kar]
+commit = "3096cd44610cce028549ac728a5ab4f789aafe69"
+file = "README.md"
+blob = "efccc4b93611fcbb8456fdf5da92fb54f6fa3ce3"
+sections = ["跨重启聊天", "适配器与验证范围", "后端能力与支持范围"]
+domains = ["聊天时间线与断线恢复", "审批与提问", "代码审阅", "工作区与模型设置", "会话续写与分叉", "子任务与并行 agent", "用量与长任务", "安装与运维"]
+
+[results]
+columns = ["上游契约、用例 ID 或供应商断言位置", "Kar 验收编号及功能", "供应商、版本及传输", "适用平台", "步骤及期望", "Kar 提交", "复验命令或测试名", "观察结果与证据", "状态"]
+passed = "给出正常入口的可重跑证据和实际结果。协议模拟和实机结果分别标注。"
+unsupported = "记录特定供应商和版本的协议、源码或原生拒绝证据，验证 Kar 对外准确表达该限制。只有相应协议确实无法提供且在 Kar 侧无法可靠实现时，才能使用此状态。"
+environment = "明确缺失的程序、账号、平台或部署，列出已做的替代验证和取得环境后的复验命令。未执行的实机测试保留待验证。"
+unfinished = "任何可实现、可修复或能在现有环境核验的缺口继续做。只有 Windows 实机验证排除，其他平台环境缺失须列出。"
+regression = ["cargo fmt --all -- --check", "cargo clippy --locked --all-targets -- -D warnings", "cargo test --locked"]
+closure = "核对所有适用条目及此后 Kar 已有进展，逐项报告已验收及证据、供应商不支持、缺环境待验证、Windows 实机排除；收尾时所有可做的实现与验证均须完成。"
+next_checklist_after_closure = "backend-workbench-acceptance.toml"
+handoff = "主线程先按本清单完成第一阶段并记录验收结果，再继续执行同目录的第二阶段清单。"
+
+[[checks]]
+id = "realtime"
+area = "实时推送与回放"
+acceptance = "在两个独立客户端订阅同一聊天，混入消息、流式工具、回合结束；分别断线，期间继续产生事件并重启控制器。从各自最后已提交的游标续收，与持久化事件逐项比对身份、顺序、内容和数量；两端时间线一致，无遗漏、重复或跨会话串流。"
+
+[[checks]]
+id = "restart"
+area = "聊天恢复与历史"
+acceptance = "运行两轮以上并在回合中强制结束控制器。按聊天 ID 回到原工作目录和原生会话，核对用户与助手消息、推理、工具归属、终态和原生回显去重，再成功续聊。历史不足、会话失效、目录冲突和权限拒绝分别返回可判定的结果。"
+
+[[checks]]
+id = "queue"
+area = "原生输入与队列"
+acceptance = "用不同 UUID 排队多条，在发送前、供应商已接收而本地回执未落盘、回执落盘后三处重启；核对原会话收到的顺序、次数和请求身份。重复提交同一 UUID 返回同一结果；已投递不重发，可确认未投递的按序续送，结果不明且无原生幂等或对账依据时显式标记待确认。验证带图输入、同轮插话、撤回和中止的实际边界。"
+
+[[checks]]
+id = "checkpoints"
+area = "Git 检查点与回滚"
+acceptance = "隔离工作区做三轮已知增删改，覆盖未忽略的新文件、二进制和支持平台上的文件模式。逐轮核对文件清单及差异；恢复中间回合并比对文件树。核对工作区自身分支及暂存区，无关或冲突改动受保护；失败后可重试。"
+
+[[checks]]
+id = "fork"
+area = "回合分叉"
+acceptance = "连续三轮写入不同文件与上下文标记，选第二轮分叉，在新聊天核对文件、原生上下文及新输入的真实回复。第三轮内容不进入子聊天，父聊天仍可打开。验证失败与重试不会留下可误用的半成品；支持独立工作树的路径验证父子可并行修改而互不覆盖。"
+
+[[checks]]
+id = "interaction_settings"
+area = "审批、提问与设置"
+acceptance = "验证供应商适用的批准、拒绝、表单、策略更新、重连后待办和双客户端同时答复。原生操作只被结算一次。选模型、推理强度、服务等级、系统指令、目录、工具限制、MCP、结构化输出等分别验证生效值、恢复行为和原生拒绝。"
+
+[[checks]]
+id = "tools"
+area = "工具与审阅"
+acceptance = "触发并行、嵌套及迟到的调用，核对输入增量、输出、错误、退出码、补丁、最终文件和所属回合。MCP 验证发现与真实调用、取消、断开、双会话 ID 隔离；有目录刷新能力时检查刷新后的结果。"
+
+[[checks]]
+id = "agents"
+area = "子任务、并行 agent 与原生目标"
+acceptance = "运行父任务和并发子任务，核对父子边、事件归属和定向停止；兄弟任务可继续。创建、读回、更新和恢复受支持的原生目标，核对回执及重启后的状态。"
+
+[[checks]]
+id = "usage"
+area = "用量、额度、压缩与可观测性"
+acceptance = "用可对账的原生数据核对根及子任务 token、费用或额度窗口、重置回执、上下文用量及压缩完成后的续聊；验证离线回放和重连不重复计数。适用时核验模型请求、失败原因和进程资源，缺失数据保留未知。"
+
+[[checks]]
+id = "inventory"
+area = "发现、安装、账号与配置"
+acceptance = "对实际版本验证安装发现、版本门限、计划/执行、更新、登录/登出、凭据隔离、模型/技能/命令/工具目录及配置表单。通过正常 SDK 或 CLI 入口验证结果、拒绝原因和敏感值脱敏。"
+
+[[checks]]
+id = "lifecycle"
+area = "运行时、记录与宿主生命周期"
+acceptance = "逐一检查版本能力声明与握手/实测一致；验证打开、多轮、取消、关闭、重启、进程树清理、多会话隔离、记录导入/重放和游标一致性。包括社区 HTTP/WebSocket 后端、浏览器持久化存储及 Rust/Wasm 边界；按实际部署或浏览器验证其专有行为。"
+
+[[checks]]
+id = "coverage"
+area = "覆盖核销"
+acceptance = "把固定版本的每个适用公开契约、公共用例和供应商专有断言映射到具体 Kar 验收条目。逐行记录功能 × 供应商/版本/传输 × 适用平台、操作、可观察的期望、可重跑的命令/测试名、Kar 提交和实测证据。相同契约可复用测试，按供应商分别结算。检查遗漏的公开后端能力并按同一口径补齐。"
