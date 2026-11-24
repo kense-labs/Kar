@@ -39,17 +39,41 @@ impl ChatStore {
     fn fork_stage(&self, source: Uuid) -> PathBuf {
         self.dir.join(format!("{source}.forking"))
     }
-    pub(super) fn pending_fork(&self, source: Uuid) -> Result<Option<ForkOrigin>> {
+    fn staged_fork(&self, source: Uuid) -> Result<Option<ChatInfo>> {
         let file = match File::open(self.fork_stage(source)) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        log::staged_info(file)?
-            .forked_from
-            .filter(|f| f.chat == source)
-            .map(Some)
-            .ok_or_else(|| Error::Protocol("invalid staged fork".into()))
+        let staged = log::staged_info(file)?;
+        if staged.forked_from.as_ref().is_none_or(|f| f.chat != source) {
+            return Err(Error::Protocol("invalid staged fork".into()));
+        }
+        Ok(Some(staged))
+    }
+    pub(super) fn pending_fork(&self, source: Uuid) -> Result<Option<ForkOrigin>> {
+        Ok(self
+            .staged_fork(source)?
+            .and_then(|child| child.forked_from))
+    }
+
+    fn fork_options(&self, parent: &ChatInfo, mut opts: SessionOptions) -> Result<SessionOptions> {
+        if let Some(child) = self.staged_fork(parent.id)? {
+            // Per-provider credentials, MCP endpoints and launch arguments belong to the
+            // live route. A switched parent cannot supply them to a different runtime.
+            if child.runtime != parent.runtime
+                || child.protocol != parent.protocol
+                || child.program != parent.program
+            {
+                opts = child.options();
+            } else {
+                opts.model = child.model;
+                opts.settings = child.settings;
+                opts.approvals = child.approvals;
+                opts.unset_env.extend(child.unset_env);
+            }
+        }
+        Ok(opts)
     }
     pub(super) fn require_no_pending_fork(&self, source: Uuid) -> Result<()> {
         if let Some(f) = self
@@ -74,7 +98,7 @@ impl ChatStore {
         configure: impl FnOnce(&mut SessionOptions),
     ) -> Result<ChatSession> {
         let log = self.open_controller(source).await?;
-        let mut opts = log.state.info.options();
+        let mut opts = self.fork_options(&log.state.info, log.state.info.options())?;
         configure(&mut opts);
         self.fork_from(Sink(Arc::new(Mutex::new(log))), turn, opts, None)
             .await
@@ -87,7 +111,7 @@ impl ChatStore {
         checkout: impl Into<PathBuf>,
     ) -> Result<ChatSession> {
         let log = self.open_controller(source).await?;
-        let opts = log.state.info.options();
+        let opts = self.fork_options(&log.state.info, log.state.info.options())?;
         self.fork_from(
             Sink(Arc::new(Mutex::new(log))),
             turn,
@@ -150,7 +174,7 @@ impl ChatStore {
             return Ok(published);
         }
         let request = Request::claim(self, source, turn, child_id, path, lease)?;
-        let (source, mut opts) = match live {
+        let (source, opts) = match live {
             Some(controller) => controller,
             None => {
                 let log = self.open_controller(source).await?;
@@ -158,6 +182,7 @@ impl ChatStore {
                 (Sink(Arc::new(Mutex::new(log))), opts)
             }
         };
+        let mut opts = self.fork_options(&source.0.lock().unwrap().state.info, opts)?;
         configure(&mut opts);
         crate::stream::retention::check_limit(opts.retained_bytes)?;
         let store = self.clone();
@@ -263,7 +288,7 @@ impl ChatStore {
         checkout: Option<PathBuf>,
         request: Option<Request>,
     ) -> Result<ChatSession> {
-        let parent = {
+        let mut parent = {
             let log = source.0.lock().unwrap();
             if log.state.pending_handoff().is_some() {
                 return Err(Error::Busy);
@@ -273,6 +298,14 @@ impl ChatStore {
         let _pin = parent.pin_worktree()?;
         opts.cwd = parent.workspace.clone();
         opts.resume = None;
+        let stage = self.fork_stage(parent.id);
+        let staged_info = self.staged_fork(parent.id)?;
+        if let Some(staged) = &staged_info {
+            let origin = staged.forked_from.as_ref().expect("validated staged fork");
+            parent.runtime.clone_from(&staged.runtime);
+            parent.protocol = staged.protocol;
+            parent.native_id.clone_from(&origin.native_source);
+        }
         let opencode = parent.protocol == Protocol::Acp && parent.runtime == "opencode";
         if !opencode
             && !matches!(
@@ -285,13 +318,6 @@ impl ChatStore {
                 parent.runtime
             )));
         }
-        let stage = self.fork_stage(parent.id);
-        let read_stage = || match File::open(&stage) {
-            Ok(file) => log::staged_info(file).map(Some),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
-        };
-        let staged_info = read_stage()?;
         let stable = request.is_some();
         if let (Some(staged), Some(request)) = (&staged_info, &request)
             && staged.id != request.id
@@ -317,7 +343,9 @@ impl ChatStore {
             None
         };
         let workspace = Self::workspace_lease_for(&opts.cwd, Some(&stage))?;
-        if staged_info.as_ref().map(|info| info.id) != read_stage()?.map(|info| info.id) {
+        if staged_info.as_ref().map(|info| info.id)
+            != self.staged_fork(parent.id)?.map(|info| info.id)
+        {
             return Err(Error::Busy);
         }
         let target = CheckpointPoint {
@@ -627,7 +655,14 @@ impl ChatSession {
     pub async fn fork_at(&self, turn: Uuid) -> Result<ChatSession> {
         self.sender
             .store
-            .fork_from(self.sender.sink.clone(), turn, self.launch.clone(), None)
+            .fork_from(
+                self.sender.sink.clone(),
+                turn,
+                self.sender
+                    .store
+                    .fork_options(self.info(), self.launch.clone())?,
+                None,
+            )
             .await
     }
     /// Submit a stable fork request through this controller, preserving its live native session.
@@ -661,9 +696,78 @@ impl ChatSession {
             .fork_from(
                 self.sender.sink.clone(),
                 turn,
-                self.launch.clone(),
+                self.sender
+                    .store
+                    .fork_options(self.info(), self.launch.clone())?,
                 Some(checkout.into()),
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod staged_route_tests {
+    use super::*;
+
+    #[test]
+    fn staged_child_uses_its_launch_after_a_parent_provider_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ChatStore::open(dir.path().join("store")).unwrap();
+        let parent = ChatInfo {
+            id: Uuid::new_v4(),
+            workspace: dir.path().into(),
+            worktree_id: None,
+            runtime: "qwen".into(),
+            protocol: Protocol::Qwen,
+            native_id: "new-parent".into(),
+            created_ms: 1,
+            program: "qwen".into(),
+            model: Some("current-model".into()),
+            settings: Default::default(),
+            unset_env: Default::default(),
+            approvals: crate::ApprovalMode::Deny,
+            forked_from: None,
+        };
+        let mut child = parent.clone();
+        child.id = Uuid::new_v4();
+        child.runtime = "codex".into();
+        child.protocol = Protocol::Codex;
+        child.program = "codex".into();
+        child.native_id = "original-child".into();
+        child.model = Some("selected-turn-model".into());
+        child.settings.system_prompt = Some("original instructions".into());
+        child.forked_from = Some(ForkOrigin {
+            chat: parent.id,
+            turn: Uuid::new_v4(),
+            native_source: "previous-parent".into(),
+            anchor: "original-turn".into(),
+            checkpoint_store: parent.id,
+            worktree_base: None,
+        });
+        log::header(
+            &mut File::create(store.fork_stage(parent.id)).unwrap(),
+            &child,
+        )
+        .unwrap();
+        let mut options = parent.options();
+        options.launch_args.push("--current-provider-only".into());
+        options
+            .env
+            .insert("CURRENT_PROVIDER_KEY".into(), "not-for-child".into());
+        let restored = store.fork_options(&parent, options).unwrap();
+        assert_eq!(restored.model, child.model);
+        assert_eq!(
+            restored.settings.system_prompt,
+            child.settings.system_prompt
+        );
+        assert!(restored.launch_args.is_empty() && restored.env.is_empty());
+        assert_eq!(
+            store
+                .pending_fork(parent.id)
+                .unwrap()
+                .unwrap()
+                .native_source,
+            "previous-parent"
+        );
     }
 }
