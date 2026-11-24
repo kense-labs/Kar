@@ -9,6 +9,7 @@ mod handoff;
 mod http;
 mod interactions;
 mod search;
+mod task_folders;
 mod terminal_preview;
 pub mod workflows;
 pub use search::{Hit, SearchKind};
@@ -41,6 +42,8 @@ struct Catalog {
     #[serde(default)]
     forge: forge::ForgeState,
     projects: BTreeMap<Uuid, Project>,
+    #[serde(default)]
+    tracked_folders:BTreeMap<Uuid,Vec<task_folders::Tracked>>,
     archived: BTreeSet<Uuid>,
 }
 
