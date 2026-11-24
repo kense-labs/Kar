@@ -240,6 +240,13 @@ async fn native_turn_fork_rolls_back_workspace_and_context() {
 }
 
 fn fixture(dir: &std::path::Path) -> (SessionOptions, Arc<Mutex<Vec<Value>>>) {
+    fixture_requests(dir, |request| request["messages"].clone())
+}
+
+fn fixture_requests(
+    dir: &std::path::Path,
+    select: fn(&Value) -> Value,
+) -> (SessionOptions, Arc<Mutex<Vec<Value>>>) {
     let work = dir.join("work");
     std::fs::create_dir(&work).unwrap();
     let shared = dir.join("shared");
@@ -258,7 +265,7 @@ fn fixture(dir: &std::path::Path) -> (SessionOptions, Arc<Mutex<Vec<Value>>>) {
                 let _ = respond_observed(conn, None, None, Some(&folder), false, |_, request| {
                     // Keep session agent requests; OpenCode also makes independent title requests.
                     if request["tools"].as_array().is_some_and(|t| !t.is_empty()) {
-                        log.lock().unwrap().push(request["messages"].clone());
+                        log.lock().unwrap().push(select(request));
                     }
                 });
             });
@@ -774,4 +781,97 @@ async fn native_process_placement_keeps_two_workspaces_independent() {
         .expect("set KAR_OPENCODE_BIN")
         .into();
     super::isolated_placement::verify(rt, opts).await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "requires OpenCode 2.2.0 or later with a configurable primary agent"]
+async fn native_primary_prompt_replacement_and_retraction_across_resume() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut opts, calls) = fixture_requests(
+        &root.path().canonicalize().unwrap(),
+        |r| json!({"system": r["system"], "messages": r["messages"]}),
+    );
+    let key = std::ffi::OsString::from("OPENCODE_CONFIG_CONTENT");
+    let mut config: Value = serde_json::from_str(opts.env[&key].to_str().unwrap()).unwrap();
+    config["default_agent"] = "review".into();
+    config["agents"] = json!({"review":{"mode":"primary","description":"Kar test agent","system":"NATIVE-REVIEW-RULE"},"plan":{"disabled":true}});
+    let original_config = config.to_string();
+    opts.env.insert(key.clone(), original_config.clone().into());
+    opts.settings.system_prompt = Some("KAR-FIRST-REPLACEMENT".into());
+    opts.settings.append_system_prompt = Some("KAR-APPENDED-INSTRUCTIONS".into());
+    let mut rt = kar::runtime("opencode").unwrap();
+    rt.program = std::env::var_os("KAR_OPENCODE_BIN")
+        .expect("set KAR_OPENCODE_BIN")
+        .into();
+    let first = rt.open(opts.clone()).await.unwrap();
+    let modes = first.info()["configOptions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["category"] == "mode")
+        .unwrap();
+    let choices: Vec<_> = modes["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|o| o["value"].as_str())
+        .collect();
+    assert_eq!(modes["currentValue"], "review");
+    assert!(
+        choices.contains(&"review") && choices.contains(&"build") && !choices.contains(&"plan")
+    );
+    assert_eq!(
+        first
+            .prompt("kar-first-instruction-probe")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        Outcome::Completed
+    );
+    let id = first.id().to_owned();
+    first.close().await.unwrap();
+    {
+        let captured = calls.lock().unwrap();
+        let system = captured.last().unwrap()["system"].to_string();
+        assert!(
+            system.contains("KAR-FIRST-REPLACEMENT")
+                && system.contains("KAR-APPENDED-INSTRUCTIONS")
+                && !system.contains("NATIVE-REVIEW-RULE")
+        );
+    }
+    opts.resume = Some(id.clone());
+    opts.settings.system_prompt = Some("KAR-SECOND-REPLACEMENT".into());
+    opts.settings.append_system_prompt = None;
+    let resumed = rt.open(opts.clone()).await.unwrap();
+    assert_eq!(resumed.id(), id);
+    assert_eq!(
+        resumed
+            .prompt("kar-resume-instruction-probe")
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
+        Outcome::Completed
+    );
+    resumed.close().await.unwrap();
+    let captured = calls.lock().unwrap();
+    let last = captured.last().unwrap();
+    let system = last["system"].to_string();
+    assert!(system.contains("KAR-SECOND-REPLACEMENT") && !system.contains("KAR-FIRST-REPLACEMENT"));
+    assert!(
+        last["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "user")
+            .any(|m| {
+                let text = m["content"].to_string();
+                text.contains("system-update") && text.contains("no longer apply")
+            })
+    );
+    assert_eq!(opts.env[&key].to_str(), Some(original_config.as_str()));
 }

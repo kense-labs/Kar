@@ -16,3 +16,14 @@ cargo test --locked --test native_live opencode_fork::native_retry_is_projected_
 ```
 
 供应商命令需要设置 `KAR_OPENCODE_BIN`。公开事件保留的 reason 只来自原生错误类别，错误消息文本不进入该投影。既有原生队列与双客户端实测见 `docs/backend-evidence.tsv` 的 OpenCode 条目；它们覆盖的操作与此次 529 情形分别登记。
+
+## 会话重启后的原生指令
+
+固定专有用例 `sea-trial/vendor/opencode-cleanup.vendor.test.ts:139` 使用自定义默认主 agent 和被禁用的 plan agent。`packages/oar/src/runtimes/opencode/prompt-config-v2.ts` 要求开场回显的实际 agent 必须处于本次覆盖的集合中。Kar 保留实际名称与期望名称；当新的模式字段类型错误时，旧字段即使带有可识别的名称，也不足以确认这次开场。
+
+macOS 协议用例覆盖未报、畸形以及实际与期望不符的模式。macOS 原生可选用例对 OpenCode 2.2.7、2.3.2 分别新建会话、检查默认 agent 与模式列表、向回环模型发送真实请求，再按原 ID 续聊。模型应接收新的替换指令，旧附加指令由原生用户更新撤回。两条命令已编译，留待联合运行。原生用例需要 `KAR_OPENCODE_BIN` 指向对应发行版。
+
+```sh
+cargo test --locked --lib options::opencode::tests::instructions_require_the_authoritative_mode_report -- --exact
+cargo test --locked --test native_live opencode_fork::native_primary_prompt_replacement_and_retraction_across_resume -- --ignored --exact --nocapture
+```

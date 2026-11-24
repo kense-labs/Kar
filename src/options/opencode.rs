@@ -370,12 +370,26 @@ pub(crate) fn confirm(info: &Value, agents: &[String]) -> Result<()> {
         .into_iter()
         .flatten()
         .find(|a| a["category"] == "mode")
-        .and_then(|a| a["currentValue"].as_str())
-        .or_else(|| info.pointer("/modes/currentModeId")?.as_str());
-    if !selected.is_some_and(|id| agents.iter().any(|a| a == id)) {
-        return Err(Error::Refused(
-            "OpenCode opened on an agent outside the configured prompt set".into(),
-        ));
+        .and_then(|a| a.get("currentValue"))
+        .filter(|value| !value.is_null())
+        .or_else(|| info.pointer("/modes/currentModeId"));
+    if !selected
+        .and_then(Value::as_str)
+        .is_some_and(|id| agents.iter().any(|a| a == id))
+    {
+        let actual = match selected {
+            None | Some(Value::Null) => "<unreported>".into(),
+            Some(Value::String(id)) => format!("{id:?}"),
+            _ => "<invalid agent id>".into(),
+        };
+        let expected = agents
+            .iter()
+            .map(|id| format!("{id:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(Error::Refused(format!(
+            "OpenCode opened on agent {actual}; system instructions were configured for {expected}"
+        )));
     }
     Ok(())
 }
@@ -383,6 +397,24 @@ pub(crate) fn confirm(info: &Value, agents: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instructions_require_the_authoritative_mode_report() {
+        let agents = vec!["review".into(), "build".into()];
+        let report = |value| serde_json::json!({"configOptions":[{"category":"mode","currentValue":value}],"modes":{"currentModeId":"review"}});
+        assert!(confirm(&report(Value::Null), &agents).is_ok());
+        let malformed = confirm(&report(serde_json::json!({"secret":"unrelated"})), &agents)
+            .unwrap_err()
+            .to_string();
+        assert!(malformed.contains("invalid agent id") && !malformed.contains("unrelated"));
+        let error = confirm(&report("plan".into()), &agents)
+            .unwrap_err()
+            .to_string();
+        for id in ["plan", "review", "build"] {
+            assert!(error.contains(id));
+        }
+    }
+
     #[test]
     fn overlay_preserves_native_interpolation_and_duplicate_member_resolution() {
         let original = r#"{ "kept":"\u007benv:S}", "agents":{},"agents":{"a":{"mode":"primary"}}, "instructions":["{file:/original}"] }"#;
