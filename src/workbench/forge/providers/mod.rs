@@ -1,0 +1,112 @@
+//! REST and native CLI drivers for non-GitHub hosts in the fixed workbench contract.
+mod rest;
+use super::{Context, ForgeError, Operation};
+use reqwest::Method;
+use serde_json::{Value, json};
+use url::Url;
+
+fn invalid(what: &str) -> ForgeError {
+    ForgeError::remote(502, format!("forge returned invalid {what}"))
+}
+fn number(v: &Value) -> Result<u64, ForgeError> {
+    v.as_u64()
+        .or_else(|| v.as_str()?.parse().ok())
+        .filter(|n| *n > 0)
+        .ok_or_else(|| invalid("object number"))
+}
+fn verify(v: Value, n: u64) -> Result<Value, ForgeError> {
+    if number(&v["number"])? == n {
+        Ok(v)
+    } else {
+        Err(invalid("object identity"))
+    }
+}
+fn path(c: &Context, parts: &[&str]) -> Result<Url, ForgeError> {
+    let mut url = c.api_base.clone();
+    url.path_segments_mut()
+        .map_err(|_| ForgeError::bad("invalid forge API URL"))?
+        .pop_if_empty()
+        .extend(parts);
+    Ok(url)
+}
+async fn send(
+    c: &Context,
+    method: Method,
+    url: Url,
+    body: Option<Value>,
+    mutation: bool,
+) -> Result<Value, ForgeError> {
+    let mut req = c.client.request(method, url);
+    if let Some(token) = &c.token {
+        req = match c.kind.as_str() {
+            "linear" => req.header("Authorization", token),
+            "azure-devops" => req.basic_auth("", Some(token)),
+            _ => req.bearer_auth(token),
+        };
+    }
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    let classify = |reason: &str| {
+        if mutation {
+            ForgeError::uncertain(reason)
+        } else {
+            ForgeError::remote(502, reason)
+        }
+    };
+    let mut res = req
+        .send()
+        .await
+        .map_err(|_| classify("forge did not return a response"))?;
+    let status = res.status();
+    if !status.is_success() {
+        if mutation && status.is_server_error() {
+            return Err(ForgeError::uncertain(format!(
+                "{} returned {status} after submission",
+                c.kind
+            )));
+        }
+        return Err(ForgeError::remote(
+            if status.is_redirection() {
+                502
+            } else {
+                status.as_u16()
+            },
+            format!("{} returned {status}", c.kind),
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .map_err(|_| classify("forge response interrupted"))?
+    {
+        if bytes.len() + chunk.len() > 16 * 1024 * 1024 {
+            return Err(classify("forge response exceeded 16 MiB"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| classify("forge returned invalid JSON"))
+}
+async fn get(c: &Context, url: Url) -> Result<Value, ForgeError> {
+    send(c, Method::GET, url, None, false).await
+}
+fn account(v: &Value, field: &str) -> Result<Value, ForgeError> {
+    v[field]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| json!(s))
+        .ok_or_else(|| invalid("authenticated account"))
+}
+pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeError> {
+    match c.kind.as_str() {
+        "gitlab" | "bitbucket" | "forgejo" => rest::execute(c, op).await,
+        _ => Err(ForgeError::unsupported(format!(
+            "{} driver is unavailable",
+            c.kind
+        ))),
+    }
+}

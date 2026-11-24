@@ -1,5 +1,6 @@
 //! Repository-scoped change requests, issue bindings and revision-specific review state.
 mod github;
+mod providers;
 mod review;
 mod routes;
 pub(super) fn routes() -> axum::Router<Workbench> {
@@ -383,10 +384,7 @@ impl Context {
         if self.kind == "github" {
             github::execute(self, op).await
         } else {
-            Err(ForgeError::unsupported(format!(
-                "{} operation is awaiting Kar driver integration",
-                self.kind
-            )))
+            providers::execute(self, op).await
         }
     }
 }
