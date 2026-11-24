@@ -57,6 +57,7 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
         let prompt = prompts[0];
         assert_eq!(prompt.prompt.as_ref().unwrap().input_id, id);
         assert_eq!(prompt.kind, RecordKind::Request);
+        let turn_records = &slice[slice.iter().position(|r| r.seq == prompt.seq).unwrap()..];
         let request = prompt
             .prompt
             .as_ref()
@@ -74,9 +75,36 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
             .collect();
         assert_eq!(replies.len(), 1, "one public decision per attempt");
         assert_eq!(replies[0].native["type"], "accepted");
+        assert_eq!(
+            prompt.control_request_id(),
+            replies[0].response_to.as_deref()
+        );
         assert!(prompt.seq < replies[0].seq);
+        if session.protocol() == kar::Protocol::Pi {
+            let evidence: Vec<_> = turn_records
+                .iter()
+                .filter(|r| {
+                    r.direction == kar::Direction::FromRuntime
+                        && r.response_to.as_deref() == Some(request)
+                        && r.native["command"] == "prompt"
+                })
+                .collect();
+            assert_eq!(evidence.len(), 1);
+            let proof = evidence[0];
+            assert_eq!(proof.frame_type(), Some("response"));
+            assert_eq!(proof.native["success"], true);
+            assert!(prompt.seq < proof.seq && proof.seq < replies[0].seq);
+        }
         let mut ends = Vec::new();
-        for r in slice {
+        for r in turn_records {
+            if r.kind == RecordKind::Frame {
+                assert!(
+                    r.frame_type().is_some_and(|name| !name.is_empty()),
+                    "missing frame type at {}: {:?}",
+                    r.seq,
+                    r.native
+                );
+            }
             if !r.agent_path.is_empty() {
                 continue;
             }
@@ -87,6 +115,7 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
                     Event::TurnStarted => ended = false,
                     _ if ended => panic!("unexpected event after turn end at {}: {event:?}", r.seq),
                     Event::TurnEnded { outcome } => {
+                        assert_eq!(r.kind, RecordKind::Frame, "the native boundary is a frame");
                         assert_eq!(outcome, &Outcome::Completed);
                         ended = true;
                         ends.push(r.seq);

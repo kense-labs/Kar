@@ -662,6 +662,7 @@ impl Actor {
                 control_request: match intent {
                     RpcIntent::Abort(request) => Some(request),
                     RpcIntent::Steer { request, .. } => Some(request),
+                    RpcIntent::Prompt => self.turn.as_ref().map(|t| t.prompt_request),
                     _ => None,
                 },
                 reply,
@@ -2092,6 +2093,7 @@ impl Actor {
         let mut reply = None;
         let mut prompt_ack = None;
         let mut prompt_decision = None;
+        let native_method = response.as_ref().map(|p| p.method.clone());
         if let Some(p) = response {
             let mut result = if p.method == crate::cursor_models::LIST
                 && v["error"]["code"] == -32601
@@ -2635,16 +2637,23 @@ impl Actor {
                 self.pi_independent = None;
             }
         }
-        self.record(
-            received,
-            wire::classify(self.protocol, &v),
-            v.clone(),
-            events,
-            path,
-        );
+        // A correlated wire reply is native evidence. The host's admission
+        // decision is a separate response with its own sequence position.
+        let mut kind = wire::classify(self.protocol, &v);
+        if kind == RecordKind::Response && (received.response_to.is_some() || terminal.is_some()) {
+            kind = RecordKind::Frame;
+            if let Some(method) = native_method
+                && crate::Record::wire_frame_type(&v).is_none()
+            {
+                received = received.with_frame_type(method);
+            }
+        }
+        self.record(received, kind, v.clone(), events, path);
         if let Some((request, refusal)) = prompt_decision {
-            self.journal
-                .control_decision(request, refusal.as_deref().map(|s| ("runtime_refused", s)));
+            self.journal.control_decision(
+                request,
+                refusal.as_deref().map(|reason| ("runtime_refused", reason)),
+            );
         }
         if current_turn
             && let Some(outcome) = &outcome

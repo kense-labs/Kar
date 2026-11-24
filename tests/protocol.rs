@@ -799,6 +799,36 @@ async fn exercise(protocol: Protocol) -> kar::Result<()> {
         next.subscribe(Some(&cursor)),
         Err(Error::InvalidCursor)
     ));
+    let resumed = next.prompt("normal").await?;
+    let input = resumed.input_id().to_string();
+    assert_eq!(resumed.wait().await?, Outcome::Completed);
+    let records = next.records();
+    let prompt = records
+        .iter()
+        .find(|r| r.prompt.as_ref().is_some_and(|p| p.input_id == input))
+        .unwrap();
+    let receipt = records
+        .iter()
+        .find(|r| {
+            r.direction == kar::Direction::Host
+                && r.kind == kar::RecordKind::Response
+                && r.response_to.as_deref() == prompt.control_request_id()
+        })
+        .unwrap();
+    let terminal = records
+        .iter()
+        .find(|r| {
+            r.kind == kar::RecordKind::Frame
+                && r.agent_path.is_empty()
+                && r.events.contains(&Event::TurnEnded {
+                    outcome: Outcome::Completed,
+                })
+        })
+        .unwrap();
+    assert!(prompt.seq < receipt.seq && receipt.seq < terminal.seq);
+    for row in [prompt, receipt, terminal] {
+        assert_eq!(row.session_id.as_deref(), Some(id.as_str()));
+    }
     next.close().await
 }
 async fn controls(p: Protocol) -> kar::Result<()> {

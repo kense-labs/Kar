@@ -144,7 +144,7 @@ impl Cybion {
                 .as_ref()
                 .is_some_and(|requested| requested != &id)
             {
-                return Err(Error::Protocol("Cybion returned a different thread".into()));
+                return Err(Error::Protocol("Cybion resumed a different thread".into()));
             }
             for (name, requested) in [
                 ("model", options.model.as_deref()),
@@ -188,7 +188,7 @@ impl Cybion {
             });
         }
         journal.push(
-            Direction::FromRuntime,
+            crate::stream::RecordStamp::frame(Direction::FromRuntime, "thread/opened"),
             RecordKind::Frame,
             None,
             vec![],
@@ -473,7 +473,16 @@ impl ThreadActor {
             events.push(Event::TurnEnded {
                 outcome: outcome.clone(),
             });
-            self.record(Direction::FromRuntime, RecordKind::Frame, native, events);
+            let name = native["display_status"]
+                .as_str()
+                .or_else(|| native["status"].as_str())
+                .map_or_else(|| "thread/lost".into(), |s| format!("thread/{s}"));
+            self.record(
+                crate::stream::RecordStamp::frame(Direction::FromRuntime, name),
+                RecordKind::Frame,
+                native,
+                events,
+            );
             let _ = active.done.send(Ok(TurnReport {
                 native_input_receipt: None,
                 structured_output: None,
@@ -507,8 +516,13 @@ impl ThreadActor {
                     Event::TextDelta { text } => Some(text.clone()),
                     _ => None,
                 }));
+            let kind = row["kind"].as_str().unwrap_or("unknown");
+            let name = match (kind, row["payload"]["type"].as_str()) {
+                ("response_output", Some(t)) if !t.is_empty() => format!("history/{kind}/{t}"),
+                _ => format!("history/{kind}"),
+            };
             self.record(
-                Direction::FromRuntime,
+                crate::stream::RecordStamp::frame(Direction::FromRuntime, name),
                 RecordKind::Frame,
                 row.clone(),
                 events,
@@ -562,7 +576,7 @@ impl ThreadActor {
         }
         if !events.is_empty() {
             self.record(
-                Direction::FromRuntime,
+                crate::stream::RecordStamp::frame(Direction::FromRuntime, "thread/usage"),
                 RecordKind::Frame,
                 info.clone(),
                 events,
@@ -794,10 +808,10 @@ impl ThreadActor {
                     if let Some(active) = self.turn.as_mut() {
                         active.due = Instant::now() + active.interval;
                         active.interval = (active.interval * 3 / 2).min(Duration::from_secs(2));
-                        if let Err(error) = result {
+                        if result.is_err() {
                             active.failures += 1;
                             if active.failures >= 8 {
-                                self.finish(json!({"error":error.to_string()}), Outcome::Failed,Some("Cybion stopped answering; the Thread may still be running there"));
+                                self.finish(Value::Null, Outcome::Failed,Some("Cybion stopped answering; the Thread may still be running there"));
                                 self.clear_queue("Cybion thread status unknown");
                             }
                         }

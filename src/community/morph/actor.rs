@@ -343,7 +343,7 @@ impl Actor {
                 let context = projection::context(&metadata);
                 self.record(
                     Some(&id),
-                    Direction::FromRuntime,
+                    crate::stream::RecordStamp::frame(Direction::FromRuntime, "topic/metadata"),
                     RecordKind::Frame,
                     metadata,
                     context,
@@ -361,7 +361,7 @@ impl Actor {
             });
             self.record(
                 Some(&id),
-                Direction::FromRuntime,
+                crate::stream::RecordStamp::frame(Direction::FromRuntime, format!("task/{status}")),
                 RecordKind::Frame,
                 info,
                 events,
@@ -381,7 +381,10 @@ impl Actor {
                 self.tasks[index].status = status.into();
                 self.record(
                     Some(&id),
-                    Direction::FromRuntime,
+                    crate::stream::RecordStamp::frame(
+                        Direction::FromRuntime,
+                        format!("task/{status}"),
+                    ),
                     RecordKind::Frame,
                     info.clone(),
                     vec![],
@@ -521,7 +524,8 @@ impl Actor {
                             continue;
                         }
                         let events=t.projection.snapshot(&task,&v);
-                        self.record(Some(&task),Direction::FromRuntime,RecordKind::Frame,v,events);
+                        let name=format!("stream/{}", v["status"].as_str().unwrap_or("snapshot"));
+                        self.record(Some(&task),crate::stream::RecordStamp::frame(Direction::FromRuntime,name),RecordKind::Frame,v,events);
                     }
                 }
                 Some(update)=self.inbox.recv()=>if let Err(err)=self.update(update).await{break (None,err.to_string(),false);},

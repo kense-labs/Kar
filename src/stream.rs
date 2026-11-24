@@ -46,6 +46,7 @@ pub(crate) struct RecordStamp {
     prompt: Option<PromptIdentity>,
     pub(crate) response_to: Option<String>,
     opening: Option<crate::Opening>,
+    frame_type: Option<String>,
 }
 
 impl From<Direction> for RecordStamp {
@@ -55,6 +56,7 @@ impl From<Direction> for RecordStamp {
             timestamp_ms: timestamp_ms(),
             response_to: None,
             opening: None,
+            frame_type: None,
             prompt: None,
         }
     }
@@ -86,6 +88,14 @@ pub struct ImageReference {
 }
 
 impl RecordStamp {
+    pub(crate) fn frame(direction: Direction, name: impl Into<String>) -> Self {
+        Self::from(direction).with_frame_type(name)
+    }
+
+    pub(crate) fn with_frame_type(mut self, name: impl Into<String>) -> Self {
+        self.frame_type = Some(name.into());
+        self
+    }
     pub(crate) fn with_prompt_request(
         mut self,
         input_id: impl ToString,
@@ -435,6 +445,9 @@ pub struct Record {
     /// Opening metadata belongs to the Kar lifecycle, independently of native wire packets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opening: Option<crate::Opening>,
+    /// The wire discriminator or protocol operation that produced a frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_type: Option<String>,
     /// Public control request answered by this record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_to: Option<String>,
@@ -458,6 +471,23 @@ pub(crate) fn present_json<'de, D: serde::Deserializer<'de>>(
     Value::deserialize(d).map(Some)
 }
 impl Record {
+    pub(crate) fn wire_frame_type(value: &Value) -> Option<&str> {
+        ["method", "type", "kind", "event"]
+            .iter()
+            .find_map(|key| value[*key].as_str().filter(|s| !s.is_empty()))
+    }
+
+    /// Legacy records may already carry the discriminator in their native envelope.
+    pub fn frame_type(&self) -> Option<&str> {
+        if self.kind != RecordKind::Frame {
+            return None;
+        }
+        self.frame_type
+            .as_deref()
+            .or_else(|| self.upstream.as_ref()?.pointer("/body/type")?.as_str())
+            .or_else(|| Self::wire_frame_type(&self.native))
+    }
+
     /// Identifier used by the paired response to a Kar control request.
     pub fn control_request_id(&self) -> Option<&str> {
         if self.kind != RecordKind::Request || self.direction != Direction::ToRuntime {
@@ -774,7 +804,7 @@ impl Journal {
     }
     pub(crate) fn host_event(&self, event: Event) {
         self.push(
-            Direction::Host,
+            RecordStamp::frame(Direction::Host, "kar/notification"),
             RecordKind::Frame,
             None,
             vec![],
@@ -865,6 +895,16 @@ impl Journal {
                 }
             }),
             opening: stamp.opening,
+            frame_type: if kind == RecordKind::Frame {
+                stamp
+                    .frame_type
+                    .or_else(|| Record::wire_frame_type(&native).map(str::to_owned))
+                    .or_else(|| {
+                        (stamp.direction == Direction::Host).then(|| "kar/notification".to_owned())
+                    })
+            } else {
+                None
+            },
             stream_id: self.id,
             seq,
             timestamp_ms: stamp.timestamp_ms,

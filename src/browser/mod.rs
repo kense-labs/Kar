@@ -136,7 +136,7 @@ impl PiDurable {
         let view = json(&get(&watch, "value")?)?;
         let initial = json!({"value":view,"ops":[],"retired":false});
         let events = core.projection.borrow_mut().fold(&initial, true, vec![]);
-        core.frame(initial["value"].clone(), events);
+        core.frame("pi-durable/view", initial["value"].clone(), events);
         call(&core.harness, "resume", &[])?;
         core.ready.set(true);
         Core::schedule(&core);
@@ -174,9 +174,9 @@ struct Core {
     withdrawn: RefCell<BTreeSet<u64>>,
 }
 impl Core {
-    fn frame(&self, native: Value, events: Vec<Event>) {
+    fn frame(&self, name: &str, native: Value, events: Vec<Event>) {
         self.journal.push(
-            Direction::FromRuntime,
+            crate::stream::RecordStamp::frame(Direction::FromRuntime, name),
             RecordKind::Frame,
             None,
             vec![],
@@ -195,6 +195,7 @@ impl Core {
                 let Some((end, item)) = next else { break };
                 if end {
                     core.frame(
+                        "pi-durable/watch_closed",
                         json!({"watchEnd":json(&item).unwrap_or(Value::Null)}),
                         vec![Event::Exited {
                             reason: "Pi Durable observation ended".into(),
@@ -206,6 +207,7 @@ impl Core {
                 }
                 if let Err(err) = core.advance(item).await {
                     core.frame(
+                        "pi-durable/projection_error",
                         json!({"projectionError":native::summary(&err)}),
                         vec![Event::Exited {
                             reason: "Pi Durable observation failed".into(),
@@ -265,6 +267,7 @@ impl Core {
         let _admission = self.admissions.lock().await;
         if get(&item, "kind")?.as_string().as_deref() == Some("failed") {
             self.frame(
+                "pi-durable/watch_error",
                 json!({"watchError":native::summary(&get(&item,"error")?)}),
                 vec![],
             );
@@ -292,12 +295,20 @@ impl Core {
                 match self.receipt(id).await {
                     Ok(r) => receipts.push(r),
                     Err(err) => {
-                        self.frame(json!({"receiptError":native::summary(&err)}), vec![]);
+                        self.frame(
+                            "pi-durable/submissions_error",
+                            json!({"receiptError":native::summary(&err)}),
+                            vec![],
+                        );
                         receipts.push(Value::Null);
                     }
                 }
             }
-            self.frame(json!({"submissions":receipts}), vec![]);
+            self.frame(
+                "pi-durable/submissions",
+                json!({"submissions":receipts}),
+                vec![],
+            );
         }
         let terminal = if ended && after_run {
             vec![Event::TurnEnded {
@@ -352,6 +363,7 @@ impl Core {
             }
         }
         self.frame(
+            "pi-durable/view",
             json!({"ops":change["ops"],"retired":change["retired"]}),
             events,
         );

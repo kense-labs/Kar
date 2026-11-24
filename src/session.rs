@@ -926,7 +926,7 @@ impl Session {
                         .is_some_and(|native| native.as_str() != Some(resume))
                     {
                         return Err(Error::Protocol(
-                            "agent did not confirm the requested session id".into(),
+                            "ACP resume did not confirm the requested session id".into(),
                         ));
                     }
                     id = resume.clone();
@@ -1110,9 +1110,12 @@ impl Session {
                         .await?;
                 }
                 if required_id(&session.info, "/session_id")? != id {
-                    return Err(Error::Protocol(
-                        "Qwen initialized a different session".into(),
-                    ));
+                    let message = if expected_resume.is_some() {
+                        "Qwen resumed a different session"
+                    } else {
+                        "Qwen initialized a different session"
+                    };
+                    return Err(Error::Protocol(message.into()));
                 }
             }
             Protocol::Pi => {

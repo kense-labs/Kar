@@ -140,6 +140,9 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
         } else {
             None
         },
+        frame_type: (kind == RecordKind::Frame)
+            .then(|| body["type"].as_str().map(str::to_owned))
+            .flatten(),
         opening: match (kind, body["kind"].as_str()) {
             (RecordKind::Request, Some("open")) => Some(crate::Opening::Open {
                 request_id: v["id"]

@@ -184,8 +184,15 @@ pub(super) async fn run() -> kar::Result<()> {
             ],
         )
         .await;
-        assert!(matches!(result, Err(Error::Protocol(_))));
+        assert!(matches!(result, Err(Error::Protocol(reason)) if reason.contains("resume")));
     }
+    let unsupported = open(
+        &acp,
+        &opts,
+        vec![json!({"method":"initialize","result":{"protocolVersion":1,"agentCapabilities":{}}})],
+    )
+    .await;
+    assert!(matches!(unsupported, Err(Error::Unsupported(reason)) if reason.contains("resume")));
     let secret = "secret-from-open-test";
     opts.env.insert("TEST_API_KEY".into(), secret.into());
     let native = error(
