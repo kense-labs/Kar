@@ -191,3 +191,42 @@ fn inherited_mcp_depth_refuses_a_child_before_opening_its_runtime() {
         assert!(child.wait().unwrap().success());
     }
 }
+
+#[test]
+fn workspace_inventories_keep_missing_provider_rows_and_validate_options() {
+    let tmp = tempfile::tempdir().unwrap();
+    for kind in ["skills", "commands", "mcp-servers", "tools"] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_kar"));
+        cmd.args([kind, "--timeout-ms", "3000", "--cwd"])
+            .arg(tmp.path())
+            .env("HOME", tmp.path());
+        for rt in kar::runtimes()
+            .into_iter()
+            .chain([kar::runtime("morph").unwrap()])
+        {
+            cmd.env(
+                format!("KAR_{}_BIN", rt.id.to_ascii_uppercase()),
+                tmp.path().join("absent-provider"),
+            );
+        }
+        let result = cmd.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let rows = String::from_utf8(result.stdout).unwrap();
+        let rows: Vec<serde_json::Value> = rows
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        for name in ["pi", "claude", "codex"] {
+            assert_eq!(
+                rows.iter().find(|r| r["id"] == name).unwrap()["installation"]["kind"],
+                "missing"
+            );
+        }
+        assert!(!kar(&[kind, "--bin", "absent"]).status.success());
+        assert!(!kar(&[kind, "--timeout-ms", "0"]).status.success());
+    }
+}

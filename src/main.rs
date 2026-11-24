@@ -2,6 +2,8 @@
 mod account_cli;
 mod chat_cli;
 mod git_cli;
+mod inventory_cli;
+use inventory_cli::WorkspaceInventory;
 mod mcp;
 mod models_cli;
 mod providers_cli;
@@ -19,34 +21,6 @@ use std::{
 struct Cli {
     #[command(subcommand)]
     command: Action,
-}
-#[derive(clap::Args)]
-struct WorkspaceInventory {
-    runtime: String,
-    #[arg(long, default_value = ".")]
-    cwd: PathBuf,
-    #[arg(long)]
-    bin: Option<PathBuf>,
-    #[arg(long)]
-    timeout_ms: Option<u64>,
-}
-impl WorkspaceInventory {
-    fn resolve(self) -> kar::Result<(kar::Runtime, kar::inventory::InventoryOptions)> {
-        let mut rt = runtime(&self.runtime)?;
-        if let Some(path) = self.bin {
-            rt.program = path;
-        }
-        Ok((
-            rt,
-            kar::inventory::InventoryOptions {
-                installation: kar::InstallationOptions {
-                    cwd: Some(self.cwd),
-                    ..Default::default()
-                },
-                timeout: self.timeout_ms.map(std::time::Duration::from_millis),
-            },
-        ))
-    }
 }
 #[derive(Subcommand)]
 enum Action {
@@ -748,22 +722,10 @@ async fn execute(command: Action) -> Result<()> {
             json_line(&session.account_usage().await?, std::io::stdout())?;
             session.close().await?;
         }
-        Action::Skills(args) => {
-            let (rt, opts) = args.resolve()?;
-            json_line(&rt.skills(&opts).await?, std::io::stdout())?;
-        }
-        Action::Commands(args) => {
-            let (rt, opts) = args.resolve()?;
-            json_line(&rt.commands(&opts).await?, std::io::stdout())?;
-        }
-        Action::McpServers(args) => {
-            let (rt, opts) = args.resolve()?;
-            json_line(&rt.mcp_servers(&opts).await?, std::io::stdout())?;
-        }
-        Action::Tools(args) => {
-            let (rt, opts) = args.resolve()?;
-            json_line(&rt.tools(&opts).await?, std::io::stdout())?;
-        }
+        Action::Skills(args) => args.print(inventory_cli::Kind::Skills).await?,
+        Action::Commands(args) => args.print(inventory_cli::Kind::Commands).await?,
+        Action::McpServers(args) => args.print(inventory_cli::Kind::McpServers).await?,
+        Action::Tools(args) => args.print(inventory_cli::Kind::Tools).await?,
         Action::Inventory { open, kind } => {
             let kind = match kind {
                 Catalog::Skills => kar::Inventory::Skills,
