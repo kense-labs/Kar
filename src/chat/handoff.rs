@@ -21,6 +21,8 @@ fn default_budget() -> usize {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSession {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<crate::provider_instance::HistoryInstance>,
     pub runtime: String,
     pub protocol: Protocol,
     pub program: PathBuf,
@@ -31,6 +33,7 @@ pub struct ProviderSession {
 impl ProviderSession {
     pub(super) fn current(info: &ChatInfo) -> Self {
         Self {
+            instance: info.active_instance().cloned(),
             runtime: info.runtime.clone(),
             protocol: info.protocol,
             program: info.program.clone(),
@@ -40,6 +43,7 @@ impl ProviderSession {
         }
     }
     pub(super) fn activate(&self, info: &mut ChatInfo) {
+        info.provider_instance.clone_from(&self.instance);
         info.runtime.clone_from(&self.runtime);
         info.protocol = self.protocol;
         info.program.clone_from(&self.program);
@@ -431,6 +435,9 @@ impl super::ChatStore {
         opts.unset_env.clone_from(&log.state.info.unset_env);
         if let Some(target) = &h.target {
             opts.settings = target.settings.clone();
+            let mut saved = log.state.info.clone();
+            target.activate(&mut saved);
+            saved.configure_instance(&mut opts);
         }
         opts.model = h.request.model.clone();
         configure(&mut opts);
@@ -473,6 +480,7 @@ impl super::ChatStore {
             }
         };
         let target = ProviderSession {
+            instance: h.target.as_ref().and_then(|s| s.instance.clone()),
             runtime: runtime.id,
             protocol: session.protocol(),
             program: runtime.program,

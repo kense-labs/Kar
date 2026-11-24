@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Origin {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<crate::provider_instance::HistoryInstance>,
     pub project: Option<Uuid>,
     pub runtime: String,
     pub native_id: String,
@@ -20,6 +22,13 @@ pub struct Origin {
     pub omitted_messages: usize,
 }
 
+impl Origin {
+    pub fn instance_id(&self) -> &str {
+        self.instance
+            .as_ref()
+            .map_or(self.runtime.as_str(), |v| v.id.as_str())
+    }
+}
 pub(crate) struct Message {
     pub role: Role,
     pub text: String,
@@ -48,7 +57,7 @@ impl Transcript {
     pub fn id(&self) -> Uuid {
         identifier(&[
             b"kar-native-import/1",
-            self.origin.runtime.as_bytes(),
+            self.origin.instance_id().as_bytes(),
             self.origin.native_id.as_bytes(),
         ])
     }
@@ -117,8 +126,14 @@ impl ChatStore {
                 .first()
                 .ok_or_else(|| Error::Refused("empty native transcript".into()))?
                 .at,
-            program: rt.program,
+            program: data
+                .origin
+                .instance
+                .as_ref()
+                .and_then(|i| i.program.clone())
+                .unwrap_or(rt.program),
             model: data.model.clone(),
+            provider_instance: None,
             imported: Some(data.origin.clone()),
             worktree_id: pin.as_ref().map(|(id, _)| *id),
             settings: Default::default(),

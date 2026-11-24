@@ -49,7 +49,7 @@ fn now() -> u64 {
 }
 async fn scan(State(app): State<Workbench>) -> std::result::Result<Json<Scan>, ApiError> {
     blocking(move || {
-        let (files, truncated) = discover::discover(&app);
+        let (files, truncated) = discover::discover(&app)?;
         let projects: BTreeMap<_, _> = app
             .projects()
             .into_iter()
@@ -126,35 +126,28 @@ fn adopt(app: &Workbench, project: Uuid, request: Request) -> Result<Outcome> {
             "project directory changed since scan".into(),
         ));
     }
-    let (files, truncated) = discover::discover(app);
+    let (files, truncated) = discover::discover(app)?;
     let bases = files
         .iter()
         .filter(|f| f.source == Source::Codex)
-        .filter_map(|f| Some((transcript::rollout(&f.path)?.to_owned(), f)))
+        .filter_map(|f| {
+            Some((
+                (
+                    f.instance.id.clone(),
+                    transcript::rollout(&f.path)?.to_owned(),
+                ),
+                f,
+            ))
+        })
         .collect::<HashMap<_, _>>();
-    let mut known = HashMap::new();
     let mut owned = HashSet::new();
     for chat in app.0.chats.list()? {
-        let mut remember = |runtime: &str, native: &str| {
-            owned.insert((runtime.to_owned(), native.to_owned(), chat.id));
-        };
-        remember(&chat.runtime, &chat.native_id);
-        let original = app.0.chats.initial_info(chat.id)?;
-        remember(&original.runtime, &original.native_id);
-        if original.runtime != chat.runtime || original.native_id != chat.native_id {
-            for h in app.0.chats.history(chat.id)?.handoffs {
-                remember(&h.from.runtime, &h.from.native_id);
-                if let Some(target) = h.target {
-                    remember(&target.runtime, &target.native_id)
-                }
-            }
-        }
-        if let Some(origin) = original.imported
-            && origin.project == Some(project)
-            && app.binding(project, chat.id).is_ok()
-        {
-            known.insert((origin.transcript, origin.stamp), chat.id);
-        }
+        app.0.chats.visit_native_bindings(chat.id, |info| {
+            let instance = info
+                .active_instance()
+                .map_or(info.runtime.as_str(), |i| i.id.as_str());
+            owned.insert((instance.to_owned(), info.native_id.clone(), chat.id));
+        })?;
     }
     let receipts = app
         .0
@@ -177,15 +170,10 @@ fn adopt(app: &Workbench, project: Uuid, request: Request) -> Result<Outcome> {
     for f in files.iter().filter(|f| {
         (f.project == p.root || f.cwd == p.root) && (cutoff..=start).contains(&f.modified)
     }) {
-        if let Some(id) = known
-            .get(&(f.path.clone(), f.stamp.clone()))
-            .copied()
-            .or_else(|| {
-                receipts
-                    .get(&f.path)
-                    .filter(|(s, _)| s == &f.stamp)
-                    .map(|(_, id)| *id)
-            })
+        if let Some(id) = receipts
+            .get(&f.path)
+            .filter(|(s, _)| s == &f.instance.receipt(&f.stamp))
+            .map(|(_, id)| *id)
             && app.binding(p.id, id).is_ok()
         {
             if visited.insert(id) {
@@ -218,7 +206,7 @@ fn adopt(app: &Workbench, project: Uuid, request: Request) -> Result<Outcome> {
         let id = history.id();
         history.origin.project = Some(p.id);
         if owned.iter().any(|(r, n, owner)| {
-            r == &history.origin.runtime && n == &history.origin.native_id && *owner != id
+            r == history.origin.instance_id() && n == &history.origin.native_id && *owner != id
         }) {
             result.skipped_count += 1;
             continue;
@@ -264,7 +252,7 @@ fn adopt(app: &Workbench, project: Uuid, request: Request) -> Result<Outcome> {
                     .imported_transcripts
                     .entry(project)
                     .or_default()
-                    .insert(f.path.clone(), (f.stamp.clone(), id));
+                    .insert(f.path.clone(), (f.instance.receipt(&f.stamp), id));
             }
             Ok(status)
         })?;

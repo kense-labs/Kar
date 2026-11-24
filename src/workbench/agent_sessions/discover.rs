@@ -18,41 +18,13 @@ use std::{
 };
 pub(super) const MIB: u64 = 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Source {
-    Claude,
-    Codex,
-    Pi,
-}
-impl Source {
-    pub fn runtime(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-            Self::Pi => "pi",
-        }
-    }
-    fn home(self) -> Option<PathBuf> {
-        let (names, default): (&[&str], &str) = match self {
-            Self::Codex => (&["CODEX_HOME"], ".codex"),
-            Self::Claude => (&["CLAUDE_CONFIG_DIR"], ".claude"),
-            Self::Pi => (&["KAR_PI_AGENT_DIR", "PI_CODING_AGENT_DIR"], ".pi/agent"),
-        };
-        let home = names
-            .iter()
-            .find_map(|k| env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from))
-            .or_else(|| env::home_dir().map(|p| p.join(default)))?;
-        Some(home.join(if self == Self::Claude {
-            "projects"
-        } else {
-            "sessions"
-        }))
-    }
-}
+use crate::provider_instance::HistoryInstance;
+pub(super) use crate::provider_instance::HistoryRuntime as Source;
 
 #[derive(Clone)]
 pub(super) struct Found {
     pub source: Source,
+    pub instance: Arc<HistoryInstance>,
     base: Arc<Dir>,
     relative: PathBuf,
     pub path: PathBuf,
@@ -264,14 +236,17 @@ impl Budget {
         names
     }
 }
-struct Home {
+type Completed = BTreeMap<PathBuf, (String, PathBuf)>;
+struct Home<'a> {
+    completed: &'a Completed,
+    instance: Arc<HistoryInstance>,
     source: Source,
     path: PathBuf,
     root: Arc<Dir>,
     codex_projects: BTreeMap<String, PathBuf>,
     codex_titles: BTreeMap<String, String>,
 }
-impl Home {
+impl Home<'_> {
     fn walk(
         &self,
         dir: &Dir,
@@ -281,7 +256,7 @@ impl Home {
         files: &mut Vec<Found>,
     ) {
         for name in budget.names(dir) {
-            if budget.files == 0 || budget.bytes == 0 || budget.records == 0 {
+            if budget.files == 0 {
                 budget.truncated = true;
                 break;
             }
@@ -311,6 +286,37 @@ impl Home {
             let Ok(meta) = file.metadata() else { continue };
             budget.files -= 1;
             let size = meta.len();
+            let full_path = self.path.join(&relative);
+            let stamp = stamp(&meta);
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            if self.source != Source::Codex
+                && let Some((stored, cwd)) = self.completed.get(&full_path)
+                && self.instance.receipt(&stamp) == *stored
+            {
+                files.push(Found {
+                    source: self.source,
+                    instance: self.instance.clone(),
+                    base: self.root.clone(),
+                    relative,
+                    path: full_path,
+                    stamp,
+                    size,
+                    modified,
+                    original_cwd: cwd.clone(),
+                    cwd: cwd.clone(),
+                    codex_title: None,
+                    project: PathBuf::new(),
+                });
+                continue;
+            }
+            if budget.bytes == 0 || budget.records == 0 {
+                budget.truncated = true;
+                continue;
+            }
             let Ok(stream) = input(&file, part) else {
                 continue;
             };
@@ -359,17 +365,13 @@ impl Home {
                     break;
                 };
                 let original_cwd = raw.to_owned();
-                let modified = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map_or(0, |d| d.as_millis() as u64);
                 files.push(Found {
                     source: self.source,
+                    instance: self.instance.clone(),
                     base: self.root.clone(),
                     relative: relative.clone(),
                     path: self.path.join(&relative),
-                    stamp: stamp(&meta),
+                    stamp: stamp.clone(),
                     size,
                     modified,
                     project: PathBuf::new(),
@@ -386,13 +388,26 @@ impl Home {
         }
     }
 }
-pub(super) fn discover(app: &Workbench) -> (Vec<Found>, bool) {
+pub(super) fn discover(app: &Workbench) -> crate::Result<(Vec<Found>, bool)> {
     let mut found = vec![];
     let mut truncated = false;
-    for source in [Source::Claude, Source::Codex, Source::Pi] {
-        let Some(path) = source.home().and_then(|p| p.canonicalize().ok()) else {
+    let receipts = app.0.catalog.lock().unwrap().imported_transcripts.clone();
+    let mut completed = Completed::new();
+    for (project, sources) in receipts {
+        if app.project(project).is_err() {
             continue;
-        };
+        }
+        for (path, (stamp, id)) in sources {
+            if let Ok(info) = app.0.chats.initial_info(id)
+                && app.allowed(&info.workspace).is_ok()
+            {
+                completed.insert(path, (stamp, info.workspace));
+            }
+        }
+    }
+    for instance in crate::provider_instance::configured()? {
+        let source = instance.runtime;
+        let path = instance.sessions.clone();
         let Ok(dir) = Dir::open_ambient_dir(&path, ambient_authority()) else {
             continue;
         };
@@ -405,6 +420,8 @@ pub(super) fn discover(app: &Workbench) -> (Vec<Found>, bool) {
             codex_titles.extend(super::codex::titles(parent));
         }
         let home = Home {
+            completed: &completed,
+            instance: Arc::new(instance),
             source,
             path,
             root: Arc::new(dir),
@@ -441,5 +458,5 @@ pub(super) fn discover(app: &Workbench) -> (Vec<Found>, bool) {
             .cmp(&a.modified)
             .then_with(|| a.path.cmp(&b.path))
     });
-    (found, truncated)
+    Ok((found, truncated))
 }

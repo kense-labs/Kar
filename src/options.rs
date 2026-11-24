@@ -180,7 +180,18 @@ pub(crate) fn pi_file(cwd: &Path, opts: &SessionOptions, id: &str) -> Result<Pat
             return Err(Error::Refused("imported Pi transcript moved".into()));
         }
         let mut header = String::new();
-        BufReader::new(std::fs::File::open(path)?.take(64 * 1024)).read_line(&mut header)?;
+        let mut open = std::fs::OpenOptions::new();
+        open.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            open.custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK);
+        }
+        let file = open.open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(Error::Refused("invalid imported Pi transcript".into()));
+        }
+        BufReader::new(file.take(64 * 1024)).read_line(&mut header)?;
         let row: Value = serde_json::from_str(&header)?;
         if row["type"] != "session"
             || row["id"] != id

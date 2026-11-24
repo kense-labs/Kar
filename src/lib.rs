@@ -69,6 +69,8 @@ pub use capabilities::{
 #[cfg(not(target_arch = "wasm32"))]
 mod options;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod provider_instance;
+#[cfg(not(target_arch = "wasm32"))]
 pub use options::{
     McpServer, NativeMemory, NativeMemoryDefault, SessionLogUpload, SessionSettings,
     UserConfigurationCategory,

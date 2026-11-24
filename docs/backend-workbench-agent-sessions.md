@@ -14,6 +14,23 @@ The defaults are the native per-user homes. Scanning does not start a provider. 
 
 Kar uses `ruzstd` 0.9.1 (MIT, Rust 1.87) for Zstandard decoding and `sqlite-core` 0.12.0 (Apache-2.0, Rust 1.80) for read-only SQLite and WAL projection. The JSONL selector uses `struson` 0.7.2 (MIT or Apache-2.0, Rust 1.85). Kar currently declares Rust 1.89. The dependency versions are locked.
 
+## Provider instances
+
+`KAR_AGENT_SESSION_CONFIG` can point the server to a host-owned TOML file. Each entry has a stable instance ID and a native runtime. Optional `home`, `program` and Pi `sessions` paths must be absolute. The default instance names are `codex`, `claude` and `pi`; setting `enabled = false` disables one. Reads are confined to the configured session directories. Instances sharing the same physical directory are scanned once, with the default preferred. Kar scopes native IDs to an instance and pins its home for future reopen. Credentials remain with the native provider.
+
+```toml
+[instances.pi-personal]
+runtime = "pi"
+home = "/Users/example/.pi-personal"
+sessions = "/Users/example/.pi-personal/history"
+
+[instances.codex-work]
+runtime = "codex"
+home = "/Users/example/.codex-work"
+```
+
+`kar::provider_instance::HistoryInstance` identifies the runtime, native home, session directory and optional executable. The scanner and saved chat binding share it. The HTTP fixture includes two Pi profiles using the same native UUID and a second configuration alias pointing at the default profile.
+
 ## Unified verification
 
 `cargo test --locked --test workbench_agent_sessions` starts a real Kar service with three isolated provider-file fixtures. It covers root filtering, subagent exclusion, the compressed Codex projection, active Pi branch, Claude sidechains, stale project roots, restart and replay, refusal to overwrite changed history and delivery into the original Codex session via an isolated protocol peer. The workbench suite includes this test in its local group.
@@ -22,4 +39,4 @@ The implementation and the scenario passed macOS `CARGO_INCREMENTAL=0 CARGO_PROF
 
 ## Boundaries to verify
 
-The scanner uses one configured home per runtime. Named provider installations with independent credentials require a separate provider-instance configuration and stable identity. The service limits optional index snapshots to 128 MiB for SQLite and 64 MiB for its WAL. Inaccessible or unstable indexes leave the native cwd in effect. The JSONL reader skips unselected image and tool bodies while parsing the surrounding record. The retained history and selected record fields share a 32 MiB allowance. Exhausting it skips the transcript. Claude retains the first user message and a sliding message window while streaming. `cargo test --locked --lib workbench::agent_sessions::jsonl::tests` covers a 36 MiB unselected field, malformed records and selected-field exhaustion. Unusually large SQLite databases and large collections of projects need separate coverage. Kar can resume from imported text. Imported historical turns have no Kar Git checkpoints.
+The service limits optional index snapshots to 128 MiB for SQLite and 64 MiB for its WAL. Inaccessible or unstable indexes leave the native cwd in effect. The JSONL reader skips unselected image and tool bodies while parsing the surrounding record. The retained history and selected record fields share a 32 MiB allowance. Exhausting it skips the transcript. Claude retains the first user message and a sliding message window while streaming. `cargo test --locked --lib workbench::agent_sessions::jsonl::tests` covers a 36 MiB unselected field, malformed records and selected-field exhaustion. Unusually large SQLite databases and large collections of projects need separate coverage. Kar can resume from imported text. Imported historical turns have no Kar Git checkpoints.

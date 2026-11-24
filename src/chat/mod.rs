@@ -45,6 +45,8 @@ pub struct ChatInfo {
     pub id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported: Option<import::native::Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_instance: Option<crate::provider_instance::HistoryInstance>,
     pub workspace: PathBuf,
     /// Stable checkout identity for Kar-managed worktrees, including chats in a subdirectory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,11 +91,31 @@ impl ChatInfo {
             .as_ref()
             .map_or(self.id, |f| f.checkpoint_store)
     }
+    pub(crate) fn active_instance(&self) -> Option<&crate::provider_instance::HistoryInstance> {
+        self.provider_instance.as_ref().or_else(|| {
+            self.imported
+                .as_ref()
+                .filter(|o| o.runtime == self.runtime && o.native_id == self.native_id)?
+                .instance
+                .as_ref()
+        })
+    }
+    pub(super) fn configure_instance(&self, opts: &mut SessionOptions) {
+        if let Some(instance) = self.active_instance() {
+            instance.configure(opts);
+        }
+        if self.protocol == Protocol::Pi
+            && let Some(o) = self
+                .imported
+                .as_ref()
+                .filter(|o| o.runtime == self.runtime && o.native_id == self.native_id)
+        {
+            opts.pi_resume_file = Some(o.transcript.clone());
+        }
+    }
     fn options(&self) -> SessionOptions {
         let mut opts = SessionOptions::new(&self.workspace);
-        if self.protocol == Protocol::Pi && let Some(origin) = &self.imported && origin.runtime == self.runtime && origin.native_id == self.native_id {
-            opts.pi_resume_file = Some(origin.transcript.clone());
-        }
+        self.configure_instance(&mut opts);
         opts.model = self.model.clone();
         opts.settings = self.settings.clone();
         if self.protocol == Protocol::KimiKap
@@ -235,6 +257,18 @@ impl ChatStore {
     }
     pub(crate) fn directory(&self) -> &Path {
         &self.dir
+    }
+    pub(crate) fn visit_native_bindings(
+        &self,
+        id: Uuid,
+        visit: impl FnMut(&ChatInfo),
+    ) -> Result<()> {
+        let mut file = File::open(self.path(id))?;
+        log::with_lock(&mut file, false, |f| {
+            let mut reader = std::io::BufReader::new(f);
+            let mut info = log::parse_header(&mut reader, Some(id))?.0.info;
+            log::visit_info_changes(reader, &mut info, visit)
+        })
     }
     pub(crate) fn initial_info(&self, id: Uuid) -> Result<ChatInfo> {
         Ok(log::parse_header(
@@ -445,6 +479,7 @@ impl ChatStore {
             ));
         }
         let info = ChatInfo {
+            provider_instance: None,
             imported: None,
             id,
             workspace: opts.cwd.clone(),

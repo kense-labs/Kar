@@ -42,7 +42,9 @@ pub enum ChatUpdate {
         id: Uuid,
         reason: String,
     },
-    Imported { turns: Vec<ChatTurn> },
+    Imported {
+        turns: Vec<ChatTurn>,
+    },
     Inherited {
         turns: Vec<ChatTurn>,
     },
@@ -520,11 +522,20 @@ impl State {
                     .insert(frame.cursor.stream_id, frame.cursor.after_seq);
             }
             ChatUpdate::Imported { turns } => {
-                if self.info.imported.is_none() || self.stream.is_some() || !self.turns.is_empty() || turns.is_empty() {
-                    return Err(Error::Protocol("misplaced native transcript history".into()));
+                if self.info.imported.is_none()
+                    || self.stream.is_some()
+                    || !self.turns.is_empty()
+                    || turns.is_empty()
+                {
+                    return Err(Error::Protocol(
+                        "misplaced native transcript history".into(),
+                    ));
                 }
                 for (index, turn) in turns.iter().enumerate() {
-                    if turn.status == TurnStatus::Running || turn.items.is_empty() || self.ids.insert(turn.id, index).is_some() {
+                    if turn.status == TurnStatus::Running
+                        || turn.items.is_empty()
+                        || self.ids.insert(turn.id, index).is_some()
+                    {
                         return Err(Error::Protocol("invalid imported turn".into()));
                     }
                 }
@@ -1086,7 +1097,16 @@ pub(super) fn parse_header(reader: &mut impl BufRead, id: Option<Uuid>) -> Resul
     }
     Ok((State::new(header.chat), line.len() as u64))
 }
-pub(super) fn read_info_changes(mut reader: impl BufRead, info: &mut ChatInfo) -> Result<()> {
+pub(super) fn read_info_changes(reader: impl BufRead, info: &mut ChatInfo) -> Result<()> {
+    visit_info_changes(reader, info, |_| {})
+}
+pub(super) fn visit_info_changes(
+    mut reader: impl BufRead,
+    info: &mut ChatInfo,
+    mut visit: impl FnMut(&ChatInfo),
+) -> Result<()> {
+    visit(info);
+
     // Listing a project and checking its workspace authorization need only the
     // provider binding, not every turn, tool result and checkpoint in the chat.
     #[derive(Deserialize)]
@@ -1111,8 +1131,9 @@ pub(super) fn read_info_changes(mut reader: impl BufRead, info: &mut ChatInfo) -
         match serde_json::from_slice(&line)? {
             Change::HandoffReady { target } => target.activate(info),
             Change::HandoffTargetReopened { native_id } => info.native_id = native_id,
-            Change::Other => {}
+            Change::Other => continue,
         }
+        visit(info);
     }
     Ok(())
 }

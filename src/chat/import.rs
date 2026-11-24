@@ -45,6 +45,7 @@ impl ChatStore {
         }
         let worktree = crate::workbench_git::pin_checkout(&workspace)?;
         let info = ChatInfo {
+            provider_instance: None,
             imported: None,
             worktree_id: worktree.as_ref().map(|(id, _)| *id),
             forked_from: None,

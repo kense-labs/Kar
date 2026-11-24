@@ -42,7 +42,26 @@ async fn run() {
     let codex_home = root.join("codex");
     let claude_home = root.join("claude");
     let pi_home = root.join("pi");
+    let config = root.join("instances.toml");
+    let other = root.join("second-pi");
+    let flat = other.join("custom");
+    fs::write(
+        &config,
+        format!(
+            "[instances.personal]
+runtime='pi'
+home={:?}
+sessions={:?}
+[instances.default-alias]
+runtime='pi'
+home={:?}
+",
+            other, flat, pi_home
+        ),
+    )
+    .unwrap();
     let vars = [
+        ("KAR_AGENT_SESSION_CONFIG", config.as_os_str()),
         ("KAR_CODEX_BIN", codex.as_os_str()),
         ("KAR_HANDOFF_FIXTURE", db.as_os_str()),
         ("KAR_HANDOFF_REAL_CODEX", std::ffi::OsStr::new("")),
@@ -90,6 +109,14 @@ async fn run() {
             json!({"type":"message","id":"c","parentId":"a","message":{"role":"assistant","content":"active"}}),
         ],
     );
+    write(
+        &flat.join("duplicate-id.jsonl"),
+        &[
+            json!({"type":"session","id":pi,"cwd":cwd}),
+            json!({"type":"message","message":{"role":"user","content":"different Pi profile"}}),
+            json!({"type":"message","message":{"role":"assistant","content":"second account"}}),
+        ],
+    );
     let dir = codex_path.parent().unwrap();
     write(
         &dir.join("rollout-subagent.jsonl"),
@@ -107,7 +134,7 @@ async fn run() {
     let (mut server, base) = server::serve_with_env(&state, &allowed, &db, &vars).await;
     let scan = ok(http.get(format!("{base}/agent-sessions/scan"))).await;
     assert_eq!(scan["candidates"].as_array().unwrap().len(), 1);
-    assert_eq!(scan["candidates"][0]["thread_count"], 3);
+    assert_eq!(scan["candidates"][0]["thread_count"], 4);
     assert_eq!(scan["candidates"][0]["already_imported"], false);
     let p = ok(http
         .post(format!("{base}/projects"))
@@ -126,7 +153,7 @@ async fn run() {
         .post(import(&base))
         .json(&json!({"expected_workspace_root":cwd})))
     .await;
-    assert_eq!(first["imported_count"], 3);
+    assert_eq!(first["imported_count"], 4);
     assert_eq!(first["skipped_count"], 0);
     let chats = ok(http.get(format!("{base}/projects/{p}/chats"))).await;
     let mut codex_chat = None;
@@ -144,6 +171,9 @@ async fn run() {
                 ("same input", "retained")
             }
             "claude" => ("Claude question", "Claude answer"),
+            "pi" if chat["info"]["imported"]["instance"]["id"] == "personal" => {
+                ("different Pi profile", "second account")
+            }
             "pi" => ("Pi question", "active"),
             _ => unreachable!(),
         };
@@ -156,7 +186,7 @@ async fn run() {
     let again = ok(http.post(import(&base)).json(&json!({}))).await;
     assert_eq!(again["chat_ids"], first["chat_ids"]);
     assert_eq!(again["imported_count"], 0);
-    assert_eq!(again["already_present_count"], 3);
+    assert_eq!(again["already_present_count"], 4);
     transcript.push(
         json!({"type":"user","cwd":cwd,"sessionId":claude,"message":{"content":"external change"}}),
     );

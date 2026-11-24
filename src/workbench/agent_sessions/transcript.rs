@@ -418,7 +418,7 @@ pub(super) enum Parsed {
 }
 pub(super) fn parse(
     found: &Found,
-    bases: &HashMap<String, &Found>,
+    bases: &HashMap<(String, String), &Found>,
     budget: &mut u64,
 ) -> Option<Parsed> {
     let mut data = read(found, None, budget)?;
@@ -432,7 +432,9 @@ pub(super) fn parse(
                 inherited.clear();
                 break;
             }
-            let prev = bases.get(&id).filter(|f| f.project == found.project);
+            let prev = bases
+                .get(&(found.instance.id.clone(), id))
+                .filter(|f| f.project == found.project);
             let Some(mut old) = prev.and_then(|f| read(f, Some(end), budget)) else {
                 inherited.clear();
                 break;
@@ -506,13 +508,14 @@ pub(super) fn parse(
         workspace: found.cwd.clone(),
         model: data.model,
         origin: Origin {
+            instance: Some((*found.instance).clone()),
             project: None,
             runtime: found.source.runtime().into(),
             native_id,
             transcript: found.path.clone(),
             title: name,
             omitted_messages: omitted + data.dropped,
-            stamp: found.stamp.clone(),
+            stamp: found.instance.receipt(&found.stamp),
         },
         messages,
     })))
