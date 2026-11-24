@@ -51,6 +51,10 @@ pub(super) fn cases() -> Vec<Case> {
             "two HTTP clients and scoped projects with a Codex protocol fixture",
         ),
         (
+            "workbench-devices",
+            "device protocol fixture, simulated Xcode tools and chat peer on local HTTP",
+        ),
+        (
             "workbench-queue",
             "workbench restart with durable inputs, native protocol fixture",
         ),
@@ -108,6 +112,14 @@ pub(super) fn cases() -> Vec<Case> {
         case.environment = env.iter().map(|s| s.to_string()).collect();
         cases.push(case);
     }
+    let mut devices = scenario(
+        "chat_restart",
+        "workbench-devices-live",
+        &["--test", "chat_restart", "--", "workbench-devices-live"],
+        "macOS, installed Xcode and a dedicated booted iOS simulator UDID for real device state, settings and screenshot; chat is a protocol fixture",
+    );
+    devices.environment = vec!["KAR_DEVICE_LIVE_ID".into()];
+    cases.push(devices);
     let mut live = scenario(
         "workbench_handoff",
         "installed-codex-qwen",
