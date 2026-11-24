@@ -72,23 +72,29 @@ enum Action {
     /// Install an absent vendor CLI or print its installation plan.
     Install {
         runtime: String,
+        /// Emit a structured host plan or installer result.
+        #[arg(long)]
+        json: bool,
         #[arg(long)]
         plan: bool,
         /// Select a release line for an OpenCode installation (v1 or v2).
         #[arg(long)]
         line: Option<String>,
         /// Bound installer execution in milliseconds.
-        #[arg(long, default_value = "600000")]
+        #[arg(long, visible_alias="timeout", default_value = "600000")]
         timeout_ms: std::num::NonZeroU64,
     },
     /// Query or update installed CLIs. Omit the runtime to select all installed runtimes.
     Update {
         runtime: Option<String>,
+        /// Include the native updater result and its captured output.
+        #[arg(long)]
+        json: bool,
         /// Only query the release the installed native updater would select.
         #[arg(long)]
         check: bool,
         /// Set the per-runtime deadline in milliseconds.
-        #[arg(long)]
+        #[arg(long, visible_alias="timeout")]
         timeout_ms: Option<std::num::NonZeroU64>,
     },
     /// Serve a group of local agents to an MCP client over stdio.
@@ -494,12 +500,46 @@ async fn execute(command: Action) -> Result<()> {
         Action::Install {
             runtime: id,
             plan,
+            json,
             line,
             timeout_ms,
         } => {
             let r = runtime(&id)?;
+            if json {
+                if plan {
+                    let plan = r
+                        .inspect_install(line.as_deref(), &Default::default())
+                        .await?;
+                    return json_line(&json!({"id":id,"plan":plan}), std::io::stdout());
+                }
+                let result = r
+                    .install_receipt(
+                        line.as_deref(),
+                        Duration::from_millis(timeout_ms.get()),
+                        &Default::default(),
+                    )
+                    .await?;
+                let failed = matches!(
+                    &result,
+                    kar::InstallResult::Failed { .. } | kar::InstallResult::Unsupported(_)
+                );
+                json_line(&json!({"id":id,"install":result}), std::io::stdout())?;
+                if failed {
+                    return Err(Error::Refused("installation did not complete".into()));
+                }
+                return Ok(());
+            }
             if plan {
-                json_line(&r.install_plan_for(line.as_deref())?.preview(), std::io::stdout())?;
+                if let kar::HostInstallPlan::Unsupported(refusal) = r
+                    .inspect_install(line.as_deref(), &Default::default())
+                    .await?
+                {
+                    return Err(Error::Unsupported(refusal.detail));
+                }
+                json_line(
+                    &r.install_plan_for(line.as_deref())?.preview(),
+                    std::io::stdout(),
+                )?;
             } else {
                 json_line(
                     &r.install_with(line.as_deref(), Duration::from_millis(timeout_ms.get()))
@@ -511,6 +551,7 @@ async fn execute(command: Action) -> Result<()> {
         Action::Update {
             runtime: id,
             check,
+            json,
             timeout_ms,
         } => {
             let timeout =
@@ -519,9 +560,13 @@ async fn execute(command: Action) -> Result<()> {
                 } else {
                     600_000
                 }));
-            if !check && let Some(id) = &id {
+            if !json
+                && !check
+                && let Some(id) = &id
+            {
                 return json_line(&runtime(id)?.update_with(timeout).await?, std::io::stdout());
             }
+            let explicit = id.is_some();
             let providers = match id {
                 Some(id) => vec![runtime(&id)?],
                 None => runtimes()
@@ -558,7 +603,22 @@ async fn execute(command: Action) -> Result<()> {
                             ..
                         }
                     );
-                    let row = if eligible {
+                    let row = if json && (explicit || eligible) {
+                        match rt.upgrade_receipt(timeout, &Default::default()).await {
+                            Ok(result) => {
+                                failed |= matches!(
+                                    &result,
+                                    kar::UpgradeResult::Failed { .. }
+                                        | kar::UpgradeResult::Unchanged { .. }
+                                );
+                                json!({"id":rt.id,"upgrade":result})
+                            }
+                            Err(error) => {
+                                failed = true;
+                                json!({"id":rt.id,"error":error.to_string()})
+                            }
+                        }
+                    } else if eligible {
                         match rt.update_with(timeout).await {
                             Ok(updated) => json!({"id":rt.id, "installation":updated}),
                             Err(Error::Unsupported(detail)) => {

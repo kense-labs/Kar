@@ -160,9 +160,12 @@ impl Probe {
             self.env.get(OsStr::new(key)).map(|s| s.as_os_str())
         }
     }
+    pub(crate) fn tool(&self, name: &str) -> Option<PathBuf> {
+        self.locate(Path::new(name), true).map(|c| c.command)
+    }
     pub(crate) fn command(&self, program: &Path) -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new(program);
-        cmd.current_dir(&self.cwd).env_clear().envs(&self.env);
+        cmd.current_dir(&self.cwd).env_clear().envs(&self.env).env_remove("KAR_WORKBENCH_TOKEN");
         cmd
     }
     async fn run(&self, program: &Path, args: &[&str], timeout: u64) -> Result<Output> {
@@ -230,13 +233,9 @@ impl Probe {
             if rt.id == "codebuddy"
                 && candidates.is_empty()
                 && let Some(npm) = self.locate(Path::new("npm"), true)
-                && let Ok(out) = self.run(&npm.command, &["prefix", "-g"], 5).await
-                && out.status.success()
-                && let Ok(prefix) = std::str::from_utf8(&out.stdout)
+                && let Ok(p) = crate::setup::host::npm_prefix(self, &npm.command).await
             {
-                let p = Path::new(prefix.trim());
-                if p.is_absolute()
-                    && let Some(found) = self.locate(
+                if let Some(found) = self.locate(
                         &p.join(if cfg!(windows) {
                             "codebuddy.cmd"
                         } else {

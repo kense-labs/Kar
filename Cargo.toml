@@ -82,6 +82,11 @@ struson = "0.7.2"
 jsonschema = { version = "0.63.1", default-features = false }
 
 [[test]]
+name = "setup_receipts"
+path = "tests/setup_receipts.rs"
+harness = false
+
+[[test]]
 name = "protocol"
 path = "tests/protocol.rs"
 harness = false

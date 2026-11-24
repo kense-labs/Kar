@@ -1,11 +1,13 @@
 //! Vendor-owned installation methods. Planning does not change the host.
+pub(crate) mod host;
+mod receipts;
 mod update;
+pub use host::{HostInstallPlan, InstallReason, InstallRefusal, InstallStep};
+pub use receipts::{InstallResult, UpgradeReason, UpgradeResult};
 mod plan;
 pub use plan::{InstallCommand, InstallPreview};
-use crate::{Error, Installation, Result, Runtime};
+use crate::{Error, Result, Runtime};
 use serde::Serialize;
-use std::{process::Stdio, time::Duration};
-use tokio::process::Command;
 pub use update::UpdateCheck;
 
 #[derive(Clone, Debug, Serialize)]
@@ -95,168 +97,5 @@ impl Runtime {
             interpreter,
             args,
         })
-    }
-    pub async fn install(&self) -> Result<Installation> {
-        self.install_with(None, Duration::from_secs(600)).await
-    }
-
-    pub async fn install_with(
-        &self,
-        line: Option<&str>,
-        timeout: Duration,
-    ) -> Result<Installation> {
-        if timeout.is_zero() {
-            return Err(Error::Protocol("installer timeout must be positive".into()));
-        }
-        let probe = crate::installation::Probe::new(&Default::default())?;
-        let installation = probe.discover(self).await.summary();
-        match installation {
-            Installation::Missing if probe.entry(self).1 => {
-                return Err(Error::Refused(format!(
-                    "the selected {} executable is missing; its installer writes to a vendor-selected location",
-                    self.id
-                )));
-            }
-            Installation::Missing => {}
-            available @ Installation::Available { .. } => return Ok(available),
-            Installation::Failed { reason } => return Err(Error::Refused(reason)),
-        }
-        let plan = self.install_plan_for(line)?;
-        let run = tokio::time::timeout(timeout, self.run_installer(plan)).await;
-        crate::clear_installation_cache();
-        let run = run.map_err(|_| Error::Timeout(format!("{} installer", self.id)))?;
-        match (probe.discover(self).await.summary(), run) {
-            (installed @ Installation::Available { .. }, _) => Ok(installed),
-            (_, Err(error)) => Err(error),
-            (Installation::Failed { reason }, _) => Err(Error::Refused(reason)),
-            (Installation::Missing, _) => Err(Error::Refused(format!(
-                "{} installer finished without a discoverable executable",
-                self.id
-            ))),
-        }
-    }
-
-    async fn run_installer(&self, plan: InstallPlan) -> Result<()> {
-        match plan {
-            InstallPlan::Npm { package } => {
-                let mut command = Command::new(plan::npm_program());
-                command.args(["install", "--global", package]);
-                checked(command).await?;
-            }
-            InstallPlan::VendorScript {
-                url,
-                interpreter,
-                args,
-            } => {
-                let temp = tempfile::NamedTempFile::new()?;
-                let mut download = Command::new("curl");
-                download
-                    .args(plan::download_args())
-                    .arg(temp.path())
-                    .arg(url);
-                checked(download).await?;
-                let mut command = Command::new(interpreter);
-                command.arg(temp.path()).args(args);
-                if self.id == "codex" {
-                    command.env("CODEX_NON_INTERACTIVE", "1");
-                }
-                checked(command).await?;
-            }
-        }
-        Ok(())
-    }
-    /// Ask the executable's own updater and verify the version of this same path afterwards.
-    pub async fn update(&self) -> Result<Installation> {
-        self.update_with(Duration::from_secs(600)).await
-    }
-
-    pub async fn update_with(&self, timeout: Duration) -> Result<Installation> {
-        if timeout.is_zero() {
-            return Err(Error::Protocol("update timeout must be positive".into()));
-        }
-        let run = tokio::time::timeout(timeout, self.run_update()).await;
-        crate::clear_installation_cache();
-        run.map_err(|_| Error::Timeout(format!("{} updater", self.id)))?
-    }
-
-    async fn run_update(&self) -> Result<Installation> {
-        let probe = crate::installation::Probe::new(&Default::default())?;
-        let before = update::Target::new(probe.discover(self).await).map_err(|reason| {
-            Error::Unsupported(format!("{} upgrade target: {reason:?}", self.id))
-        })?;
-        let args: &[&str] = match self.id.as_str() {
-            "codex" | "claude" | "grok" | "antigravity" | "factory" => &["update"],
-            "opencode" if before.version.major == 2 => &["upgrade"],
-            "opencode" => {
-                return Err(Error::Unsupported(
-                    "the native OpenCode updater requires v2".into(),
-                ));
-            }
-            "kimi" if before.version >= semver::Version::new(0, 43, 0) => &["upgrade", "-y"],
-            "kimi" => {
-                return Err(Error::Unsupported(
-                    "this Kimi upgrade requires a terminal".into(),
-                ));
-            }
-            _ => {
-                return Err(Error::Unsupported(format!(
-                    "native updater for {}",
-                    self.id
-                )));
-            }
-        };
-        match update::query(&self.id, &probe, &before).await? {
-            UpdateCheck::Ok {
-                update_available: false,
-                ..
-            } => {
-                return Ok(Installation::Available {
-                    version: before.version.to_string(),
-                });
-            }
-            UpdateCheck::Unavailable {
-                reason: "unmanaged_installation" | "package_manager" | "updates_disabled",
-                ..
-            } => {
-                return Err(Error::Unsupported(format!(
-                    "this {} installation is not managed by the native updater",
-                    self.id
-                )));
-            }
-            _ => {}
-        }
-        let mut command = update::setup_command(&probe, &before.command);
-        command.args(args);
-        if self.id == "claude" {
-            crate::options::claude_environment(&mut command, &Default::default());
-        }
-        let run = checked(command).await;
-        crate::clear_installation_cache();
-        let mut selected = self.clone();
-        selected.program = before.command;
-        let observed = probe.discover(&selected).await;
-        if let Installation::Available { version } = observed.clone().summary()
-            && let Ok(after) = update::Target::new(observed)
-            && before.version != after.version
-        {
-            return Ok(Installation::Available { version });
-        }
-        run?;
-        Err(Error::Refused(format!(
-            "{} updater did not produce a new usable version of the selected executable",
-            self.id
-        )))
-    }
-}
-async fn checked(mut cmd: Command) -> Result<()> {
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::from(std::io::stderr()))
-        .stderr(Stdio::inherit())
-        .env_remove("KAR_WORKBENCH_TOKEN");
-    let status = crate::process::OwnedProcess::spawn(cmd)?.wait().await?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::Refused(format!("setup command returned {status}")))
     }
 }
