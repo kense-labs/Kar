@@ -157,9 +157,6 @@ pub(crate) fn credential_refusal(protocol: Protocol, id: &str) -> Option<&'stati
         Protocol::Acp if matches!(id, "devin" | "antigravity" | "cursor") => {
             Some("session MCP credential isolation has not been verified for this ACP adapter")
         }
-        Protocol::Claude if cfg!(windows) => {
-            Some("Claude session MCP credentials are unavailable on Windows")
-        }
         Protocol::Dsh => Some(
             "DSH session MCP requires a stdio command and arguments without credential environment or headers",
         ),

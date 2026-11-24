@@ -2,6 +2,7 @@ pub(crate) mod availability;
 pub(crate) mod environment;
 pub(crate) mod instructions;
 pub(crate) mod mcp_capabilities;
+pub(crate) mod mcp_file;
 pub(crate) mod opencode;
 pub(crate) mod qwen_memory;
 pub(crate) mod user_configuration;
@@ -12,7 +13,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
 pub use user_configuration::UserConfigurationCategory;
@@ -165,17 +166,6 @@ impl McpServer {
         };
         map.values().filter(|v| !v.is_empty())
     }
-}
-pub(crate) fn claude_mcp(options: &SessionOptions) -> Result<tempfile::NamedTempFile> {
-    let mut file = tempfile::NamedTempFile::new()?;
-    let servers: Result<BTreeMap<_, _>> = options
-        .mcp_servers
-        .iter()
-        .map(|(name, server)| Ok((name, server.vendor_config()?)))
-        .collect();
-    serde_json::to_writer(&mut file, &json!({"mcpServers":servers?}))?;
-    file.flush()?;
-    Ok(file)
 }
 pub(crate) fn env_path(opts: &SessionOptions, name: &str) -> Option<PathBuf> {
     opts.env_value(name)

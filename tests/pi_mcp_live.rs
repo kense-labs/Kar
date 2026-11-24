@@ -2,6 +2,9 @@
 #[cfg(unix)]
 #[path = "support/mcp_process.rs"]
 mod mcp_process;
+#[path = "support/private_inputs.rs"]
+mod private_inputs;
+use private_inputs::verify_private_inputs;
 #[path = "support/sse.rs"]
 mod sse;
 use axum::{
@@ -254,27 +257,6 @@ async fn observe_http_call(store: &ChatStore, chat: &ChatSession, peer: &Peer) -
     }
     http.abort();
     turn.unwrap()
-}
-
-fn verify_private_inputs(dir: &Path, probes: &[String]) {
-    for e in fs::read_dir(dir).unwrap() {
-        let e = e.unwrap();
-        let kind = e.file_type().unwrap();
-        if kind.is_dir() {
-            verify_private_inputs(&e.path(), probes);
-        } else if kind.is_file() {
-            let bytes = fs::read(e.path()).unwrap();
-            for value in probes {
-                assert!(
-                    !bytes
-                        .windows(value.len())
-                        .any(|slice| slice == value.as_bytes()),
-                    "credential persisted in {}",
-                    e.path().display()
-                );
-            }
-        }
-    }
 }
 
 #[tokio::test]

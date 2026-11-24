@@ -294,7 +294,11 @@ impl Session {
                 None
             };
         let reader = capture.as_ref().map(|owner| owner.reader.clone());
-        let mut private_mcp = None;
+        let mut private_mcp = match runtime.protocol {
+            Protocol::Claude => crate::options::mcp_file::prepare("kar-claude-mcp-", &options)?,
+            Protocol::Qoder => crate::options::mcp_file::prepare("kar-qoder-mcp-", &options)?,
+            _ => None,
+        };
         let mut qoder = None;
         let mut memory = None;
         match runtime.protocol {
@@ -326,11 +330,8 @@ impl Session {
                 if !dirs.is_empty() {
                     process.arg("--add-dir").args(&dirs);
                 }
-                if !options.mcp_servers.is_empty() {
-                    private_mcp = Some(crate::options::claude_mcp(&options)?);
-                    process
-                        .arg("--mcp-config")
-                        .arg(private_mcp.as_ref().unwrap().path());
+                if let Some(config) = &private_mcp {
+                    process.arg("--mcp-config").arg(config.path());
                 }
                 Uuid::parse_str(&id).map_err(|_| {
                     Error::Protocol("Claude resume requires a native session UUID".into())
@@ -377,9 +378,6 @@ impl Session {
                 }
             }
             Protocol::Qoder => {
-                if !options.mcp_servers.is_empty() {
-                    private_mcp = Some(crate::options::claude_mcp(&options)?);
-                }
                 qoder = Some(
                     crate::qoder::prepare(
                         runtime,
@@ -1022,6 +1020,9 @@ impl Session {
                     return Err(error);
                 }
                 session.info = initialized?;
+                if let Some(config) = private_mcp.take() {
+                    config.finish(options.handshake_timeout).await?;
+                }
                 if session.request_capture.is_some() {
                     session
                         .rpc(crate::model_request::CONFIRM, json!({}))
@@ -1142,7 +1143,9 @@ impl Session {
             let _ = session.close().await;
             return Err(error);
         }
-        drop(private_mcp);
+        if let Some(config) = private_mcp {
+            config.finish(options.handshake_timeout).await?;
+        }
         identity.lock().unwrap().session = Some(id.clone());
         session.journal.bind_root(&id);
         session.id = id;

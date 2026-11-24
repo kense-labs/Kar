@@ -25,12 +25,16 @@ mod environment;
 mod grok_turns;
 #[path = "protocol/installation.rs"]
 mod installation;
+#[path = "protocol/mcp_handoff.rs"]
+mod mcp_handoff;
 #[path = "protocol/opencode_steering.rs"]
 mod opencode_steering;
 #[path = "protocol/opening.rs"]
 mod opening;
 #[path = "protocol/pi_registry.rs"]
 mod pi_registry;
+#[path = "support/private_inputs.rs"]
+mod private_inputs;
 #[path = "protocol/provider.rs"]
 mod provider;
 #[path = "protocol/qoder.rs"]
@@ -1211,6 +1215,10 @@ async fn manual_compaction_controls() -> kar::Result<()> {
 async fn main() {
     let args: Vec<_> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("claude-mcp-native") => return mcp_handoff::claude().await,
+        Some("qoder-mcp-native") => return mcp_handoff::qoder().await,
+        Some("stdio-echo-once") => return mcp_handoff::stdio(true),
+        Some("stdio-echo") => return mcp_handoff::stdio(false),
         Some("environment-leaf") => return environment::leaf(),
         Some("environment-sessions") => return environment::sessions().await,
         Some("peer") => environment::capture(),

@@ -13,6 +13,15 @@ pub(crate) struct PrivateDir {
 }
 impl PrivateDir {
     pub(crate) fn sweep(root: &Path, prefix: &str, signature: &[u8]) -> Result<()> {
+        Self::sweep_with(root, prefix, signature, |_| {})
+    }
+
+    pub(crate) fn sweep_with(
+        root: &Path,
+        prefix: &str,
+        signature: &[u8],
+        before_remove: impl Fn(&Path),
+    ) -> Result<()> {
         for entry in fs::read_dir(root)?.flatten() {
             if !entry.file_name().to_string_lossy().starts_with(prefix)
                 || !entry.file_type().is_ok_and(|f| f.is_dir())
@@ -31,6 +40,7 @@ impl PrivateDir {
                     .is_ok()
                     && marker == signature
                 {
+                    before_remove(&path);
                     let _ = fs::remove_dir_all(path);
                 }
             }
@@ -40,6 +50,10 @@ impl PrivateDir {
 
     pub(crate) fn create(root: &Path, prefix: &str, signature: &[u8]) -> Result<Self> {
         Self::sweep(root, prefix, signature)?;
+        Self::create_after_sweep(root, prefix, signature)
+    }
+
+    pub(crate) fn create_after_sweep(root: &Path, prefix: &str, signature: &[u8]) -> Result<Self> {
         let mut builder = tempfile::Builder::new();
         builder.prefix(prefix);
         #[cfg(unix)]
