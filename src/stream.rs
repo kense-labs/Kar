@@ -51,7 +51,8 @@ pub(crate) struct RecordStamp {
     pub(crate) response_to: Option<String>,
     opening: Option<crate::Opening>,
     frame_type: Option<String>,
-    pub(crate) carried: Option<Uuid>,
+    pub(crate) carried: Vec<Uuid>,
+    pub(crate) origin: Option<InputOrigin>,
 }
 
 impl From<Direction> for RecordStamp {
@@ -62,11 +63,28 @@ impl From<Direction> for RecordStamp {
             response_to: None,
             opening: None,
             frame_type: None,
-            carried: None,
+            carried: Vec::new(),
+            origin: None,
             prompt: None,
         }
     }
 }
+/// Origin declared by the host, kept out of the native message payload.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputOrigin {
+    pub kind: InputOriginKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputOriginKind {
+    User,
+    Notification,
+    Automation,
+}
+
 /// Host identity of an ordinary prompt. Native admission is reported by Pi RPC.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptIdentity {
@@ -94,6 +112,13 @@ pub struct ImageReference {
 }
 
 impl RecordStamp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_input(mut self, input: &crate::input::Input) -> Self {
+        self.origin = input.origin.clone();
+        self.carried = input.carried.clone();
+        self
+    }
+
     pub(crate) fn frame(direction: Direction, name: impl Into<String>) -> Self {
         Self::from(direction).with_frame_type(name)
     }
@@ -458,6 +483,8 @@ pub struct Record {
     /// Opening metadata belongs to the Kar lifecycle, independently of native wire packets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opening: Option<crate::Opening>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<InputOrigin>,
     /// Inputs previously admitted to an adapter queue and carried by this dispatch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carries: Vec<String>,
@@ -723,8 +750,7 @@ impl Journal {
         let request = input.request_id;
         let mut body = serde_json::json!({"control":"prompt", "input":input.text, "imageCount":input.images.len()});
         crate::transport::redact(&mut body, secrets);
-        let mut stamp = RecordStamp::from(Direction::ToRuntime);
-        stamp.carried = input.carried;
+        let stamp = RecordStamp::from(Direction::ToRuntime).with_input(input);
         self.push(
             stamp.with_prompt_request(
                 input_id,
@@ -807,7 +833,7 @@ impl Journal {
         {
             let reason = "prompt no longer owns the active turn";
             self.refused_input(
-                Direction::ToRuntime.into(),
+                RecordStamp::from(Direction::ToRuntime).with_input(input),
                 body,
                 request,
                 "no_active_turn",
@@ -816,7 +842,7 @@ impl Journal {
             return Err(Error::Refused(reason.into()));
         }
         self.push(
-            Direction::ToRuntime,
+            RecordStamp::from(Direction::ToRuntime).with_input(input),
             RecordKind::Request,
             None,
             vec![],
@@ -1018,7 +1044,8 @@ impl Journal {
                 }
             }),
             opening: stamp.opening,
-            carries: stamp.carried.map(|id| id.to_string()).into_iter().collect(),
+            origin: stamp.origin,
+            carries: stamp.carried.iter().map(ToString::to_string).collect(),
             frame_type: if kind == RecordKind::Frame {
                 stamp
                     .frame_type

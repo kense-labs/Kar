@@ -254,7 +254,7 @@ impl Actor {
         }
         events.push(Event::UserMessage { text });
         let request = input.request_id;
-        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
+        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime).with_input(&input);
         self.journal.push(
             if steer || queued {
                 stamp

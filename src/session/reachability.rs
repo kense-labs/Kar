@@ -20,6 +20,7 @@ impl Command {
                 Self::Prompt(id, input, ..)
                 | Self::Queue(id, input, ..)
                 | Self::Steer(id, input, ..) => {
+                    stamp = stamp.with_input(input);
                     let request = input.request_id;
                     let submission = ImageSubmission::loaded(&input.text, &input.images, secrets);
                     let mut body = json!({"id":request, "inputId":id, "input":input.text});

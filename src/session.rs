@@ -64,6 +64,14 @@ impl Turn {
     }
 }
 
+/// Host metadata and attachments for a single logical input.
+#[derive(Clone, Debug, Default)]
+pub struct InputOptions {
+    pub input_id: Option<Uuid>,
+    pub images: Vec<crate::InputImage>,
+    pub origin: Option<crate::InputOrigin>,
+}
+
 /// A completed public prompt decision. Unconfirmed transport failures stay errors.
 pub enum PromptDecision {
     Accepted(Turn),
@@ -1525,6 +1533,31 @@ impl Session {
     pub fn subscribe(&self, cursor: Option<&Cursor>) -> Result<Subscription> {
         self.journal.subscribe(cursor)
     }
+    fn prepare_input(&self, text: String, options: InputOptions) -> (Uuid, crate::input::Input) {
+        let mut input = crate::input::Input::new(text, options.images);
+        input.origin = options.origin;
+        if let Some(source) = input.origin.as_mut().and_then(|o| o.source.as_mut()) {
+            crate::transport::redact_text(source, &self.preflight_secrets);
+        }
+        (options.input_id.unwrap_or_else(Uuid::new_v4), input)
+    }
+
+    pub async fn prompt_with_options(
+        &self,
+        text: impl Into<String>,
+        options: InputOptions,
+    ) -> Result<Turn> {
+        let (id, input) = self.prepare_input(text.into(), options);
+        self.prompt_prepared(id, input).await
+    }
+
+    async fn prompt_prepared(&self, id: Uuid, input: crate::input::Input) -> Result<Turn> {
+        match self.submit_prepared(id, input).await? {
+            PromptDecision::Accepted(turn) => Ok(turn),
+            PromptDecision::Rejected { error, .. } => Err(error),
+        }
+    }
+
     pub async fn prompt(&self, text: impl Into<String>) -> Result<Turn> {
         self.prompt_images(text, Vec::new()).await
     }
@@ -1559,10 +1592,24 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<PromptDecision> {
-        let id = input_id.unwrap_or_else(Uuid::new_v4);
-        let input = crate::input::Input::new(text.into(), images);
+        let (id, input) = self.prepare_input(
+            text.into(),
+            InputOptions {
+                input_id,
+                images,
+                origin: None,
+            },
+        );
+        self.submit_prepared(id, input).await
+    }
+
+    async fn submit_prepared(
+        &self,
+        id: Uuid,
+        input: crate::input::Input,
+    ) -> Result<PromptDecision> {
         let request = input.request_id;
-        let result = match self.check_input("prompt", id, request, &input.text, &input.images) {
+        let result = match self.check_input("prompt", id, &input) {
             Ok(()) => self.start_prompt(id, input, None).await,
             Err(error) => Err(error),
         };
@@ -1622,10 +1669,30 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<Turn> {
+        self.queue_with_options(
+            text,
+            InputOptions {
+                input_id: Some(id),
+                images,
+                origin: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn queue_with_options(
+        &self,
+        text: impl Into<String>,
+        options: InputOptions,
+    ) -> Result<Turn> {
+        let (id, input) = self.prepare_input(text.into(), options);
+        self.queue_prepared(id, input).await
+    }
+
+    async fn queue_prepared(&self, id: Uuid, input: crate::input::Input) -> Result<Turn> {
         let (done, receiver) = oneshot::channel();
-        let input = crate::input::Input::new(text.into(), images);
         let request = input.request_id;
-        self.check_input("queue", id, request, &input.text, &input.images)?;
+        self.check_input("queue", id, &input)?;
         crate::input::check_text(&input.text, self.text_limit)?;
         self.call(|tx| Command::Queue(id, input, tx, done)).await?;
         Ok(Turn {
@@ -1723,7 +1790,24 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<()> {
-        self.steer_input(id, text.into(), images, None).await
+        self.steer_with_options(
+            text,
+            InputOptions {
+                input_id: Some(id),
+                images,
+                origin: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn steer_with_options(
+        &self,
+        text: impl Into<String>,
+        options: InputOptions,
+    ) -> Result<()> {
+        let (id, input) = self.prepare_input(text.into(), options);
+        self.steer_input(id, input, None).await
     }
     /// Send a new stable input only to the named root attempt. Omit the target request
     /// UUID to pin the current matching input; the actor rechecks that attempt before dispatch.
@@ -1737,8 +1821,7 @@ impl Session {
     ) -> Result<()> {
         self.steer_input(
             input_id,
-            text.into(),
-            images,
+            crate::input::Input::new(text.into(), images),
             Some(crate::transport::TurnTarget {
                 input_id: target_input_id,
                 request_id: target_request_id,
@@ -1749,12 +1832,10 @@ impl Session {
     async fn steer_input(
         &self,
         id: Uuid,
-        text: String,
-        images: Vec<crate::InputImage>,
+        input: crate::input::Input,
         target: Option<crate::transport::TurnTarget>,
     ) -> Result<()> {
-        let input = crate::input::Input::new(text, images);
-        self.check_input("steer", id, input.request_id, &input.text, &input.images)?;
+        self.check_input("steer", id, &input)?;
         crate::input::check_text(&input.text, self.text_limit)?;
         let target = match target {
             Some(target) => match target.pin(&self.journal) {

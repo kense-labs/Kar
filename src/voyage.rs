@@ -168,6 +168,18 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
         } else {
             None
         },
+        origin: if kind == RecordKind::Request
+            && matches!(body["kind"].as_str(), Some("prompt" | "queue" | "steer"))
+        {
+            body.get("origin")
+                .filter(|v| !v.is_null())
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| Error::Protocol(format!("invalid input origin: {e}")))?
+        } else {
+            None
+        },
         carries: if kind == RecordKind::Request && body["kind"] == "prompt" {
             body["carries"]
                 .as_array()

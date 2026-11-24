@@ -117,6 +117,48 @@ async fn fixture() -> (String, Arc<Mutex<Deployment>>) {
     (base, state)
 }
 
+fn sourced(kind: kar::InputOriginKind, source: &str) -> kar::InputOptions {
+    kar::InputOptions {
+        origin: Some(kar::InputOrigin {
+            kind,
+            source: Some(source.into()),
+        }),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn equal_inputs_replay_with_distinct_host_origins() {
+    let (url, state) = fixture().await;
+    let session = Cybion::new(&url, "local-fixture")
+        .unwrap()
+        .open(SessionOptions::new("/nonlocal"))
+        .await
+        .unwrap();
+    for (kind, label) in [
+        (kar::InputOriginKind::User, "keyboard"),
+        (kar::InputOriginKind::Automation, "ci-worker"),
+    ] {
+        let turn = session
+            .prompt_with_options("quick", sourced(kind, label))
+            .await
+            .unwrap();
+        let receipt = turn.admission().unwrap();
+        let saved: kar::Record =
+            serde_json::from_slice(&serde_json::to_vec(&*receipt.request).unwrap()).unwrap();
+        assert_eq!(saved.origin, sourced(kind, label).origin);
+        assert_eq!(turn.report().await.unwrap().text, "quick answer");
+    }
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(state.submissions.len(), 2);
+        assert_eq!(state.submissions[0], state.submissions[1]);
+        assert!(!state.submissions[0].to_string().contains("keyboard"));
+        assert!(!state.submissions[0].to_string().contains("ci-worker"));
+    }
+    session.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn delayed_steer_preserves_the_running_turn_and_holds_the_queue() {
     let (url, state) = fixture().await;
@@ -142,8 +184,32 @@ async fn delayed_steer_preserves_the_running_turn_and_holds_the_queue() {
     })
     .await
     .unwrap();
-    session.steer("defer until later").await.unwrap();
-    let (_, queued) = session.queue("quick").await.unwrap();
+    session
+        .steer_with_options(
+            "defer until later",
+            sourced(kar::InputOriginKind::Notification, "worker"),
+        )
+        .await
+        .unwrap();
+    let queued = session
+        .queue_with_options(
+            "quick",
+            sourced(kar::InputOriginKind::Automation, "scheduler"),
+        )
+        .await
+        .unwrap();
+    for (control, label) in [("steer", "worker"), ("queue", "scheduler")] {
+        assert!(session.records().iter().any(|r| r.native["type"] == control
+            && r.origin.as_ref().and_then(|o| o.source.as_deref()) == Some(label)));
+    }
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .submissions
+            .iter()
+            .all(|request| request.get("origin").is_none())
+    );
     let initial = {
         let mut s = state.lock().unwrap();
         s.model = Some("updated-fixture".into());

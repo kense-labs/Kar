@@ -204,7 +204,8 @@ struct Queued {
 struct Turn {
     input_receipt: Option<crate::InputReceipt>,
     prompt_request: uuid::Uuid,
-    carried: Option<uuid::Uuid>,
+    carried: Vec<uuid::Uuid>,
+    origin: Option<crate::InputOrigin>,
     image_submission: Option<crate::ImageSubmission>,
     process_baseline: Option<crate::resources::turn::Baseline>,
     chat_input: Option<uuid::Uuid>,
@@ -531,7 +532,8 @@ impl Actor {
             && let Some(turn) = &self.turn
             && let Some(id) = turn.chat_input
         {
-            stamp.carried = turn.carried;
+            stamp.carried = turn.carried.clone();
+            stamp.origin = turn.origin.clone();
             stamp = stamp.with_prompt_request(
                 id,
                 self.protocol == Protocol::Pi,
@@ -898,7 +900,8 @@ impl Actor {
         self.turn = Some(Turn {
             input_receipt: None,
             prompt_request: request,
-            carried: prompt.carried,
+            carried: prompt.carried.clone(),
+            origin: prompt.origin.clone(),
             image_submission: crate::ImageSubmission::loaded(
                 &prompt.text,
                 &prompt.images,

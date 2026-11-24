@@ -95,8 +95,7 @@ impl Actor {
             body["llm_profile"] = model.clone().into();
         }
         let request = input.request_id;
-        let mut stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
-        stamp.carried = input.carried;
+        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime).with_input(&input);
         self.record(
             None,
             if let Some(id) = input_id {

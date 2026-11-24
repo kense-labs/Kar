@@ -28,7 +28,7 @@ impl Journal {
         }
         redact(&mut body, secrets);
         self.push(
-            Direction::ToRuntime,
+            super::RecordStamp::from(Direction::ToRuntime).with_input(input),
             RecordKind::Request,
             None,
             vec![],

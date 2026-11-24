@@ -279,7 +279,8 @@ impl crate::ImageSubmission {
 pub(crate) struct Input {
     /// Identity of this local control attempt, never part of a provider's input.
     pub request_id: uuid::Uuid,
-    pub carried: Option<uuid::Uuid>,
+    pub carried: Vec<uuid::Uuid>,
+    pub origin: Option<crate::InputOrigin>,
     pub text: String,
     pub images: Vec<InputImage>,
 }
@@ -287,7 +288,8 @@ impl Input {
     pub fn new(text: String, images: Vec<InputImage>) -> Self {
         Self {
             request_id: uuid::Uuid::new_v4(),
-            carried: None,
+            carried: Vec::new(),
+            origin: None,
             text,
             images,
         }
@@ -298,7 +300,9 @@ impl Input {
     }
     pub(crate) fn dispatch_queued(mut self, id: uuid::Uuid) -> Self {
         self.request_id = uuid::Uuid::new_v4();
-        self.carried = Some(id);
+        if !self.carried.contains(&id) {
+            self.carried.push(id);
+        }
         self
     }
     pub fn blocks(&self, protocol: Protocol) -> Vec<Value> {

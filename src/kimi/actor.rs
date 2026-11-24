@@ -176,8 +176,7 @@ impl Actor {
         }
         events.push(Event::UserMessage { text });
         let request = input.request_id;
-        let mut stamp = crate::stream::RecordStamp::from(Direction::ToRuntime);
-        stamp.carried = input.carried;
+        let stamp = crate::stream::RecordStamp::from(Direction::ToRuntime).with_input(&input);
         self.record(
             if steer {
                 stamp

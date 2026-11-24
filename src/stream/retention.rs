@@ -82,6 +82,7 @@ impl Record {
             prompt: self.prompt.clone(),
             response_to: self.response_to.clone(),
             opening: self.opening.clone(),
+            origin: self.origin.clone(),
             carries: self.carries.clone(),
             frame_type: self.frame_type.clone(),
             session_id: self.session_id.clone(),

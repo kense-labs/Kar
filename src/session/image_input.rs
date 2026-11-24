@@ -46,7 +46,7 @@ impl Session {
                 paths.iter().map(|p| Some(p.as_path())),
                 &self.preflight_secrets,
             );
-            self.refuse_input(control, id, Uuid::new_v4(), submission, error)
+            self.refuse_input(control, id, Uuid::new_v4(), submission, None, error)
         };
         if !self.image_input {
             return Err(refused(Error::Unsupported(
@@ -66,10 +66,9 @@ impl Session {
         &self,
         control: &str,
         id: Uuid,
-        request: Uuid,
-        text: &str,
-        images: &[InputImage],
+        input: &crate::input::Input,
     ) -> Result<()> {
+        let (request, text, images) = (input.request_id, input.text.as_str(), &input.images);
         let reason = if text.is_empty() && images.is_empty() {
             crate::input::EMPTY_INPUT
         } else if !images.is_empty() && control == "steer" && !self.capabilities().steering {
@@ -89,6 +88,7 @@ impl Session {
             id,
             request,
             submission,
+            input.origin.clone(),
             Error::Unsupported(reason.into()),
         ))
     }
@@ -99,6 +99,7 @@ impl Session {
         id: Uuid,
         request: Uuid,
         submission: ImageSubmission,
+        origin: Option<crate::InputOrigin>,
         error: Error,
     ) -> Error {
         let (code, mut reason) = match &error {
@@ -109,6 +110,7 @@ impl Session {
         let mut body =
             json!({"id":request,"inputId":id,"input":submission.input,"images":submission.images});
         let mut stamp = crate::stream::RecordStamp::from(crate::Direction::ToRuntime);
+        stamp.origin = origin;
         if control == "prompt" {
             // Earlier recordings use type=prompt for an actual native dispatch.
             body["control"] = "prompt".into();
