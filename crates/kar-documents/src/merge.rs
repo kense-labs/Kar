@@ -22,8 +22,23 @@ pub struct Conflict {
     pub reason: String,
     pub base: Value,
     /// None means the target or property could not be located.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_value"
+    )]
     pub current: Option<Value>,
     pub proposed: Value,
+}
+
+fn present_value<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(d).map(Some)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Comparison {
+    Base,
+    Current,
 }
 
 impl<T: PartialEq + Serialize> Change<T> {
@@ -33,6 +48,23 @@ impl<T: PartialEq + Serialize> Change<T> {
         target: &str,
         property: &str,
     ) -> anyhow::Result<Outcome> {
+        self.compare_at(current, target, property, Comparison::Current)
+    }
+
+    pub(crate) fn compare_at(
+        &self,
+        current: Option<&T>,
+        target: &str,
+        property: &str,
+        comparison: Comparison,
+    ) -> anyhow::Result<Outcome> {
+        if matches!(comparison, Comparison::Base) {
+            anyhow::ensure!(
+                current == Some(&self.base),
+                "edit does not match base snapshot at {target} ({property})"
+            );
+            return Ok(Outcome::Unchanged);
+        }
         if let Some(current) = current {
             if current == &self.proposed || self.base == self.proposed {
                 return Ok(Outcome::Unchanged);

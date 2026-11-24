@@ -1,7 +1,10 @@
 //! Headless document operations used after Kar resolves an edit target.
+mod candidate;
+pub use candidate::{OfficeEdits, prepare};
 pub mod excel;
 mod merge;
 pub mod slides;
+pub mod word;
 pub use merge::{Change, Conflict, Outcome};
 
 use anyhow::{Result, ensure};

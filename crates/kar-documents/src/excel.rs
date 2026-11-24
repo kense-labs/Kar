@@ -1,4 +1,4 @@
-use crate::merge::{Change, Outcome, unique_index};
+use crate::merge::{Change, Comparison, Outcome, unique_index};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use sheets_engine::{CellRange, MAX_COLS, MAX_ROWS, Workbook, cell_name, format::StyleChange};
@@ -31,6 +31,15 @@ impl Cell {
     }
 
     pub fn apply(&self, book: &mut Workbook, edit: &CellEdit) -> Result<Outcome> {
+        self.apply_at(book, edit, Comparison::Current)
+    }
+
+    pub(crate) fn apply_at(
+        &self,
+        book: &mut Workbook,
+        edit: &CellEdit,
+        comparison: Comparison,
+    ) -> Result<Outcome> {
         ensure!(
             self.row < MAX_ROWS && self.column < MAX_COLS,
             "cell outside worksheet"
@@ -51,7 +60,7 @@ impl Cell {
         match edit {
             CellEdit::Input(change) => {
                 let value = sheet.map(|s| book.input(s, self.row, self.column));
-                let result = change.compare(value.as_ref(), &target, "input")?;
+                let result = change.compare_at(value.as_ref(), &target, "input", comparison)?;
                 if let (Outcome::Applied, Some(s)) = (result, sheet) {
                     book.set_input(s, self.row, self.column, &change.proposed)?;
                 }
@@ -63,7 +72,7 @@ impl Cell {
                     "invalid RGB fill"
                 );
                 let value = sheet.map(|s| book.cell_style(s, self.row, self.column).fill);
-                let result = change.compare(value.as_ref(), &target, "fill")?;
+                let result = change.compare_at(value.as_ref(), &target, "fill", comparison)?;
                 if let (Outcome::Applied, Some(s)) = (result, sheet) {
                     let cell = (self.row, self.column);
                     book.set_range_style(

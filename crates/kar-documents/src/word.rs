@@ -1,0 +1,150 @@
+use crate::{Change, Outcome, replace_word_text};
+use anyhow::{Result, ensure};
+use docs_engine::Document;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::ops::Range;
+
+/// Identifies a UTF-8 byte range in the immutable base document.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WordEdit {
+    pub paragraph: usize,
+    pub range: Range<usize>,
+    pub replacement: String,
+}
+
+impl WordEdit {
+    pub fn apply(&self, base: &Document, current: &mut Document) -> Result<Outcome> {
+        let old = base
+            .paragraphs()
+            .get(self.paragraph)
+            .ok_or_else(|| anyhow::anyhow!("unknown base paragraph"))?;
+        let selected = old
+            .text
+            .get(self.range.clone())
+            .ok_or_else(|| anyhow::anyhow!("invalid UTF-8 range in base paragraph"))?;
+        ensure!(
+            !self.replacement.contains(['\r', '\n']),
+            "a paragraph text edit cannot split the paragraph"
+        );
+        let change = Change {
+            base: selected.to_owned(),
+            proposed: self.replacement.clone(),
+        };
+        let label = format!(
+            "paragraph {} / bytes {}..{}",
+            self.paragraph + 1,
+            self.range.start,
+            self.range.end
+        );
+        let index = map_paragraph(base, current, self.paragraph).ok_or_else(|| {
+            change.conflict(
+                None,
+                &label,
+                "text",
+                "paragraph deleted, split or ambiguous",
+            )
+        })?;
+        let text = &current.paragraphs()[index].text;
+        let mapped = map_range(&old.text, text, self.range.clone()).ok_or_else(|| {
+            change.conflict(Some(text), &label, "text", "overlapping text changes")
+        })?;
+        let value = text[mapped.clone()].to_owned();
+        let outcome = change.compare(Some(&value), &label, "text")?;
+        if outcome == Outcome::Applied {
+            replace_word_text(current, index, mapped, selected, &self.replacement)?;
+        }
+        Ok(outcome)
+    }
+}
+
+// Bound the paragraph with unchanged neighbors which occur exactly once
+// in both revisions. Equal paragraphs outside those bounds are unrelated.
+fn map_paragraph(base: &Document, current: &Document, index: usize) -> Option<usize> {
+    let old: Vec<_> = base.paragraphs().iter().map(|p| p.text.as_str()).collect();
+    let new: Vec<_> = current
+        .paragraphs()
+        .iter()
+        .map(|p| p.text.as_str())
+        .collect();
+    let positions = |texts: &[&str]| {
+        let mut map = HashMap::new();
+        for (i, &text) in texts.iter().enumerate() {
+            map.entry(text.to_owned())
+                .and_modify(|p| *p = None)
+                .or_insert(Some(i));
+        }
+        map
+    };
+    let base_positions = positions(&old);
+    let current_positions = positions(&new);
+    let anchor = |i: usize| {
+        base_positions[old[i]]?;
+        current_positions
+            .get(old[i])
+            .copied()
+            .flatten()
+            .map(|j| (i, j))
+    };
+    let (old_lo, new_lo) = (0..index)
+        .rev()
+        .find_map(anchor)
+        .map_or((0, 0), |(a, b)| (a + 1, b + 1));
+    let (old_hi, new_hi) = (index + 1..old.len())
+        .find_map(anchor)
+        .unwrap_or((old.len(), new.len()));
+    let source = old.get(old_lo..old_hi)?;
+    let latest = new.get(new_lo..new_hi)?;
+    let slot = index - old_lo;
+    if source.len() == latest.len()
+        && source[..slot] == latest[..slot]
+        && source[slot + 1..] == latest[slot + 1..]
+    {
+        return Some(new_lo + slot);
+    }
+    if source.iter().filter(|p| **p == old[index]).count() == 1 {
+        return crate::merge::unique_index(
+            latest
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| (*p == old[index]).then_some(new_lo + i)),
+        );
+    }
+    None
+}
+
+// Translate through one changed span, narrowing it on scalar boundaries.
+// For an overlap only compare a selection whose two boundaries still map.
+fn map_range(base: &str, current: &str, range: Range<usize>) -> Option<Range<usize>> {
+    if base == current {
+        return Some(range);
+    }
+    let prefix: usize = base
+        .chars()
+        .zip(current.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    let suffix: usize = base[prefix..]
+        .chars()
+        .rev()
+        .zip(current[prefix..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    let old_end = base.len() - suffix;
+    let new_end = current.len() - suffix;
+    if range.is_empty() && range.start == prefix && prefix == old_end {
+        return Some(prefix..new_end);
+    }
+    if range.end <= prefix {
+        return Some(range);
+    }
+    if range.start >= old_end {
+        return Some(new_end + (range.start - old_end)..new_end + (range.end - old_end));
+    }
+    if range.start <= prefix && range.end >= old_end {
+        return Some(range.start..new_end + (range.end - old_end));
+    }
+    None
+}

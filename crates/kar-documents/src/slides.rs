@@ -1,4 +1,4 @@
-use crate::merge::{Change, Outcome, unique_index};
+use crate::merge::{Change, Comparison, Outcome, unique_index};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use slides_engine::Presentation;
@@ -28,6 +28,15 @@ impl Object {
     }
 
     pub fn apply(&self, deck: &mut Presentation, edit: &ObjectEdit) -> Result<Outcome> {
+        self.apply_at(deck, edit, Comparison::Current)
+    }
+
+    pub(crate) fn apply_at(
+        &self,
+        deck: &mut Presentation,
+        edit: &ObjectEdit,
+        comparison: Comparison,
+    ) -> Result<Outcome> {
         let index = unique_index(
             deck.slides()
                 .iter()
@@ -60,7 +69,7 @@ impl Object {
                     "invalid shape text"
                 );
                 let value = shape.and_then(|s| s.text.as_ref()).map(|v| v.plain_text());
-                let result = change.compare(value.as_ref(), &target, "text")?;
+                let result = change.compare_at(value.as_ref(), &target, "text", comparison)?;
                 if let (Outcome::Applied, Some(r)) = (result, indexes) {
                     deck.set_shape_text(r, &change.proposed)?;
                 }
@@ -79,7 +88,7 @@ impl Object {
                     ObjectEdit::Height(_) => ("height", transform.map(|v| v.cy)),
                     ObjectEdit::Text(_) => unreachable!(),
                 };
-                let result = change.compare(current.as_ref(), &target, property)?;
+                let result = change.compare_at(current.as_ref(), &target, property, comparison)?;
                 if let (Outcome::Applied, Some(r), Some(mut v)) = (result, indexes, transform) {
                     match edit {
                         ObjectEdit::X(_) => v.x = change.proposed,
