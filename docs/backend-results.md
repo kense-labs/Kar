@@ -109,7 +109,17 @@ Kar 提交 `bc905c7`。测试分开记录文件操作、Git 断言和原生模�
 | `bc905c7` 与 `c6d2341`，DSH Web 0.2.2-rc.5、ACP 0.2.1-rc.5 / 0.2.2-rc.3 | 设置 `KAR_DSH_BIN`、`KAR_DSH_ACP_BIN`、`KAR_DSH_ACP_ROOTS_BIN`、`KAR_KIMI_ACP_BIN`，运行 `cargo test --locked --test dsh_live -- --ignored --test-threads=1` | 首次完整执行 24 项，23 项通过；重复工具 ID 用例碰到供应商的 Landlock stderr，原断言将它一并当作 stdout。修正后单跑该项通过，分别核对两次 stdout，再将含 stderr 的完整工具结果与回放、重启恢复逐项比对。 |
 | `0b13edf`，Pi 1.4.0、Claude 2.1.326、Qwen 0.27.4、Factory 1.12.1、DSH Web 0.2.2-rc.5、DSH ACP 0.2.1-rc.5 | 各自运行 `public_prompt_readbacks`（Pi 位于 `native_live`，其余位于对应 `*_live`），Claude 运行 `cargo test --locked --test protocol -- claude-mcp-native` | 通过公共用例 `session.query-readbacks-carry-stream-seq` 的两次普通输入。给定 UUID 原样记录，省略 UUID 时自动生成；逐条重放到模型、用量和上下文各自的 seq，返回值分别一致。 |
 
-macOS 同一公共用例通过 Pi 1.6.0、Claude 2.1.330、Qwen、Factory 1.12.1 / 1.17.2 和上述两种 DSH 传输。真实 Chromium 的 Pi Durable 还用不透明字符串 `lookup` 和自动生成的 UUID 核对输入记录，三项查询值及序号均与快照相符；`node tests/browser/live.mjs` 的整套模型请求数为 8。Rust 协议用例另在 Codex、Claude、Qwen、ACP 和 Pi 五种传输执行。
+macOS 同一公共用例通过 Pi 1.6.0、Claude 2.1.330、Qwen 0.28.4、Factory 1.12.1 / 1.17.2 和上述两种 DSH 传输。真实 Chromium 的 Pi Durable 还用不透明字符串 `lookup` 和自动生成的 UUID 核对输入记录，三项查询值及序号均与快照相符；`node tests/browser/live.mjs` 的整套模型请求数为 8。Rust 协议用例另在 Codex、Claude、Qwen、ACP 和 Pi 五种传输执行。
+
+## 固定源码索引与逐项证据
+
+[源码索引](backend-source-index.tsv) 固定到 OAR v0.130.1 的 `2b15859a13dcc50e8b66cbaee5a007832aa00e08`。通过 TypeScript 语法树与包导出表提取了 40 个契约文件、221 个顶层契约声明、481 个具名接口成员、849 个按入口区分的导出、12 条 CLI 命令声明、32 个选项、2 个显式参数和 4 个 inventory 选择。20 个公共用例与 suite 注册表一致。149 个供应商测试文件内有 381 个测试定义，另有 53 组文件级共享断言。供应商部分索引了 2621 处直接断言或断言辅助函数调用。参数化测试在运行时可产生多个实例；类型别名和共享辅助函数须结合引用处逐项验收。
+
+[逐项证据](backend-evidence.tsv) 用固定源码路径和行号关联实际运行。每行给出供应商、版本、平台、操作、期望、Kar 提交、命令和观察结果。索引中的“待逐项核销”表示此表尚未登记对应证据。此前按场景执行的结果仍见上文。
+
+- **安装与额度。** 在 25 组 macOS、16 组 Ubuntu 的真实版本/程序上指定 `--bin` 查询安装，41 组返回 available，文件系统确认 command 指向指定的可执行文件。按能力从正常 CLI 入口查询空配置账号额度，保留每组的响应类型和原生原因。复验时使用独立的空 HOME、USERPROFILE 和 XDG 目录，清除供应商凭据变量，把对应版本程序的绝对路径传给 BIN、空目录传给 WORK，并把其 Node 解释器加入 PATH。有效付费账号的额度窗口另行核销。
+- **实时、回放与三轮会话。** `c747118` 在 macOS / Ubuntu 各跑了六组。Pi、Claude、Qwen、Factory 及 DSH Web / ACP 均连续完成三轮。一个订阅任务在提示出现时故意 panic，另一个订阅逐条收到日志中的完整记录。从第一轮提示后重新订阅，补齐该轮后继续接收后两轮，到会话关闭时逐条核对游标和内容，两端均无多余记录。修复前 Claude、Pi、DSH 的实机以及 Codex 协议用例均观测到 fork_anchor 越过 turn_ended。修复后回合结束是该轮的最后事件，原生包仍完整保留。设定所测版本的 `KAR_PI_BIN`、`KAR_CLAUDE_BIN`、`KAR_QWEN_BIN` 或 `KAR_FACTORY_BIN`；DSH 用例同时需要 `KAR_DSH_BIN` 和 `KAR_DSH_ACP_BIN`。
+- **私有配置与能力声明。** `12690fd` 验证真实 Claude 在 POSIX FIFO 的读端已打开后等待一秒，写入配置之后才完成初始化，配置路径删除后仍能调用该工具。macOS 的 2.1.322、2.1.326、2.1.330 与 Ubuntu 的 2.1.326 均通过。`1fee586` 对 Factory 1.12.1 与 1.17.2 逐项验证 stdio、HTTP 实际调用和能力声明。macOS 两个版本各运行 `cargo test --locked --test factory_live -- --ignored` 全部七项通过，Ubuntu 1.12.1 同样通过七项。1.12.1 的实机 AskUser 帧缺少较新版本提供的上下文字段，Kar 保留字段缺失，两个版本均通过各自的表单断言。
 
 ## 尚未核销的范围
 
