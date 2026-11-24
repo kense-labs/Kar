@@ -473,9 +473,10 @@ id = "workbench-editor"
 phase = 2
 name = "系统编辑器启动与定位"
 upstream = ["apps/server/src/process/externalLauncher.ts"]
-kar = ["src/workbench/files.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart -- workbench-projects"
+kar = ["src/workbench/editors.rs"]
+status = "macOS 已接入 PATH、应用包和 Toolbox 的发现，以及单独参数传递路径、行、列和 Finder 显示。正式运行须区分测试启动器及本机已安装的 GUI。"
+implementation_ref = "d9237c8"
+test_target = "cargo test --locked --test chat_restart -- workbench-editors"
 accept = "在授权工作目录开指定文件、行和列，对照默认编辑器、所选编辑器、缺失程序及启动错误。"
 
 [[gap]]

@@ -9,7 +9,7 @@ projects.mutate	packages/contracts/src/rpc.ts#L493	apps/server/src/ws.ts#L3110	p
 projects.ensureScratch	packages/contracts/src/rpc.ts#L494	apps/server/src/ws.ts#L3003	project-creation	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
 projects.createNew	packages/contracts/src/rpc.ts#L495	apps/server/src/ws.ts#L3009	project-creation	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
 projects.createFromThread	packages/contracts/src/rpc.ts#L496	apps/server/src/ws.ts#L3017	project-creation	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
-shell.openInEditor	packages/contracts/src/rpc.ts#L498	apps/server/src/ws.ts#L3124	workbench-editor	src/workbench/files.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
+shell.openInEditor	packages/contracts/src/rpc.ts#L498	apps/server/src/ws.ts#L3124	workbench-editor	POST /projects/{project}/editor/open	cargo test --locked --test chat_restart -- workbench-editors	d9237c8	macOS 已接入；启动夹具、Finder 及已安装编辑器实测分列
 filesystem.browse	packages/contracts/src/rpc.ts#L500	apps/server/src/ws.ts#L3126	filesystem-inspection	GET browse	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
 workspace.listFolders	packages/contracts/src/rpc.ts#L501	apps/server/src/ws.ts#L3137	task-folders	GET folders	cargo test --locked --test chat_restart -- workbench-projects	c2c283f	实现已集成，待统一验收
 workspace.scanFolders	packages/contracts/src/rpc.ts#L502	apps/server/src/ws.ts#L3138	task-folders	GET folders/scan	cargo test --locked --test chat_restart -- workbench-projects	c2c283f	实现已集成，待统一验收
