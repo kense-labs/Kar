@@ -24,7 +24,7 @@ pub(super) struct Snapshot {
     pub phase: String,
     started_at: String,
     ended_at: Option<String>,
-    branch: String,
+    pub(super) branch: String,
     base_ref: String,
     worktree_path: PathBuf,
     setup_script: Option<serde_json::Value>,

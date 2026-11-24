@@ -116,10 +116,15 @@ async fn scenario() {
             .json(&json!({"op":"worktree_remove","id":sid})),
     )
     .await;
+    git(&api, &["branch", "task-sample"]);
     let q = json!({"directory":task,"branch":"task-sample","repositories":[api]});
     let endpoint = format!("{scope}/tasks/{id}/folder");
     let created = json(c.put(&endpoint).json(&q)).await;
     let cwd = std::path::PathBuf::from(created["project_path"].as_str().unwrap());
+    assert_eq!(
+        created["repositories"][0]["selected_branch"],
+        "task-sample-2"
+    );
     assert!(cwd.join("api/.git").is_file());
     assert_eq!(std::fs::read(cwd.join("plain.txt")).unwrap(), b"shared");
     let child = api.strip_prefix(&project).unwrap();

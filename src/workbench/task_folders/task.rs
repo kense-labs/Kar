@@ -40,6 +40,8 @@ pub(super) struct Member {
     worktree_id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     selected_branch: Option<String>,
+    #[serde(default)]
+    adding: bool,
     pub ready: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -63,6 +65,7 @@ pub(in super::super) struct Store {
     dir: PathBuf,
     jobs: Mutex<HashMap<Uuid, (Uuid, Arc<Lifecycle>)>>,
     start: std::sync::Once,
+    planning: Mutex<()>,
 }
 impl Store {
     pub fn new(dir: PathBuf) -> Self {
@@ -70,6 +73,7 @@ impl Store {
             dir,
             jobs: Default::default(),
             start: Default::default(),
+            planning: Default::default(),
         }
     }
     fn cancelled_path(&self, id: Uuid) -> PathBuf {
@@ -274,6 +278,7 @@ fn member(task: &Task, path: &Path, name: String) -> Result<Member> {
         worktree_path: task.root.join(rel),
         worktree_id: Uuid::new_v4(),
         selected_branch: None,
+        adding: false,
         ready: false,
     })
 }
@@ -305,6 +310,7 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create) -> Result<Record
                 worktree_path: dir.clone(),
                 worktree_id: id,
                 selected_branch: None,
+                adding: false,
                 ready: false,
             }],
         };
@@ -373,7 +379,61 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create) -> Result<Record
     }
     task.repositories
         .sort_by_key(|m| m.repository_path.components().count());
-    let progress = Snapshot::new(id, &q.branch, &q.base, &task.project_path);
+    let collides = |a: &str, b: &str| {
+        a == b
+            || a.strip_prefix(b).is_some_and(|s| s.starts_with('/'))
+            || b.strip_prefix(a).is_some_and(|s| s.starts_with('/'))
+    };
+    let mut taken = Vec::new();
+    let mut project_collision = false;
+    for m in &task.repositories {
+        let refs = crate::workbench_git::git(
+            &m.repository_path,
+            &["for-each-ref", "--format=%(refname:strip=2)", "refs/heads/"],
+        )?;
+        let refs = String::from_utf8_lossy(&refs);
+        if m.repository_path == task.project_root && refs.lines().any(|s| collides(s, &q.branch)) {
+            project_collision = true;
+        }
+        taken.extend(refs.lines().map(str::to_owned));
+    }
+    if let Ok(files) = fs::read_dir(&app.0.task_folders.dir) {
+        for f in files
+            .flatten()
+            .filter(|f| f.path().extension().is_some_and(|s| s == "json"))
+        {
+            let other: Record = serde_json::from_reader(fs::File::open(f.path())?)?;
+            if other.progress.phase == "running"
+                && other.task.repositories.iter().any(|repo| {
+                    task.repositories
+                        .iter()
+                        .any(|m| m.repository_path == repo.repository_path)
+                })
+            {
+                taken.push(other.progress.branch.clone());
+            }
+        }
+    }
+    let actual = if project_collision {
+        q.branch.clone()
+    } else {
+        (1..=50)
+            .map(|i| {
+                if i == 1 {
+                    q.branch.clone()
+                } else {
+                    format!("{}-{i}", q.branch)
+                }
+            })
+            .find(|c| !taken.iter().any(|s| collides(s, c)))
+            .ok_or_else(|| {
+                Error::Refused("no task branch is free in every selected repository".into())
+            })?
+    };
+    for m in &mut task.repositories {
+        m.selected_branch = Some(actual.clone());
+    }
+    let progress = Snapshot::new(id, &actual, &q.base, &task.project_path);
     Ok(Record {
         id,
         request: q,
@@ -503,7 +563,7 @@ fn checkout(
         &app.destination(&entry.worktree_path)?,
         entry.selected_branch.as_deref().unwrap_or(&q.branch),
         start,
-        !q.single_checkout,
+        entry.adding,
         cancel,
     )?;
     Ok(())
@@ -598,6 +658,7 @@ pub(super) fn create(app: &Workbench, p: Uuid, id: Uuid, q: Create) -> Result<Ta
     let operation = (|| {
         let controller = app.controller(id);
         let chat = (!q.single_checkout).then(|| controller.owner.blocking_lock());
+        let reservation = store.planning.lock().unwrap();
         let mut r = match store.get(p, id)? {
             Some(r) if r.request != q => {
                 return Err(Error::Refused(
@@ -612,10 +673,15 @@ pub(super) fn create(app: &Workbench, p: Uuid, id: Uuid, q: Create) -> Result<Ta
             None => plan(app, id, app.project(p)?, q)?,
         };
         if r.progress.phase != "running" {
-            r.progress =
-                Snapshot::new(id, &r.request.branch, &r.request.base, &r.task.project_path);
+            r.progress = Snapshot::new(
+                id,
+                &r.progress.branch,
+                &r.request.base,
+                &r.task.project_path,
+            );
         }
         store.save(&r, &life)?;
+        drop(reservation);
         drop(chat);
         if app.project(p)?.root != r.task.project_root
             || app.destination(&r.task.root)? != r.task.root
@@ -699,6 +765,7 @@ pub(super) fn add(app: &Workbench, p: Uuid, id: Uuid, src: PathBuf) -> Result<Ta
         None => member(&r.task, &src, f.name)?,
     };
     if pending.is_none() {
+        m.adding = true;
         let anchor = r.task.repositories.iter().find(|m| m.ready);
         if let Some(anchor) = anchor
             && app.allowed(&anchor.worktree_path).is_ok()
@@ -709,6 +776,9 @@ pub(super) fn add(app: &Workbench, p: Uuid, id: Uuid, src: PathBuf) -> Result<Ta
                 .ok()
                 .and_then(|s| s.branch);
         }
+    }
+    if m.selected_branch.is_none() {
+        m.selected_branch = Some(r.progress.branch.clone());
     }
     let to = &m.worktree_path;
     // Open actual directory components in a plain mirrored project without writing through
