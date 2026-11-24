@@ -1027,8 +1027,9 @@ phase = 1
 name = "按当前模型和服务端图片限制上传并引用图片"
 upstream = ["sdk:src/runtimes/dsh/bridge-input.ts", "sdk:src/runtimes/dsh/list-models.ts"]
 kar = ["src/dsh", "src/input.rs"]
-status = "已发现具体差异，待开发。"
-test_target = "cargo test --locked --test native_live -- dsh"
+status = "已集成到原清单 session.images-travel-with-input，macOS 编译通过，官方 CLI 与协议用例待统一验收。"
+implementation_ref = "ad7e478"
+test_target = "cargo test --locked --test dsh_live images::uploads_images_to_the_selected_route_and_recovers_native_references -- --ignored --exact"
 accept = "模型声明可读图片且后台允许对应 MIME 时上传并在原生 prompt 引用返回的附件。模型切换、缺失图片模态、过大或不支持的 MIME 提前拒绝。原生连接和协议样本分别留证。"
 
 [[gap]]

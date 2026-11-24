@@ -2,6 +2,21 @@
 
 `docs/backend-workbench-acceptance.toml` 的 `final_acceptance` 对应同一个测试入口。场景使用一个临时 Kar 状态目录、一个注册的源项目和一个从 PR 创建的管理工作树。工作树注册为第二个项目，两个客户端始终在该项目的同一个聊天里协作。测试在完整保留状态和工作区的情况下终止并重启 Kar 服务。
 
+## 两阶段候选交接
+
+功能代码基线为 `ad7e47868f0f54c250dcf4638093c9118b901994`。本地 `main` 的后续交接提交仅更新验收资料。开发检查使用 macOS 27.2.1 arm64、rustc 1.100.0，`cargo check --locked --offline --all-targets` 成功。已生成测试计划；本候选的协议测试、供应商实机及统一回归由接手方执行。
+
+按 [运行时 12 项](backend-acceptance.toml) 和 [工作台 8 项](backend-workbench-acceptance.toml) 的用户操作判断结果。运行时另含表内 20 个公共用例及适用的供应商行为。先保存 `git rev-parse HEAD`。在仓库根目录用 `cargo run --locked --example backend_suite` 查看命令、用例和环境。可按供应商或测试名筛选，执行模式会把版本、命令、返回码和日志保存在新建的输出目录。
+
+| 优先操作 | 从正常入口复验 |
+| --- | --- |
+| 两客户端各自断线续收，强杀后回原会话，核对 FIFO 与待确认的输入 | 配置 `KAR_QWEN_BIN` 后执行 `cargo test --locked --test qwen_live queue_crash:: -- --ignored --nocapture`；OpenCode 设置 `KAR_OPENCODE_BIN` 并执行 `cargo test --locked --test native_live opencode_fork::queue_crash::two_clients_and_fifo_after_native_receive_before_host_receipt -- --exact --ignored`。这两组使用真实 CLI 和回环模型端点。 |
+| 查看逐轮文件变化、恢复文件树，并从中间回合继续聊 | `cargo test --locked --test chat_restart` 覆盖 CLI、Git 工作区与原生协议夹具；配置 `KAR_PI_BIN` 后执行 `cargo test --locked --test native_live pi_history::three_native_writes_fork_at_middle_and_reopen_both_contexts -- --exact --ignored`，复查实际 Pi 父子会话。 |
+| 当前模型的图片能力、只发图片、上传失败及模型切换 | 见 [DSH 测试和环境](backend-input-images.md)。 |
+| 项目、工作树、交接、PR、终端预览、工作流、分享及文本和 Office 双写 | `cargo test --locked --test workbench_acceptance` 贯通本地流程。下文另列专用 GitHub 仓库、真实 CLI 与跨设备操作。 |
+
+**已有证据的边界。** Kimi 与 Codex 的现有用例通过真实原生历史与截短的 Kar 日志构造“原生已接收、Kar 尚未记录回执”的现场。要核销这两个供应商在该时刻真实强杀的行为，还需在实际投递窗口终止控制器，保留双方日志，核对每条消息的身份、次数和顺序。Cybion 的远端关闭及运行中收尾需有实际部署、凭据和可识别版本；现有部署测试 `deployed_thread_creation_and_resume` 覆盖创建和恢复。按供应商分别报告实际执行、协议夹具和环境缺失。Linux 后移，Windows 实机排除。
+
 ## 本地跨模块场景
 
 在 macOS 仓库根目录运行 `cargo test --locked --test workbench_acceptance`。环境需能运行 Git、PTY 及本机回环 HTTP。测试使用锁定版本的 Kantor Word、Excel、PPT Rust 引擎真实生成、编辑和重新打开 Office 文件。工作流步骤在工作树中真实执行，Git 推送写入临时裸仓库。供应商 stdio 和代码托管 API 使用 Rust 协议对端。
