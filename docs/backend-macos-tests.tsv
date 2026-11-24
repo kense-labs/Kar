@@ -30,6 +30,7 @@ codex	host_tools	codex_reports_the_required_host_service_ready	KAR_CODEX_BIN	req
 codex	native_live	actual_codex_durable_chat_across_processes	KAR_CODEX_BIN	installed Codex CLI, isolated home and loopback model
 codex	native_live	actual_codex_managed_worktree_across_processes	KAR_CODEX_BIN	installed Codex CLI, local Git, isolated home and loopback model
 codex	native_live	actual_codex_turn_and_resume	KAR_CODEX_BIN	requires an installed Codex CLI; uses only a loopback model fixture
+codex	native_live	codex_queue::native_queue_receipt_idle_interruption_and_restart_of_admission	KAR_CODEX_BIN	requires installed Codex 0.169.0 with thread/queue/add and a loopback Responses API provider
 codex	native_live	codex_startup::per_server_startup_precedes_the_first_model_request	KAR_CODEX_BIN	requires held HTTP and failing stdio MCP services with real Codex and a loopback model
 codex	native_live	resume_prompts::codex_prompt_persistence	KAR_CODEX_BIN	requires Codex CLI with a loopback model
 codex	setup_cli	codex	KAR_CODEX_BIN	vendor-managed macOS Codex CLI with updates.status in doctor --json (0.158.0+); official version feed reachable; verifies read-only check and unchanged executable identity/version

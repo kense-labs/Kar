@@ -401,6 +401,10 @@ impl SessionReducer {
                 Event::ServiceTier { tier } => self.snapshot.service_tier = Some(tier.clone()),
                 Event::Usage { usage } => self.snapshot.last_usage = Some(usage.clone()),
                 Event::TurnStarted | Event::PromptDispatched if !self.released => self.start(r),
+                Event::NativeInput {
+                    receipt: crate::InputReceipt::Started,
+                    ..
+                } if !self.released && r.prompt.is_some() => self.start(r),
                 Event::InputQueued { input_id } => {
                     self.queued
                         .insert(input_id.clone(), (r.seq, r.timestamp_ms));

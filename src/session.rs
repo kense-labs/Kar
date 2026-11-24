@@ -98,6 +98,8 @@ pub struct Capabilities {
     pub native_session_file: bool,
     pub model_requests: bool,
     pub host_queue: bool,
+    /// Inputs accepted by the native runtime survive a process restart.
+    pub durable_native_queue: bool,
     pub output_schema: bool,
     pub stop_task: bool,
     pub goals: bool,
@@ -1416,7 +1418,8 @@ impl Session {
             native_session_file: self.factory_dir.is_some()
                 || self.dsh_file.is_some()
                 || self.reported_session_file().is_some(),
-            host_queue: true,
+            host_queue: self.protocol != Protocol::Codex,
+            durable_native_queue: self.protocol == Protocol::Codex,
             output_schema: self.supports_output_schema,
             stop_task: matches!(
                 self.protocol,

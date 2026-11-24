@@ -396,6 +396,11 @@ fn peer(protocol: &str) {
                             json!({"method":"turn/completed","params":{"threadId":"session-1","turn":{"id":"t","status":"interrupted"}}}),
                         );
                     }
+                    Some("thread/queue/add") if v["params"]["input"][0]["text"] == "refuse" => {
+                        emit(
+                            json!({"id":req,"error":{"code":-32602,"message":"native queue refusal"}}),
+                        );
+                    }
                     Some("turn/steer") if v["params"]["input"][0]["text"] == "fallback" => {
                         emit(
                             json!({"id":req,"error":{"code":-32602,"message":"native control refused"}}),
@@ -991,10 +996,22 @@ async fn controls(p: Protocol) -> kar::Result<()> {
         assert_eq!(session.service_tier().as_deref(), Some("default"));
         session.steer("continue").await?;
     }
-    let (input, cancelled) = session.queue("withdrawn").await?;
-    session.withdraw(input).await?;
-    assert_eq!(cancelled.wait().await?, Outcome::Aborted);
-    let (_, queued) = session.queue("refuse").await?;
+    let queued = if p == Protocol::Codex {
+        assert!(matches!(
+            session.withdraw(uuid::Uuid::new_v4()).await,
+            Err(kar::Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            session.queue("refuse").await,
+            Err(kar::Error::Refused(_))
+        ));
+        None
+    } else {
+        let (input, cancelled) = session.queue("withdrawn").await?;
+        session.withdraw(input).await?;
+        assert_eq!(cancelled.wait().await?, Outcome::Aborted);
+        Some(session.queue("refuse").await?.1)
+    };
     let stall = tokio::time::timeout(Duration::from_secs(3), stalls.next())
         .await
         .unwrap()?
@@ -1006,9 +1023,16 @@ async fn controls(p: Protocol) -> kar::Result<()> {
             .await
             .is_err()
     );
-    let (extra, removed) = session.queue("withdraw-before-dispatch").await?;
-    session.withdraw(extra).await?;
-    assert_eq!(removed.wait().await?, Outcome::Aborted);
+    if p == Protocol::Codex {
+        assert!(matches!(
+            session.withdraw(uuid::Uuid::new_v4()).await,
+            Err(kar::Error::Unsupported(_))
+        ));
+    } else {
+        let (extra, removed) = session.queue("withdraw-before-dispatch").await?;
+        session.withdraw(extra).await?;
+        assert_eq!(removed.wait().await?, Outcome::Aborted);
+    }
 
     let next = tokio::time::timeout(Duration::from_secs(3), stalls.next())
         .await
@@ -1018,7 +1042,9 @@ async fn controls(p: Protocol) -> kar::Result<()> {
     assert!(next.last_record.after_seq > stall.last_record.after_seq);
     session.abort().await?;
     assert_eq!(turn.wait().await?, Outcome::Aborted);
-    assert!(queued.wait().await.is_err());
+    if let Some(queued) = queued {
+        assert!(queued.wait().await.is_err());
+    }
     assert!(!session.await_idle().await?.status.is_running());
     assert!(session.prompt("refuse").await?.wait().await.is_err());
     session.close().await

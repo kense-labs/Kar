@@ -7,7 +7,20 @@ use uuid::Uuid;
 
 impl Journal {
     pub(crate) fn queue_request(&self, id: Uuid, input: &Input, secrets: &[String]) {
+        self.record_queue_request(id, input, secrets, false);
+    }
+
+    pub(crate) fn record_queue_request(
+        &self,
+        id: Uuid,
+        input: &Input,
+        secrets: &[String],
+        native: bool,
+    ) {
         let mut body = json!({"type":"queue","id":input.request_id,"inputId":id,"text":input.text});
+        if native {
+            body["admission"] = "native".into();
+        }
         redact(&mut body, secrets);
         self.push(
             Direction::ToRuntime,

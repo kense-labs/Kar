@@ -1,4 +1,5 @@
 mod codex_processes;
+mod codex_queue;
 mod interrupt_timeout;
 use crate::grok::turns::{INTERJECT, Turns as GrokTurns};
 use crate::interaction::sensitive_field;
@@ -274,6 +275,7 @@ impl SteeringReceipt {
 #[derive(Clone, Copy)]
 enum RpcIntent {
     Control,
+    Queue(uuid::Uuid),
     Abort(uuid::Uuid),
     Prompt,
     Steer {
@@ -312,6 +314,7 @@ pub(crate) struct Actor {
     end_turn_processes: bool,
     grok_interjections: HashMap<uuid::Uuid, (SteeringReceipt, crate::SteerStatus)>,
     codex_quota: wire::failure::CodexQuota,
+    codex_queue: codex_queue::NativeQueue,
     codex_processes: Option<codex_processes::Guard>,
     interrupt_timeout: interrupt_timeout::InterruptTimeout,
     factory: Option<crate::factory::Projection>,
@@ -408,6 +411,7 @@ impl Actor {
                 .then(|| crate::grok::terminal::Terminals::new(options, child.id())),
             end_turn_processes: options.settings.end_turn_processes_on_abort,
             codex_quota: Default::default(),
+            codex_queue: Default::default(),
             interrupt_timeout: Default::default(),
             codex_processes: (runtime.protocol == Protocol::Codex
                 && options.settings.end_turn_processes_on_abort)
@@ -700,6 +704,11 @@ impl Actor {
             &params,
             self.pi_independent
                 .or_else(|| self.turn.as_ref().and_then(|t| t.chat_input))
+                .or_else(|| {
+                    self.codex_queue
+                        .active(self.observed_root_turn())
+                        .map(|(id, _)| id)
+                })
                 .or_else(|| self.grok_owner()),
             intent,
             &self.secrets,
@@ -729,7 +738,7 @@ impl Actor {
                 },
                 method: method.to_owned(),
                 control_request: match intent {
-                    RpcIntent::Abort(request) => Some(request),
+                    RpcIntent::Abort(request) | RpcIntent::Queue(request) => Some(request),
                     RpcIntent::Steer { request, .. } => Some(request),
                     RpcIntent::Prompt => self.turn.as_ref().map(|t| t.prompt_request),
                     _ => None,
@@ -786,7 +795,11 @@ impl Actor {
         }
         self.write_packet(
             packet,
-            RecordKind::Request,
+            if method == codex_queue::ADD {
+                RecordKind::Frame
+            } else {
+                RecordKind::Request
+            },
             if matches!(
                 (self.protocol, method),
                 (Protocol::Pi, "steer") | (Protocol::Codex, "turn/steer")
@@ -946,6 +959,7 @@ impl Actor {
                     || self.observed_root_turn().is_some()
                     || self.grok_owner().is_some()
                     || !self.queue.is_empty()
+                    || self.codex_queue.has_entries()
                     || self.manual_compaction.is_some()
                     || (self.protocol == Protocol::Codex
                         && self
@@ -1139,13 +1153,42 @@ impl Actor {
                 }
             }
             Command::Queue(id, input, tx, done) => {
-                self.journal.queue_request(id, &input, &self.secrets);
-                if self.protocol == Protocol::Codex && self.manual_compaction.is_some() {
-                    self.journal.control_decision(
-                        input.request_id,
-                        Some(("busy", "a compaction is running")),
-                    );
-                    let _ = tx.send(Err(Error::Busy));
+                self.journal.record_queue_request(
+                    id,
+                    &input,
+                    &self.secrets,
+                    self.protocol == Protocol::Codex,
+                );
+                if self.protocol == Protocol::Codex {
+                    if let Err(error) = self.codex_queue.check(
+                        id,
+                        self.manual_compaction.is_some(),
+                        self.output_schema.is_some(),
+                    ) {
+                        let code = match &error {
+                            Error::Busy => "busy",
+                            Error::Unsupported(_) => "unsupported",
+                            Error::Refused(_) if self.codex_queue.interrupted() => "no_active_turn",
+                            _ => "runtime_refused",
+                        };
+                        let reason = match &error {
+                            Error::Unsupported(s) | Error::Refused(s) => s.as_str(),
+                            _ => "a compaction is running",
+                        };
+                        self.journal
+                            .control_decision(input.request_id, Some((code, reason)));
+                        let _ = tx.send(Err(error));
+                        return Ok(true);
+                    }
+                    let params = json!({"threadId":self.session(),"input":input.blocks(Protocol::Codex),"clientUserMessageId":id});
+                    self.codex_queue.sent(id, input.request_id, tx, done);
+                    self.rpc(
+                        codex_queue::ADD,
+                        params,
+                        None,
+                        RpcIntent::Queue(input.request_id),
+                    )
+                    .await?;
                     return Ok(true);
                 }
                 self.journal
@@ -1161,6 +1204,13 @@ impl Actor {
                 let request = self
                     .journal
                     .control_request(json!({"type":"withdraw","inputId":input}));
+                if self.protocol == Protocol::Codex {
+                    let reason = "Codex owns the native queue; this adapter does not expose experimental thread/queue/delete";
+                    self.journal
+                        .control_decision(request, Some(("unsupported", reason)));
+                    let _ = tx.send(Err(Error::Unsupported(reason.into())));
+                    return Ok(true);
+                }
                 let mut removed = false;
                 while let Some(pos) = self.queue.iter().position(|e| e.id == input) {
                     let entry = self.queue.remove(pos).expect("queued entry was present");
@@ -1366,10 +1416,16 @@ impl Actor {
         let native_owner = target.is_none_or(|target| {
             self.pi_independent.is_none()
                 && !self.claude_notifications.active()
-                && self
+                && (self
                     .turn
                     .as_ref()
                     .is_some_and(|t| Some(t.prompt_request) == target.request_id)
+                    || self
+                        .codex_queue
+                        .active(self.observed_root_turn())
+                        .is_some_and(|(input, request)| {
+                            Some(request) == target.request_id && input == target.input_id
+                        }))
         });
         let Some((request, tx)) =
             self.journal
@@ -2186,6 +2242,7 @@ impl Actor {
         let mut reply = None;
         let mut prompt_ack = None;
         let mut prompt_decision = None;
+        let mut queue_reply = None;
         let native_method = response.as_ref().map(|p| p.method.clone());
         if let Some(p) = response {
             let mut result = if p.method == crate::cursor_models::LIST
@@ -2378,6 +2435,17 @@ impl Actor {
                     Err(e) => result = Err(e),
                 }
             }
+            if p.method == "turn/start"
+                && self.protocol == Protocol::Codex
+                && let Ok(body) = &result
+                && let Some(native) = body.pointer("/turn/id").and_then(Value::as_str)
+                && let Some(turn) = self
+                    .turn
+                    .as_mut()
+                    .filter(|t| p.control_request == Some(t.prompt_request))
+            {
+                turn.native = Some(native.to_owned());
+            }
             if let Ok(body) = &result {
                 if let Some(report) = self.usage.reply(
                     if matches!(p.method.as_str(), OPENCODE_COMPACT | ANTIGRAVITY_STEER) {
@@ -2481,7 +2549,16 @@ impl Actor {
                     t.aborted = true;
                 }
             }
-            if let Some(tx) = p.reply {
+            if p.method == codex_queue::ADD
+                && let Some(request) = p.control_request
+            {
+                if v["error"]["code"] == -32601 {
+                    result = Err(Error::Unsupported(
+                        "Codex does not implement thread/queue/add".into(),
+                    ));
+                }
+                queue_reply = Some((request, result));
+            } else if let Some(tx) = p.reply {
                 reply = Some((tx, result, p.control_request));
             }
         }
@@ -2489,7 +2566,18 @@ impl Actor {
             .pointer("/params/turn/id")
             .or_else(|| v.pointer("/params/turnId"))
             .and_then(Value::as_str);
+        if is_root
+            && self.protocol == Protocol::Codex
+            && let Some((id, request)) = self.codex_queue.notice(&v, &mut events)
+        {
+            received = received.with_prompt_request(id, false, request, None);
+            received.response_to = Some(request.to_string());
+        }
+        let queued_turn = is_root
+            && self.protocol == Protocol::Codex
+            && self.codex_queue.active(reported_turn).is_some();
         let mut current_turn = is_root
+            && !queued_turn
             && independent.is_none()
             && (self.protocol != Protocol::Codex
                 || self
@@ -2748,7 +2836,17 @@ impl Actor {
                 received = received.with_frame_type(method);
             }
         }
+        let queue_input = reported_turn
+            .filter(|_| queued_turn)
+            .and_then(|turn| self.codex_queue.collect(turn, &events));
         self.record(received, kind, v.clone(), events, path);
+        if let Some(id) = queue_input {
+            self.codex_queue.finish(id);
+        }
+        if let Some((id, result)) = queue_reply {
+            self.codex_queue
+                .reply(&self.journal, id, result, &self.secrets);
+        }
         if let Some((request, refusal)) = prompt_decision {
             self.journal.control_decision(
                 request,
@@ -3301,6 +3399,9 @@ impl Actor {
             .fold(reason, |msg, key| msg.replace(key, "[redacted]"));
         let closed = Error::Closed(reason.clone());
         for p in self.pending.values() {
+            if p.method == codex_queue::ADD {
+                continue;
+            }
             if let Some(request) = p
                 .prompt_request
                 .or(p.control_request.filter(|_| p.reply.is_some()))
@@ -3322,6 +3423,7 @@ impl Actor {
             vec![],
         );
         self.finish(Err(Error::Closed(reason.clone())));
+        self.codex_queue.disconnected(&reason);
         for p in self.pending.into_values() {
             if let Some(tx) = p.reply {
                 let _ = tx.send(Err(Error::Closed(reason.clone())));
