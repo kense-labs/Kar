@@ -198,3 +198,7 @@ qwen	qwen_live	queue_crash::kill_after_native_input_before_host_receipt	KAR_QWEN
 qwen	qwen_live	queue_crash::native_retry_of_same_sdk_uuid	KAR_QWEN_BIN	requires real Qwen Code; SDK UUID and native deduplication across resume
 qwen	qwen_provider_live	qwen_settings_scope_and_stored_key_reuse	KAR_QWEN_BIN	requires KAR_QWEN_BIN with native qwen/providers/connect
 qwen	skill_inventory_live	qwen	KAR_QWEN_BIN	requires KAR_QWEN_BIN
+dsh	dsh_live	model_picker_reads_the_native_route_without_a_turn	KAR_DSH_BIN	DSH native Cordis model services, isolated home and loopback provider; zero model calls
+pi	pi_provider_live	model_picker_reads_project_default_and_actual_available_models	KAR_PI_BIN	Pi with loadable SDK, isolated keyless home and registered fixture model, actual Pi effort levels and project default
+qoder	qoder_live	model_picker_stops_after_native_logged_out_status	KAR_QODER_BIN	Qoder CLI in an isolated home, native status must short-circuit model discovery
+qoder	qoder_live	authenticated_model_picker_lists_selectors_without_a_turn	KAR_QODER_BIN,KAR_QODER_MODEL_LIVE	requires KAR_QODER_MODEL_LIVE=1 and signed-in Qoder with a live account catalog

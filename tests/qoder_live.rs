@@ -118,3 +118,77 @@ async fn real_daemon_acknowledges_session_before_requesting_login() {
         matches!(opened, Err(kar::Error::Refused(message)) if message == "Qoder refused initialize")
     );
 }
+
+#[test]
+#[ignore = "requires an installed Qoder CLI; queries native status in an isolated signed-out home"]
+fn model_picker_stops_after_native_logged_out_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().join("project");
+    let home = tmp.path().join("home");
+    fs::create_dir(&cwd).unwrap();
+    fs::create_dir(&home).unwrap();
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_kar"));
+    cmd.args(["models", "qoder", "--picker", "--bin"])
+        .arg(std::env::var_os("KAR_QODER_BIN").unwrap())
+        .arg("--cwd")
+        .arg(&cwd)
+        .args(["--timeout-ms", "60000"])
+        .env_clear();
+    for key in ["PATH", "SystemRoot"] {
+        if let Some(v) = std::env::var_os(key) {
+            cmd.env(key, v);
+        }
+    }
+    let out = cmd
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let menu: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        menu,
+        json!({"status":"unavailable","reason":"unauthenticated"})
+    );
+    assert_eq!(fs::read_dir(cwd).unwrap().count(), 0);
+}
+
+#[test]
+#[ignore = "requires an explicitly enabled signed-in Qoder account and live catalog"]
+fn authenticated_model_picker_lists_selectors_without_a_turn() {
+    assert_eq!(std::env::var("KAR_QODER_MODEL_LIVE").as_deref(), Ok("1"));
+    let workspace = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+        .args(["models", "qoder", "--picker", "--bin"])
+        .arg(std::env::var_os("KAR_QODER_BIN").unwrap())
+        .arg("--cwd")
+        .arg(workspace.path())
+        .args(["--timeout-ms", "60000"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "Kar model discovery exited with {}",
+        out.status
+    );
+    let menu: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        menu["status"], "live",
+        "Qoder model menu reason: {}",
+        menu["reason"]
+    );
+    let rows = menu["models"].as_array().unwrap();
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert!(row["id"].as_str().is_some_and(|s| !s.is_empty()));
+        if let Some(disabled) = row.get("disabled") {
+            assert!(disabled["reason"].is_string());
+        }
+        if let Some(default) = row.get("defaultEffort") {
+            assert!(default.is_string());
+        }
+        assert!(row.get("serverModel").is_none());
+    }
+    assert_eq!(fs::read_dir(workspace.path()).unwrap().count(), 0);
+}

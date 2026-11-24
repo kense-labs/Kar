@@ -718,3 +718,71 @@ async fn product_cli_roundtrip() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+#[ignore = "requires a loadable installed Pi SDK; isolated keyless and configured workspaces"]
+fn model_picker_reads_project_default_and_actual_available_models() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("project");
+    let agent = dir.path().join("agent");
+    fs::create_dir_all(cwd.join(".pi")).unwrap();
+    fs::create_dir(&agent).unwrap();
+    let bin = std::env::var_os("KAR_PI_BIN").unwrap();
+    let run = || {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_kar"));
+        cmd.args(["models", "pi", "--picker", "--bin"])
+            .arg(&bin)
+            .arg("--cwd")
+            .arg(&cwd)
+            .args(["--timeout-ms", "60000"])
+            .env_clear();
+        for key in ["PATH", "SystemRoot", "KAR_PI_SDK_DIR"] {
+            if let Some(v) = std::env::var_os(key) {
+                cmd.env(key, v);
+            }
+        }
+        let out = cmd
+            .env("HOME", dir.path())
+            .env("KAR_PI_AGENT_DIR", &agent)
+            .env("PI_OFFLINE", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let keyless = run();
+    assert_eq!(keyless["reason"], "unauthenticated", "{keyless}");
+    let model = json!({"providers":{"kar-catalog":{"baseUrl":"http://127.0.0.1:1/v1","api":"openai-completions","models":[{"id":"local","name":"Fixture","reasoning":true}]}}});
+    fs::write(agent.join("models.json"), model.to_string()).unwrap();
+    fs::write(
+        agent.join("auth.json"),
+        r#"{"kar-catalog":{"type":"api_key","key":"isolated-fixture"}}"#,
+    )
+    .unwrap();
+    let settings = r#"{"defaultProvider":"kar-catalog","defaultModel":"local"}"#;
+    fs::write(cwd.join(".pi/settings.json"), settings).unwrap();
+    let menu = run();
+    assert_eq!(menu["status"], "live", "{menu}");
+    let selected = menu["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == "kar-catalog/local")
+        .unwrap();
+    assert_eq!(selected["displayName"], "Fixture");
+    assert_eq!(selected["provider"]["id"], "kar-catalog");
+    assert_eq!(selected["default"], true);
+    assert!(
+        selected["effortLevels"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("off"))
+    );
+    assert!(selected.get("defaultEffort").is_none());
+    assert_eq!(
+        fs::read_to_string(cwd.join(".pi/settings.json")).unwrap(),
+        settings
+    );
+    assert_eq!(fs::read_dir(&cwd).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(cwd.join(".pi")).unwrap().count(), 1);
+}

@@ -1684,3 +1684,31 @@ async fn public_abort_active_then_idle() {
         s.close().await.unwrap();
     }
 }
+
+#[tokio::test]
+#[ignore = "requires a selected DSH binary, isolated profile and loopback provider catalog"]
+async fn model_picker_reads_the_native_route_without_a_turn() {
+    let tb = testbed(Protocol::Dsh).await;
+    let result = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+        .args(["models", "dsh", "--picker", "--cwd"])
+        .arg(&tb.opts.cwd)
+        .arg("--bin")
+        .arg(&tb.runtime.program)
+        .envs(&tb.opts.env)
+        .output()
+        .await
+        .unwrap();
+    assert!(result.status.success());
+    let menu: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(menu["status"], "live", "{menu}");
+    let row = menu["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "deepseek-official/deepseek-flash")
+        .expect("loopback model");
+    assert_eq!(row["provider"]["id"], "deepseek-official");
+    assert!(tb.data.requests.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read_to_string(&tb.data.file).unwrap(), "first");
+    assert_eq!(std::fs::read_dir(&tb.opts.cwd).unwrap().count(), 1);
+}
