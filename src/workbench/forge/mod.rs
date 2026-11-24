@@ -437,6 +437,27 @@ pub(super) fn remote_identity(remote: &str) -> Result<(String, String), ForgeErr
     Ok((host.to_ascii_lowercase(), path.into()))
 }
 
+fn primary_remote(cwd: &std::path::Path) -> Result<(String, String, String), ForgeError> {
+    let names = crate::workbench_git::git(cwd, &["remote"])?;
+    let names =
+        std::str::from_utf8(&names).map_err(|_| ForgeError::bad("Git remote name is not UTF-8"))?;
+    let primary = if names.lines().any(|n| n == "origin") {
+        "origin"
+    } else {
+        names
+            .lines()
+            .next()
+            .ok_or_else(|| ForgeError::bad("no Git remote configured"))?
+    };
+    let remote = crate::workbench_git::git(cwd, &["remote", "get-url", "--", primary])?;
+    let (host, repository) = remote_identity(
+        std::str::from_utf8(&remote)
+            .map_err(|_| ForgeError::bad("Git remote URL is not UTF-8"))?
+            .trim(),
+    )?;
+    Ok((primary.to_owned(), host, repository))
+}
+
 impl Context {
     fn base(base: &str) -> Result<Url, ForgeError> {
         let api_base =
@@ -499,24 +520,7 @@ impl Context {
         let service = app.clone();
         let mut c = tokio::task::spawn_blocking(move || {
             let repo = app.repository(project)?;
-            let names = crate::workbench_git::git(repo.root(), &["remote"])?;
-            let names =
-                std::str::from_utf8(&names).map_err(|_| ForgeError::bad("non-UTF-8 remote"))?;
-            let primary = if names.lines().any(|n| n == "origin") {
-                "origin"
-            } else {
-                names
-                    .lines()
-                    .next()
-                    .ok_or_else(|| ForgeError::bad("no Git remote configured"))?
-            };
-            let remote =
-                crate::workbench_git::git(repo.root(), &["remote", "get-url", "--", primary])?;
-            let (host, repository) = remote_identity(
-                std::str::from_utf8(&remote)
-                    .map_err(|_| ForgeError::bad("origin is not UTF-8"))?
-                    .trim(),
-            )?;
+            let (_, host, repository) = primary_remote(repo.root())?;
             Self::located(host, repository, repo.root().into())
         })
         .await

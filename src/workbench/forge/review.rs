@@ -60,6 +60,10 @@ fn fetch(c: &Context, number: u64, pull: &Value) -> Result<(String, String), For
     for (is_head, sha) in [(false, &base), (true, &head)] {
         let commit = format!("{sha}^{{commit}}");
         if git(&c.cwd, &["cat-file", "-e", &commit]).is_err() {
+            let (remote, host, repository) = primary_remote(&c.cwd)?;
+            if host != c.host || repository != c.repository {
+                return Err(ForgeError::bad("project remote changed during review"));
+            }
             let result = git(
                 &c.cwd,
                 &[
@@ -67,7 +71,7 @@ fn fetch(c: &Context, number: u64, pull: &Value) -> Result<(String, String), For
                     "--no-tags",
                     "--no-write-fetch-head",
                     "--",
-                    "origin",
+                    &remote,
                     sha,
                 ],
             );
@@ -87,7 +91,7 @@ fn fetch(c: &Context, number: u64, pull: &Value) -> Result<(String, String), For
                         "--no-tags",
                         "--no-write-fetch-head",
                         "--",
-                        "origin",
+                        &remote,
                         &reference,
                     ],
                 )?;

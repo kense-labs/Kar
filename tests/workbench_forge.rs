@@ -351,6 +351,55 @@ async fn scenario() {
         .json(&json!({"id":Uuid::new_v4(),"head":head,"directory":tree})))
     .await;
     assert_eq!(git(&tree, &["rev-parse", "HEAD"]), head);
+    // This checkout has no local PR objects and its one remote is named upstream.
+    let fresh = root.join("review-base");
+    fs::create_dir(&fresh).unwrap();
+    git(&fresh, &["init", "-b", "main"]);
+    git(&fresh, &["fetch", repo.to_str().unwrap(), &base]);
+    git(&fresh, &["reset", "--hard", &base]);
+    git(
+        &fresh,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "git@review.example:team/repo.git",
+        ],
+    );
+    let quote = |path: &Path| format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"));
+    let ssh = format!(
+        "{} named-remote-upload {}",
+        quote(&std::env::current_exe().unwrap()),
+        quote(&bare)
+    );
+    git(&fresh, &["config", "ssh.variant", "ssh"]);
+    git(&fresh, &["config", "core.sshCommand", &ssh]);
+    let fresh_project = ok(a
+        .post(format!("{url}/projects"))
+        .json(&json!({"name":"named-remote","root":fresh})))
+    .await;
+    let fresh_url = format!(
+        "{url}/projects/{}/forge/pulls/1",
+        fresh_project["id"].as_str().unwrap()
+    );
+    let fresh_tree = root.join("named-remote-tree");
+    assert!(
+        !Command::new("git")
+            .current_dir(&fresh)
+            .args(["cat-file", "-e", &head])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    ok(a.post(format!("{fresh_url}/worktree"))
+        .json(&json!({"id":Uuid::new_v4(),"head":head,"directory":fresh_tree})))
+    .await;
+    assert_eq!(git(&fresh_tree, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        ok(a.get(format!("{fresh_url}/diff"))).await["files"],
+        json!(["notes.txt"])
+    );
     let issue_chat = json!({"id":Uuid::new_v4(),"runtime":"codex"});
     let opened = ok(a.post(format!("{forge}/issues/7/chat")).json(&issue_chat)).await;
     assert_eq!(opened["chat"]["info"]["id"], issue_chat["id"]);
@@ -484,6 +533,14 @@ fn main() {
         Some("hosted-github") => tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(hosted::run()),
+        Some("named-remote-upload") => {
+            let status = Command::new("git")
+                .arg("upload-pack")
+                .arg(std::env::args_os().nth(2).unwrap())
+                .status()
+                .unwrap();
+            std::process::exit(status.code().unwrap_or(1));
+        }
         Some("clone-filter") => clone_jobs::filter(),
         Some("clone-ssh-refused") => {
             eprintln!("Permission denied (publickey).");
