@@ -136,6 +136,7 @@ async fn use_device(weak: WeakApp, headers: HeaderMap, op: Operation) -> Respons
             && s.settings.agent_access_enabled
             && app.binding(c.project, c.chat).is_ok()
             && !app.archived(c.chat)
+            && c.model.as_ref().is_none_or(|p|p.verify(&app,matches!(op, Operation::Action(_))).is_ok())
     }) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };

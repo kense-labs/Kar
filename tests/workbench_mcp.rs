@@ -13,6 +13,10 @@ mod peer;
 #[allow(dead_code)]
 #[path = "support/workbench_server.rs"]
 mod server;
+#[allow(dead_code)]
+#[path="support/workbench_devices.rs"]
+mod devices;
+use server as workbench_server;
 use reqwest::{Client, RequestBuilder, StatusCode};
 use serde_json::{Value, json};
 use std::{
@@ -23,6 +27,10 @@ use std::{
 use uuid::Uuid;
 
 fn main() {
+    if matches!(std::env::args().nth(1).as_deref(),Some("simctl"|"devices"|"-s"|"-version"|"version"|"-list-avds"|"--find")){
+        devices::peer(&std::env::args().skip(1).collect::<Vec<_>>());
+        return;
+    }
     match std::env::args().nth(1).as_deref() {
         Some("--version") => {
             println!("codex 0.143.0");
@@ -85,12 +93,17 @@ async fn scenario() {
         .await
         .unwrap();
     let address = observer.local_addr().unwrap().to_string();
+    let device_bin=std::env::current_exe().unwrap();
     let (mut kar, url) = server::serve_with_env(
         &state,
         &authorized,
         &db,
         &[
             ("KAR_TEST_MCP_OBSERVER", address.as_ref()),
+            ("KAR_DEVICE_TEST_DIR",db.as_os_str()),
+            ("KAR_DEVICE_XCRUN_BIN",device_bin.as_os_str()),
+            ("KAR_DEVICE_ADB_BIN",device_bin.as_os_str()),
+            ("KAR_DEVICE_EMULATOR_BIN",device_bin.as_os_str()),
             ("KAR_FORGE_CONFIG", config.as_os_str()),
             ("KAR_MCP_TEST_FORGE", "local-only".as_ref()),
         ],
@@ -191,6 +204,7 @@ async fn scenario() {
     assert_eq!(foreign["result"]["isError"], true);
     let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
     preview_tools::controls(&url, &a, p, chat, call).await;
+    preview_tools::devices(&url,&a,p,chat,call).await;
     workflow::exercise(&url, &a, p, chat, call).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")

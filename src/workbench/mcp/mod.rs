@@ -4,6 +4,7 @@ mod issues;
 pub(super) use issues::{Policy, permission_routes};
 mod registry;
 mod preview_tools;
+pub(in crate::workbench) use preview_tools::DevicePermission;
 mod toolkit;
 mod workflow;
 pub(in crate::workbench) mod worktree;
@@ -307,9 +308,7 @@ async fn rpc(
                 call.await
             };
             match result {
-                Ok(value) => {
-                    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value})
-                }
+                Ok(value) => preview_tools::result(name,value),
                 Err(e) => json!({"isError":true,"content":[{"type":"text","text":e.to_string()}]}),
             }
         }

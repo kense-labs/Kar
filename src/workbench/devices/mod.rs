@@ -4,6 +4,7 @@ mod actions;
 mod agent;
 mod cloud;
 mod native;
+pub(super) mod model;
 mod remote;
 use remote::SshHost;
 mod screen;
@@ -76,6 +77,8 @@ impl Device {
 }
 #[derive(Clone, Serialize)]
 struct Session {
+    #[serde(skip)]
+    model:Option<super::mcp::DevicePermission>,
     view_id: Uuid,
     #[serde(skip)]
     grant: Option<agent::Grant>,
@@ -540,12 +543,22 @@ async fn open(State(app): State<Workbench>, Json(q): Json<Open>) -> Reply<Json<S
         .map_err(|e| Error::Closed(e.to_string()))?
 }
 async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
+    Ok(Json(open_checked(&app,q,None).await?))
+}
+async fn open_checked(app:&Workbench,q:Open, model:Option<super::mcp::DevicePermission>) -> Result<Session> {
     let host = q.target.host_id.as_deref().unwrap_or("local");
     let cwd = app.binding(q.project, q.chat)?.workspace;
     let svc = &app.0.devices;
     let _operation = svc.lifecycle.lock().await;
     let mut s = svc.live.lock().await;
     let mut device = svc.resolve(&mut s, host, &q.target.device_id).await?;
+    if let Some(scope)=&model{
+        scope.verify(app,true)?;
+        if !s.settings.agent_access_enabled {return Err(Error::Refused("device agent access is disabled".into()));}
+        if let Some(existing)=s.sessions.iter().find(|v| v.chat==q.chat && v.host_id==host && v.device_id==device.id && v.model.as_ref().is_some_and(|m|m.same_lease(scope)) && v.grant.is_some()){
+            return Ok(existing.clone());
+        }
+    }
     if device.platform != q.platform {
         return Err(Error::Refused("device platform differs".into()).into());
     }
@@ -582,6 +595,10 @@ async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
         }
     }
     let admission: Result<Option<agent::Grant>> = async {
+        if let Some(scope)=&model{
+            scope.verify(app,true)?;
+            if !s.settings.agent_access_enabled{return Err(Error::Refused("device agent access was disabled while opening the device".into()));}
+        }
         app.binding(q.project, q.chat)?;
         if app.archived(q.chat) {
             return Err(Error::Refused(
@@ -613,6 +630,7 @@ async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
         }
     };
     let session = Session {
+        model,
         view_id: Uuid::new_v4(),
         agent_config: grant.as_ref().map(|g| g.file.clone()),
         grant,
@@ -628,7 +646,7 @@ async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
     });
     s.sessions.push(session.clone());
     svc.publish(&mut s);
-    Ok(Json(session))
+    Ok(session)
 }
 #[derive(Deserialize)]
 struct Close {
