@@ -1961,7 +1961,17 @@ mod workbench_server;
 
 #[path = "support/worktree_chats.rs"]
 mod worktree_chats;
+#[path = "support/workbench_devices.rs"]
+mod workbench_devices;
 fn main() {
+    let mode=std::env::args().nth(1);
+    if matches!(mode.as_deref(),Some("workbench-devices"|"workbench-devices-live")){
+        workbench_devices::run(mode.as_deref()==Some("workbench-devices-live"));
+        return;
+    }
+    if std::env::var_os("KAR_DEVICE_TEST_DIR").is_some() && matches!(mode.as_deref(),Some("simctl"|"devices"|"-s"|"-T"|"-list-avds")){
+        workbench_devices::peer(&std::env::args().skip(1).collect::<Vec<_>>());return;
+    }
     if std::env::args().nth(1).as_deref() == Some("workbench-requests") {
         workbench_requests::run();
         return;

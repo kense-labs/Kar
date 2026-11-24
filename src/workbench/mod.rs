@@ -1,6 +1,7 @@
 //! A local workbench that shares Kar's saved chats, their native sessions and event cursors.
 mod access;
 mod chat_controls;
+mod devices;
 mod documents;
 mod files;
 mod forge;
@@ -81,6 +82,7 @@ struct Inner {
     state: PathBuf,
     pump: chat_controls::QueuePump,
     access: access::AccessStore,
+    devices: devices::Service,
     documents: documents::Documents,
     terminal_preview: terminal_preview::TerminalPreview,
     task_folders: task_folders::Store,
@@ -147,6 +149,7 @@ impl Workbench {
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
         let workflows = workflows::Engine::open(&state, clock)?;
         let access = access::AccessStore::open(&state)?;
+        let devices = devices::Service::open(&state)?;
         let app = Self(Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
             let service = weak.clone();
             let chats = chats.with_repository_scopes(Arc::new(move |chat| {
@@ -166,6 +169,7 @@ impl Workbench {
                 pump: Default::default(),
                 access,
                 state,
+                devices,
                 documents: Default::default(),
                 _lease: lease,
                 controllers: Default::default(),
