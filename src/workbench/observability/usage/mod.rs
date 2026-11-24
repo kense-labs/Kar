@@ -1,5 +1,6 @@
 //! Local usage reports. Only normalized counters and provider identities enter the on-disk index.
 mod aggregation;
+mod cursor;
 mod databases;
 mod pricing;
 mod records;
@@ -81,6 +82,7 @@ struct Entry {
 }
 pub(super) struct Service {
     rates: pricing::Cache,
+    cursor: cursor::Cache,
     index_file: PathBuf,
     latest: Mutex<Option<Arc<scans::Snapshot>>>,
     gate: tokio::sync::Mutex<()>,
@@ -89,6 +91,7 @@ impl Service {
     pub(super) fn new(dir: &Path) -> Self {
         Self {
             rates: pricing::Cache::new(dir),
+            cursor: cursor::Cache::new(dir),
             index_file: dir.join("usage-index-v1.json"),
             latest: Default::default(),
             gate: Default::default(),
@@ -117,6 +120,7 @@ pub(super) async fn summary(
     Json(input): Json<aggregation::Request>,
 ) -> std::result::Result<Json<Value>, ApiError> {
     let window = input.window()?;
+    let (since, until) = input.account_bounds(&window)?;
     let svc = app.0.observability.usage.clone();
     let chat_dir = app.0.chats.directory().to_path_buf();
     let previous = svc.latest.lock().unwrap().clone();
@@ -134,10 +138,32 @@ pub(super) async fn summary(
         let (s, r) = tokio::join!(svc.scan(chat_dir), svc.rates.get(false));
         (s?, r)
     };
+    let account = if let Some(key) = cursor::Cache::prepared() {
+        if !input.await_refresh {
+            let preview = svc.cursor.preview(&key);
+            let service = svc.clone();
+            tokio::spawn(async move {
+                service.cursor.get(&key, since, until).await;
+            });
+            Some(preview)
+        } else {
+            Some(svc.cursor.get(&key, since, until).await)
+        }
+    } else {
+        None
+    };
     let url = svc.rates.url.clone();
     Ok(Json(
         tokio::task::spawn_blocking(move || {
-            aggregation::build(&snapshot, &rates, &url, &input, window, provisional)
+            let combined = account.map(|r| snapshot.with_account(r));
+            aggregation::build(
+                combined.as_ref().unwrap_or(&snapshot),
+                &rates,
+                &url,
+                &input,
+                window,
+                provisional,
+            )
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))?,

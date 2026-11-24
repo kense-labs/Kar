@@ -34,6 +34,27 @@ pub(super) struct Window {
     hour: bool,
 }
 impl Request {
+    pub(super) fn account_bounds(&self, w: &Window) -> Result<(i64, i64)> {
+        if let Some((a, b)) = w.bounds {
+            return Ok((a, b - 1));
+        }
+        let bounds = || -> std::result::Result<_, jiff::Error> {
+            let a = self
+                .since_day
+                .parse::<jiff::civil::Date>()?
+                .to_zoned(w.zone.clone())?;
+            let b = self
+                .until_day
+                .parse::<jiff::civil::Date>()?
+                .tomorrow()?
+                .to_zoned(w.zone.clone())?;
+            Ok((
+                a.timestamp().as_millisecond(),
+                b.timestamp().as_millisecond() - 1,
+            ))
+        };
+        bounds().map_err(|_| Error::Refused("invalid usage date range".into()))
+    }
     pub(super) fn window(&self) -> Result<Window> {
         let invalid = || Error::Refused("invalid usage date or time window".into());
         let date = |s: &str| {

@@ -125,7 +125,10 @@ pub(super) fn bounded_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
     (&file).take(limit + 1).read_to_end(&mut bytes).ok()?;
     (stamp(&file.metadata().ok()?) == stamp(&meta) && bytes.len() as u64 <= limit).then_some(bytes)
 }
-pub(super) fn input<'a>(file: &'a File, path: &Path) -> io::Result<Box<dyn Read + 'a>> {
+pub(in crate::workbench) fn input<'a>(
+    file: &'a File,
+    path: &Path,
+) -> io::Result<Box<dyn Read + 'a>> {
     if path.extension().is_some_and(|x| x == "zst") {
         let mut decoder = ruzstd::decoding::FrameDecoder::new();
         decoder.set_max_window_size(64 * MIB);

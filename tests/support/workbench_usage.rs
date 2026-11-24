@@ -51,7 +51,15 @@ pub(super) async fn run() {
     let pi_home = home.join(".pi/agent");
     let opencode = home.join("opencode");
     let antigravity = home.join("antigravity");
+    let archived = codex_home.join("archived_sessions");
+    fs::create_dir_all(&archived).unwrap();
+    let compressed = ruzstd::encoding::compress_to_vec(
+        fs::File::open(&codex).unwrap(),
+        ruzstd::encoding::CompressionLevel::Fastest,
+    );
+    fs::write(archived.join("copy.jsonl.zst"), compressed).unwrap();
     let env = [
+        ("CURSOR_API_KEY", "".as_ref()),
         ("OPENCODE_DATA_DIR", opencode.as_os_str()),
         ("ANTIGRAVITY_DATA_DIR", antigravity.as_os_str()),
         ("KAR_AGENT_SESSION_CONFIG", "".as_ref()),

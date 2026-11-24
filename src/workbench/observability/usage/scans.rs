@@ -20,6 +20,8 @@ pub(super) struct FileUsage {
 pub(super) struct Source {
     pub root: PathBuf,
     pub provider: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    refreshing: bool,
     fingerprint: Value,
     status: String,
     scanned_files: u64,
@@ -27,7 +29,7 @@ pub(super) struct Source {
     malformed_records: u64,
     message: Option<String>,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Snapshot {
     pub sources: Vec<Source>,
     pub files: BTreeMap<PathBuf, Arc<FileUsage>>,
@@ -35,6 +37,46 @@ pub(super) struct Snapshot {
     pub duration: u64,
 }
 impl Snapshot {
+    pub fn with_account(&self, read: cursor::Read) -> Self {
+        let mut snapshot = self.clone();
+        let id = read.account.as_ref().map(|a| a.id.as_str()).unwrap_or("");
+        let root = PathBuf::from(if id.is_empty() {
+            "cursor-account".into()
+        } else {
+            format!("cursor-account:{id}")
+        });
+        let mut src = source(&root, "cursor");
+        src.fingerprint = json!({"host_id":"cursor.com","provider":"cursor","resolved_home_path":root,"volume_id":id});
+        src.status = if read.message.is_none() {
+            "ok"
+        } else if read.account.is_some() {
+            "partial"
+        } else {
+            "failed"
+        }
+        .into();
+        src.message = read.message;
+        src.refreshing = read.refreshing;
+        if let Some(a) = read.account {
+            src.scanned_files = 1;
+            snapshot.files.insert(
+                root.clone(),
+                Arc::new(FileUsage {
+                    root: root.clone(),
+                    format: "cursor".into(),
+                    entries: a.rows.clone(),
+                    parser: Default::default(),
+                    signature: String::new(),
+                    identity: String::new(),
+                    offset: 0,
+                    guard: vec![],
+                    malformed: 0,
+                }),
+            );
+        }
+        snapshot.sources.push(src);
+        snapshot
+    }
     pub fn source_id(&self, root: &Path, provider: &str) -> Option<usize> {
         self.sources
             .iter()
@@ -208,9 +250,13 @@ fn read_file(
     if let Some(o) = old.filter(|x| x.signature == sig) {
         return Ok((o.clone(), true));
     }
+    let compressed = path.extension().is_some_and(|s| s == "zst");
     let previous = match old {
         Some(o)
-            if o.offset > 0 && meta.len() > o.offset && guard(&mut file, o.offset)? == o.guard =>
+            if !compressed
+                && o.offset > 0
+                && meta.len() > o.offset
+                && guard(&mut file, o.offset)? == o.guard =>
         {
             Some(o.as_ref().clone())
         }
@@ -228,7 +274,9 @@ fn read_file(
         malformed: 0,
     });
     file.seek(SeekFrom::Start(result.offset))?;
-    let mut reader = BufReader::new(&mut file);
+    let mut reader = BufReader::new(crate::workbench::agent_sessions::transcript_input(
+        &file, path,
+    )?);
     let mut line = Vec::new();
     let mut bytes = 0u64;
     let mut oversize = false;
@@ -263,7 +311,12 @@ fn read_file(
         oversize = false;
         line.clear();
     }
-    result.guard = guard(&mut file, result.offset)?;
+    drop(reader);
+    if compressed {
+        result.offset = 0;
+    } else {
+        result.guard = guard(&mut file, result.offset)?;
+    }
     result.signature = sig;
     Ok((Arc::new(result), false))
 }
@@ -380,7 +433,10 @@ fn scan(root: &Path, format: &str, files: &mut BTreeMap<PathBuf, Arc<FileUsage>>
                 "kar" => path.extension().is_some_and(|e| e == "karchat"),
                 "grok" => e.file_name() == "updates.jsonl",
                 "muse" => e.file_name() == "session.jsonl",
-                _ => path.extension().is_some_and(|e| e == "jsonl"),
+                _ => {
+                    path.extension().is_some_and(|e| e == "jsonl")
+                        || e.file_name().to_string_lossy().ends_with(".jsonl.zst")
+                }
             };
             if !matched {
                 continue;

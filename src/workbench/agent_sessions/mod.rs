@@ -1,6 +1,7 @@
 //! Read local provider history into the existing chat journal and resume its native binding.
 mod codex;
 mod discover;
+pub(super) use discover::input as transcript_input;
 mod jsonl;
 mod transcript;
 use super::{

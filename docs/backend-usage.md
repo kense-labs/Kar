@@ -17,4 +17,6 @@ OpenCode 的两个数据库表（message、session_message）与 storage/message
 
 这两类数据库均使用现有纯 Rust sqlite-core 读取活跃表和已提交 WAL。数据库无 WAL 时按页读，遍历消息表一次只解码一张叶页。存在 WAL 时使用内存快照，主库上限 512 MiB、WAL 上限 128 MiB，超过上限或扫描期间发生写入时来源显示 partial，保留该来源上次可读的计量。集中 HTTP 用例新增 Rust 写入的真实 SQLite 文件，覆盖层级分叉/旧 JSON 去重、每模型申报额、Antigravity 两个表同一轮合并、回退到带时间的原生记录。这是原生格式样例；用户账号账单留待独立验证。
 
-Cursor 的账号历史另有远端读取契约。
+Cursor 从 CURSOR_API_KEY 交换账号令牌，随后从固定的 Cursor Dashboard API 读取个人与团队历史。团队请求始终同时指定当前用户。接口按账单总事件数识别翻页重叠，保留确实发生多次的相同计费事件。以账号标识的 SHA-256 联合主机指纹，来源缓存只持久化散列及规范化计量。await_refresh=true 等待账号读取，读取失败保留该来源旧记录并显示 partial。复验命令为 `cargo test --locked --lib cursor_account_usage_counts_paid_occurrences_across_overlapping_pages`；用本地 HTTP 服务模拟分页、凭证交换和团队限制。真实账号需要主机上的 Cursor API key，与离线协议证据分别登记。
+
+Claude、Codex 和 Pi 的压缩记录同样支持 .jsonl.zst，复用现有纯 Rust zstd 流式解码器。HTTP 用例把同一批已归档的 Codex 请求同时放入压缩与普通文件，核对不重复计量。
