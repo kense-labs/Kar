@@ -55,6 +55,9 @@ impl Runtime {
                     })?;
                 return Ok(serde_json::from_value(models)?);
             }
+            if self.id == "opencode" && self.protocol == crate::Protocol::Acp {
+                return crate::options::opencode::models::list(self, options).await;
+            }
             if self.id != "grok" || self.protocol != crate::Protocol::Acp {
                 return Err(Error::Unsupported(
                     "no model listing for this runtime form".into(),

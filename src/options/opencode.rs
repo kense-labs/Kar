@@ -1,4 +1,5 @@
 //! Prompt overlays for OpenCode's two native configuration formats.
+pub(crate) mod models;
 use super::env_path;
 use crate::{Error, Result, Runtime, SessionOptions, process::OwnedProcess};
 use serde_json::{Value, value::RawValue};

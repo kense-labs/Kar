@@ -875,3 +875,50 @@ async fn native_primary_prompt_replacement_and_retraction_across_resume() {
     );
     assert_eq!(opts.env[&key].to_str(), Some(original_config.as_str()));
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "requires a real OpenCode binary and a workspace-scoped fixture model"]
+async fn native_picker_and_models_cli_list_without_opening_a_chat() {
+    let base = tempfile::tempdir().unwrap();
+    let (opts, calls) = fixture(&base.path().canonicalize().unwrap());
+    let mut rt = kar::runtime("opencode").unwrap();
+    rt.program = std::env::var_os("KAR_OPENCODE_BIN")
+        .expect("set KAR_OPENCODE_BIN")
+        .into();
+    let (version, v2) = queue_crash::version(&rt.program);
+    let listing = rt.form_model_listing(&opts, vec![]).await;
+    let kar::forms::ModelListing::Live { models } = listing else {
+        panic!("native {version} listing: {listing:?}");
+    };
+    let entry = models
+        .iter()
+        .find(|m| m.id == "fixture/fixture")
+        .expect("workspace-scoped model");
+    if v2 {
+        assert!(entry.metadata.is_empty() && entry.effort_levels.is_none());
+    } else {
+        assert_eq!(entry.metadata["provider"]["id"], "fixture");
+        assert_eq!(entry.metadata["displayName"], "Fixture");
+    }
+    let cli = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+        .args(["models", "opencode", "--bin"])
+        .arg(&rt.program)
+        .arg("--cwd")
+        .arg(&opts.cwd)
+        .envs(&opts.env)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        cli.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cli.stderr)
+    );
+    let listed: Vec<kar::forms::ModelEntry> = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(
+        listed.iter().find(|m| m.id == "fixture/fixture"),
+        Some(entry)
+    );
+    assert!(calls.lock().unwrap().is_empty());
+}

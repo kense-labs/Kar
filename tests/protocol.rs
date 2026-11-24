@@ -31,6 +31,8 @@ mod installation;
 mod launch_args;
 #[path = "protocol/mcp_handoff.rs"]
 mod mcp_handoff;
+#[path = "protocol/opencode_models.rs"]
+mod opencode_models;
 #[path = "protocol/opencode_steering.rs"]
 mod opencode_steering;
 #[path = "protocol/opening.rs"]
@@ -1465,6 +1467,7 @@ async fn main() {
     }
     match args.get(1).map(String::as_str) {
         Some("codex-catalog") => return codex_catalog::run().await.unwrap(),
+        Some("opencode-model-listing") => return opencode_models::run().await.unwrap(),
         Some("launch-args") => return launch_args::run().await.unwrap(),
         Some("claude-mcp-native") => return mcp_handoff::claude().await,
         Some("qoder-mcp-native") => return mcp_handoff::qoder().await,
@@ -1492,6 +1495,9 @@ async fn main() {
     }
     if let Ok(version) = std::env::var("KAR_TEST_AGY_STEER") {
         return antigravity_steering::peer(&version);
+    }
+    if let Ok(case) = std::env::var("KAR_TEST_OPENCODE_MODELS") {
+        return opencode_models::peer(&case, &args[1..]);
     }
     if let Ok(mode) = std::env::var("KAR_TEST_OPENCODE_STEERING") {
         return opencode_steering::peer(&mode, &args);
@@ -1612,6 +1618,7 @@ async fn main() {
         .await
         .unwrap()
         .unwrap();
+    opencode_models::run().await.unwrap();
     tokio::time::timeout(Duration::from_secs(30), opencode_steering::run())
         .await
         .unwrap()

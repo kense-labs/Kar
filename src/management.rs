@@ -138,6 +138,15 @@ impl Runtime {
             return Ok(models);
         }
         if standalone
+            && self.id == "opencode"
+            && self.protocol == Protocol::Acp
+            && matches!(kind, Catalog::Models)
+        {
+            return Ok(serde_json::to_value(
+                crate::options::opencode::models::list(self, &options).await?,
+            )?);
+        }
+        if standalone
             && self.id == "grok"
             && self.protocol == Protocol::Acp
             && matches!(kind, Catalog::Models)
