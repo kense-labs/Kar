@@ -291,6 +291,16 @@ impl ChatStore {
             runtime(id)
         }
     }
+    pub(crate) fn run_schema_path(&self, chat: Uuid, turn: Uuid) -> std::path::PathBuf {
+        self.directory().join("workbench/run-schemas").join(chat.to_string()).join(format!("{turn}.json"))
+    }
+    pub(crate) fn run_schema(&self, chat: Uuid, turn: Uuid) -> Result<Option<serde_json::Value>> {
+        match std::fs::File::open(self.run_schema_path(chat,turn)) {
+            Ok(file)=>Ok(Some(serde_json::from_reader(file)?)),
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(None),
+            Err(e)=>Err(e.into()),
+        }
+    }
     pub(crate) fn directory(&self) -> &Path {
         &self.dir
     }
@@ -1026,6 +1036,9 @@ impl Sender {
                 .map_or_else(|| text.clone(), |n| n.prompt(&text));
             (log.state.dispatch_text(&prompt), note)
         };
+        let wire_text = if let Some(schema) = store.run_schema(self.info.id, id)? {
+            format!("{wire_text}\n\nWhen the work is complete, call kar_submit_output with JSON text matching this schema. Correct any validation error before finishing.\n{schema}")
+        } else { wire_text };
         crate::input::check_text(&wire_text, crate::input::text_limit(&self.info.runtime))?;
         let store_for_input = store.clone();
         let chat = self.info.id;

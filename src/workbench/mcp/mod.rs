@@ -3,6 +3,7 @@ mod forge_tools;
 mod issues;
 pub(super) use issues::{Policy, permission_routes};
 mod registry;
+mod collaboration_tools;
 mod preview_tools;
 mod html;
 pub(in crate::workbench) use preview_tools::DevicePermission;

@@ -103,6 +103,7 @@ pub(in crate::workbench) struct Registry {
     sessions: Mutex<HashMap<Uuid, Arc<HttpSession>>>,
 }
 impl Registry {
+    pub(super) fn origin(&self)->Option<String>{self.endpoint.get().map(|a|format!("http://{a}"))}
     pub(in crate::workbench) fn set_endpoint(&self, addr: SocketAddr) -> crate::Result<()> {
         if !addr.ip().is_loopback()
             || addr.port() == 0

@@ -32,6 +32,8 @@ const TICKET_MS: u64 = 600_000;
 const PENDING_MS: u64 = 86_400_000;
 #[derive(Clone, Deserialize, Serialize)]
 struct Upload {
+    #[serde(default)]
+    prepared_by: Option<Uuid>,
     project: Uuid,
     created_ms: u64,
     spec: Spec,
@@ -54,7 +56,7 @@ pub(super) struct Registry {
     reads: BTreeMap<Uuid, Download>,
 }
 #[derive(Clone, Deserialize, Serialize)]
-struct Spec {
+pub(super) struct Spec {
     name: String,
     mime: String,
     kind: AttachmentKind,
@@ -88,10 +90,16 @@ async fn issue(
     Path(p): Path<Uuid>,
     Json(spec): Json<Spec>,
 ) -> Reply<Value> {
+    blocking(move || prepare(&app, p, spec, None)).await
+}
+pub(super) fn prepare(app: &Workbench, p: Uuid, spec: Spec, owner: Option<Uuid>) -> Result<Value> {
     Attachment::validate(&spec.name, &spec.mime, spec.kind, spec.bytes)?;
-    blocking(move||{
-        app.project(p)?;let secret=credential()?;let id=Uuid::new_v4();let at=now();
-        app.update(|db|{
+
+    app.project(p)?;
+    let secret = credential()?;
+    let id = Uuid::new_v4();
+    let at = now();
+    app.update(|db|{
             if !db.projects.contains_key(&p){return Err(missing());}
             db.assets.reads.retain(|_,r|r.expires_ms>at);
             // A published chat reference owns its own bytes and can be reused without this ticket.
@@ -100,10 +108,9 @@ async fn issue(
                 match fs::remove_file(path(&app,old)){Err(e) if e.kind()!=std::io::ErrorKind::NotFound=>return Err(e.into()),_=>{}}
                 db.assets.uploads.remove(&old);
             }
-            db.assets.uploads.insert(id,Upload{project:p,spec,secret_hash:digest(&secret),created_ms:at,chat:None});
+            db.assets.uploads.insert(id,Upload{prepared_by:owner,project:p,spec,secret_hash:digest(&secret),created_ms:at,chat:None});
             Ok(json!({"id":id,"upload_path":format!("/assets/upload/{id}/{secret}"),"expires_ms":at+TICKET_MS}))
         })
-    }).await
 }
 async fn upload(
     State(app): State<Workbench>,
@@ -166,72 +173,86 @@ async fn claim(
     Path((p, c)): Path<(Uuid, Uuid)>,
     Json(q): Json<Claim>,
 ) -> Reply<Attachment> {
-    blocking(move || {
-        let info = app.binding(p, c)?;
-        let final_attachment = app.update(|db| {
-            let project = db.projects.get(&p).ok_or_else(missing)?;
-            if !app.owns_chat(db, project, &info)? {
+    blocking(move || claim_for(&app, p, c, q.attachment, None)).await
+}
+pub(super) fn claim_for(
+    app: &Workbench,
+    p: Uuid,
+    c: Uuid,
+    attachment: Uuid,
+    owner: Option<Uuid>,
+) -> Result<Attachment> {
+    let info = app.binding(p, c)?;
+    let final_attachment = app.update(|db| {
+        let project = db.projects.get(&p).ok_or_else(missing)?;
+        if !app.owns_chat(db, project, &info)? {
+            return Err(missing());
+        }
+        let grant = db.assets.uploads.get_mut(&attachment);
+        if let Some(grant) = grant {
+            if grant.project != p
+                || (grant.chat.is_none() && owner.is_some() && grant.prepared_by != owner)
+                || grant.chat.is_some_and(|owner| owner != c)
+            {
                 return Err(missing());
             }
-            let grant = db.assets.uploads.get_mut(&q.attachment);
-            if let Some(grant) = grant {
-                if grant.project != p || grant.chat.is_some_and(|owner| owner != c) {
+            if grant.chat.is_none() {
+                if now() >= grant.created_ms.saturating_add(PENDING_MS) {
                     return Err(missing());
                 }
-                if grant.chat.is_none() {
-                    if now() >= grant.created_ms.saturating_add(PENDING_MS) {
-                        return Err(missing());
-                    }
-                    let bytes = fs::read(path(&app, q.attachment))?;
-                    if bytes.len() as u64 != grant.spec.bytes {
-                        return Err(Error::Refused("staged upload changed".into()));
-                    }
-                    let a = app.0.chats.persist_attachment(
-                        c,
-                        q.attachment,
-                        &grant.spec.name,
-                        &grant.spec.mime,
-                        grant.spec.kind,
-                        &bytes,
-                    )?;
-                    grant.chat = Some(c);
-                    return Ok(a);
+                let bytes = fs::read(path(&app, attachment))?;
+                if bytes.len() as u64 != grant.spec.bytes {
+                    return Err(Error::Refused("staged upload changed".into()));
                 }
+                let a = app.0.chats.persist_attachment(
+                    c,
+                    attachment,
+                    &grant.spec.name,
+                    &grant.spec.mime,
+                    grant.spec.kind,
+                    &bytes,
+                )?;
+                grant.chat = Some(c);
+                return Ok(a);
             }
-            app.0.chats.read_attachment(c, q.attachment)
-        })?;
-        match fs::remove_file(path(&app, q.attachment)) {
+        }
+        app.0.chats.read_attachment(c, attachment)
+    })?;
+    match fs::remove_file(path(&app, attachment)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    Ok(final_attachment)
+}
+async fn discard(State(app): State<Workbench>, Path((p, id)): Path<(Uuid, Uuid)>) -> Reply<Value> {
+    blocking(move || discard_for(&app, p, id, None)).await
+}
+pub(super) fn discard_for(
+    app: &Workbench,
+    p: Uuid,
+    id: Uuid,
+    owner: Option<Uuid>,
+) -> Result<Value> {
+    app.project(p)?;
+    app.update(|db| {
+        let u = db
+            .assets
+            .uploads
+            .get(&id)
+            .filter(|u| u.project == p && (owner.is_none() || owner == u.prepared_by))
+            .ok_or_else(missing)?;
+        if u.chat.is_some() {
+            return Err(Error::Refused(
+                "attachment is already assigned to a chat".into(),
+            ));
+        }
+        match fs::remove_file(path(&app, id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
             _ => {}
         }
-        Ok(final_attachment)
+        db.assets.uploads.remove(&id);
+        Ok(json!({"id":id}))
     })
-    .await
-}
-async fn discard(State(app): State<Workbench>, Path((p, id)): Path<(Uuid, Uuid)>) -> Reply<Value> {
-    blocking(move || {
-        app.project(p)?;
-        app.update(|db| {
-            let u = db
-                .assets
-                .uploads
-                .get(&id)
-                .filter(|u| u.project == p)
-                .ok_or_else(missing)?;
-            if u.chat.is_some() {
-                return Err(Error::Refused(
-                    "attachment is already assigned to a chat".into(),
-                ));
-            }
-            match fs::remove_file(path(&app, id)) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-                _ => {}
-            }
-            db.assets.uploads.remove(&id);
-            Ok(json!({"id":id}))
-        })
-    })
-    .await
 }
 async fn sign_read(
     State(app): State<Workbench>,

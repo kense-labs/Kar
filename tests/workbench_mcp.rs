@@ -7,6 +7,8 @@ mod projects;
 mod worktree;
 #[path = "workbench_mcp/preview_tools.rs"]
 mod preview_tools;
+#[path="workbench_mcp/collaboration.rs"]
+mod collaboration;
 #[path = "workbench_mcp/workflow.rs"]
 mod workflow;
 #[allow(dead_code)]
@@ -206,6 +208,7 @@ async fn scenario() {
     assert_eq!(foreign["result"]["isError"], true);
     let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
     projects::exercise(&url, &a, p, chat, &root, call).await;
+    collaboration::run(&url,&a,p,chat,&db,call).await;
     preview_tools::controls(&url, &a, p, chat, call).await;
     preview_tools::devices(&url,&a,p,chat,call).await;
     preview_tools::html(&url,&a,p,chat,&root,call).await;

@@ -126,6 +126,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
             required:&["task_ids"],
         });
     }
+    tools.extend(super::collaboration_tools::tools(caller));
     tools.extend(super::forge_tools::tools(caller));
     tools.extend(preview_tools::tools(caller));
     tools.extend(super::project_tools::tools(caller));
@@ -262,6 +263,7 @@ pub(super) async fn call(
 ) -> Result<Value> {
     if super::project_tools::handles(name) { return super::project_tools::call(&app,&caller,name,input).await; }
     if name.starts_with("kar_preview_") || name.starts_with("kar_device_") || name.starts_with("kar_html_"){return preview_tools::call(&app,&caller,name,input).await;}
+    if super::collaboration_tools::handles(name) { return super::collaboration_tools::call(&app,&caller,name,input).await; }
     if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
         return issues::call(app, caller, name, input).await;
     }

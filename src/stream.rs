@@ -1260,6 +1260,18 @@ impl Journal {
         ControlReceipt::from_records(&self.state.lock().unwrap().records, request_id)
     }
     #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn model_tool_result(&self,turn:Uuid,tool:&str,event:Event)->Result<()> {
+        let mut s=self.state.lock().unwrap();
+        let request=match s.queries.as_ref().map(|q|q.snapshot().status.clone()) {
+            Some(crate::observe::AgentStatus::Running{input_id:Some(id),request_id:Some(request),..}) if id==turn.to_string() && !s.closed=>request,
+            _=>return Err(Error::Refused("model tool no longer belongs to the active turn".into())),
+        };
+        let mut stamp=RecordStamp::frame(Direction::Host,tool);
+        stamp.response_to=Some(request);
+        self.append_locked(&mut s,stamp,RecordKind::Frame,None,vec![],None,serde_json::Value::Null,vec![event]);
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn active_prompt(&self) -> Option<(String, String)> {
         let state = self.state.lock().unwrap();
         match &state.queries.as_ref()?.snapshot().status {

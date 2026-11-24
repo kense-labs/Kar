@@ -1507,6 +1507,12 @@ impl Session {
     pub fn records(&self) -> Vec<Arc<Record>> {
         self.journal.records()
     }
+    pub(crate) fn model_caller_turn(&self) -> Option<Uuid> {
+        self.journal.active_prompt().and_then(|(id,_)|id.parse().ok())
+    }
+    pub(crate) fn publish_model_tool_result(&self,turn:Uuid,tool:&str,event:crate::Event)->Result<()> {
+        self.journal.model_tool_result(turn,tool,event)
+    }
     /// Consistent root queries and the last record they include.
     pub fn snapshot(&self) -> crate::observe::SessionSnapshot {
         self.journal.snapshot()

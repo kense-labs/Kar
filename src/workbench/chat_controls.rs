@@ -273,6 +273,7 @@ async fn control_queue(
 }
 #[derive(Deserialize)]
 struct Input {
+    requested_output_schema: Option<serde_json::Value>,
     #[serde(default)]
     attachments: Vec<Uuid>,
     id: Uuid,
@@ -288,6 +289,7 @@ async fn enqueue(
         if app.archived(c) {
             return Err(Error::Refused("chat is archived".into()));
         }
+        if let Some(schema)=m.requested_output_schema { app.register_run_schema(p,c,m.id,schema)?; }
         let receipt = app
             .0
             .chats
