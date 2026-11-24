@@ -2,19 +2,19 @@ method	upstream_contract	upstream_handler	gap_id	kar_entry	test_command	evidence
 projects.listEntries	packages/contracts/src/rpc.ts#L487	apps/server/src/ws.ts#L3065	project-entries	GET entries	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
 projects.listIgnoredFiles	packages/contracts/src/rpc.ts#L488	apps/server/src/ws.ts#L3076	project-entries	GET ignored-files	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
 projects.readFile	packages/contracts/src/rpc.ts#L489	apps/server/src/ws.ts#L3087	project-read-options	GET file	cargo test --locked --test chat_restart -- workbench-projects	162d633	实现已集成，待统一验收
-projects.searchContents	packages/contracts/src/rpc.ts#L490	apps/server/src/ws.ts#L3052	project-search-options				已登记差异
-projects.searchEntries	packages/contracts/src/rpc.ts#L491	apps/server/src/ws.ts#L3039	project-search-options				已登记差异
+projects.searchContents	packages/contracts/src/rpc.ts#L490	apps/server/src/ws.ts#L3052	project-search-options	GET search	cargo test --locked --test chat_restart -- workbench-projects	1edc215	实现已集成，待统一验收
+projects.searchEntries	packages/contracts/src/rpc.ts#L491	apps/server/src/ws.ts#L3039	project-search-options	GET search/entries	cargo test --locked --test chat_restart -- workbench-projects	1edc215	实现已集成，待统一验收
 projects.writeFile	packages/contracts/src/rpc.ts#L492	apps/server/src/ws.ts#L3098					待源码核对
-projects.mutate	packages/contracts/src/rpc.ts#L493	apps/server/src/ws.ts#L3110	project-lifecycle				已登记差异
-projects.ensureScratch	packages/contracts/src/rpc.ts#L494	apps/server/src/ws.ts#L3003	project-creation				已登记差异
-projects.createNew	packages/contracts/src/rpc.ts#L495	apps/server/src/ws.ts#L3009	project-creation				已登记差异
-projects.createFromThread	packages/contracts/src/rpc.ts#L496	apps/server/src/ws.ts#L3017	project-creation				已登记差异
+projects.mutate	packages/contracts/src/rpc.ts#L493	apps/server/src/ws.ts#L3110	project-lifecycle	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
+projects.ensureScratch	packages/contracts/src/rpc.ts#L494	apps/server/src/ws.ts#L3003	project-creation	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
+projects.createNew	packages/contracts/src/rpc.ts#L495	apps/server/src/ws.ts#L3009	project-creation	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
+projects.createFromThread	packages/contracts/src/rpc.ts#L496	apps/server/src/ws.ts#L3017	project-creation	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
 shell.openInEditor	packages/contracts/src/rpc.ts#L498	apps/server/src/ws.ts#L3124					待源码核对
 filesystem.browse	packages/contracts/src/rpc.ts#L500	apps/server/src/ws.ts#L3126	filesystem-inspection	GET browse	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
 workspace.listFolders	packages/contracts/src/rpc.ts#L501	apps/server/src/ws.ts#L3137	task-folders	GET folders	cargo test --locked --test chat_restart -- workbench-projects	c2c283f	实现已集成，待统一验收
 workspace.scanFolders	packages/contracts/src/rpc.ts#L502	apps/server/src/ws.ts#L3138	task-folders	GET folders/scan	cargo test --locked --test chat_restart -- workbench-projects	c2c283f	实现已集成，待统一验收
-workspace.taskFolder	packages/contracts/src/rpc.ts#L503	apps/server/src/ws.ts#L3139	task-folders				已登记差异
-workspace.addTaskFolderRepository	packages/contracts/src/rpc.ts#L504	apps/server/src/ws.ts#L3141	task-folders				已登记差异
+workspace.taskFolder	packages/contracts/src/rpc.ts#L503	apps/server/src/ws.ts#L3139	task-folders	GET tasks/{id}/folder	cargo test --locked --test chat_restart -- workbench-task-folders	c4c9bbb	实现已集成，待统一验收
+workspace.addTaskFolderRepository	packages/contracts/src/rpc.ts#L504	apps/server/src/ws.ts#L3141	task-folders	POST tasks/{id}/folder/repositories	cargo test --locked --test chat_restart -- workbench-task-folders	c4c9bbb	实现已集成，待统一验收
 filesystem.getMetadata	packages/contracts/src/rpc.ts#L505	apps/server/src/ws.ts#L3125	filesystem-inspection	POST /filesystem/metadata	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
 agentSessions.scan	packages/contracts/src/rpc.ts#L506	apps/server/src/ws.ts#L3144					待源码核对
 agentSessions.import	packages/contracts/src/rpc.ts#L507	apps/server/src/ws.ts#L3145					待源码核对
@@ -216,9 +216,9 @@ sourceControl.signInCancel	packages/contracts/src/rpc.ts#L718	apps/server/src/ws
 sourceControl.appAccess	packages/contracts/src/rpc.ts#L719	apps/server/src/ws.ts#L2962					待源码核对
 sourceControl.starred	packages/contracts/src/rpc.ts#L720	apps/server/src/ws.ts#L2963					待源码核对
 sourceControl.star	packages/contracts/src/rpc.ts#L721	apps/server/src/ws.ts#L2964					待源码核对
-projectClone.start	packages/contracts/src/rpc.ts#L722	apps/server/src/ws.ts#L2965					待源码核对
-projectClone.cancel	packages/contracts/src/rpc.ts#L723	apps/server/src/ws.ts#L3025					待源码核对
-projectClone.retry	packages/contracts/src/rpc.ts#L724	apps/server/src/ws.ts#L3027					待源码核对
+projectClone.start	packages/contracts/src/rpc.ts#L722	apps/server/src/ws.ts#L2965	project-hosted-clone	src/workbench/forge/clone_jobs.rs	cargo test --locked --test workbench_forge	0800f7f	实现已集成，待统一验收
+projectClone.cancel	packages/contracts/src/rpc.ts#L723	apps/server/src/ws.ts#L3025	project-hosted-clone	src/workbench/forge/clone_jobs.rs	cargo test --locked --test workbench_forge	0800f7f	实现已集成，待统一验收
+projectClone.retry	packages/contracts/src/rpc.ts#L724	apps/server/src/ws.ts#L3027	project-hosted-clone	src/workbench/forge/clone_jobs.rs	cargo test --locked --test workbench_forge	0800f7f	实现已集成，待统一验收
 subscribeProjectClones	packages/contracts/src/rpc.ts#L725	apps/server/src/ws.ts#L3029					待源码核对
 subscribeVcsStatus	packages/contracts/src/rpc.ts#L727	apps/server/src/ws.ts#L3234					待源码核对
 subscribeVcsBranch	packages/contracts/src/rpc.ts#L728	apps/server/src/ws.ts#L3231					待源码核对
@@ -234,11 +234,11 @@ subscribeServerLifecycle	packages/contracts/src/rpc.ts#L737	apps/server/src/ws.t
 subscribeAuthAccess	packages/contracts/src/rpc.ts#L738	apps/server/src/ws.ts#L3647					待源码核对
 subscribeResourceTelemetry	packages/contracts/src/rpc.ts#L739	apps/server/src/ws.ts#L3705					待源码核对
 orchestration.dispatchCommand	packages/contracts/src/orchestrationV2.ts#L4076	apps/server/src/ws.ts#L2023					待源码核对
-orchestration.getTurnDiff	packages/contracts/src/orchestrationV2.ts#L4077	apps/server/src/ws.ts#L2096					待源码核对
-orchestration.getFullThreadDiff	packages/contracts/src/orchestrationV2.ts#L4078	apps/server/src/ws.ts#L2106					待源码核对
+orchestration.getTurnDiff	packages/contracts/src/orchestrationV2.ts#L4077	apps/server/src/ws.ts#L2096	checkpoint-patches	GET checkpoints/diff	cargo test --locked --test chat_restart -- workbench-fork	4e50ef6	实现已集成，待统一验收
+orchestration.getFullThreadDiff	packages/contracts/src/orchestrationV2.ts#L4078	apps/server/src/ws.ts#L2106	checkpoint-patches	GET checkpoints/diff	cargo test --locked --test chat_restart -- workbench-fork	4e50ef6	实现已集成，待统一验收
 orchestration.searchThreads	packages/contracts/src/orchestrationV2.ts#L4079	apps/server/src/ws.ts#L2124					待源码核对
-orchestration.searchThread	packages/contracts/src/orchestrationV2.ts#L4080	apps/server/src/ws.ts#L2116					待源码核对
-orchestration.searchThreadStream	packages/contracts/src/orchestrationV2.ts#L4081	apps/server/src/ws.ts#L2120					待源码核对
+orchestration.searchThread	packages/contracts/src/orchestrationV2.ts#L4080	apps/server/src/ws.ts#L2116	thread-find				已登记差异
+orchestration.searchThreadStream	packages/contracts/src/orchestrationV2.ts#L4081	apps/server/src/ws.ts#L2120	thread-find				已登记差异
 orchestration.getArchivedShellSnapshot	packages/contracts/src/orchestrationV2.ts#L4082	apps/server/src/ws.ts#L2142					待源码核对
 orchestration.getThreadFamily	packages/contracts/src/orchestrationV2.ts#L4083	apps/server/src/ws.ts#L2144					待源码核对
 orchestration.getThreadTitles	packages/contracts/src/orchestrationV2.ts#L4084	apps/server/src/ws.ts#L2156					待源码核对
@@ -249,8 +249,8 @@ orchestration.getThreadProjection	packages/contracts/src/orchestrationV2.ts#L408
 orchestration.getWorkflowScript	packages/contracts/src/orchestrationV2.ts#L4089	apps/server/src/ws.ts#L2081					待源码核对
 orchestration.getNativeChildWork	packages/contracts/src/orchestrationV2.ts#L4090	apps/server/src/ws.ts#L2083					待源码核对
 orchestration.stopWorkflow	packages/contracts/src/orchestrationV2.ts#L4091	apps/server/src/ws.ts#L2078					待源码核对
-orchestration.forceStopThread	packages/contracts/src/orchestrationV2.ts#L4092	apps/server/src/ws.ts#L2079					待源码核对
-orchestration.getTurnItem	packages/contracts/src/orchestrationV2.ts#L4093	apps/server/src/ws.ts#L2085					待源码核对
+orchestration.forceStopThread	packages/contracts/src/orchestrationV2.ts#L4092	apps/server/src/ws.ts#L2079	turn-control				已登记差异
+orchestration.getTurnItem	packages/contracts/src/orchestrationV2.ts#L4093	apps/server/src/ws.ts#L2085	thread-find				已登记差异
 orchestration.launchThread	packages/contracts/src/orchestrationV2.ts#L4094	apps/server/src/ws.ts#L2214					待源码核对
 orchestration.subscribeShell	packages/contracts/src/orchestrationV2.ts#L4095	apps/server/src/ws.ts#L2357					待源码核对
 orchestration.subscribeThread	packages/contracts/src/orchestrationV2.ts#L4096	apps/server/src/ws.ts#L2359					待源码核对

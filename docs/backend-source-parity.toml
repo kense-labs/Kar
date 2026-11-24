@@ -83,7 +83,7 @@ upstream = ["packages/cli/src/index.ts","packages/cli/src/models.ts","packages/c
 kar = ["src/models_cli.rs","src/grok.rs"]
 status = "单项、隐式及显式全部、文本和 JSON 数组、超时与独立失败处理已集成，待统一验收"
 implementation_ref = "bae800b"
-test_target = "cargo test --locked --test setup_cli"
+test_target = "cargo test --locked --test protocol"
 accept = "分别省略运行时、选择全部、指定单一运行时；设置项目目录、不同原生模型目录和单运行时超时，混入缺程序、查询超时和查询成功的情形。比较逐项结果、错误归属、输出模式和进程退出码。先核对主线已有模型查询改动。"
 
 [[gap]]
@@ -147,8 +147,8 @@ phase = 2
 name = "扫描项目中的仓库并为一个任务关联多个仓库"
 upstream = ["packages/contracts/src/workspaceFolders.ts","apps/server/src/workspace/TaskFolders.ts","apps/server/src/workspace/TaskFolderStore.ts"]
 kar = ["src/workbench/mod.rs","src/workbench/git.rs"]
-status = "目录发现和跟踪已集成，任务工作树及设置订阅在开发"
-implementation_ref = "c2c283f"
+status = "工作区描述、自动发现、任务多仓库、共用唯一分支及设置进度订阅已集成，待统一验收"
+implementation_ref = "c2c283f, 262755a, 1acef60, c4c9bbb"
 test_target = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = "用含两个仓库及工作区描述文件的项目，核对列举、扫描、跟踪目录和来源。为同一任务建立工作目录并追加另一个已跟踪仓库，从任务子目录及重启后读回映射；分别检查重复加入、非跟踪仓库和目标目录已有文件的处理及数据保留。"
 
@@ -257,7 +257,8 @@ phase = 2
 name = "项目更新、固定、归档与安全删除"
 upstream = ["apps/server/src/project/ProjectMutation.ts", "packages/contracts/src/project.ts"]
 kar = ["src/workbench/mod.rs"]
-status = "已从固定源码定位，待补齐"
+status = "项目更新、归档、固定、删除、稳定聊天归属及任务队列重启扫描已集成，待统一验收"
+implementation_ref = "7c7be85"
 test_target = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = "用不同命令 ID 更新项目标题、脚本、目录和设置，同时修改目录列表。重复命令、重启、归档恢复和删除非空项目时核对线程和实际文件。"
 
@@ -267,7 +268,8 @@ phase = 2
 name = "暂存项目、新项目及从聊天建立项目"
 upstream = ["apps/server/src/ws.ts", "packages/contracts/src/project.ts"]
 kar = ["src/workbench/mod.rs"]
-status = "已从固定源码定位，待补齐"
+status = "暂存项目、按聊天选择独立目录、原地晋升和命令回执已集成，待统一验收"
+implementation_ref = "7c7be85"
 test_target = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = "重复获取暂存项目结果一致。由名称创建新项目，检查目录和初始提交失败的可读结果；用已有聊天创建项目，并从该聊天读回归属。"
 
@@ -309,7 +311,8 @@ phase = 2
 name = "路径类型和图片过滤，全文正则及范围"
 upstream = ["packages/contracts/src/project.ts", "apps/server/src/workspace/WorkspaceEntries.ts", "apps/server/src/workspace/WorkspaceSearchIndex.ts"]
 kar = ["src/workbench/search.rs", "src/workbench/files/inspection.rs"]
-status = "已定位到普通搜索以外的参数差异，待补齐"
+status = "文件与目录类型、图片过滤、大小写、全词、正则和范围已集成，待统一验收"
+implementation_ref = "1edc215"
 test_target = "cargo test --locked --test chat_restart -- workbench-projects"
 accept = "覆盖目录、文件、仅图片、空路径搜索、大小写、全词、正则错误回退、含非 ASCII 文本的匹配范围和截断标记。"
 
@@ -322,3 +325,66 @@ kar = ["src/workbench_git/stacked.rs", "src/workbench/git_actions.rs"]
 status = "普通组合操作已接入，独立发布目标待补齐"
 test_target = "cargo test --locked --test workbench_forge"
 accept = "在具有独立 branch.pushRemote 和不同拉取基线的仓库执行 create_pr。检查真实发布分支与原拉取跟踪配置、已存在的分叉 PR 及同名外部 PR 的区分。"
+
+[[gap]]
+id = "checkpoint-patches"
+phase = 2
+name = "历史回合范围补丁和多仓库视图"
+upstream = ["packages/contracts/src/checkpointDiff.ts", "apps/server/src/checkpointing/CheckpointDiffQuery.ts", "apps/server/src/orchestration-v2/CheckpointService.ts"]
+kar = ["src/chat/checkpoint/diff.rs", "src/chat/checkpoint/scopes.rs", "src/workbench/task_folders/checkpoints.rs"]
+status = "范围、空白选项、长度上限、独立任务仓库和已检出子模块已集成，待统一验收"
+implementation_ref = "27c5ade, 4e50ef6"
+test_target = "cargo test --locked --test chat_restart -- workbench-projects && cargo test --locked --test chat_restart -- workbench-fork"
+accept = "分两轮修改根目录、嵌套仓库、独立工作树与子模块，核对单轮、全程及忽略空白的补丁。重启后读取同一范围。覆盖越界、空范围、无变化仓库、二进制文件、总输出限制和继承历史的分叉。"
+
+[[gap]]
+id = "checkpoint-repository-restore"
+phase = 2
+name = "工作区、独立工作树和仓库范围的联动回滚"
+upstream = ["apps/server/src/orchestration-v2/CheckpointRollbackService.ts", "apps/server/src/orchestration-v2/CheckpointRollbackService.taskFolder.test.ts", "apps/server/src/orchestration-v2/CheckpointRestoreSafety.ts"]
+kar = ["src/chat/checkpoint/restore.rs", "src/chat/fork/worktree.rs"]
+status = "单工作区恢复和分仓库快照已集成，多仓库文件与模型切点联动待补"
+test_target = "cargo test --locked --test chat_restart -- workbench-task-folders"
+accept = "两个受管仓库在同一回合修改。预览指出各自的路径；存在冲突时所有仓库都维持原内容。落盘恢复、重启重试及在独立目录分叉后继续聊时，逐一读取文件、原生会话和父工作区。"
+
+[[gap]]
+id = "turn-control"
+phase = 2
+name = "定向中断、强制停止和活动回合输入"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts", "apps/server/src/orchestration-v2/ProviderTurnControlService.ts"]
+kar = ["src/session/prompt_run.rs","src/workbench/interactions.rs"]
+status = "按 input 和 request 定向中断已集成；强制停止、定向续写及派生任务终止仍待逐项核对"
+implementation_ref = "a02f848, 67be12f"
+test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+accept = "两端观察同一回合，在正确 input、过期 input、错 request 和同一 input 重试时发送中断；核对只有正确目标收到原生命令、两端终态及下一回合。分别核对子任务链、已离线会话和强停的清理结果。"
+
+[[gap]]
+id = "queue-edit-control"
+phase = 2
+name = "已排队回合的编辑、重新排序、提升、延迟启动与重启投递"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/QueuedRunOrder.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
+kar = ["src/chat/queue.rs", "src/workbench/chat_controls.rs"]
+status = "持久 FIFO 及撤回已集成；原子编辑、排序、立即开始、暂停后继续及提升待补"
+test_target = "cargo test --locked --test chat_restart -- workbench-queue"
+accept = "活动回合中排入 A/B/C，编辑 B、调整顺序并重启。接收回执前后分别撤回、改序和提升为 steer，检查原生投递顺序、文本、ID 和是否重复。"
+
+[[gap]]
+id = "thread-find"
+phase = 2
+name = "聊天内查找、结果导航、分阶段返回和单条时间线读取"
+upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/ThreadFind.ts", "apps/server/src/orchestration-v2/ProjectionStore.ts"]
+kar = ["src/workbench/search.rs", "src/chat/timeline.rs"]
+status = "跨聊天搜索已接入；单个聊天结果定位、单条取回及流式查找待补"
+test_target = "cargo test --locked --test chat_restart -- workbench-fork"
+accept = "在分叉前后添加同词的多条消息，按文本出现序号、游标和正负偏移导航，核对首个匹配与完整计数共享同一快照。读取匹配项，对不存在或别的聊天的标识返回空。"
+
+[[gap]]
+id = "project-hosted-clone"
+phase = 2
+name = "托管仓库克隆任务及可重连进度"
+upstream = ["packages/contracts/src/rpc.ts", "apps/server/src/ws.ts"]
+kar = ["src/workbench/forge/clone_jobs.rs", "src/workbench/forge/clone_jobs/worker.rs"]
+status = "克隆、隔离目标、取消、进度和重启重试已集成，待统一验收"
+implementation_ref = "5740f5c, 0800f7f"
+test_target = "cargo test --locked --test workbench_forge"
+accept = "克隆含实际文件的 Git 源，中途断开观察者、取消或终止服务，重连进度并重试。核对克隆完成前聊天被拒绝、完成目录原子发布、无关目录内容保留。"
