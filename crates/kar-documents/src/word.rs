@@ -46,6 +46,13 @@ impl WordEdit {
             )
         })?;
         let text = &current.paragraphs()[index].text;
+        if &old.text != text {
+            let mut proposed = old.text.clone();
+            proposed.replace_range(self.range.clone(), &self.replacement);
+            if &proposed == text {
+                return Ok(Outcome::Unchanged);
+            }
+        }
         let mapped = map_range(&old.text, text, self.range.clone()).ok_or_else(|| {
             change.conflict(Some(text), &label, "text", "overlapping text changes")
         })?;

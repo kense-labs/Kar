@@ -113,3 +113,16 @@ fn merges_disjoint_ranges_in_either_order_and_reports_conflicting_values() -> Re
     assert!(day.apply(&base, &mut split).unwrap_err().is::<Conflict>());
     Ok(())
 }
+
+#[test]
+fn retry_of_prefix_preserving_replacement_does_not_duplicate_the_suffix() -> Result<()> {
+    let mut base = Document::new();
+    base.insert_text(Selection::default(), "项目完成", None);
+    let mut current = Document::new();
+    current.insert_text(Selection::default(), "项目完成", None);
+    let op = edit(&base, 0, "项目", "项目甲");
+    assert_eq!(op.apply(&base, &mut current)?, Outcome::Applied);
+    assert_eq!(op.apply(&base, &mut current)?, Outcome::Unchanged);
+    assert_eq!(current.paragraphs()[0].text, "项目甲完成");
+    Ok(())
+}
