@@ -484,6 +484,46 @@ impl Journal {
     pub fn id(&self) -> Uuid {
         self.id
     }
+    pub(crate) fn request_dispose(&self) -> Uuid {
+        let id = Uuid::new_v4();
+        self.push(
+            Direction::ToRuntime,
+            RecordKind::Request,
+            None,
+            vec![],
+            serde_json::json!({"type":"dispose", "id":id}),
+            vec![],
+        );
+        id
+    }
+    pub(crate) fn disposed(&self, id: Uuid, mut outcome: Value, event: Event) {
+        outcome["requestId"] = id.to_string().into();
+        self.push(
+            Direction::Host,
+            RecordKind::Response,
+            None,
+            vec![],
+            outcome,
+            vec![event],
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn process_exited(
+        &self,
+        id: Option<Uuid>,
+        reason: String,
+        status: &std::io::Result<std::process::ExitStatus>,
+    ) {
+        if let Some(id) = id {
+            self.disposed(
+                id,
+                crate::process::exit_body(status, &reason),
+                Event::Exited { reason },
+            );
+        } else {
+            self.host_event(Event::Exited { reason });
+        }
+    }
     pub(crate) fn host_event(&self, event: Event) {
         self.push(
             Direction::Host,

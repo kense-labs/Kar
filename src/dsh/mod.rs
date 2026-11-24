@@ -109,7 +109,7 @@ pub(crate) async fn open(
         match ready.unwrap_or_else(|_| Err(Error::Timeout("DSH initial subscriptions".into()))) {
             Ok(v) => v,
             Err(e) => {
-                web.stop().await;
+                let _ = web.stop().await;
                 return Err(e);
             }
         };

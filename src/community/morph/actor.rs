@@ -491,7 +491,7 @@ impl Actor {
             }
             tokio::select! {
                 cmd=commands.recv()=>match cmd{
-                    Some(Command::Close(ack))=>break (Some(ack),"session closed".into(),true),
+                    Some(Command::Close(ack))=>break (Some((self.journal.request_dispose(), ack)),"session closed".into(),true),
                     Some(cmd)=>self.command(cmd).await,
                     None=>break (None,"session dropped".into(),true),
                 },
@@ -523,17 +523,21 @@ impl Actor {
         for (_, _, done) in self.queue.drain(..) {
             let _ = done.send(Err(Error::Closed(reason.clone())));
         }
-        self.record(
-            None,
-            Direction::Host,
-            RecordKind::Frame,
-            Value::Null,
-            vec![Event::Exited { reason }],
-        );
-        self.lease.release().await;
+        let stopped = self.lease.release().await;
+        if let Some((id, _)) = &ack {
+            let outcome = match &stopped {
+                Ok(Some(status)) => json!({"type":"exited", "code":status.code()}),
+                Ok(None) => json!({"type":"accepted"}),
+                Err(err) => json!({"type":"rejected", "code":"error", "reason":err.to_string()}),
+            };
+            self.journal
+                .disposed(*id, outcome, Event::Exited { reason });
+        } else {
+            self.journal.host_event(Event::Exited { reason });
+        }
         self.journal.close();
-        if let Some(ack) = ack {
-            let _ = ack.send(Ok(()));
+        if let Some((_, ack)) = ack {
+            let _ = ack.send(stopped.map(|_| ()).map_err(Error::from));
         }
     }
 }

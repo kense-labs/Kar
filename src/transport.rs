@@ -231,7 +231,7 @@ pub(crate) struct Actor {
     mode: ApprovalMode,
     child: crate::process::OwnedProcess,
     stdin: Option<ChildStdin>,
-    close_ack: Option<Reply<()>>,
+    close_ack: Option<(uuid::Uuid, Reply<()>)>,
     files: LaunchFiles,
     journal: Journal,
     identity: Arc<Mutex<Identity>>,
@@ -844,7 +844,7 @@ impl Actor {
                 let _ = tx.send(Ok(handle));
             }
             Command::Close(tx) => {
-                self.close_ack = Some(tx);
+                self.close_ack = Some((self.journal.request_dispose(), tx));
                 return Ok(false);
             }
             Command::Rpc(method, params, open, tx) => {
@@ -2567,7 +2567,7 @@ impl Actor {
         .ok()
         .flatten()
     }
-    async fn stop_child(&mut self) {
+    async fn stop_child(&mut self) -> std::io::Result<std::process::ExitStatus> {
         if self.files.pi_mcp.is_some()
             || (matches!(
                 self.protocol,
@@ -2575,14 +2575,13 @@ impl Actor {
             ) && self.turn.is_none())
         {
             self.stdin.take();
-            if matches!(
-                tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await,
-                Ok(Ok(_))
-            ) {
-                return;
+            if let Ok(Ok(status)) =
+                tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await
+            {
+                return Ok(status);
             }
         }
-        self.child.stop().await;
+        self.child.stop_with_status().await
     }
     async fn run(mut self, stdout: ChildStdout, mut commands: mpsc::Receiver<Command>) {
         let mut lines = BufReader::new(stdout).lines();
@@ -2728,7 +2727,7 @@ impl Actor {
         if let Some(guard) = &mut self.codex_processes {
             guard.exited(session_id).await;
         }
-        self.stop_child().await;
+        let status = self.stop_child().await;
         self.files.capture.take();
         self.files.pi.take();
         self.files.pi_mcp.take();
@@ -2739,10 +2738,14 @@ impl Actor {
             .secrets
             .iter()
             .fold(reason, |msg, key| msg.replace(key, "[redacted]"));
+        let mut exit = crate::process::exit_body(&status, &reason);
+        if let Some((id, _)) = &self.close_ack {
+            exit["requestId"] = id.to_string().into();
+        }
         self.record(
             Direction::Host,
             RecordKind::Response,
-            json!({"type":"exited","reason":reason}),
+            exit,
             vec![Event::Exited {
                 reason: reason.clone(),
             }],
@@ -2758,8 +2761,8 @@ impl Actor {
             let _ = input.done.send(Err(Error::Closed(reason.clone())));
         }
         self.journal.close();
-        if let Some(tx) = self.close_ack {
-            let _ = tx.send(Ok(()));
+        if let Some((_, tx)) = self.close_ack {
+            let _ = tx.send(status.map(|_| ()).map_err(Error::from));
         }
     }
 }

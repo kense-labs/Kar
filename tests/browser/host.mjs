@@ -97,7 +97,22 @@ export async function exercise() {
     check((await tail.next()).seq===records.at(-1).seq,"replay returned the wrong record");
     const abandoned = await s.prompt("slow detached work","detach");
     const id = s.id;
+    let timer;
+    try {
+        await Promise.race([
+            Promise.all([s.close(), s.close()]),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(Error("dispose exceeded 15 seconds")), 15000); })
+        ]);
+    } finally { clearTimeout(timer); }
+    const afterClose = s.records();
+    const dispose = afterClose.filter(r => r.direction === "to_runtime" && r.kind === "request" && r.native?.type === "dispose");
+    check(dispose.length === 1 && dispose[0].native.id, "expected one dispose request");
+    const receipt = afterClose.filter(r => r.kind === "response" && r.native?.requestId === dispose[0].native.id);
+    check(receipt.length === 1 && receipt[0].native.type === "accepted" && receipt[0].events.some(e => e.kind === "released") && receipt[0].seq > dispose[0].seq,
+        "missing correlated controller release");
+    await rejects(()=>s.prompt("after dispose"),"closed controller accepted a prompt");
     await s.close();
+    check(s.records().length === afterClose.length, "repeat close wrote records");
     while ((await tail.next()) !== undefined) { /* Drain buffered records to the detach boundary. */ }
     const observer = await runtime.open({...open,resume:id});
     check(observer.streamId!==s.streamId && observer.id===id,"failed to attach to existing conversation");

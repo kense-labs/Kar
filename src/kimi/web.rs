@@ -374,16 +374,16 @@ impl Web {
             .map_err(|_| Error::Closed("Kimi WebSocket handshake failed".into()))?
             .0)
     }
-    pub async fn stop(&mut self) {
+    pub async fn stop(&mut self) -> std::io::Result<std::process::ExitStatus> {
         let graceful = tokio::time::timeout(Duration::from_secs(2), async {
             self.request(Method::POST, "/shutdown", None).await?;
-            self.child.wait().await?;
-            Ok::<(), Error>(())
+            self.child.wait().await.map_err(Error::from)
         })
         .await;
-        if !matches!(graceful, Ok(Ok(()))) {
-            self.child.stop().await;
+        if let Ok(Ok(status)) = graceful {
+            return Ok(status);
         }
+        self.child.stop_with_status().await
     }
 }
 pub(super) async fn send(ws: &mut Socket, v: &Value) -> Result<()> {

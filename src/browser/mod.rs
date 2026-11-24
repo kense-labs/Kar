@@ -78,6 +78,7 @@ impl PiDurable {
             ready: Cell::new(false),
             draining: Cell::new(false),
             detached: Cell::new(false),
+            dispose: Cell::new(None),
             watch: RefCell::new(None),
             projection: RefCell::new(Projection::default()),
             waiters: RefCell::new(vec![]),
@@ -134,6 +135,7 @@ struct Core {
     ready: Cell<bool>,
     draining: Cell<bool>,
     detached: Cell<bool>,
+    dispose: Cell<Option<uuid::Uuid>>,
     watch: RefCell<Option<JsValue>>,
     projection: RefCell<Projection>,
     waiters: RefCell<Vec<oneshot::Sender<()>>>,
@@ -169,7 +171,7 @@ impl Core {
                         }],
                     );
                     core.detached.set(true);
-                    core.journal.close();
+                    core.close_watch();
                     break;
                 }
                 if let Err(err) = core.advance(item).await {
@@ -180,7 +182,7 @@ impl Core {
                         }],
                     );
                     core.detach();
-                    core.journal.close();
+                    core.close_watch();
                     break;
                 }
             }
@@ -195,6 +197,13 @@ impl Core {
             let _ = call(&watch, "detach", &[]);
         }
         self.detached.set(true);
+    }
+    fn close_watch(&self) {
+        if let Some(id) = self.dispose.take() {
+            self.journal
+                .disposed(id, json!({"type":"accepted"}), Event::Released);
+        }
+        self.journal.close();
     }
     fn open(&self) -> JsResult<()> {
         if self.detached.get() || self.journal.is_closed() {
@@ -558,11 +567,15 @@ impl DurableSession {
     }
     pub async fn close(&self) -> JsResult<()> {
         let _serial = self.core.admissions.lock().await;
-        self.core.detach();
+        if !self.core.detached.get() {
+            self.core
+                .dispose
+                .set(Some(self.core.journal.request_dispose()));
+            self.core.detach();
+        }
         drop(_serial);
         self.core.flush().await;
-        self.core.journal.host_event(Event::Released);
-        self.core.journal.close();
+        self.core.close_watch();
         Ok(())
     }
 }

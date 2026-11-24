@@ -89,7 +89,7 @@ pub(crate) async fn open(
                         actor.capture_recovery(&frame, turn);
                     }
                     if let Err(e) = actor.frame(frame).await {
-                        actor.close().await;
+                        let _ = actor.close().await;
                         return Err(e);
                     }
                 }
@@ -109,7 +109,7 @@ pub(crate) async fn open(
                         )
                         .await;
                 }
-                web.stop().await;
+                let _ = web.stop().await;
                 result?;
             }
         }

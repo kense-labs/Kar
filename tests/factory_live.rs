@@ -829,5 +829,8 @@ async fn public_prompt_readbacks() {
     let session = f.runtime.open(f.opts.clone()).await.unwrap();
     public_readbacks::check(&session).await.unwrap();
     public_readbacks::stream::check(&session).await.unwrap();
-    session.close().await.unwrap();
+    let active = f.runtime.open(f.opts.clone()).await.unwrap();
+    public_readbacks::stream::dispose_mid_turn(&active)
+        .await
+        .unwrap();
 }

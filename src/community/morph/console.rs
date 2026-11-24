@@ -10,7 +10,7 @@ use std::{
     collections::HashMap,
     net::IpAddr,
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     sync::{Arc, LazyLock, Weak},
     time::Duration,
 };
@@ -179,11 +179,13 @@ async fn discover(dir: &Path) -> Option<Console> {
     (health["mode"] == "console").then_some(console)
 }
 
+type ConsoleExit = std::result::Result<ExitStatus, String>;
+
 struct Owned {
     process_root: Option<crate::resources::Root>,
     console: Console,
     _stop: oneshot::Sender<()>,
-    exit: watch::Receiver<Option<String>>,
+    exit: watch::Receiver<Option<ConsoleExit>>,
 }
 type Pool = HashMap<PathBuf, Weak<Owned>>;
 static CONSOLES: LazyLock<Mutex<Pool>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -295,25 +297,36 @@ impl Lease {
             }
         }
     }
-    pub fn exit(&self) -> Option<watch::Receiver<Option<String>>> {
+    pub fn exit(&self) -> Option<watch::Receiver<Option<ConsoleExit>>> {
         self.owned.as_ref().map(|o| o.exit.clone())
     }
-    pub async fn release(self) {
-        if let Some(owner) = self.owned {
-            let _guard = CONSOLES.lock().await;
-            let mut exit = owner.exit.clone();
-            let last = Arc::strong_count(&owner) == 1;
-            drop(owner);
-            if last && exit.borrow().is_none() {
-                let _ = exit.changed().await;
-            }
+    /// Only the last owner can report that releasing this lease stopped a process.
+    pub async fn release(self) -> std::io::Result<Option<ExitStatus>> {
+        let Some(owner) = self.owned else {
+            return Ok(None);
+        };
+        let _guard = CONSOLES.lock().await;
+        if Arc::strong_count(&owner) > 1 {
+            return Ok(None);
         }
+        let mut exit = owner.exit.clone();
+        drop(owner);
+        let observed = exit
+            .wait_for(Option::is_some)
+            .await
+            .map_err(std::io::Error::other)?;
+        observed
+            .as_ref()
+            .expect("waited for exit")
+            .clone()
+            .map(Some)
+            .map_err(std::io::Error::other)
     }
 }
 async fn supervise(
     mut child: Child,
     stop: oneshot::Receiver<()>,
-    status: watch::Sender<Option<String>>,
+    status: watch::Sender<Option<ConsoleExit>>,
 ) {
     let result = tokio::select! {
         result = child.wait() => result,
@@ -328,8 +341,5 @@ async fn supervise(
             child.wait().await
         }
     };
-    status.send_replace(Some(match result {
-        Ok(status) => status.to_string(),
-        Err(err) => err.to_string(),
-    }));
+    status.send_replace(Some(result.map_err(|e| e.to_string())));
 }

@@ -9,6 +9,16 @@ use tokio::{
 };
 
 pub(crate) const OUTPUT_LIMIT: u64 = 4 * 1024 * 1024;
+/// An exited response carries the OS exit code, or null for termination by signal.
+pub(crate) fn exit_body(status: &io::Result<ExitStatus>, reason: &str) -> serde_json::Value {
+    match status {
+        Ok(status) => serde_json::json!({"type":"exited", "code":status.code(), "reason":reason}),
+        Err(error) => {
+            serde_json::json!({"type":"rejected", "code":"error", "reason":error.to_string()})
+        }
+    }
+}
+
 pub(crate) struct OwnedProcess {
     #[cfg(windows)]
     child: Box<dyn process_wrap::tokio::TokioChildWrapper>,
@@ -91,8 +101,12 @@ impl OwnedProcess {
     }
 
     pub(crate) async fn stop(&mut self) {
+        let _ = self.stop_with_status().await;
+    }
+
+    pub(crate) async fn stop_with_status(&mut self) -> io::Result<ExitStatus> {
         self.kill_tree();
-        let _ = self.inner().wait().await;
+        self.inner().wait().await
     }
 
     /// Look for an exited leader without freeing its process group before cleanup.

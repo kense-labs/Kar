@@ -3,6 +3,8 @@ mod declaration;
 #[path = "support/sse.rs"]
 mod sse;
 
+#[path = "support/disposal.rs"]
+mod disposal;
 use axum::{Json, Router, body::Body, extract::State, http::Response, routing::post};
 use kar::{
     Protocol, SessionOptions,
@@ -584,7 +586,14 @@ async fn exercise(kap: bool) {
             .text,
         "KAP_FIFO"
     );
-    controls.close().await.unwrap();
+    disposal::check(&controls, "exited").await.unwrap();
+    let active = runtime.open(opts.clone()).await.unwrap();
+    let _held = active.prompt("KAP_HOLD").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), requests.model_started.notified())
+        .await
+        .unwrap();
+    disposal::check(&active, "exited").await.unwrap();
+    requests.finish_model.notify_waiters();
     let seen = requests.messages.lock().unwrap();
     assert!(seen.iter().any(|m| {
         let text = m["messages"].to_string();

@@ -349,6 +349,9 @@ pub(super) async fn claude() {
     );
     super::public_readbacks::check(&a).await.unwrap();
     super::public_readbacks::stream::check(&a).await.unwrap();
+    super::public_readbacks::stream::dispose_mid_turn(&b)
+        .await
+        .unwrap();
     for session in [a, b] {
         session.close().await.unwrap();
         for r in session.records() {

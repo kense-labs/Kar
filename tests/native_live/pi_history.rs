@@ -689,7 +689,10 @@ async fn public_prompt_readbacks() {
     super::public_readbacks::stream::check(&session)
         .await
         .unwrap();
-    session.close().await.unwrap();
+    let active = runtime.open(fixture.options.clone()).await.unwrap();
+    super::public_readbacks::stream::dispose_mid_turn(&active)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

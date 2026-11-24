@@ -71,7 +71,7 @@ async fn kimi(probe: &Probe, path: &Path, end: Instant) -> Result<Listing> {
         Ok((items, false))
     }
     .await;
-    web.stop().await;
+    let _ = web.stop().await;
     result
 }
 

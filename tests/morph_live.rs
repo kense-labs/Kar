@@ -1,3 +1,5 @@
+#[path = "support/disposal.rs"]
+mod disposal;
 use axum::{
     Json, Router,
     body::Body,
@@ -106,7 +108,7 @@ async fn actual_morph_shared_console_turn_and_resume() {
         .await
         .unwrap();
     assert!(external.resources().await.is_none());
-    external.close().await.unwrap();
+    disposal::check(&external, "accepted").await.unwrap();
     let check = reqwest::Client::builder().no_proxy().build().unwrap();
     let cli = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
         .args(["models", "morph", "--bin"])
@@ -132,7 +134,7 @@ async fn actual_morph_shared_console_turn_and_resume() {
             .iter()
             .any(|profile| profile["id"] == "default" && profile["resolvedId"] == "fixture")
     );
-    one.close().await.unwrap();
+    disposal::check(&one, "accepted").await.unwrap();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert_eq!(
         one.resources().await.unwrap().scope,
@@ -188,7 +190,7 @@ async fn actual_morph_shared_console_turn_and_resume() {
         assert!(result.text().unwrap().contains("morph-tool-output"));
     }
     options.resume = Some(two.id().into());
-    two.close().await.unwrap();
+    disposal::check(&two, "exited").await.unwrap();
     assert!(one.resources().await.is_none());
     assert!(two.resources().await.is_none());
     assert!(

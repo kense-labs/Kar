@@ -656,7 +656,8 @@ async fn exercise(protocol: Protocol) -> kar::Result<()> {
     let readbacks = r.open(opts.clone()).await?;
     public_readbacks::check(&readbacks).await?;
     public_readbacks::stream::check(&readbacks).await?;
-    readbacks.close().await?;
+    let active = r.open(opts.clone()).await?;
+    public_readbacks::stream::dispose_mid_turn(&active).await?;
     let mut stream = session.subscribe(None)?;
     let result = session.prompt("normal").await?.wait().await?;
     assert_eq!(result, Outcome::Completed);
@@ -852,6 +853,14 @@ async fn failures() -> kar::Result<()> {
         let (_d, r, opts) = rig(Protocol::Acp, ApprovalMode::Deny);
         let session = r.open(opts).await?;
         assert!(session.prompt(message).await?.wait().await.is_err());
+        let records = session.records();
+        assert!(records.iter().all(|r| r.native["type"] != "dispose"));
+        let exit = &records.last().unwrap().native;
+        assert_eq!(exit["type"], "exited");
+        assert!(exit.get("requestId").is_none());
+        if message == "exit" {
+            assert_eq!(exit["code"], 0);
+        }
         assert!(
             session
                 .records()

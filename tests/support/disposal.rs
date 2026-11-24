@@ -1,0 +1,49 @@
+use kar::{Direction, Error, RecordKind, Session};
+
+pub(crate) async fn check(session: &Session, expected: &str) -> kar::Result<()> {
+    let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        tokio::join!(session.close(), session.close())
+    })
+    .await
+    .expect("dispose must finish within the public 15-second deadline");
+    first?;
+    second?;
+    let records = session.records();
+    let mut requests = records.iter().filter(|r| {
+        r.direction == Direction::ToRuntime
+            && r.kind == RecordKind::Request
+            && r.native["type"] == "dispose"
+    });
+    let dispose = requests
+        .next()
+        .expect("explicit close must record a dispose request");
+    assert!(requests.next().is_none(), "close recorded twice");
+    assert_eq!(dispose.session_id.as_deref(), Some(session.id()));
+    let id = dispose.native["id"].as_str().unwrap();
+    assert!(uuid::Uuid::parse_str(id).is_ok());
+    let mut answers = records.iter().filter(|r| {
+        r.direction == Direction::Host
+            && r.kind == RecordKind::Response
+            && r.native["requestId"] == id
+    });
+    let answer = answers.next().expect("no correlated dispose response");
+    assert!(answers.next().is_none(), "dispose answered twice");
+    assert_eq!(answer.native["type"], expected);
+    if expected == "exited" {
+        assert!(
+            answer
+                .native
+                .get("code")
+                .is_some_and(|code| code.is_i64() || code.is_null())
+        );
+    }
+    assert!(answer.seq > dispose.seq);
+    assert_eq!(answer.session_id, dispose.session_id);
+    assert!(matches!(
+        session.prompt("after dispose").await,
+        Err(Error::Closed(_))
+    ));
+    session.close().await?;
+    assert_eq!(session.records().len(), records.len());
+    Ok(())
+}

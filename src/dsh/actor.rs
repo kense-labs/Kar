@@ -127,7 +127,7 @@ impl Actor {
         Ok(())
     }
     pub(super) async fn close_web(&mut self) {
-        self.web.stop().await;
+        let _ = self.web.stop().await;
     }
     pub(super) async fn initialize_goals(&mut self) -> Result<()> {
         loop {
@@ -742,7 +742,7 @@ impl Actor {
             let r = tokio::select! {
                 Some(reply) = self.compact_reply.next(), if !self.compact_reply.is_empty() => self.finish_compaction(reply).await,
                 packet=web::read(&mut self.ws)=>match packet{Ok(v)=>self.frame(v).await,Err(e)=>Err(e)},
-                cmd=rx.recv()=>match cmd{Some(Command::Close(ack))=>{close=Some(ack);break "closed".into()},
+                cmd=rx.recv()=>match cmd{Some(Command::Close(ack))=>{close=Some((self.journal.request_dispose(),ack));break "closed".into()},
                     Some(c)=>self.command(c).await,None=>break "controller closed".into()},
             };
             if let Err(e) = r {
@@ -762,11 +762,12 @@ impl Actor {
             let _ = t.done.send(Err(Error::Closed(reason.clone())));
         }
         let _ = self.web.session_file(&self.id).await;
-        self.web.stop().await;
-        self.journal.host_event(Event::Exited { reason });
+        let status = self.web.stop().await;
+        self.journal
+            .process_exited(close.as_ref().map(|(id, _)| *id), reason, &status);
         self.journal.close();
-        if let Some(tx) = close {
-            let _ = tx.send(Ok(()));
+        if let Some((_, tx)) = close {
+            let _ = tx.send(status.map(|_| ()).map_err(Error::from));
         }
     }
 }

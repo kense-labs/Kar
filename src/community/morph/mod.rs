@@ -117,7 +117,7 @@ impl Morph {
             .await
             .map_err(|_| Error::Timeout("discovering Morph Console".into()))??;
         let result = models(&lease.console).await;
-        lease.release().await;
+        lease.release().await?;
         result
     }
     pub async fn open(&self, mut options: SessionOptions) -> Result<Session> {

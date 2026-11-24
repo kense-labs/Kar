@@ -677,7 +677,21 @@ impl ThreadActor {
                 let _ = ack.send(result);
             }
             Command::Close(ack) => {
-                self.release();
+                let id = self.journal.request_dispose();
+                self.clear_queue("detached from Cybion thread");
+                // Cybion owns the turn and can finish it while a controller detaches.
+                let _ = tokio::time::timeout(Duration::from_secs(3), async {
+                    while self.turn.is_some() {
+                        let (view, history) = self.poll_status().await?;
+                        self.observe(view, history)?;
+                        if self.turn.is_some() {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                        }
+                    }
+                    Ok::<(), Error>(())
+                })
+                .await;
+                self.release(Some(id));
                 let _ = ack.send(Ok(()));
                 return false;
             }
@@ -703,22 +717,37 @@ impl ThreadActor {
         true
     }
 
-    fn release(&mut self) {
+    fn release(&mut self, id: Option<Uuid>) {
         if let Some(active) = self.turn.take() {
             let _ = active
                 .done
                 .send(Err(Error::Closed("detached from Cybion thread".into())));
         }
         self.clear_queue("detached from Cybion thread");
-        self.record(
-            Direction::Host,
-            RecordKind::Frame,
-            json!({"action":"detach"}),
-            vec![Event::Exited {
-                reason: "detached".into(),
-            }],
-        );
+        let event = Event::Exited {
+            reason: "detached".into(),
+        };
+        if let Some(id) = id {
+            self.journal
+                .disposed(id, json!({"type":"accepted", "action":"detach"}), event);
+        } else {
+            self.record(
+                Direction::Host,
+                RecordKind::Frame,
+                json!({"action":"detach"}),
+                vec![event],
+            );
+        }
         self.journal.close();
+    }
+
+    async fn poll_status(&self) -> Result<(Value, Value)> {
+        let thread = ["v1", "threads", &self.id];
+        let history = ["v1", "threads", &self.id, "history"];
+        tokio::try_join!(
+            self.api.request(Method::GET, &thread, None, self.timeout),
+            self.api.request(Method::GET, &history, None, self.timeout)
+        )
     }
 
     async fn run(mut self, mut inbox: mpsc::Receiver<Command>) {
@@ -736,18 +765,12 @@ impl ThreadActor {
             // A control can interrupt read-only polls. Writes are serialized and never retried.
             let poll = async {
                 tokio::time::sleep_until(due.expect("only polled with an active turn")).await;
-                let thread = ["v1", "threads", &self.id];
-                let history = ["v1", "threads", &self.id, "history"];
-                let (view, rows) = tokio::try_join!(
-                    self.api.request(Method::GET, &thread, None, self.timeout),
-                    self.api.request(Method::GET, &history, None, self.timeout)
-                )?;
-                Ok::<_, Error>((view, rows))
+                self.poll_status().await
             };
             tokio::select! {
                 incoming = inbox.recv() => match incoming {
                     Some(command) => { if !self.command(command).await { break; } }
-                    None => { self.release(); break; }
+                    None => { self.release(None); break; }
                 },
                 result = poll, if due.is_some() => {
                     let result = result.and_then(|(view,rows)| self.observe(view,rows));

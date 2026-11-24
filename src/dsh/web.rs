@@ -93,7 +93,7 @@ impl Web {
         if let Some(path) = web.patch.receipt()
             && let Err(error) = web.confirm(path).await
         {
-            web.stop().await;
+            let _ = web.stop().await;
             return Err(error);
         }
         web.base = url.origin().ascii_serialization();
@@ -214,7 +214,7 @@ impl Web {
         *self.file.lock().unwrap() = path.clone();
         Ok(serde_json::json!(path))
     }
-    pub async fn stop(&mut self) {
+    pub async fn stop(&mut self) -> std::io::Result<std::process::ExitStatus> {
         #[cfg(unix)]
         if let Some(pid) = self.child.id() {
             let _ = nix::sys::signal::kill(
@@ -223,13 +223,12 @@ impl Web {
             );
         }
         #[cfg(unix)]
-        if matches!(
-            tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await,
-            Ok(Ok(_))
-        ) {
-            return;
+        if let Ok(Ok(status)) =
+            tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await
+        {
+            return Ok(status);
         }
-        self.child.stop().await;
+        self.child.stop_with_status().await
     }
 }
 pub(super) async fn subscribe(

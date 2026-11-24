@@ -682,9 +682,9 @@ impl Actor {
         let _ = tx.send(reply);
         Ok(handle)
     }
-    pub async fn close(&mut self) {
+    pub async fn close(&mut self) -> std::io::Result<std::process::ExitStatus> {
         let _ = self.socket.close(None).await;
-        self.web.stop().await;
+        self.web.stop().await
     }
     pub async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         let mut close_ack = None;
@@ -712,7 +712,7 @@ impl Actor {
                     let mut failed=false;for id in expired{if let Some((_,Some(tx)))=self.controls.remove(&id){let _=tx.send(Err(Error::Timeout("Kimi WebSocket command".into())));}else{failed=true;}}
                     if failed{break "Kimi child subscription timed out".into();}
                 }
-                c=rx.recv()=>match c{None=>break "last session handle dropped".into(),Some(Command::Close(tx))=>{close_ack=Some(tx);break "closed by host".into()},Some(c)=>if let Err(e)=self.command(c).await{break e.to_string()}},
+                c=rx.recv()=>match c{None=>break "last session handle dropped".into(),Some(Command::Close(tx))=>{close_ack=Some((self.journal.request_dispose(),tx));break "closed by host".into()},Some(c)=>if let Err(e)=self.command(c).await{break e.to_string()}},
                 v=web::read(&mut self.socket)=>match v{Ok(v)=>if let Err(e)=self.frame(v).await{break e.to_string()},Err(e)=>break e.to_string()},
             }
         };
@@ -733,11 +733,12 @@ impl Actor {
                 input_id: id.to_string(),
             });
         }
-        self.close().await;
-        self.journal.host_event(Event::Exited { reason });
+        let status = self.close().await;
+        self.journal
+            .process_exited(close_ack.as_ref().map(|(id, _)| *id), reason, &status);
         self.journal.close();
-        if let Some(tx) = close_ack {
-            let _ = tx.send(Ok(()));
+        if let Some((_, tx)) = close_ack {
+            let _ = tx.send(status.map(|_| ()).map_err(Error::from));
         }
     }
 }

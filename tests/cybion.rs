@@ -1,3 +1,5 @@
+#[path = "support/disposal.rs"]
+mod disposal;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -173,6 +175,49 @@ async fn delayed_steer_preserves_the_running_turn_and_holds_the_queue() {
 }
 
 #[tokio::test]
+async fn native_completion_during_dispose_precedes_its_receipt() {
+    let (url, state) = fixture().await;
+    let session = Cybion::new(&url, "local-fixture")
+        .unwrap()
+        .open(SessionOptions::new("/nonlocal"))
+        .await
+        .unwrap();
+    let turn = session.prompt("finish while detaching").await.unwrap();
+    let (_, queued) = session.queue("held").await.unwrap();
+    let mut stream = session.subscribe(None).unwrap();
+    let responder = async {
+        while let Some(row) = stream.next().await {
+            if row.native["type"] == "dispose" {
+                state.lock().unwrap().reply("finished remotely");
+                return;
+            }
+        }
+        panic!("dispose request missing");
+    };
+    let (closed, ()) = tokio::join!(disposal::check(&session, "accepted"), responder);
+    closed.unwrap();
+    assert_eq!(turn.report().await.unwrap().text, "finished remotely");
+    assert!(queued.report().await.is_err());
+    let records = session.records();
+    let end = records
+        .iter()
+        .find(|r| {
+            r.events.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::TurnEnded {
+                        outcome: Outcome::Completed
+                    }
+                )
+            })
+        })
+        .unwrap();
+    assert!(end.seq < records.last().unwrap().seq);
+    let state = state.lock().unwrap();
+    assert_eq!((state.submissions.len(), state.cancels), (1, 0));
+}
+
+#[tokio::test]
 async fn thread_control_and_replay_use_the_native_api() {
     let (url, state) = fixture().await;
     let api = Cybion::new(&url, "local-fixture").unwrap();
@@ -318,7 +363,7 @@ async fn thread_control_and_replay_use_the_native_api() {
             .any(|e| matches!(e, Event::TextDelta { .. }))
     );
     let detached = resumed.prompt("continue on worker").await.unwrap();
-    resumed.close().await.unwrap();
+    disposal::check(&resumed, "accepted").await.unwrap();
     assert!(matches!(detached.wait().await, Err(Error::Closed(_))));
     let s = state.lock().unwrap();
     assert_eq!(s.cancels, 1);

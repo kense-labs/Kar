@@ -1,4 +1,6 @@
 //! The OAR public cursor, observer-isolation, multi-turn and late-steer cases.
+#[path = "disposal.rs"]
+mod disposal;
 use kar::{Error, Event, Outcome, Record, RecordKind, Session, Subscription};
 use std::{sync::Arc, time::Duration};
 
@@ -19,6 +21,13 @@ pub(crate) async fn check(session: &Session) -> kar::Result<()> {
     tokio::time::timeout(Duration::from_secs(60), three_turns(session))
         .await
         .expect("public stream cases timed out")
+}
+
+pub(crate) async fn dispose_mid_turn(session: &Session) -> kar::Result<()> {
+    let _turn = session
+        .prompt("please answer slow-ly (slow marker)")
+        .await?;
+    disposal::check(session, "exited").await
 }
 
 async fn three_turns(session: &Session) -> kar::Result<()> {
@@ -89,16 +98,12 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
             Err(Error::Refused(_))
         ));
     }
-    session.close().await?;
+    disposal::check(session, "exited").await?;
     let records = session.records();
     let mut reconnect = reconnect.unwrap();
     for sub in [&mut observer, &mut reconnect] {
         compare_delivery(sub, &records[next..]).await;
         assert!(sub.next().await.is_none(), "duplicate delivery after close");
     }
-    assert!(matches!(
-        session.prompt("after dispose").await,
-        Err(Error::Closed(_))
-    ));
     Ok(())
 }
