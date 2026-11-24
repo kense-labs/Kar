@@ -145,9 +145,14 @@ impl OwnedProcess {
     /// Read both pipes before reaping the leader so timeout can also stop any
     /// descendant which inherited a pipe and kept it open.
     pub(crate) async fn output(&mut self) -> io::Result<Output> {
+        self.output_limited(OUTPUT_LIMIT).await
+    }
+
+    pub(crate) async fn output_limited(&mut self, stdout_limit: u64) -> io::Result<Output> {
         let out = self.inner().stdout.take().expect("piped stdout");
         let err = self.inner().stderr.take().expect("piped stderr");
-        let (stdout, stderr) = tokio::try_join!(bounded(out), bounded(err))?;
+        let (stdout, stderr) =
+            tokio::try_join!(bounded(out, stdout_limit), bounded(err, OUTPUT_LIMIT))?;
         Ok(Output {
             status: self.wait().await?,
             stdout,
@@ -162,10 +167,10 @@ impl Drop for OwnedProcess {
     }
 }
 
-async fn bounded(input: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
+async fn bounded(input: impl AsyncRead + Unpin, limit: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    input.take(OUTPUT_LIMIT + 1).read_to_end(&mut bytes).await?;
-    if bytes.len() as u64 > OUTPUT_LIMIT {
+    input.take(limit + 1).read_to_end(&mut bytes).await?;
+    if bytes.len() as u64 > limit {
         return Err(io::Error::other("Native output exceeded its size limit"));
     }
     Ok(bytes)

@@ -3,6 +3,7 @@ mod account;
 mod actions;
 mod agent;
 mod native;
+mod screen;
 use super::{Workbench, http::ApiError};
 use crate::{Error, Result};
 use axum::{
@@ -64,6 +65,7 @@ impl Device {
 }
 #[derive(Clone, Serialize)]
 struct Session {
+    view_id: Uuid,
     #[serde(skip)]
     grant: Option<agent::Grant>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +80,7 @@ struct Session {
 #[derive(Clone, Default)]
 struct Live {
     settings: Settings,
+    booting: Vec<Value>,
     revision: u64,
     devices: Vec<Device>,
     sessions: Vec<Session>,
@@ -99,7 +102,7 @@ impl Live {
         } else {
             "ready"
         };
-        json!({"settings":self.settings,"revision":self.revision,"host_status":status,"hosts":[{"id":"local","kind":"local","label":"This machine","platforms":platforms}],"incomplete_platforms":self.errors.keys().collect::<Vec<_>>(),"devices":self.devices,"sessions":self.sessions})
+        json!({"settings":self.settings,"revision":self.revision,"host_status":status,"hosts":[{"id":"local","kind":"local","label":"This machine","platforms":platforms}],"incomplete_platforms":self.errors.keys().collect::<Vec<_>>(),"devices":self.devices,"sessions":self.sessions,"booting_devices":self.booting})
     }
     fn device(&self, id: &str) -> Result<Device> {
         if !self.settings.enabled {
@@ -113,6 +116,8 @@ impl Live {
     }
 }
 pub(super) struct Service {
+    lifecycle: Mutex<()>,
+    screens: screen::Screens,
     agents: agent::AgentServer,
     file: PathBuf,
     live: Mutex<Live>,
@@ -133,6 +138,8 @@ impl Service {
         };
         let events = watch::channel(live.snapshot()).0;
         Ok(Self {
+            lifecycle: Mutex::new(()),
+            screens: Default::default(),
             agents: agent::AgentServer::new(path)?,
             file,
             live: Mutex::new(live),
@@ -257,6 +264,7 @@ async fn configure(State(app): State<Workbench>, Json(q): Json<Configure>) -> Re
     s.settings = next;
     if !s.settings.enabled {
         s.sessions.clear();
+        s.booting.clear();
         s.devices.clear();
         s.inspected = false;
         s.errors.clear();
@@ -374,16 +382,37 @@ struct Open {
     target: Target,
 }
 async fn open(State(app): State<Workbench>, Json(q): Json<Open>) -> Reply<Json<Session>> {
+    tokio::spawn(open_device(app, q))
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?
+}
+async fn open_device(app: Workbench, q: Open) -> Reply<Json<Session>> {
     host(q.target.host_id.as_deref())?;
     app.binding(q.project, q.chat)?;
     let svc = &app.0.devices;
+    let _operation = svc.lifecycle.lock().await;
     let mut s = svc.live.lock().await;
     let mut device = svc.resolve(&mut s, &q.target.device_id).await?;
     if device.platform != q.platform {
         return Err(Error::Refused("device platform differs".into()).into());
     }
     if !device.booted && q.boot.unwrap_or(true) {
-        let id = native::boot(&device).await?;
+        let attempt = Uuid::new_v4();
+        s.booting.push(json!({"id":device.id,"platform":device.platform,"host_id":"local","chat":q.chat,"attempt":attempt}));
+        svc.publish(&mut s);
+        drop(s);
+        let boot = native::boot(&device).await;
+        s = svc.live.lock().await;
+        let valid = s
+            .booting
+            .iter()
+            .any(|v| v["attempt"] == attempt.to_string());
+        s.booting.retain(|v| v["attempt"] != attempt.to_string());
+        svc.publish(&mut s);
+        if !valid || !s.settings.enabled {
+            return Err(Error::Refused("device configuration changed during boot".into()).into());
+        }
+        let id = boot?;
         device = svc.resolve(&mut s, &id).await?;
         if !device.booted {
             return Err(Error::Refused("device did not finish booting".into()).into());
@@ -396,6 +425,7 @@ async fn open(State(app): State<Workbench>, Json(q): Json<Open>) -> Reply<Json<S
         None
     };
     let session = Session {
+        view_id: Uuid::new_v4(),
         agent_config: grant.as_ref().map(|g| g.file.clone()),
         grant,
         project: q.project,
@@ -432,6 +462,7 @@ fn revoke_matching(s: &mut Live, mut matches: impl FnMut(&Session) -> bool) {
 async fn close(State(app): State<Workbench>, Json(q): Json<Close>) -> Reply<Json<()>> {
     host(q.host_id.as_deref())?;
     let svc = &app.0.devices;
+    let _operation = svc.lifecycle.lock().await;
     let mut s = svc.live.lock().await;
     let ids: Vec<_> = s
         .sessions
@@ -458,6 +489,7 @@ async fn close(State(app): State<Workbench>, Json(q): Json<Close>) -> Reply<Json
 async fn shutdown(State(app): State<Workbench>, Json(q): Json<Target>) -> Reply<Json<()>> {
     host(q.host_id.as_deref())?;
     let svc = &app.0.devices;
+    let _operation = svc.lifecycle.lock().await;
     let mut s = svc.live.lock().await;
     let d = svc.resolve(&mut s, &q.device_id).await?;
     native::shutdown(&d).await?;
@@ -548,6 +580,7 @@ pub(super) fn routes() -> Router<Workbench> {
         .route("/devices/detail", get(detail))
         .route("/devices/action", post(action))
         .route("/devices/screenshot", get(screenshot))
+        .route("/devices/stream", get(screen::stream))
         .route("/devices/eas-account", post(account::eas))
         .route("/devices/simlock-identity", post(account::simlock))
 }

@@ -41,6 +41,11 @@ fn command(program: &str) -> Command {
     c
 }
 pub(super) async fn run(program: &str, args: &[&str], input: Option<Vec<u8>>) -> Result<Vec<u8>> {
+    let limit = if program == "adb" && args.ends_with(&["exec-out", "screencap", "-p"]) {
+        32 * 1024 * 1024
+    } else {
+        crate::process::OUTPUT_LIMIT
+    };
     let mut command = command(program);
     command.args(args);
     if input.is_some() {
@@ -57,7 +62,7 @@ pub(super) async fn run(program: &str, args: &[&str], input: Option<Vec<u8>>) ->
                 }
                 Ok::<(), std::io::Error>(())
             },
-            proc.output()
+            proc.output_limited(limit)
         )?;
         Ok::<_, std::io::Error>(out)
     })

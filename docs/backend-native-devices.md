@@ -9,10 +9,10 @@
 | device.testHost | `POST /devices/test-host`。通过 SSH BatchMode 向指定主机读取系统与 Xcode、adb 的可用性，支持端口和指定的 SSH 身份文件。 |
 | device.easAccount | `POST /devices/eas-account`。向 Expo 官方 GraphQL 获取账户名称和应用。支持传入 token、EXPO_TOKEN 与 EAS 本机登录。 |
 | device.simlockIdentity | `POST /devices/simlock-identity`。向指定网关请求 /v1/identity，校验 agent 角色。仅匹配本机配置的网关能使用对应环境凭证。 |
-| device.open | `POST /devices/open` 接收 project、chat、device_id、platform、boot 并校验聊天归属。可以启动指定 iOS 模拟器或已安装的 Android AVD，将启动后的真实设备 ID 写入会话。 |
+| device.open | `POST /devices/open` 接收 project、chat、device_id、platform、boot 并校验聊天归属。可以启动指定 iOS 模拟器或已安装的 Android AVD。启动中对订阅方公布 booting_devices，完成后重新扫描并用真实设备 ID 创建视图。 |
 | device.close、device.shutdown | `POST /devices/close` 默认只释放指定聊天的设备视图，可指定同时关机。`POST /devices/shutdown` 关闭模拟器并清除所有指向它的视图。 |
 | device.detail、device.action | `GET /devices/detail?device_id=…` 读取真实设置。向 `POST /devices/action` 发送设备 ID 和原动作类型。支持平台相应的外观、文字、位置、App、推送、权限、方向和辅助功能。ADB shell 参数逐项转义。iOS 扩展辅助设置需要已安装的 KAR_DEVICE_IOS_AX_HELPER；通知权限需要 KAR_DEVICE_IOS_PERMISSION_HELPER。 |
-| subscribeDeviceState、设备截图 | `GET /devices/events` 返回初始状态和后续变更，有订阅者时定期刷新本地设备；`GET /devices/screenshot?device_id=…` 返回原始 PNG。iOS 用 simctl io，Android 用 adb exec-out。 |
+| subscribeDeviceState、设备截图 | `GET /devices/events` 返回初始状态和后续变更，有订阅者时定期刷新本地设备；`GET /devices/screenshot?device_id=…` 返回原始 PNG。iOS 用 simctl io，Android 用 adb exec-out。已打开的设备视图可通过 `GET /devices/stream?project=…&chat=…&device_id=…` 接收实时 multipart PNG。多个视图共享一次本地抓图，关闭或撤销立即停止该视图。 |
 
 ## 复验与界限
 

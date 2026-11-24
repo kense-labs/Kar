@@ -181,6 +181,28 @@ async fn scenario(live: bool) {
         .await
         .unwrap();
     assert!(shot.starts_with(b"\x89PNG\r\n\x1a\n") && shot.len() > 40);
+    let stream_url = format!(
+        "{url}/devices/stream?project={p}&chat={}&device_id={id}",
+        chats[0]
+    );
+    let mut stream = b
+        .get(&stream_url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert!(
+        stream.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .contains("multipart/x-mixed-replace")
+    );
+    let mut bytes = vec![];
+    while !bytes.windows(8).any(|s| s == b"\x89PNG\r\n\x1a\n") {
+        bytes.extend_from_slice(&stream.chunk().await.unwrap().unwrap());
+    }
+    drop(stream);
     let mut events = b.get(format!("{url}/devices/events")).send().await.unwrap();
     assert!(String::from_utf8_lossy(&events.chunk().await.unwrap().unwrap()).contains("devices"));
     json(
@@ -189,6 +211,14 @@ async fn scenario(live: bool) {
     )
     .await;
     assert!(!grant_files[0].exists() && grant_files[1].is_file());
+    assert!(
+        !a.get(&stream_url)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
     let state1 = json(b.get(format!("{url}/devices"))).await;
     assert_eq!(state1["sessions"].as_array().unwrap().len(), 1);
     if live {
