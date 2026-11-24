@@ -225,6 +225,27 @@ impl Workbench {
         })
     }
 
+    fn chat_directories(
+        &self,
+        workspace: &Path,
+        settings: &crate::SessionSettings,
+    ) -> Result<Vec<PathBuf>> {
+        let paths = settings.directories(workspace)?;
+        paths
+            .into_iter()
+            .map(|path| {
+                let actual = path.canonicalize()?;
+                if actual != path || !actual.is_dir() {
+                    return Err(Error::Refused(
+                        "an additional workspace directory changed or is not a directory".into(),
+                    ));
+                }
+                self.allowed(&actual)?;
+                Ok(actual)
+            })
+            .collect()
+    }
+
     fn binding(&self, project: Uuid, chat: Uuid) -> Result<ChatInfo> {
         let project = self.project(project)?;
         let info = self.0.chats.saved_info(chat)?;
@@ -273,20 +294,29 @@ impl Workbench {
         runtime: &str,
         model: Option<String>,
     ) -> Result<ProjectChat> {
-        self.create_chat_with_approvals(project, id, runtime, model, crate::ApprovalMode::Deny)
-            .await
+        self.create_chat_with_settings(
+            project,
+            id,
+            runtime,
+            model,
+            crate::ApprovalMode::Deny,
+            Default::default(),
+        )
+        .await
     }
 
-    async fn create_chat_with_approvals(
+    pub async fn create_chat_with_settings(
         &self,
         project: Uuid,
         id: Uuid,
         runtime: &str,
         model: Option<String>,
         approvals: crate::ApprovalMode,
+        mut settings: crate::SessionSettings,
     ) -> Result<ProjectChat> {
         let p = self.project(project)?;
         self.workspace(&p)?;
+        settings.additional_directories = self.chat_directories(&p.root, &settings)?;
         let slot = self.controller(id);
         let mut owner = slot.owner.lock().await;
         match self.0.chats.initial_info(id) {
@@ -295,6 +325,7 @@ impl Workbench {
                     && info.workspace == p.root
                     && info.runtime == runtime
                     && info.approvals == approvals
+                    && info.settings == settings
                     && info.model == model =>
             {
                 return Ok(ProjectChat {
@@ -315,6 +346,7 @@ impl Workbench {
         opts.remove_env("KAR_WORKBENCH_TOKEN")?;
         opts.model = model;
         opts.approvals = approvals;
+        opts.settings = settings;
         let session = self.0.chats.create_with_id(id, runtime, None, opts).await?;
         let info = session.info().clone();
         slot.publish(&session);

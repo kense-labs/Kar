@@ -64,5 +64,23 @@ pub(super) async fn run() -> kar::Result<()> {
             reason: ListingReason::Failed
         }
     ));
+    let menu = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+        .args(["models", "codex", "--picker", "--bin"])
+        .arg(&rt.program)
+        .arg("--cwd")
+        .arg(tmp.path())
+        .args(["--timeout-ms", "10000"])
+        .env("KAR_TEST_CODEX_CATALOG", "b")
+        .output()
+        .await?;
+    assert!(
+        menu.status.success(),
+        "{}",
+        String::from_utf8_lossy(&menu.stderr)
+    );
+    let menu: Value = serde_json::from_slice(&menu.stdout)?;
+    assert_eq!(menu["status"], "live");
+    assert_eq!(menu["models"][1]["id"], "b");
+    assert_eq!(menu["models"][1]["default"], true);
     Ok(())
 }

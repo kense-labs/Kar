@@ -2,6 +2,7 @@
 mod chat_cli;
 mod git_cli;
 mod mcp;
+mod models_cli;
 mod providers_cli;
 use clap::{Args, Parser, Subcommand};
 use kar::{Cursor, Error, Event, Outcome, Record, Result, SessionOptions, runtime, runtimes};
@@ -133,7 +134,7 @@ enum Action {
     /// Negotiate a session and show the native session id without sending a prompt.
     Open(Open),
     /// List the running provider's advertised models.
-    Models(Open),
+    Models(models_cli::Models),
     /// Print the runtime's declarative settings form, without launching its CLI.
     ConfigForm { runtime: Option<String> },
     /// Send a prompt and stream the reply.
@@ -325,9 +326,14 @@ impl NativeSettings {
 }
 #[derive(Args)]
 struct Open {
+    runtime: String,
+    #[command(flatten)]
+    args: SessionArgs,
+}
+#[derive(Args)]
+struct SessionArgs {
     #[command(flatten)]
     settings: NativeSettings,
-    runtime: String,
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
     #[arg(long)]
@@ -343,10 +349,18 @@ struct Open {
     #[arg(long)]
     bin: Option<PathBuf>,
 }
+impl SessionArgs {
+    fn options(self) -> SessionOptions {
+        let mut opts = self.settings.options(self.cwd);
+        opts.resume = self.resume;
+        opts.model = self.model;
+        opts
+    }
+}
 impl Open {
     fn runtime(&mut self) -> Result<kar::Runtime> {
         let mut r = runtime(&self.runtime)?;
-        if let Some(bin) = self.bin.take() {
+        if let Some(bin) = self.args.bin.take() {
             if r.protocol == kar::Protocol::Cybion {
                 return Err(Error::Unsupported(
                     "--bin for a remote Cybion thread".into(),
@@ -356,17 +370,11 @@ impl Open {
         }
         Ok(r)
     }
-    fn options(self) -> SessionOptions {
-        let mut opts = self.settings.options(self.cwd);
-        opts.resume = self.resume;
-        opts.model = self.model;
-        opts
-    }
     async fn session(mut self) -> Result<kar::Session> {
         let rt = self.runtime()?;
-        let fork = self.fork.take();
-        let through = self.through.take();
-        let options = self.options();
+        let fork = self.args.fork.take();
+        let through = self.args.through.take();
+        let options = self.args.options();
         if let Some(source) = fork {
             rt.fork(&source, through.as_deref(), options).await
         } else {
@@ -374,7 +382,7 @@ impl Open {
         }
     }
     async fn catalog(mut self, kind: kar::Catalog) -> Result<()> {
-        let value = if self.fork.is_some() {
+        let value = if self.args.fork.is_some() {
             let session = self.session().await?;
             let result = session.catalog(kind).await;
             let closed = session.close().await;
@@ -382,7 +390,7 @@ impl Open {
             closed?;
             value
         } else {
-            self.runtime()?.catalog(kind, self.options()).await?
+            self.runtime()?.catalog(kind, self.args.options()).await?
         };
         json_line(&value, std::io::stdout())
     }
@@ -725,7 +733,7 @@ async fn execute(command: Action) -> Result<()> {
             )?;
             s.close().await?;
         }
-        Action::Models(args) => args.catalog(kar::Catalog::Models).await?,
+        Action::Models(args) => args.run().await?,
         Action::ConfigForm { runtime } => {
             let data = if let Some(id) = runtime {
                 let form = kar::forms::config_form(&id)

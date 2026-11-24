@@ -1,12 +1,14 @@
 //! Credential-free workspace discovery that does not open a model session.
 mod antigravity;
 mod claude;
+pub(crate) use claude::models::read as claude_models;
 mod codex;
 pub(crate) mod codex_models;
 mod cursor;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod dsh;
 mod entries;
+pub(crate) mod model_choices;
 pub use entries::{CommandEntry, McpServerEntry, SkillEntry, SkillScope, ToolEntry};
 mod grok;
 mod opencode;

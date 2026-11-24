@@ -1,6 +1,7 @@
 use super::*;
 use crate::account::AccountWire;
 use serde_json::json;
+pub(super) mod models;
 mod skills;
 async fn request(wire: &mut AccountWire, args: Value) -> Result<Value> {
     let mut reply = wire.control_reply(args).await?;

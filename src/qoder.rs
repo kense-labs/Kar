@@ -406,9 +406,9 @@ impl Launch {
         if let Some(effort) = &opts.settings.effort
             && confirmed["effort"] != effort.as_str()
         {
-            return Err(Error::Refused(
-                "Qoder did not confirm the requested effort".into(),
-            ));
+            return Err(Error::Refused(format!(
+                "Qoder did not confirm effort {effort:?}"
+            )));
         }
         Ok(
             json!({"sessionId":id,"model":reported,"effort":confirmed["effort"],"version":self.version.to_string()}),

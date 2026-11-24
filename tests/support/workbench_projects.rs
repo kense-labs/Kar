@@ -79,12 +79,39 @@ async fn scenario() {
             assert_eq!(result.status(), StatusCode::FORBIDDEN);
             assert!(!native.join("new.txt").exists());
         }
+        let picker = json(a.get(format!("{scope}/models/codex"))).await;
+        assert_eq!(picker["status"], "live");
+        assert_eq!(picker["models"][0]["id"], "demo");
+        assert_eq!(picker["models"][0]["default"], true);
+        assert_eq!(picker["models"][0]["effortLevels"], json!(["high"]));
+        let outside = json!({"id":Uuid::new_v4(),"runtime":"codex","settings":{"additional_directories":[native]}});
+        let rejected = a
+            .post(format!("{scope}/chats"))
+            .json(&outside)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
         for _ in 0..2 {
             let id = Uuid::new_v4();
-            let create = json!({"id":id,"runtime":"codex"});
+            let create =
+                json!({"id":id,"runtime":"codex","settings":{"end_turn_processes_on_abort":true}});
             let entry = json(a.post(format!("{scope}/chats")).json(&create)).await;
             let retried = json(b.post(format!("{scope}/chats")).json(&create)).await;
             assert_eq!(entry, retried);
+            assert_eq!(
+                entry["info"]["settings"]["end_turn_processes_on_abort"],
+                true
+            );
+            let revised =
+                json!({"id":id,"runtime":"codex","settings":{"end_turn_processes_on_abort":false}});
+            let conflicting = b
+                .post(format!("{scope}/chats"))
+                .json(&revised)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(conflicting.status(), StatusCode::BAD_REQUEST);
             assert_eq!(entry["info"]["id"], id.to_string());
             chats.push(id);
         }

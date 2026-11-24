@@ -27,6 +27,65 @@ async fn completed(s: &Session, prompt: &str) -> Result<()> {
     Ok(())
 }
 
+async fn listed_efforts(rt: &kar::Runtime, mut opts: SessionOptions) -> Result<serde_json::Value> {
+    // A saved selector limits which model to exercise. The inventory itself is workspace-scoped.
+    let wanted = opts.model.take();
+    let list = rt.form_model_listing(&opts, Vec::new()).await;
+    let kar::forms::ModelListing::Live { models } = list else {
+        bail!("installed model catalog did not return live choices: {list:?}");
+    };
+    let candidates: Vec<_> = models
+        .iter()
+        .filter(|m| m.disabled.is_none() && wanted.as_deref().is_none_or(|id| id == m.id))
+        .collect();
+    if let Some(selected) = &wanted {
+        ensure!(
+            !candidates.is_empty(),
+            "requested test model {selected} is absent or disabled"
+        );
+    }
+    let entry = candidates
+        .iter()
+        .find(|m| m.effort_levels.as_ref().is_some_and(|v| v.len() >= 2));
+    if let Some(model) = entry {
+        let levels = model.effort_levels.as_ref().expect("selected effort menu");
+        opts.model = Some(model.id.clone());
+        for effort in &levels[..2] {
+            opts.settings.effort = Some(effort.clone());
+            let session = rt.open(opts.clone()).await?;
+            if let Some(expected) = &opts.resume {
+                ensure!(
+                    session.id() == expected,
+                    "resuming changed the native session ID"
+                );
+            }
+            if let Some(actual) = session.effort() {
+                ensure!(&actual == effort, "selected {effort} but observed {actual}");
+            }
+            completed(&session, "Reply hello.").await?;
+            opts.resume = Some(session.id().to_owned());
+            session.close().await?;
+        }
+        return Ok(
+            json!({"model":model.id,"effort_levels":&levels[..2],"native_session":opts.resume}),
+        );
+    }
+    opts.model = candidates.first().map(|m| m.id.clone());
+    opts.settings.effort = Some("low".into());
+    match rt.open(opts).await {
+        Ok(session) => {
+            session.close().await?;
+            bail!("model without two listed effort levels accepted low");
+        }
+        Err(e @ (Error::Refused(_) | Error::Unsupported(_) | Error::Open(_)))
+            if e.to_string().contains("low") =>
+        {
+            Ok(json!({"refusal":e.to_string()}))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -115,6 +174,9 @@ async fn main() -> Result<()> {
                     evidence["observed"] = json!(session.capabilities());
                     evidence["native_session"] = json!(session.id());
                     session.close().await?;
+                }
+                "session.effort-listed-levels-apply-across-resume" => {
+                    evidence["exercise"] = listed_efforts(&rt, opts).await?;
                 }
                 "session.effort-never-substituted" => {
                     let requested = "kar-no-such-effort";

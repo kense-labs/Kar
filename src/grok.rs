@@ -18,6 +18,20 @@ impl Runtime {
     ) -> crate::forms::ModelListing {
         use crate::forms::{ListingReason, ModelListing};
         let read = async {
+            if self.protocol == crate::Protocol::Claude && self.id == "claude" {
+                let rows = crate::inventory::claude_models(&self.selected(options).await?, options)
+                    .await?;
+                return crate::inventory::model_choices::project(&rows, self.protocol);
+            }
+            if self.protocol == crate::Protocol::Factory && self.id == "factory" {
+                let rows = crate::factory::inventory(
+                    &self.selected(options).await?,
+                    options,
+                    crate::Catalog::Models,
+                )
+                .await?;
+                return crate::inventory::model_choices::project(&rows, self.protocol);
+            }
             if self.protocol == crate::Protocol::Codex && self.id == "codex" {
                 let models = crate::inventory::codex_models::read(
                     &self.selected(options).await?,

@@ -760,3 +760,6 @@ cargo test --locked --test dsh_live legacy_ -- --ignored
 cargo test --locked --test skill_inventory_live pi_registered_tools -- --ignored
 ```
 
+
+
+按项目读取模型菜单可调用 `GET /projects/{project}/models/{runtime}`，或运行 `kar models codex --picker --cwd <directory> --timeout-ms 15000`。不填供应商的 `kar models --cwd <directory>` 逐个报告已注册程序的安装状态和可获取的模型。单独运行 `kar models codex` 保留原生目录输出。Codex 的菜单使用该目录下实际配置的模型、推理档位和服务等级，Claude 的菜单使用独立的 `list_models` 控制请求。工作台新建聊天时可在 `settings` 提交 `effort`、`service_tier`、`output_schema` 等 Kar 设置；重启后随原聊天恢复。重复使用同一聊天 UUID 时，创建参数必须与首次请求一致。

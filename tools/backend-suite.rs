@@ -135,8 +135,17 @@ fn catalog() -> Result<Vec<Case>> {
             "account-usage.snapshot",
             "session.capabilities-match-declaration",
             "session.effort-never-substituted",
+            "session.effort-listed-levels-apply-across-resume",
             "session.resume-or-loud-rejection",
         ] {
+            if public_case == "session.effort-listed-levels-apply-across-resume"
+                && !matches!(
+                    rt.id.as_str(),
+                    "codex" | "claude" | "qwen" | "cursor" | "grok" | "factory" | "opencode"
+                )
+            {
+                continue;
+            }
             if public_case == "account-usage.snapshot" && !rt.supports_account_usage() {
                 continue;
             }

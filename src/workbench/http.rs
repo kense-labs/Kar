@@ -71,6 +71,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
     let router = Router::new()
         .route("/projects", get(projects).post(register))
         .route("/projects/{project}/chats", get(chats).post(create_chat))
+        .route("/projects/{project}/models/{runtime}", get(models))
         .route("/projects/{project}/chats/{chat}/snapshot", get(snapshot))
         .route("/projects/{project}/chats/{chat}/events", get(events))
         .route("/projects/{project}/chats/{chat}/messages", post(send))
@@ -142,6 +143,8 @@ struct NewChat {
     model: Option<String>,
     #[serde(default)]
     approvals: crate::ApprovalMode,
+    #[serde(default)]
+    settings: crate::SessionSettings,
 }
 async fn create_chat(
     State(app): State<Workbench>,
@@ -149,16 +152,29 @@ async fn create_chat(
     Json(p): Json<NewChat>,
 ) -> Reply<ProjectChat> {
     Ok(Json(
-        app.create_chat_with_approvals(
+        app.create_chat_with_settings(
             id,
             p.id.unwrap_or_else(Uuid::new_v4),
             &p.runtime,
             p.model,
             p.approvals,
+            p.settings,
         )
         .await?,
     ))
 }
+async fn models(
+    State(app): State<Workbench>,
+    Path((project, runtime)): Path<(Uuid, String)>,
+) -> Reply<crate::forms::ModelListing> {
+    let project = app.project(project)?;
+    app.workspace(&project)?;
+    let rt = crate::runtime(&runtime)?;
+    let mut opts = crate::SessionOptions::new(project.root);
+    opts.remove_env("KAR_WORKBENCH_TOKEN")?;
+    Ok(Json(rt.form_model_listing(&opts, Vec::new()).await))
+}
+
 #[derive(Deserialize)]
 struct Message {
     id: Uuid,

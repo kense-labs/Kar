@@ -42,6 +42,10 @@ pub(crate) fn agent() {
         match v["method"].as_str() {
             Some("initialize") => reply(json!({})),
             Some("initialized") => {}
+            Some("model/list") => reply(
+                json!({"data":[{"id":"demo","model":"demo","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}]}),
+            ),
+            Some("config/read") => reply(json!({"config":{"model":"demo"}})),
             Some("thread/start") => {
                 session = Uuid::new_v4().to_string();
                 fs::write(database.join(&session), cwd.to_str().unwrap()).unwrap();

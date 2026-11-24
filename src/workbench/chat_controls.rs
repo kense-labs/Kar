@@ -146,6 +146,8 @@ impl Workbench {
             old.close().await?
         }
         if owner.is_none() {
+            let info = self.0.chats.saved_info(id)?;
+            self.chat_directories(&info.workspace, &info.settings)?;
             let session = self
                 .0
                 .chats

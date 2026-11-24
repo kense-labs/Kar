@@ -1047,7 +1047,9 @@ impl Session {
                 if !antigravity && let Some(effort) = &options.settings.effort {
                     let option = crate::options::acp_effort_option(&session.info, cursor_acp)
                         .ok_or_else(|| {
-                            Error::Unsupported("ACP did not advertise thought_level".into())
+                            Error::Unsupported(format!(
+                                "ACP did not advertise thought_level for effort {effort:?}"
+                            ))
                         })?;
                     if option["currentValue"] != effort.as_str() {
                         let key = option["id"]
@@ -1066,18 +1068,18 @@ impl Session {
                                 .and_then(|v| v["currentValue"].as_str())
                                 != Some(expected)
                         {
-                            return Err(Error::Refused(
-                                "Cursor changed the model while applying reasoning effort".into(),
-                            ));
+                            return Err(Error::Refused(format!(
+                                "Cursor changed the model while applying effort {effort:?}"
+                            )));
                         }
                         let confirmed = crate::options::acp_effort_option(&reply, cursor_acp)
                             .is_some_and(|v| {
                                 v["id"] == key && v["currentValue"] == effort.as_str()
                             });
                         if !confirmed {
-                            return Err(Error::Refused(
-                                "ACP did not confirm requested effort".into(),
-                            ));
+                            return Err(Error::Refused(format!(
+                                "ACP did not confirm effort {effort:?}"
+                            )));
                         }
                         session.info["configOptions"] = reply["configOptions"].clone();
                     }
@@ -1109,9 +1111,9 @@ impl Session {
                 if let Some(effort) = &options.settings.effort
                     && session.rpc("get_settings", json!({})).await?.as_str() != Some(effort)
                 {
-                    return Err(Error::Refused(
-                        "Claude did not confirm requested effort".into(),
-                    ));
+                    return Err(Error::Refused(format!(
+                        "Claude did not confirm effort {effort:?}"
+                    )));
                 }
                 if let Some(tier) = &options.settings.service_tier
                     && session.info["fast_mode_state"] != if tier == "fast" { "on" } else { "off" }
@@ -1182,9 +1184,9 @@ impl Session {
                 if let Some(effort) = &options.settings.effort
                     && session.info["thinkingLevel"] != effort.as_str()
                 {
-                    return Err(Error::Refused(
-                        "Pi did not confirm requested thinking level".into(),
-                    ));
+                    return Err(Error::Refused(format!(
+                        "Pi did not confirm thinking level {effort:?}"
+                    )));
                 }
                 id = required_id(&session.info, "/sessionId")?;
             }
@@ -1249,9 +1251,9 @@ impl Session {
             return Ok(());
         }
         if method == "thread/start" {
-            return Err(Error::Refused(
-                "Codex did not confirm requested reasoning effort".into(),
-            ));
+            return Err(Error::Refused(format!(
+                "Codex did not confirm reasoning effort {effort:?}"
+            )));
         }
         // Subscribe before the update: the notification may arrive before its RPC reply.
         let cursor = self.records().last().map(|r| r.cursor());
