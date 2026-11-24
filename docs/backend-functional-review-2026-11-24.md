@@ -2,7 +2,22 @@
 
 复核对象为 GitHub `main` 的 `d02239d9234a`、上游运行时 `v0.130.1`（`2b15859a13dc`）及 T3 Code `2808e878de91`。以下结论来自固定提交的实际处理逻辑。列出的操作供独立验收复现，当前候选的统一实测仍待执行。
 
-## 当前操作复核
+## 功能修复后的对照
+
+固定对照版本为上游运行时 v0.130.1 和工作台 2808e878。检查以用户或模型实际可调用的行为为单位。工作台的 16 个业务工具组共有 94 个声明，另有工具搜索。一个声明可以有多个动作，也可由 Kar 的多个入口实现。[上游工具与处理函数索引](backend-workbench-mcp-map.tsv)
+
+| 用户操作 | Kar 实现及证据 | macOS 复验入口 |
+| --- | --- | --- |
+| 在原聊天回到所选回合并继续写文件 | `b3cd44f` 先检查文件冲突，按同一个命令 ID 提交模型绑定、工作区位置和回退记录；`8fccd99` 保留继承的附件。 | `cargo test --locked --test workbench_handoff`，检验意外中止、双客户端事件与模型实际恢复的上下文。 |
+| 重启后继续原 FIFO，保留用户不确定的投递 | `b04a7ed` 使用有归属的 Kimi/Codex 原生记录确认队首。缺少证据时暴露待确认状态，后项停止派发；工作树交接在 `2794c14` 使用同一边界。 | `cargo test --locked --test provider_queue_crash`，按 [供应商环境表](backend-macos-tests.tsv) 配置真实 CLI。 |
+| 动态 ACP、原生会话和订阅 | `e890131` 允许只支持新建的代理在进程存活时工作；`5a207ee`、`a343998`、`3d74284` 提供本地启动器、模型菜单和原生登录。SDK 的文本聚合与安装诊断分别见 `0d62edc`、`2300804`。 | `cargo test --locked --test workbench_acp_registry`、`cargo test --locked --lib merge_by_native_message`、`cargo test --locked --test protocol installation`。 |
+| 项目、Git 与协作 | `6b496b6` 管理和克隆项目并启动聊天；`4311ce3` 在受管工作树运行初始化脚本；`82ce2d6` 保留分叉和合回；`73075c7` 恢复结构化输出要求。 | `cargo test --locked --test workbench_mcp`，同时覆盖工具查找、直接调用、范围限制和重复命令。 |
+| 模型在工作台使用其他服务 | 浏览器/桌面/设备见 `6907400`、`5bd94a9`；附件、私密输入、环境配对、主题和反馈见 `3dda5e8`、`f08087d`；工作流 KV 及信号见 `8163bdb`；本机委派、批量新聊及排程见 `d0affd2`。 | `workbench_mcp`、`workbench_workflows`；外部账户、真实设备和远端 Git 托管须提供各自的授权测试环境。 |
+| HTTP 文件与追踪 | `09a0dc4` 增加受签名约束的附件 Range / If-Range、静态文件条件读取和浏览器跟踪接收与转发。 | `cargo test --locked --lib conditional_and_partial_downloads_validate_the_same_entity`，另以有效及过期的签名地址对照。 |
+
+清单内的“待 macOS 统一实测”保留运行结果空缺。协议回放、真实供应商程序连接本地模型、真实账户和真实设备分别记录。以下历史表格仅描述其标题或正文标明的旧提交。
+
+## 历史快照 · 候选 3ab6da6 与 cbd3c93
 
 本次重新查询 GitHub 的 `refs/heads/main` 得到 `d02239d9234abb382d0a35c084d25dacc557738c`。首表核对本地候选 `3ab6da6`，完整模型工具组核对到 `cbd3c93`。运行时源码通过 `git show 2b15859:<文件>` 读取，工作台源码通过 `git show 2808e87:<文件>` 读取。以下判断限于用户或宿主实际调用的后端入口。
 
