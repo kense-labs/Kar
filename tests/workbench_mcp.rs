@@ -3,6 +3,8 @@
 mod issues;
 #[path = "workbench_mcp/worktree.rs"]
 mod worktree;
+#[path = "workbench_mcp/preview_tools.rs"]
+mod preview_tools;
 #[path = "workbench_mcp/workflow.rs"]
 mod workflow;
 #[allow(dead_code)]
@@ -188,6 +190,7 @@ async fn scenario() {
     .await;
     assert_eq!(foreign["result"]["isError"], true);
     let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
+    preview_tools::controls(&url, &a, p, chat, call).await;
     workflow::exercise(&url, &a, p, chat, call).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")

@@ -16,6 +16,8 @@ enum Mode {
 pub(in crate::workbench) struct Policy {
     mode: Mode,
     #[serde(default)]
+    pub(super) preview_tools: super::preview_tools::Resources,
+    #[serde(default)]
     issue_reads: bool,
     #[serde(default)]
     issue_writes: bool,
@@ -40,6 +42,8 @@ pub(in crate::workbench) struct Policy {
 struct Configure {
     mode: Mode,
     #[serde(default)]
+    pub(super) preview_tools: super::preview_tools::Resources,
+    #[serde(default)]
     issue_reads: bool,
     #[serde(default)]
     issue_writes: bool,
@@ -57,6 +61,7 @@ struct Configure {
 }
 
 impl Policy {
+    pub(super) fn executes(&self) -> bool { self.mode == Mode::Execute }
     fn get(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         db.model_tool_permissions.get(&project)?.get(&chat)
     }
@@ -121,6 +126,7 @@ async fn configure(
         pull_repository,pull_reads:cfg.pull_reads,pull_writes:cfg.pull_writes,
         worktree_directory,
         mode: cfg.mode,
+        preview_tools: cfg.preview_tools,
         issue_reads: cfg.issue_reads,
         issue_writes: cfg.issue_writes,
         workflow_reads: cfg.workflow_reads,

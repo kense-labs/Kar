@@ -279,6 +279,7 @@ async fn open_preview(
             .grants
             .open(
                 p,
+                None,
                 state.find(p, q.terminal)?,
                 q.target,
                 device.map(|d| d.0),

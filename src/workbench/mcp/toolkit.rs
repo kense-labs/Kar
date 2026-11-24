@@ -127,6 +127,7 @@ fn tools(caller: &Caller) -> Vec<Tool> {
         });
     }
     tools.extend(super::forge_tools::tools(caller));
+    tools.extend(preview_tools::tools(caller));
     tools
 }
 pub(super) fn enabled(name: &str, caller: &Caller, deferred: bool) -> bool {
@@ -258,6 +259,7 @@ pub(super) async fn call(
     name: &str,
     input: Value,
 ) -> Result<Value> {
+    if name.starts_with("kar_preview_"){return preview_tools::call(&app,&caller,name,input).await;}
     if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
         return issues::call(app, caller, name, input).await;
     }

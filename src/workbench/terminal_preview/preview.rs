@@ -34,6 +34,8 @@ pub(super) struct Preview {
     pub id: Uuid,
     pub project: Uuid,
     pub terminal: Uuid,
+    #[serde(skip_serializing_if="Option::is_none")]
+    pub chat: Option<Uuid>,
     target: Port,
     pub url: String,
     pub profile_id: String,
@@ -271,6 +273,7 @@ impl Grants {
     pub async fn open(
         &self,
         project: Uuid,
+        chat: Option<Uuid>,
         term: Arc<Terminal>,
         target: Port,
         device: Option<DeviceLease>,
@@ -303,6 +306,7 @@ impl Grants {
             id,
             project,
             terminal: m.id,
+            chat,
             target,
             url: format!("http://{authority}/"),
             profile_id,

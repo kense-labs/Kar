@@ -3,6 +3,7 @@ mod forge_tools;
 mod issues;
 pub(super) use issues::{Policy, permission_routes};
 mod registry;
+mod preview_tools;
 mod toolkit;
 mod workflow;
 pub(in crate::workbench) mod worktree;
