@@ -1,6 +1,7 @@
 mod codex_admission;
 mod codex_processes;
 mod codex_queue;
+mod codex_steering;
 mod interrupt_timeout;
 use crate::grok::turns::{INTERJECT, Turns as GrokTurns};
 use crate::interaction::sensitive_field;
@@ -317,6 +318,7 @@ pub(crate) struct Actor {
     grok_interjections: HashMap<uuid::Uuid, (SteeringReceipt, crate::SteerStatus)>,
     codex_quota: wire::failure::CodexQuota,
     codex_queue: codex_queue::NativeQueue,
+    codex_steering: codex_steering::Inputs,
     codex_processes: Option<codex_processes::Guard>,
     interrupt_timeout: interrupt_timeout::InterruptTimeout,
     factory: Option<crate::factory::Projection>,
@@ -414,6 +416,7 @@ impl Actor {
             end_turn_processes: options.settings.end_turn_processes_on_abort,
             codex_quota: Default::default(),
             codex_queue: Default::default(),
+            codex_steering: Default::default(),
             interrupt_timeout: Default::default(),
             codex_processes: (runtime.protocol == Protocol::Codex
                 && options.settings.end_turn_processes_on_abort)
@@ -715,6 +718,12 @@ impl Actor {
             intent,
             &self.secrets,
         );
+        if method == "turn/steer"
+            && let RpcIntent::Steer { request, .. } = intent
+            && let (Some(turn), Some(receipt)) = (params["expectedTurnId"].as_str(), &steer)
+        {
+            self.codex_steering.submit(turn, request, receipt.clone());
+        }
         if method == INTERJECT
             && let Some(receipt) = &steer
         {
@@ -1536,11 +1545,18 @@ impl Actor {
                         .and_then(|t| t.native.as_deref())
                         .or_else(|| self.observed_root_turn())
                     {
-                        return self.rpc("turn/steer",json!({"threadId":id,"expectedTurnId":turn_id,"clientUserMessageId":input_id,"input":message.blocks(Protocol::Codex)}),Some(tx),intent).await;
+                        if self.codex_steering.contains(turn_id, input_id) {
+                            Err(Error::Refused(
+                                "Codex already has this steering input for the target turn".into(),
+                            ))
+                        } else {
+                            return self.rpc("turn/steer",json!({"threadId":id,"expectedTurnId":turn_id,"clientUserMessageId":input_id,"input":message.blocks(Protocol::Codex)}),Some(tx),intent).await;
+                        }
+                    } else {
+                        Err(Error::Refused(
+                            "runtime has not acknowledged this turn".into(),
+                        ))
                     }
-                    Err(Error::Refused(
-                        "runtime has not acknowledged this turn".into(),
-                    ))
                 }
                 Protocol::Pi => return self.rpc("steer", message.pi(), Some(tx), intent).await,
                 _ => Err(Error::Unsupported("steering on this transport".into())),
@@ -2255,7 +2271,7 @@ impl Actor {
         let mut reply = None;
         let mut prompt_ack = None;
         let mut prompt_decision = None;
-        let mut codex_prompt_decision = None;
+        let mut codex_decision = None;
         let mut codex_request = None;
         let mut invalid_codex_admission = false;
         let mut queue_reply = None;
@@ -2300,8 +2316,35 @@ impl Actor {
                     .refused(request_id, v["error"]["code"].as_i64());
             if let Some(steer) = p.steer {
                 match (&result, p.method.as_str()) {
-                    (Ok(_), "turn/steer") => events.push(steer.event(crate::SteerStatus::Received)),
-                    (Err(_), "turn/steer") => events.push(steer.event(crate::SteerStatus::Refused)),
+                    (_, "turn/steer") => {
+                        if let Some(request) = p.control_request {
+                            if let Ok(native) = &result
+                                && !self.codex_steering.confirms(request, native)
+                            {
+                                self.codex_steering.unconfirmed(request, &mut events);
+                                result = Err(Error::Protocol(
+                                    "Codex did not confirm the targeted steering turn".into(),
+                                ));
+                            } else {
+                                self.codex_steering
+                                    .reply(request, result.is_ok(), &mut events);
+                                codex_decision = match &result {
+                                    Ok(native) => {
+                                        Some((request, json!({"type":"accepted","native":native})))
+                                    }
+                                    Err(_) => v.get("error").map(|native| {
+                                        let mut decision = codex_admission::refusal(native);
+                                        let reason = format!(
+                                            "not_steerable: {}",
+                                            decision["reason"].as_str().unwrap()
+                                        );
+                                        decision["reason"] = reason.into();
+                                        (request, decision)
+                                    }),
+                                };
+                            }
+                        }
+                    }
                     (Ok(data), "steer") if self.protocol == Protocol::Pi => {
                         let status = match data["disposition"].as_str() {
                             Some("handled") => crate::SteerStatus::Handled,
@@ -2380,7 +2423,7 @@ impl Actor {
                         input_id: input,
                         receipt: crate::InputReceipt::Refused,
                     });
-                    codex_prompt_decision = Some((request, decision));
+                    codex_decision = Some((request, decision));
                 } else if let Some(native) = v.get("result").filter(|value| {
                     value
                         .pointer("/turn/id")
@@ -2391,8 +2434,7 @@ impl Actor {
                         input_id: input,
                         receipt: crate::InputReceipt::Started,
                     });
-                    codex_prompt_decision =
-                        Some((request, json!({"type":"accepted","native":native})));
+                    codex_decision = Some((request, json!({"type":"accepted","native":native})));
                 } else {
                     // No evidence identifies the native turn. An uncertain write is not a native refusal.
                     result = Err(Error::Closed(
@@ -2532,15 +2574,6 @@ impl Actor {
                     self.cursor_children.is_some(),
                 ));
             }
-            if p.starts_turn
-                && self.protocol == Protocol::Codex
-                && let (Some(t), Ok(r)) = (&mut self.turn, &result)
-            {
-                t.native = r
-                    .pointer("/turn/id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            }
             if self.protocol == Protocol::Acp
                 && (p.method == "session/prompt" || p.method == ANTIGRAVITY_STEER)
             {
@@ -2610,13 +2643,20 @@ impl Actor {
                 }
                 queue_reply = Some((request, result));
             } else if let Some(tx) = p.reply {
-                reply = Some((tx, result, p.control_request));
+                reply = Some((
+                    tx,
+                    result,
+                    p.control_request.filter(|_| p.method != "turn/steer"),
+                ));
             }
         }
         let reported_turn = v
             .pointer("/params/turn/id")
             .or_else(|| v.pointer("/params/turnId"))
             .and_then(Value::as_str);
+        if is_root && self.protocol == Protocol::Codex {
+            self.codex_steering.notice(&v, &mut events);
+        }
         if is_root
             && self.protocol == Protocol::Codex
             && let Some((id, request)) = self.codex_queue.notice(&v, &mut events)
@@ -2903,7 +2943,7 @@ impl Actor {
             self.codex_queue
                 .reply(&self.journal, id, result, &self.secrets);
         }
-        if let Some((request, decision)) = codex_prompt_decision {
+        if let Some((request, decision)) = codex_decision {
             codex_admission::publish(&self.journal, request, decision, &self.secrets);
         }
         if let Some((request, refusal)) = prompt_decision {
@@ -3382,6 +3422,7 @@ impl Actor {
                     ANTIGRAVITY_STEER | OPENCODE_V1_STEER | "steer" | "turn/steer"
                 )
             })
+            .filter(|p| p.method != "turn/steer" || !self.codex_steering.echoed(p.control_request))
             .filter_map(|p| p.steer.as_ref())
         {
             self.record(
@@ -3463,7 +3504,9 @@ impl Actor {
             .fold(reason, |msg, key| msg.replace(key, "[redacted]"));
         let closed = Error::Closed(reason.clone());
         for p in self.pending.values() {
-            if p.method == codex_queue::ADD || p.codex_prompt_input.is_some() {
+            if matches!(p.method.as_str(), codex_queue::ADD | "turn/steer")
+                || p.codex_prompt_input.is_some()
+            {
                 continue;
             }
             if let Some(request) = p

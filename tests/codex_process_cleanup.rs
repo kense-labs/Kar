@@ -13,7 +13,10 @@ use std::{
 };
 use uuid::Uuid;
 
+const UNREAD: &str = "kar-unread-codex-input";
+
 struct Model {
+    observed: std::sync::Mutex<Vec<(bool, bool)>>,
     work: PathBuf,
     foreground: bool,
 }
@@ -28,6 +31,10 @@ async fn model(
         .find(|item| item["role"] == "user")
         .unwrap()
         .to_string();
+    model.observed.lock().unwrap().push((
+        last.contains("NEXT_PROMPT"),
+        body["input"].to_string().contains(UNREAD),
+    ));
     let marker = ["earlier", "current"]
         .into_iter()
         .find(|marker| last.contains(&format!("START_{marker}")));
@@ -137,10 +144,11 @@ async fn scenario(enabled: bool, foreground: bool) {
     let state = Arc::new(Model {
         work: work.clone(),
         foreground,
+        observed: Default::default(),
     });
     let app = Router::new()
         .route("/v1/responses", post(model))
-        .with_state(state);
+        .with_state(state.clone());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let config = format!(
         "model = \"gpt-5.1\"\nmodel_provider = \"fixture\"\napproval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\n[model_providers.fixture]\nname = \"fixture\"\nbase_url = \"http://127.0.0.1:{port}/v1\"\nenv_key = \"KAR_FIXTURE_KEY\"\nwire_api = \"responses\"\n"
@@ -178,6 +186,8 @@ async fn scenario(enabled: bool, foreground: bool) {
     let mut second =
         ChatReplica::from_snapshot(HttpChatFeed::new(&url).unwrap().snapshot().await.unwrap());
     let turn = Uuid::new_v4();
+    let unread = Uuid::new_v4();
+    let mut records = chat.subscribe(None).unwrap();
     let send = chat.send(turn, "START_current");
     let abort = async {
         let current = marker(&work, "current").await;
@@ -193,6 +203,9 @@ async fn scenario(enabled: bool, foreground: bool) {
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
             assert!(work.join("model-waiting").exists());
+        }
+        if foreground {
+            chat.steer_with_id(unread, UNREAD).await.unwrap();
         }
         chat.abort().await.unwrap();
         (current, child, earlier_child, mcp_child)
@@ -277,6 +290,62 @@ async fn scenario(enabled: bool, foreground: bool) {
         second.turns()[0].process_cleanups.is_empty()
             && second.turns()[2].process_cleanups.is_empty()
     );
+    if foreground {
+        let statuses = &second.turns()[1].steered_inputs;
+        assert_eq!(statuses.get(&unread), Some(&kar::SteerStatus::Cancelled));
+        let mut rows = Vec::new();
+        while let Some(record) = records.next().await {
+            rows.push(record);
+        }
+        let unread_id = unread.to_string();
+        let request = rows
+            .iter()
+            .find(|r| r.native["type"] == "steer" && r.native["inputId"] == unread_id)
+            .unwrap();
+        let receipt =
+            kar::ControlReceipt::from_records(&rows, request.control_request_id().unwrap())
+                .unwrap();
+        assert_eq!(receipt.response.native["type"], "accepted");
+        let abort = rows.iter().find(|r| r.native["type"] == "abort").unwrap();
+        assert_eq!(
+            kar::ControlReceipt::from_records(&rows, abort.control_request_id().unwrap())
+                .unwrap()
+                .response
+                .native["type"],
+            "accepted"
+        );
+        let drop: Vec<_> = rows
+            .iter()
+            .filter(|r| r.input_drop_reason(&unread_id) == Some("turn_interrupted"))
+            .collect();
+        assert_eq!(drop.len(), 1);
+        assert_eq!(drop[0].frame_type(), Some("turn/completed"));
+        let dropped = drop[0]
+            .events
+            .iter()
+            .position(
+                |e| matches!(e, kar::Event::InputDropped {input_id} if input_id == &unread_id),
+            )
+            .unwrap();
+        let ended = drop[0]
+            .events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    kar::Event::TurnEnded {
+                        outcome: kar::Outcome::Aborted
+                    }
+                )
+            })
+            .unwrap();
+        assert!(dropped < ended);
+        assert!(rows.iter().all(|r| !(r.native["method"] == "item/started"
+            && r.native["params"]["item"]["clientId"] == unread_id)));
+        let observed = state.observed.lock().unwrap();
+        assert!(observed.iter().any(|(next, _)| *next));
+        assert!(!observed.iter().any(|(_, has_marker)| *has_marker));
+    }
     server.abort();
     service.abort();
 }

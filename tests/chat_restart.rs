@@ -1791,6 +1791,7 @@ async fn codex_steer_receipt_survives_reopen() {
         .await
         .unwrap();
     let (owner, refused, landed) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let echoed = Uuid::new_v4();
     let mut events = chat.subscribe(None).unwrap();
     let drive = async {
         while let Some(record) = events.next().await {
@@ -1799,6 +1800,14 @@ async fn codex_steer_receipt_survives_reopen() {
             }
         }
         assert!(chat.steer_with_id(refused, "refused steer").await.is_err());
+        chat.steer_with_id(echoed, "echo before reply")
+            .await
+            .unwrap();
+        assert!(
+            chat.steer_with_id(echoed, "echo before reply")
+                .await
+                .is_err()
+        );
         chat.steer_with_id(landed, "accepted steer").await.unwrap();
     };
     let (turn, ()) = tokio::time::timeout(Duration::from_secs(10), async {
@@ -1814,6 +1823,7 @@ async fn codex_steer_receipt_survives_reopen() {
     let turn = &history.turns[0];
     for (input, text, status) in [
         (landed, "accepted steer", kar::SteerStatus::Received),
+        (echoed, "echo before reply", kar::SteerStatus::Accepted),
         (refused, "refused steer", kar::SteerStatus::Refused),
     ] {
         assert_eq!(turn.steered_inputs.get(&input), Some(&status));

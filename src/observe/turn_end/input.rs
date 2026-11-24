@@ -309,6 +309,9 @@ impl<'a> InputReader<'a> {
                     self.attempt.native_queued = true
                 }
                 Event::InputDropped { input_id } if self.matches(Some(input_id), request) => {
+                    if record.input_drop_reason(input_id) == Some("turn_interrupted") {
+                        return Some(aborted(record));
+                    }
                     return Some(failed(record, "runtime dropped the input"));
                 }
                 Event::TurnStarted if request.is_some() && self.matches(None, request) => {

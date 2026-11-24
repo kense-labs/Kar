@@ -80,7 +80,7 @@ impl ChatInfo {
     fn awaits_steering_receipt(&self, status: crate::SteerStatus) -> bool {
         // Pi's queued disposition is already a native receipt. Only a submitted
         // call can lose its acknowledgement when the controller exits.
-        if self.protocol == Protocol::Pi {
+        if matches!(self.protocol, Protocol::Pi | Protocol::Codex) {
             status == crate::SteerStatus::Submitted
         } else {
             status.is_waiting()

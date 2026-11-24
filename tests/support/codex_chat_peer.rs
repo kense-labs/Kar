@@ -200,6 +200,17 @@ pub(crate) fn agent() {
                     emit(
                         json!({"id":v["id"], "error":{"code":-32602,"message":"steering refused"}}),
                     );
+                } else if params["input"][0]["text"] == "echo before reply" {
+                    let echo = |thread: &str, turn: &str| {
+                        emit(json!({"method":"item/started","params":{
+                        "threadId":thread,"turnId":turn,"item":{"type":"userMessage","id":"steer-item",
+                            "clientId":params["clientUserMessageId"],"content":params["input"]}}}))
+                    };
+                    echo("other-thread", turn);
+                    echo(&session, "unrelated-turn");
+                    echo(&session, turn);
+                    echo(&session, turn);
+                    reply(json!({"turnId":turn}));
                 } else {
                     // Deliberately deliver the RPC reply after its root turn is over.
                     emit(

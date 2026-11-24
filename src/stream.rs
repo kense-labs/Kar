@@ -567,6 +567,42 @@ impl Record {
             _ => None,
         })
     }
+    /// The native reason for dropping this exact input, when the recorded evidence identifies it.
+    pub fn input_drop_reason(&self, id: &str) -> Option<&str> {
+        if let Some(events) = self
+            .upstream
+            .as_ref()
+            .and_then(|r| r.pointer("/body/events"))
+            .and_then(Value::as_array)
+        {
+            return events
+                .iter()
+                .find(|e| e["kind"] == "input_dropped" && e["inputId"] == id)?
+                .get("reason")?
+                .as_str();
+        }
+        if !self
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::InputDropped { input_id } if input_id == id))
+        {
+            return None;
+        }
+        let interrupted = self
+            .native
+            .pointer("/params/turn/status")
+            .and_then(Value::as_str)
+            == Some("interrupted");
+        let late_reply = self.frame_type() == Some("turn/steer") && self.response_to.is_some();
+        ((interrupted || late_reply)
+            && self.events.iter().any(|e| {
+                matches!(e, Event::SteeringInput {
+            status: SteerStatus::Cancelled, input_id, ..
+        } if input_id.to_string() == id)
+            }))
+        .then_some("turn_interrupted")
+    }
+
     /// Classified evidence attached to a terminal record by the runtime adapter.
     pub fn turn_failure(&self) -> Option<&crate::TurnFailure> {
         self.events.iter().find_map(|event| {

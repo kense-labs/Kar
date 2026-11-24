@@ -352,6 +352,53 @@ impl ChatTurn {
             _ => None,
         }
     }
+    fn codex_steer_observations(&self, root: &str, turn: &Value) -> Vec<Edit> {
+        use crate::SteerStatus;
+        if self.steered_inputs.is_empty() {
+            return Vec::new();
+        }
+        let mut echoes = BTreeMap::<Uuid, usize>::new();
+        for item in turn["items"].as_array().into_iter().flatten().skip(1) {
+            if item["type"] == "userMessage"
+                && let Some(id) = item["clientId"].as_str().and_then(|id| id.parse().ok())
+            {
+                *echoes.entry(id).or_default() += 1;
+            }
+        }
+        self.items
+            .iter()
+            .filter_map(|row| {
+                let Item::Message {
+                    role: Role::User,
+                    provider_id: Some(id),
+                    text,
+                    ..
+                } = &row.item
+                else {
+                    return None;
+                };
+                let input = id.parse().ok()?;
+                (row.source.path.is_empty()
+                    && row.source.session_id.as_deref() == Some(root)
+                    && echoes.get(&input) == Some(&1)
+                    && matches!(
+                        self.steered_inputs.get(&input),
+                        Some(
+                            SteerStatus::Received
+                                | SteerStatus::Unconfirmed
+                                | SteerStatus::Submitted
+                        )
+                    ))
+                .then(|| Edit::SteeringInput {
+                    id: input,
+                    text: text.clone(),
+                    request_id: None,
+                    status: SteerStatus::Accepted,
+                })
+            })
+            .collect()
+    }
+
     pub(super) fn owns_tool_update(&self, source: &Agent, event: &Event) -> bool {
         !matches!(event, Event::ToolStarted { .. })
             && Tool::id(event).is_some_and(|id| {
@@ -912,6 +959,13 @@ impl Frame {
                 },
             });
         }
+        let steer_evidence = if record.elided {
+            Vec::new()
+        } else {
+            local.codex_steer_observations(root, turn)
+        };
+        let new_steering = !steer_evidence.is_empty();
+        edits.extend(steer_evidence);
         let mut frame = Self {
             elided: record.elided,
             cursor: record.cursor(),
@@ -927,7 +981,10 @@ impl Frame {
             "completed" => Outcome::Completed,
             "interrupted" => Outcome::Aborted,
             "failed" => Outcome::Failed,
-            "inProgress" if claimed && (!local.input_sent || local.native_turn_id.is_none()) => {
+            "inProgress"
+                if new_steering
+                    || (claimed && (!local.input_sent || local.native_turn_id.is_none())) =>
+            {
                 return Some(frame);
             }
             _ => return None,
