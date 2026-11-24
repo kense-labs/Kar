@@ -73,7 +73,6 @@ impl Policy {
     fn get(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         db.model_tool_permissions.get(&project)?.get(&chat)
     }
-    pub(super) fn executes(&self)->bool{self.mode==Mode::Execute}
     pub(super) fn current(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         if db.archived.contains(&chat) || db.projects.get(&project)?.metadata.deleted {
             return None;

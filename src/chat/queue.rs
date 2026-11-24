@@ -338,7 +338,7 @@ impl ChatStore {
             if entry.refusal.is_some() {
                 return Err(Error::Refused("input was already refused".into()));
             }
-            if turn.is_some()
+            if state.find(id).is_some()
                 || entry
                     .promotion
                     .as_ref()
