@@ -164,6 +164,16 @@ macOS 的格式检查、全目标 Clippy 和默认 Rust 测试套件通过。Ubu
 
 Pi 上游 handled 系列还包含预先取消的调用者、扩展独立启动模型及压缩与排队竞争等断言，本表所列测试仅覆盖相应输入和重启路径。公共用例的完整打开记录和执行位置也仍待核销。每项对应的版本、命令与限制见 `backend-evidence.tsv`。
 
+## Pi 原生接纳检查期间排队
+
+提交 `e8d223c` 在 Pi 已进入扩展的输入检查、尚未答复 A 时提交 B。固定 OAR 的测试扩展在隔离目录移除 A、B 的模型凭据，处理 C 时恢复。修复前，原生程序已拒绝 A、B，Kar 发布的队列丢弃事件数为 0。修复后，A 有对应的 `runtime_refused` 拒绝回执，B 有且仅有一次带自己输入 ID 的丢弃事件，两次都保留 Pi 的缺少凭据错误。此期间没有模型请求和模型回合。空闲时中止返回 `no_active_turn`，C 完成且模型只收到一次请求。
+
+macOS arm64 的 Pi 1.6.0 和 Ubuntu arm64 的 Pi 1.4.0、1.6.0 均通过。设置 `KAR_PI_BIN` 和 `KAR_OAR_PI_PREFLIGHT` 后，执行 `cargo test --locked --test native_live admission_holds -- --ignored --nocapture`。后一个变量指向固定 OAR 源码中的 `sea-trial/vendor/support/pi-preflight.ts`，测试核验文件摘要，并使用其中的原生 Pi 扩展。完整运行 `pi_history::` 还需要前述发行包自带的 `KAR_PI_INPUT_EXTENSION`。三组各通过 10 项。相同提交还复验了两个平台上的 Pi、Factory、Claude 和 DSH Web 在空闲时拒绝插话，每次都有一对可从日志关联的请求与回执。
+
+## OAR 会话录制文件导入
+
+提交 `6c07423` 兼容 OAR v0.130.1 和既有 Kar 的 v3 文件头。macOS、Ubuntu 的 Rust CLI 均成功导入固定 OAR 的 `openVoyage` 写出的文件。三个样例事件的完整上游记录及顺序均保留，命令输出包含原始头和结束行。对已有目标再次执行会保留原文件，遇到不连续序号会报错且不留下半成品。这里验证了官方写入器与 Kar 的格式兼容性，输入事件由测试提供。设置 `KAR_OAR_SOURCE` 为解包的固定源码或检出目录，Node 24 加入 PATH，运行 `cargo test --locked --test voyage_compat -- --ignored`。仅需 Rust 的截断、版本及历史兼容测试为 `cargo test --locked --lib voyage::`。
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。
