@@ -10,6 +10,7 @@ mod background;
 pub use background::BackgroundTasks;
 mod chat_controls;
 mod configuration;
+pub(crate) mod managed_providers;
 mod devices;
 mod antigravity_proto;
 pub(crate) mod native_sqlite;
@@ -129,6 +130,7 @@ impl Controller {
 }
 
 struct Inner {
+    managed_providers:managed_providers::Manager,
     config_changes:tokio::sync::watch::Sender<u64>,
     relay: relay_client::tunnel::Service,
     acp_registry: acp_registry::Catalog,
@@ -234,6 +236,7 @@ impl Workbench {
             let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
             Inner {
                 relay: Default::default(),
+                managed_providers:Default::default(),
                 config_changes:tokio::sync::watch::channel(catalog.server.revision).0,
                 acp_registry: Default::default(),
                 acp_auth: Default::default(),

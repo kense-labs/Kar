@@ -289,7 +289,7 @@ impl ChatStore {
         if crate::workbench::acp_registry::dynamic(id) {
             crate::workbench::acp_registry::resolve(self, id, opts)
         } else {
-            runtime(id)
+            crate::workbench::managed_providers::resolve(self, runtime(id)?)
         }
     }
     pub(crate) fn run_schema_path(&self, chat: Uuid, turn: Uuid) -> std::path::PathBuf {

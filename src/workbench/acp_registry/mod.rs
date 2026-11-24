@@ -416,7 +416,7 @@ async fn instances(State(app): State<Workbench>) -> Reply {
 // process, including sessions opened from a second Kar process using this store.
 pub(crate) fn pin_process(runtime: &Runtime) -> Result<Option<File>> {
     if !dynamic(&runtime.id) {
-        return Ok(None);
+        return crate::workbench::managed_providers::pin(runtime);
     }
     let Some(registry_root) = runtime
         .program

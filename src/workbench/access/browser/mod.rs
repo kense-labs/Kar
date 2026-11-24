@@ -248,6 +248,7 @@ fn required(method: &Method, path: &str) -> Option<&'static str> {
         ["server","config"]|["server","config","events"]|["server","settings"] if read=>Some("orchestration:read"),
         ["server","settings"|"keybindings"] if !read=>Some("settings:write"),
         ["peer","threads",_,_,"history" | "item" | "events"] if method == Method::GET => Some("orchestration:read"),
+        ["providers",_,"install",..] if read=>Some("providers:manage"),
         ["environment"] | ["projects"] | ["projects", _, "chats"] if read => {
             Some("orchestration:read")
         }

@@ -92,6 +92,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::acp_registry::routes())
         .merge(super::chat_controls::routes())
         .merge(super::configuration::routes())
+        .merge(super::managed_providers::routes())
         .merge(super::background::routes())
         .merge(super::thread_find::routes())
         .merge(super::native_child_work::routes())
