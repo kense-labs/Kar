@@ -12,19 +12,30 @@ impl ChatStore {
         if source == child {
             return Err(Error::Refused("cannot fork onto the source chat".into()));
         }
+        let _source = self.stop_fence(source, false)?;
+        let published = || -> Result<Option<super::super::ChatInfo>> {
+            if self.path(child).try_exists()? {
+                let info = self.initial_info(child)?;
+                let origin = info
+                    .forked_from
+                    .as_ref()
+                    .filter(|f| f.context_only && f.chat == source && f.turn == turn)
+                    .ok_or_else(|| Error::Refused("child ID is already in use".into()))?;
+                policy.check(origin.mode)?;
+                return Ok(Some(info));
+            }
+            Ok(None)
+        };
+        if let Some(info) = published()? {
+            return Ok(info);
+        }
         let lease = self.lease(child, true)?;
         lease.try_lock().map_err(|e| match e {
             fs::TryLockError::WouldBlock => Error::Busy,
             fs::TryLockError::Error(e) => e.into(),
         })?;
-        if self.path(child).try_exists()? {
-            let info = self.initial_info(child)?;
-            let origin = info
-                .forked_from
-                .as_ref()
-                .filter(|f| f.context_only && f.chat == source && f.turn == turn)
-                .ok_or_else(|| Error::Refused("child ID is already in use".into()))?;
-            policy.check(origin.mode)?;
+        self.require_available_id(child)?;
+        if let Some(info) = published()? {
             return Ok(info);
         }
         if self.fork_claimed(child)? {

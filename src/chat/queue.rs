@@ -329,8 +329,9 @@ impl ChatStore {
         id: Uuid,
         text: Option<(String, Vec<super::Attachment>)>,
     ) -> Result<QueuedInput> {
-        let file = File::open(self.path(chat))?;
+        let _dispatch = self.stop_fence(chat, false)?;
         let _lock = self.inbox_lock(chat)?;
+        let file = File::open(self.path(chat))?;
         let state = self.read_state(file, chat)?;
         if state.pending_rewind.is_some() {
             return Err(Error::Busy);

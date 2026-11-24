@@ -35,6 +35,7 @@ mod search;
 mod shell;
 mod task_folders;
 mod terminal_preview;
+mod thread_family;
 mod thread_find;
 mod thread_state;
 pub use thread_state::Metadata as ChatMetadata;
@@ -71,6 +72,8 @@ pub struct Project {
 struct Catalog {
     #[serde(default)]
     desktop_jobs: BTreeMap<Uuid,configuration::desktop::Job>,
+    #[serde(default)]
+    family: thread_family::Family,
     #[serde(default)] server:configuration::Config,
     #[serde(default)]
     environment: mcp::collaboration_tools::environment::Environment,
@@ -134,6 +137,7 @@ impl Controller {
 
 struct Inner {
     desktop_updates:configuration::desktop::Service,
+    family_gate: AsyncMutex<()>,
     managed_providers:managed_providers::Manager,
     config_changes:tokio::sync::watch::Sender<u64>,
     keybindings_lock:Mutex<()>,
@@ -240,6 +244,7 @@ impl Workbench {
             }));
             let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
             Inner {
+                family_gate: Default::default(),
                 relay: Default::default(),
                 managed_providers:Default::default(),
                 desktop_updates:Default::default(),
@@ -274,6 +279,7 @@ impl Workbench {
                 controllers: Default::default(),
             }
         }));
+        app.recover_thread_deletions()?;
         forge::signals::checkpoint_worker(&app, completed)?;
         git_actions::recover(&app)?;
         forge::clone_jobs::recover(&app)?;
@@ -577,34 +583,7 @@ impl Workbench {
         chat: Uuid,
         archived: bool,
     ) -> Result<ProjectChat> {
-        let info = self.binding(project, chat)?;
-        let slot = self.controller(chat);
-        let mut owner = slot.owner.lock().await;
-        if archived && let Some(session) = owner.take() {
-            session.close().await?;
-        }
-        self.update(|catalog| {
-            let changed = if archived {
-                catalog.archived.insert(chat)
-            } else {
-                catalog.archived.remove(&chat)
-            };
-            if changed {
-                catalog.forge.linked_chat_changed(chat)?;
-                let now = jiff::Timestamp::now().as_millisecond() as u64;
-                let meta = catalog.thread_state.rows.entry(chat).or_default();
-                meta.archived_ms = archived.then_some(now);
-                meta.updated_ms = now;
-            }
-            Ok(())
-        })?;
-        self.0.access.notify();
-        Ok(ProjectChat {
-            project,
-            metadata: self.thread_metadata(chat),
-            info,
-            archived,
-        })
+        self.archive_family(project, chat, archived).await
     }
 
     /// Publish the actual bound loopback listener to native processes with chat-scoped credentials.

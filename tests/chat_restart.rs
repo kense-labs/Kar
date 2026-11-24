@@ -2012,6 +2012,8 @@ async fn manual_compaction_replay() {
 mod cursor_children;
 #[path = "support/cursor_interactions.rs"]
 mod cursor_interactions;
+#[path = "support/workbench_thread_family.rs"]
+mod workbench_thread_family;
 #[path = "support/workbench_fork.rs"]
 mod workbench_fork;
 #[path = "support/workbench_task_folders.rs"]
@@ -2105,6 +2107,10 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("workbench-requests") {
         workbench_requests::run();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("workbench-thread-family") {
+        workbench_thread_family::run();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("workbench-fork") {

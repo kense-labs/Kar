@@ -98,7 +98,7 @@ impl Launch {
             {
                 // An inherited timeline retains its original native IDs. Reconstruct
                 // launch settings from the actual owner, not from the child header.
-                let mut file = File::open(store.path(origin.chat)).map_err(|error| {
+                let mut file = store.ancestry_file(origin.chat).map_err(|error| {
                     if error.kind() == std::io::ErrorKind::NotFound {
                         Error::Refused(format!(
                             "original chat {} is missing for this inherited turn",

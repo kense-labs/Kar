@@ -54,6 +54,9 @@ pub(in crate::workbench) struct Task {
     #[serde(default)] next_peer_poll_ms:i64,
 }
 impl Task {
+    pub(in crate::workbench) fn blocks_thread_archive(&self, chat: Uuid) -> bool {
+        self.parent == chat && !self.terminal()
+    }
     fn input(&self) -> Uuid {
         crate::chat::stable_id([self.id.as_bytes().as_slice(), b"delegated input"])
     }

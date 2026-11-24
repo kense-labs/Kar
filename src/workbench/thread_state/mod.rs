@@ -20,6 +20,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Metadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side_chat_parent: Option<Uuid>,
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived_ms: Option<u64>,
@@ -102,6 +104,8 @@ struct Command {
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Change {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    deleted: bool,
     sequence: u64,
     project: Uuid,
     chat: Uuid,
@@ -114,6 +118,16 @@ pub(super) struct Store {
     commands: BTreeMap<Uuid, (Action, usize)>,
 }
 impl Store {
+    pub(super) fn record_lifecycle(&mut self, project: Uuid, chat: Uuid, deleted: bool) {
+        self.changes.push(Change {
+            deleted,
+            sequence: self.sequence() + 1,
+            project,
+            chat,
+            metadata: self.rows.get(&chat).cloned().unwrap_or_default(),
+        });
+    }
+
     pub(super) fn sequence(&self) -> u64 {
         self.changes.len() as u64
     }
@@ -397,6 +411,7 @@ fn apply(app:&Workbench,p:Uuid,c:Uuid,req:Command,authorize:impl FnOnce(&super::
             })?;
             let idx = s.changes.len();
             let change = Change {
+                deleted: false,
                 sequence: idx as u64 + 1,
                 project: p,
                 chat: c,
@@ -448,6 +463,7 @@ impl Workbench {
             let metadata = row.clone();
             let sequence = store.sequence() + 1;
             store.changes.push(Change {
+                deleted: false,
                 sequence,
                 project,
                 chat,

@@ -65,6 +65,7 @@ impl ChatStore {
         };
         let lease = self.lease(id, true)?;
         lease.try_lock().map_err(std::io::Error::from)?;
+        self.require_available_id(id)?;
         if self.path(id).exists() {
             return Err(Error::Refused(format!(
                 "recording already has a chat: {id}"

@@ -7,6 +7,7 @@ mod native_profile;
 pub use attachments::{Attachment, AttachmentKind};
 pub use native_profile::{AntigravityProfile, NativeChildOrigin};
 pub(crate) mod checkpoint;
+mod deletion;
 pub(crate) mod feed;
 mod handoff;
 mod rewind;
@@ -128,7 +129,7 @@ impl ChatInfo {
             opts.pi_resume_file = Some(o.transcript.clone());
         }
     }
-    fn options(&self) -> SessionOptions {
+    pub(crate) fn options(&self) -> SessionOptions {
         let mut opts = SessionOptions::new(&self.workspace);
         self.configure_instance(&mut opts);
         opts.model = self.model.clone();
@@ -302,7 +303,7 @@ impl ChatStore {
     pub(crate) fn run_schema(&self, chat: Uuid, turn: Uuid) -> Result<Option<serde_json::Value>> {
         match std::fs::File::open(self.run_schema_path(chat,turn)) {
             Ok(file)=>Ok(Some(serde_json::from_reader(file)?)),
-            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound=>Ok(None),
             Err(e)=>Err(e.into()),
         }
     }
@@ -332,7 +333,7 @@ impl ChatStore {
     /// The inherited row is written directly after the child's header before publication.
     pub(crate) fn fork_prefix(&self, chat: Uuid) -> Result<Option<(Uuid, Vec<Uuid>)>> {
         use std::io::{BufRead, BufReader};
-        let mut reader = BufReader::new(File::open(self.path(chat))?);
+        let mut reader = BufReader::new(self.ancestry_file(chat)?);
         let (header, _) = log::parse_header(&mut reader, Some(chat))?;
         let Some(origin) = header.info.forked_from else {
             return Ok(None);
@@ -390,7 +391,10 @@ impl ChatStore {
             else {
                 continue;
             };
-            let file = File::open(&path)?;
+            let file = match File::open(&path) {
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound => continue,
+                other => other?,
+            };
             list.push((file.metadata()?.modified()?, log::info(file, id)?));
         }
         list.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| y.id.cmp(&x.id)));
@@ -528,6 +532,7 @@ impl ChatStore {
             Err(std::fs::TryLockError::WouldBlock) => return Err(Error::Busy),
             Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
         }
+        self.require_available_id(id)?;
         if self.fork_claimed(id)? {
             return Err(Error::Refused(
                 "chat UUID belongs to a native fork request".into(),

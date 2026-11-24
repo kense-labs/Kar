@@ -415,6 +415,7 @@ impl ChatFeed {
                 || self.may_have_steering;
             (self.ready, self.may_be_running) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
+                    store.require_available_id(cursor.chat)?;
                     let events = log::with_lock(&mut file.lock().unwrap(), false, |f| {
                         read_batch(f, cursor)
                     })?;

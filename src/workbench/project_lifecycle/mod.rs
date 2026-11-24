@@ -91,6 +91,9 @@ impl Workbench {
         p: &Project,
         info: &ChatInfo,
     ) -> Result<bool> {
+        if catalog.family.deleted.contains_key(&info.id) {
+            return Ok(false);
+        }
         self.owns_chat_in(&catalog.lifecycle, p, info)
     }
 
@@ -164,6 +167,12 @@ impl Workbench {
     }
     pub(super) fn reserve_chat_directory(&self, project: Uuid, id: Uuid) -> Result<PathBuf> {
         self.update(|c| {
+            if c.family.deleted.contains_key(&id) {
+                return Err(missing());
+            }
+            if c.thread_state.rows.get(&id).is_some_and(|m| m.side_chat_parent.is_some()) {
+                return Err(Error::Refused("chat ID belongs to a side chat".into()));
+            }
             let p = c.projects.get(&project).ok_or_else(missing)?;
             if let Some(b) = c.lifecycle.owners.get(&id) {
                 if b.fork.is_some() {
@@ -210,17 +219,47 @@ impl Workbench {
         })
     }
 
+    pub(super) fn saved_side_point(&self, parent: Uuid, child: Uuid) -> Option<Option<Uuid>> {
+        let db = self.0.catalog.lock().unwrap();
+        if db.thread_state.rows.get(&child)?.side_chat_parent != Some(parent) {
+            return None;
+        }
+        Some(db.lifecycle.owners.get(&child)?.fork.map(|(_, turn)| turn))
+    }
     pub(super) fn reserve_fork_directory(
         &self,
         parent: Uuid,
         parent_project: Uuid,
-        turn: Uuid,
+        turn: Option<Uuid>,
         child: Uuid,
         target: Uuid,
         cwd: &Path,
         independent: bool,
+        side_chat: bool,
     ) -> Result<()> {
         self.update(|c| {
+            if c.family.deleted.contains_key(&child) || c.family.deleted.contains_key(&parent) {
+                return Err(missing());
+            }
+            if side_chat
+                && (parent == child
+                    || target != parent_project
+                    || c.model_tasks.contains_key(&parent)
+                    || c.thread_state
+                        .rows
+                        .get(&parent)
+                        .is_some_and(|m| m.side_chat_parent.is_some()))
+            {
+                return Err(Error::Refused(
+                    "a side chat requires a main chat in the same project".into(),
+                ));
+            }
+            if super::mcp::pending_launch(c, child).is_some() {
+                return Err(Error::Refused(
+                    "chat ID is reserved for a model launch".into(),
+                ));
+            }
+            let fork = turn.map(|t| (parent, t));
             let source = self.0.chats.saved_info(parent)?;
             if !self.owns_chat(
                 c,
@@ -231,7 +270,15 @@ impl Workbench {
             }
             let p = c.projects.get(&target).ok_or_else(missing)?;
             if let Some(b) = c.lifecycle.owners.get(&child) {
-                if b.project != target || b.cwd != cwd || b.fork != Some((parent, turn)) {
+                if b.project != target
+                    || b.cwd != cwd
+                    || b.fork != fork
+                    || c.thread_state
+                        .rows
+                        .get(&child)
+                        .and_then(|m| m.side_chat_parent)
+                        != side_chat.then_some(parent)
+                {
                     return Err(Error::Refused(
                         "chat ID belongs to a different fork request".into(),
                     ));
@@ -243,27 +290,36 @@ impl Workbench {
             }
             match self.0.chats.initial_info(child) {
                 Ok(info)
-                    if info.workspace == cwd
+                    if !side_chat
+                        && info.workspace == cwd
                         && info
                             .forked_from
                             .as_ref()
-                            .is_some_and(|f| (f.chat, f.turn) == (parent, turn)) => {}
+                            .is_some_and(|f| Some((f.chat, f.turn)) == fork) => {}
                 Ok(_) => return Err(Error::Refused("chat ID already used".into())),
                 Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e),
             }
+            if side_chat {
+                c.thread_state
+                    .rows
+                    .entry(child)
+                    .or_default()
+                    .side_chat_parent = Some(parent);
+            }
             c.lifecycle.owners.insert(
                 child,
                 Binding {
-                    task:None,
+                    task: None,
                     project: target,
                     cwd: cwd.into(),
-                    fork: Some((parent, turn)),
+                    fork,
                 },
             );
             Ok(())
         })
     }
+
     pub(super) fn saved_fork_directory(&self, child: Uuid, target: Uuid) -> Option<PathBuf> {
         self.0
             .catalog

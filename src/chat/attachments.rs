@@ -74,6 +74,26 @@ impl Attachment {
     }
 }
 impl ChatStore {
+    pub(super) fn remove_retired_attachments(&self, owners: &BTreeSet<Uuid>) -> Result<()> {
+        let entries = match fs::read_dir(self.dir.join("attachments")) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            other => other?,
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let Some(id) = entry.file_name().to_str().and_then(|s| s.parse().ok()) else {
+                continue;
+            };
+            if owners.contains(&self.saved_attachment(id)?.chat) {
+                fs::remove_dir_all(entry.path())?;
+            }
+        }
+        Ok(())
+    }
+
     fn attachment_dir(&self, id: Uuid) -> PathBuf {
         self.dir.join("attachments").join(id.to_string())
     }
@@ -121,6 +141,7 @@ impl ChatStore {
         kind: AttachmentKind,
         data: &[u8],
     ) -> Result<Attachment> {
+        let _admission = self.stop_fence(chat, false)?;
         self.initial_info(chat)?;
         Attachment::validate(name, mime, kind, data.len() as u64)?;
         if kind == AttachmentKind::Image && InputImage::from_bytes(data)?.mime_type() != mime {

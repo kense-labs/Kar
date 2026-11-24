@@ -128,7 +128,7 @@ pub(super) async fn apply(app: &Workbench, c: &Caller, id: Uuid, row: &Record) -
                 row.source,
                 source,
             )?;
-            app.reserve_fork_directory(source, p, turn, id, p, &info.workspace, false)?;
+            app.reserve_fork_directory(source, p, Some(turn), id, p, &info.workspace, false, false)?;
             let child = app
                 .0
                 .chats

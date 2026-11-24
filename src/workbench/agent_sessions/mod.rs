@@ -227,7 +227,10 @@ fn adopt(app: &Workbench, project: Uuid, request: Request) -> Result<Outcome> {
                 ));
             }
             app.workspace_at(&cwd)?;
-            if !catalog.lifecycle.can_bind_import(project, id, &cwd) {
+            if catalog.family.deleted.contains_key(&id)
+                || catalog.thread_state.rows.get(&id).is_some_and(|m| m.side_chat_parent.is_some())
+                || !catalog.lifecycle.can_bind_import(project, id, &cwd)
+            {
                 return Ok(ImportStatus::Changed);
             }
             if !discover::still_belongs(&cwd, &p.root) {

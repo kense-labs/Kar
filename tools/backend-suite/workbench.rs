@@ -65,6 +65,7 @@ pub(super) fn cases() -> Vec<Case> {
     acp.environment.push("KAR_ACP_LIVE_AGENT".into());
     cases.push(acp);
     for (mode, requires) in [
+        ("workbench-thread-family","two normal HTTP clients, scoped deletion, side-chat lifecycle and restart; local Codex protocol peer and real Git"),
         ("workbench-background", "Claude protocol task roster, dual clients, controller restart and native task ID reuse"),
         ("workbench-editors", "macOS editor discovery and literal path/position, Rust launcher fixture"),
         ("workbench-suggestions", "two independent subscribers, Claude push and Codex sampling protocol fixtures"),

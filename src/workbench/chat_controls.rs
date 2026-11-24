@@ -433,10 +433,12 @@ async fn checkpoints(
 
 #[derive(Deserialize)]
 struct Fork {
+    #[serde(default, alias = "sideChat")]
+    side_chat: bool,
     #[serde(default)]
     policy: crate::chat::ForkPolicy,
     id: Uuid,
-    turn: Uuid,
+    turn: Option<Uuid>,
     destination_project: Option<Uuid>,
 }
 
@@ -456,6 +458,53 @@ async fn fork(
     Json(request): Json<Fork>,
 ) -> std::result::Result<Json<ForkResult>, ApiError> {
     let project = request.destination_project.unwrap_or(p);
+    if request.side_chat {
+        let history = tokio::spawn(async move {
+            let _family = app.0.family_gate.lock().await;
+            let info = app.binding(p, chat)?;
+            if app.archived(chat) {
+                return Err(Error::Refused("chat is archived".into()));
+            }
+            let turn = match (request.turn, app.saved_side_point(chat, request.id)) {
+                (Some(t), _) => Some(t),
+                (None, Some(saved)) => saved,
+                (None, None) => app
+                    .0
+                    .chats
+                    .history(chat)?
+                    .turns
+                    .into_iter()
+                    .rev()
+                    .find(|t| t.status == crate::chat::TurnStatus::Completed)
+                    .map(|t| t.id),
+            };
+            app.reserve_fork_directory(
+                chat,
+                p,
+                turn,
+                request.id,
+                project,
+                &info.workspace,
+                false,
+                true,
+            )?;
+            if let Some(point) = turn {
+                app.0
+                    .chats
+                    .fork_context(chat, point, request.id, request.policy)
+                    .await?;
+            } else {
+                app.open_empty_side(project, request.id, &info).await?;
+            }
+            app.0.chats.history(request.id)
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
+        return Ok(Json(ForkResult { project, history }));
+    }
+    let turn = request
+        .turn
+        .ok_or_else(|| Error::Refused("a workspace fork requires a completed turn".into()))?;
     let host = app.clone();
     let (destination, published) = tokio::task::spawn_blocking(move || -> Result<_> {
         let info = host.binding(p, chat)?;
@@ -493,11 +542,12 @@ async fn fork(
         host.reserve_fork_directory(
             chat,
             p,
-            request.turn,
+            Some(turn),
             request.id,
             project,
             destination.as_deref().unwrap_or(&info.workspace),
             destination.is_some(),
+            false,
         )?;
         Ok((destination, published))
     })
@@ -510,7 +560,7 @@ async fn fork(
             .chats
             .fork_at_with_policy(
                 chat,
-                request.turn,
+                turn,
                 request.id,
                 destination,
                 request.policy,
@@ -538,20 +588,12 @@ async fn fork(
                 Err(_) => {
                     let destination = destination.ok_or(Error::Busy)?;
                     let live = slot.fork.lock().unwrap().clone().ok_or(Error::Busy)?;
-                    return live
-                        .fork(request.turn, request.id, destination, configure)
-                        .await;
+                    return live.fork(turn, request.id, destination, configure).await;
                 }
             };
             if let Some(source) = owner.as_ref().filter(|s| !s.is_closed()) {
                 source
-                    .workbench_fork(
-                        request.turn,
-                        request.id,
-                        destination,
-                        request.policy,
-                        configure,
-                    )
+                    .workbench_fork(turn, request.id, destination, request.policy, configure)
                     .await
             } else {
                 if let Some(closed) = owner.take() {
@@ -561,7 +603,7 @@ async fn fork(
                     .chats
                     .workbench_fork(
                         chat,
-                        request.turn,
+                        turn,
                         request.id,
                         destination,
                         request.policy,

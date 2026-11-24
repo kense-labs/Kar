@@ -149,6 +149,7 @@ impl ChatStore {
             std::fs::TryLockError::WouldBlock => Error::Busy,
             std::fs::TryLockError::Error(e) => e.into(),
         })?;
+        self.require_available_id(id)?;
         let target = self.path(id);
         if target.try_exists()? {
             let mut file = File::open(target)?;

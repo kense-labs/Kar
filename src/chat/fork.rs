@@ -441,6 +441,7 @@ impl ChatStore {
         live: Option<(Sink, SessionOptions)>,
         configure: impl FnOnce(&str, &mut SessionOptions) -> Result<()>,
     ) -> Result<super::ChatHistory> {
+        let _source = self.stop_fence(source, false)?;
         let path = worktree.as_deref();
         if source == child_id {
             return Err(Error::Refused(
@@ -461,6 +462,7 @@ impl ChatStore {
         if let Some(published) = Request::published(self, source, turn, child_id, path, policy)? {
             return Ok(published);
         }
+        self.require_available_id(child_id)?;
         let request = Request::claim(self, source, turn, child_id, path, lease)?;
         let (source, opts) = match live {
             Some(controller) => controller,
