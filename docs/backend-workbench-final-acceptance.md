@@ -4,7 +4,24 @@
 
 ## 两阶段候选交接
 
-本次复核的功能提交为 `61650ba7437510369ac2907f8ae268d1a2948564`。此前的 `ad7e47868f0f54c250dcf4638093c9118b901994` 是较早的交接点。后续文档提交与功能提交的源码树相同。源码复核发现的缺口见[功能对照报告](backend-functional-review-2026-11-24.md)和[逐项清单](backend-source-parity.toml)。
+本次 macOS 交接以功能提交 `a93cb6924693a363ae092078c6a2edac964b84bc` 为准。该提交包含工作区准备与同次重试、多客户端终端、安装和更新回执、委派结果投递、工作台额度操作及 ChatGPT 档案交接。接手方可从干净检出运行以下命令，并保存 `git rev-parse HEAD`。功能缺口及实机条件见[功能对照报告](backend-functional-review-2026-11-24.md)和[逐项清单](backend-source-parity.toml)。
+
+```sh
+cargo test --locked --test workbench_mcp -- prepared-runs
+cargo test --locked --test workbench_mcp
+cargo test --locked --test workbench_terminal_preview multiple_viewers_share_grid_query_writes_and_metadata_without_observer_votes
+cargo test --locked --test setup_receipts
+cargo test --locked --test workbench_quota_resets
+cargo test --locked --test workbench_chatgpt_handoff
+```
+
+在该功能提交上，macOS 27.2.1 arm64、rustc 1.100.0 执行 `cargo check --locked --offline --all-targets` 成功（25.81 秒）。随后 `cargo test --locked --offline --no-run --test workbench_mcp --test workbench_terminal_preview --test setup_receipts --test workbench_quota_resets --test workbench_chatgpt_handoff` 成功（1 分 17 秒），五个目标均生成可执行文件。链接器提示调试程序的 `__eh_frame` 超过 compact unwind 表可编码的大小。本次检查未执行这五个目标中的测试。
+
+安装分支的 `352edfe` 在 macOS 已执行并通过 `setup_receipts` 和 `setup_cli release_line_planning_requires_an_explicit_supported_choice`。这两次使用独立临时目录和测试程序模拟供应商安装器。最终候选的 macOS 统一实测、真实供应商登录和实际额度领取留待独立验收。 [安装用例](backend-installer-receipts.md) · [账号验收条件](backend-chatgpt-handoff.md)
+
+### 较早候选的历史证据
+
+以下静态映射和 16 个目标的链接记录属于较早的功能提交 `61650ba7437510369ac2907f8ae268d1a2948564`。
 
 macOS 27.2.1 arm64、rustc 1.100.0 上的 `cargo check --locked --offline --all-targets` 已完成。固定源码映射检查也已执行，核对 233 个上游来源文件、192 项断言映射及 50 项 CLI 映射。工作台清单收录 257 个 RPC，模型工具表有 95 个入口（含工具搜索）。各项实测判定见下述命令及供应商记录。 [静态检查复跑说明](backend-coverage.md)
 
@@ -18,6 +35,8 @@ cargo test --locked --offline --no-run --lib \
   --test workbench_terminal_preview --test workbench_configuration \
   --test workbench_managed_providers --test workbench_acceptance --test workbench_forge
 ```
+
+## 优先复验的故障窗口
 
 本次交接优先复验以下三种故障窗口，每项记录客户端游标、Kar 输入/回合 ID、供应商会话/回合 ID、实际收到次数以及磁盘状态。测试使用可丢弃项目、独立聊天存储及测试账号。
 

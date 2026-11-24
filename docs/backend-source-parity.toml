@@ -525,10 +525,10 @@ id = "provider-account-flows"
 phase = 2
 name = "供应商与 MCP 登录、反馈、额度及凭据交接"
 upstream = ["apps/server/src/provider/ProviderAuthService.ts", "apps/server/src/provider/CodexChatGptAuth.ts", "apps/server/src/mcpApps/McpSignIn.ts", "apps/server/src/ws.ts"]
-kar = ["src/workbench/acp_registry/auth/builtin.rs", "src/account/binding.rs", "src/workbench/provider_controls.rs", "src/account/quota"]
-implementation_commit = "61650ba"
-status = "本机内置账号变更会按有效凭据目录协调同一工作台的聊天。Codex/Claude 可在活动会话中完成第三方 MCP 登录；Codex 支持供应商诊断反馈。ChatGPT 档案导入、重连及交接订阅仍缺；额度重置已通过 eab019b 接入工作台 HTTP，使用凭据目录级别的互斥、稳定请求 ID 与待确认处理。"
-test_target = "cargo test --locked --test workbench_mcp -- provider-controls"
+kar = ["src/workbench/acp_registry/auth/builtin.rs", "src/account/binding.rs", "src/workbench/provider_controls.rs", "src/account/quota", "src/workbench/chatgpt"]
+implementation_commit = "a93cb69"
+status = "内置账号变更按凭据目录协调聊天。Codex/Claude 支持原生 MCP 登录，Codex 支持诊断反馈。工作台支持带稳定请求 ID 的额度重置与结果核对（eab019b）。ChatGPT 独立档案支持加密转移、目标端验签导入、重连及交接状态订阅（a93cb69）。真实浏览器登录、双机转移、模型调用、撤权和实际额度领取仍待授权环境实测。"
+test_target = "cargo test --locked --test workbench_mcp -- provider-controls && cargo test --locked --test workbench_chatgpt_handoff && cargo test --locked --test workbench_quota_resets"
 accept = "从两个客户端启动、响应、完成、取消、观察授权流；验证来源客户端绑定。检查凭据移除、退出、MCP 登录、账号导入/重连、反馈和额度结果。"
 
 [[gap]]
