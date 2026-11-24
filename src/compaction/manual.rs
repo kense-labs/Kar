@@ -7,6 +7,13 @@ use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
 
+/// Limits on observing native compaction. Expiry stops observation without interrupting the runtime.
+#[derive(Clone, Debug, Default)]
+pub struct CompactionOptions {
+    pub timeout: Option<Duration>,
+    pub signal: tokio_util::sync::CancellationToken,
+}
+
 /// Dropping the handle or timing out a wait leaves the native operation running.
 pub struct ManualCompaction {
     updates: watch::Receiver<Report>,
@@ -40,6 +47,18 @@ impl ManualCompaction {
                     report
                 }
             }),
+        }
+    }
+    /// Observe this operation until a native result, cancellation or timeout.
+    /// A subsequent wait can still obtain its eventual native terminal record.
+    pub async fn wait_with(&self, options: &CompactionOptions) -> Report {
+        tokio::select! {
+            biased;
+            result = self.wait(options.timeout) => result,
+            () = options.signal.cancelled() => {
+                let observed = self.latest();
+                if observed.status.is_pending() { observed.unconfirmed(Unconfirmed::Signal) } else { observed }
+            }
         }
     }
     pub(crate) async fn native(self, timeout: Duration) -> Result<Value> {
@@ -186,6 +205,7 @@ impl Operation {
                         frame,
                     ),
                     _ if v.get("error").is_some() => Status::Rejected {
+                        code: crate::CompactionRejection::RuntimeRefused,
                         reason: v["error"]["message"]
                             .as_str()
                             .unwrap_or("Grok refused compaction")
@@ -202,7 +222,10 @@ impl Operation {
                 self.report.status = if self.manual_start || self.protocol == Protocol::Acp {
                     Self::failed(CompactionFailure::NativeFailed, &reason, frame)
                 } else {
-                    Status::Rejected { reason }
+                    Status::Rejected {
+                        code: crate::CompactionRejection::RuntimeRefused,
+                        reason,
+                    }
                 };
             } else if self.protocol == Protocol::Factory {
                 let result = &v["result"];

@@ -782,7 +782,7 @@ impl Actor {
                 };
                 let _ = ack.send(r);
             }
-            Command::Compact(_, ack) => {
+            Command::Compact(_, _, ack) => {
                 let r = self.start_compaction().await;
                 let _ = ack.send(r);
             }

@@ -752,7 +752,7 @@ impl ThreadActor {
                     "native task stop on this adapter".into(),
                 )));
             }
-            Command::Compact(_, ack) => {
+            Command::Compact(_, _, ack) => {
                 let _ = ack.send(Err(Error::Unsupported(
                     "manual compaction through this protocol".into(),
                 )));

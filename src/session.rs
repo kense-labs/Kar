@@ -1814,6 +1814,9 @@ impl Session {
     }
     /// Dispatch compaction and follow its native admission and completion independently.
     pub async fn start_compaction(&self) -> Result<crate::ManualCompaction> {
+        self.dispatch_compaction(Uuid::new_v4()).await
+    }
+    async fn dispatch_compaction(&self, request: Uuid) -> Result<crate::ManualCompaction> {
         if !self.manual_compaction {
             return Err(Error::Unsupported(
                 "manual compaction through this protocol".into(),
@@ -1830,8 +1833,67 @@ impl Session {
         } else {
             None
         };
-        self.call_with_timeout(None, |tx| Command::Compact(revision, tx))
+        self.call_with_timeout(None, |tx| Command::Compact(request, revision, tx))
             .await
+    }
+    /// Observe compaction through its terminal frame. A caller limit after dispatch
+    /// releases the waiter while the session continues to track the native operation.
+    pub async fn compact_with(
+        &self,
+        options: &crate::CompactionOptions,
+    ) -> Result<crate::ManualCompactionReport> {
+        if !self.manual_compaction {
+            return Err(Error::Unsupported(
+                "manual compaction through this protocol".into(),
+            ));
+        }
+        let request = Uuid::new_v4();
+        let started = tokio::time::Instant::now();
+        let (code, mut reason) = if options.signal.is_cancelled() {
+            (
+                "aborted",
+                "caller cancelled compaction before dispatch".to_owned(),
+            )
+        } else {
+            match self.dispatch_compaction(request).await {
+                Ok(op) => {
+                    let mut remaining = options.clone();
+                    remaining.timeout =
+                        options.timeout.map(|d| d.saturating_sub(started.elapsed()));
+                    return Ok(op.wait_with(&remaining).await);
+                }
+                Err(Error::Busy) => ("busy", "another operation owns the session".to_owned()),
+                Err(Error::Refused(reason)) => ("runtime_refused", reason),
+                Err(Error::Closed(reason)) => ("session_released", reason),
+                Err(err) => return Err(err),
+            }
+        };
+        let id = request.to_string();
+        let receipt = if let Some(receipt) = self.control_receipt(&id) {
+            receipt
+        } else {
+            crate::transport::redact_text(&mut reason, &self.preflight_secrets);
+            // The local rejection and any intervening native exit share one journal lock.
+            let _ = self.journal.refused_input(
+                crate::Direction::ToRuntime.into(),
+                json!({"type":"compact","id":id}),
+                request,
+                code,
+                &reason,
+            );
+            self.control_receipt(&id)
+                .ok_or_else(|| Error::Protocol("missing compaction refusal".into()))?
+        };
+        let code = serde_json::from_value(receipt.response.native["code"].clone())?;
+        let reason = receipt.response.native["reason"]
+            .as_str()
+            .ok_or_else(|| Error::Protocol("compaction refusal has no reason".into()))?
+            .to_owned();
+        Ok(crate::ManualCompactionReport {
+            request: receipt.request.cursor(),
+            response: Some(receipt.response.cursor()),
+            status: crate::CompactionStatus::Rejected { code, reason },
+        })
     }
     /// Returns the native RPC reply, which can precede native completion.
     pub async fn compact(&self) -> Result<Value> {

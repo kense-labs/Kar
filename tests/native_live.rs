@@ -15,6 +15,8 @@ mod declaration;
 mod declared_turn;
 #[path = "native_live/pi_history.rs"]
 mod pi_history;
+#[path = "support/pre_cancelled_compaction.rs"]
+mod pre_cancelled_compaction;
 #[path = "support/public_readbacks.rs"]
 mod public_readbacks;
 #[path = "native_live/resume_prompts.rs"]
@@ -711,6 +713,7 @@ multi_agent_v2 = true
     assert_ne!(resumed.stream_id(), stream);
     let cursor = resumed.records().last().unwrap().cursor();
     let mut updates = resumed.subscribe(Some(&cursor)).unwrap();
+    pre_cancelled_compaction::check(&resumed).await;
     let operation = resumed.start_compaction().await.unwrap();
     let result = operation.wait(Some(Duration::from_secs(30))).await;
     let kar::CompactionStatus::Completed { frame } = &result.status else {
@@ -1205,6 +1208,7 @@ async fn actual_claude_turn_and_resume() {
             .pointer("/response/response/session/model_usage")
             .is_none()
     }));
+    pre_cancelled_compaction::check(&resumed).await;
     let begin = resumed.snapshot().cursor.unwrap();
     let receipt = resumed
         .start_compaction()
@@ -1613,6 +1617,9 @@ async fn real_protocol_turn(provider_id: &str) {
     }
     assert_eq!(resumed.id(), session.id());
     assert!(resumed.capabilities().manual_compaction);
+    if provider_id == "pi" {
+        pre_cancelled_compaction::check(&resumed).await;
+    }
     if provider_id == "pi" {
         for turn in ["A", "B", "C"] {
             resumed

@@ -22,12 +22,12 @@ mod process;
 pub mod providers;
 #[cfg(not(target_arch = "wasm32"))]
 mod terminal;
-#[cfg(not(target_arch = "wasm32"))]
-pub use compaction::ManualCompaction;
 pub use compaction::{
-    CompactionFailure, CompactionReport, CompactionStatus, CompactionUnconfirmed,
-    ManualCompactionReport,
+    CompactionFailure, CompactionRejection, CompactionReport, CompactionStatus,
+    CompactionUnconfirmed, ManualCompactionReport,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use compaction::{CompactionOptions, ManualCompaction};
 mod context;
 mod error;
 mod open_error;

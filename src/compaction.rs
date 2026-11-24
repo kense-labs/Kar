@@ -137,6 +137,8 @@ pub enum CompactionStatus {
         frame: crate::Cursor,
     },
     Rejected {
+        #[serde(default)]
+        code: CompactionRejection,
         reason: String,
     },
     Failed {
@@ -147,6 +149,17 @@ pub enum CompactionStatus {
     Unconfirmed {
         code: CompactionUnconfirmed,
     },
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionRejection {
+    #[default]
+    RuntimeRefused,
+    Busy,
+    Aborted,
+    Disposed,
+    RuntimeExited,
+    SessionReleased,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -159,6 +172,7 @@ pub enum CompactionFailure {
 #[serde(rename_all = "snake_case")]
 pub enum CompactionUnconfirmed {
     Timeout,
+    Signal,
     Disposed,
     RuntimeExited,
     ControllerExited,
@@ -182,6 +196,6 @@ impl ManualCompactionReport {
 #[cfg(not(target_arch = "wasm32"))]
 mod manual;
 #[cfg(not(target_arch = "wasm32"))]
-pub use manual::ManualCompaction;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use manual::Operation;
+#[cfg(not(target_arch = "wasm32"))]
+pub use manual::{CompactionOptions, ManualCompaction};

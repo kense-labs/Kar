@@ -130,7 +130,7 @@ impl AbortRequest {
     }
 }
 pub(crate) enum Command {
-    Compact(Option<u64>, Reply<crate::ManualCompaction>),
+    Compact(uuid::Uuid, Option<u64>, Reply<crate::ManualCompaction>),
     Rpc(
         String,
         Value,
@@ -904,7 +904,7 @@ impl Actor {
     async fn command(&mut self, c: Command) -> Result<bool> {
         let id = self.session();
         match c {
-            Command::Compact(revision, tx) => {
+            Command::Compact(_, revision, tx) => {
                 if tx.is_closed() {
                     return Ok(true);
                 }

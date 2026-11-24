@@ -117,12 +117,16 @@ impl Pending {
         self.op.report.response = journal.latest_record().map(|r| r.cursor());
         self.op.report.status = match &reply {
             Ok(v) if v.is_null() => Status::Rejected {
+                code: crate::CompactionRejection::RuntimeRefused,
                 reason: "DSH does not provide /compact".into(),
             },
             Ok(v) => self.status(v).unwrap_or(Status::Unconfirmed {
                 code: Unconfirmed::ObservationFailed,
             }),
-            Err(Error::Refused(e)) => Status::Rejected { reason: e.clone() },
+            Err(Error::Refused(e)) => Status::Rejected {
+                code: crate::CompactionRejection::RuntimeRefused,
+                reason: e.clone(),
+            },
             Err(_) => Status::Unconfirmed {
                 code: Unconfirmed::ObservationFailed,
             },

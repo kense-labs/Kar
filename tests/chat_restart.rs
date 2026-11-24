@@ -1811,6 +1811,15 @@ async fn manual_compaction_replay() {
             code: CompactionUnconfirmed::Timeout
         }
     ));
+    let cancelled = kar::CompactionOptions::default();
+    cancelled.signal.cancel();
+    assert!(matches!(
+        op.wait_with(&cancelled).await.status,
+        CompactionStatus::Unconfirmed {
+            code: CompactionUnconfirmed::Signal
+        }
+    ));
+    assert!(chat.snapshot().status.is_running());
     assert!(matches!(
         chat.start_compaction().await,
         Err(kar::Error::Busy)

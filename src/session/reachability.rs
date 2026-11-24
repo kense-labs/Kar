@@ -44,7 +44,7 @@ impl Command {
                 Self::Withdraw(id, _) => (Uuid::new_v4(), json!({"type":"withdraw","inputId":id})),
                 Self::Abort(_) => (Uuid::new_v4(), json!({"type":"abort"})),
                 Self::StopTask(id, _) => (Uuid::new_v4(), json!({"type":"stop_task","taskId":id})),
-                Self::Compact(..) => (Uuid::new_v4(), json!({"type":"compact"})),
+                Self::Compact(request, ..) => (*request, json!({"type":"compact"})),
                 Self::Rpc(method, params, ..)
                     if matches!(
                         method.as_str(),

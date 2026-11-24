@@ -625,7 +625,7 @@ impl Actor {
                     };
                 let _ = ack.send(res);
             }
-            Command::Compact(_, ack) => {
+            Command::Compact(_, _, ack) => {
                 let result = self.compact().await;
                 let _ = ack.send(result);
             }
@@ -680,6 +680,7 @@ impl Actor {
             Err(Error::Refused(reason)) => (
                 Value::Null,
                 CompactionStatus::Rejected {
+                    code: crate::CompactionRejection::RuntimeRefused,
                     reason: reason.clone(),
                 },
             ),

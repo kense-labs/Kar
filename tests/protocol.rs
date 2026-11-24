@@ -51,6 +51,8 @@ mod opening;
 mod orientation;
 #[path = "protocol/pi_registry.rs"]
 mod pi_registry;
+#[path = "support/pre_cancelled_compaction.rs"]
+mod pre_cancelled_compaction;
 #[path = "support/private_inputs.rs"]
 mod private_inputs;
 #[path = "protocol/provider.rs"]
@@ -1417,6 +1419,7 @@ async fn manual_compaction_controls() -> kar::Result<()> {
     r.id = "grok".into();
     let session = r.open(opts).await?;
     use kar::{CompactionFailure, CompactionStatus as Status, CompactionUnconfirmed};
+    pre_cancelled_compaction::check(&session).await;
     for i in 0..5 {
         let r = session
             .start_compaction()
@@ -1444,6 +1447,17 @@ async fn manual_compaction_controls() -> kar::Result<()> {
     }
 
     session.close().await?;
+    let disposed = session.compact_with(&Default::default()).await?;
+    assert!(matches!(
+        disposed.status,
+        Status::Rejected {
+            code: kar::CompactionRejection::Disposed
+                | kar::CompactionRejection::RuntimeExited
+                | kar::CompactionRejection::SessionReleased,
+            ..
+        }
+    ));
+
     for mode in ["shadow", "changed", "failed", "missing"] {
         let (_dir, r, mut opts) = rig(Protocol::Claude, ApprovalMode::Deny);
         opts.env
