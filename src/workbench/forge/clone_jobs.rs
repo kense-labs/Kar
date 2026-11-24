@@ -200,6 +200,7 @@ fn begin(
                 id,
                 name: title,
                 root: input.dest,
+                metadata: Default::default(),
             },
         );
         db.forge.clones.insert(id, job.clone());
