@@ -68,7 +68,8 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
                 | Operation::ReplyToThread { number, .. }
                 | Operation::SetThreadResolution { number, .. } => (Some(number), "pull"),
                 Operation::CreateIssue { .. } => (v["number"].as_u64(), "issue"),
-                Operation::UpdateIssue { number, .. }
+                Operation::SetIssueReaction { number, .. }
+                | Operation::UpdateIssue { number, .. }
                 | Operation::SetIssueState { number, .. }
                 | Operation::CommentIssue { number, .. } => (Some(number), "issue"),
                 _ => unreachable!(),
@@ -98,7 +99,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
     }
     providers::issue::validate(&input.operation)?;
     actions::validate(&input.operation)?;
-    let c = Context::for_operation(
+    let mut c = Context::for_operation(
         app.clone(),
         project,
         &input.operation,
@@ -138,6 +139,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
                 issue_scope: input.issue_scope.clone(),
                 routing: input.routing.clone(),
                 result: None,
+                reaction_viewer: None,
             },
         );
         Ok(None)
@@ -154,6 +156,21 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
     let mut op = input.operation;
     if let Operation::CreatePull { body, .. } = &mut op {
         body.push_str(&format!("\n\n<!-- kar-operation:{id} -->"))
+    }
+    if matches!(op, Operation::SetIssueReaction { .. }) {
+        let viewer = match providers::reactions::viewer(&mut c).await {
+            Ok(id) => id,
+            Err(e) => return complete(&app, id, Err(e)),
+        };
+        app.update(|db| {
+            let m = db
+                .forge
+                .operations
+                .get_mut(&id)
+                .ok_or_else(|| Error::Refused("unknown operation".into()))?;
+            m.reaction_viewer = Some(viewer);
+            Ok(())
+        })?;
     }
     let result = c.execute(&op).await;
     complete(&app, id, result)
@@ -248,8 +265,9 @@ async fn reconcile(
     Json(input): Json<Reconcile>,
 ) -> Reply<Value> {
     let Json(m) = operation(State(app.clone()), Path((project, id))).await?;
-    let c = Context::for_operation(app.clone(), project, &m.operation, m.issue_scope.as_deref())
-        .await?;
+    let mut c =
+        Context::for_operation(app.clone(), project, &m.operation, m.issue_scope.as_deref())
+            .await?;
     routing::verify(&c, m.routing.as_ref()).await?;
     if c.identity() != m.repository {
         return Err(ForgeError::bad(
@@ -291,6 +309,15 @@ async fn reconcile(
                 ));
             }
             v
+        }
+        ref op @ Operation::SetIssueReaction { number, .. } if number == input.number => {
+            let viewer = providers::reactions::viewer(&mut c).await?;
+            if m.reaction_viewer.as_ref() != Some(&viewer) {
+                return Err(ForgeError::uncertain(
+                    "the current account cannot attest the original reaction",
+                ));
+            }
+            providers::reactions::execute(&c, op, false).await?
         }
         Operation::UpdateIssue { number, ref fields } if number == input.number => {
             providers::issue::update::confirm(&c, number, fields).await?

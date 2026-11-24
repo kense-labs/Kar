@@ -50,6 +50,32 @@ pub(super) async fn issue(client: &reqwest::Client, forge: &str, chat: Uuid) {
         .await
         .unwrap();
     assert_eq!(reconcile.status(), StatusCode::CONFLICT);
+    let reaction = json!({"id":Uuid::new_v4(),"chat":chat,"op":"set_issue_reaction","number":7,"subject_id":"comment-node","content":"heart","reacted":true});
+    let mut foreign = reaction.clone();
+    foreign["subject_id"] = json!("other-comment");
+    foreign["id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        client
+            .post(&operations)
+            .json(&foreign)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    for desired in [true, true, false] {
+        let mut op = reaction.clone();
+        op["id"] = json!(Uuid::new_v4());
+        op["reacted"] = json!(desired);
+        for _ in 0..2 {
+            let res = ok(client.post(&operations).json(&op)).await;
+            assert_eq!(
+                (res["number"].as_u64(), res["reacted"].as_bool()),
+                (Some(7), Some(desired))
+            );
+        }
+    }
     let create = json!({"id":Uuid::new_v4(),"chat":chat,"op":"create_issue","title":"New issue","body":"  original markdown","labels":["bug"],"assignees":["kar-test"]});
     let created = ok(client.post(&operations).json(&create)).await;
     assert_eq!(created["number"], 8);
@@ -122,6 +148,21 @@ pub(super) async fn review_control(
             json!([{"path":"CHANGELOG.md","additions":1,"deletions":3},{"path":"requirements-dev.txt","additions":6,"deletions":4}])
         };
         json!({"repository":{"pullRequest":{"files":{"nodes":nodes,"pageInfo":{"hasNextPage":v["number"]==9||page==0,"endCursor":(page+1).to_string()}}}}})
+    } else if q.starts_with("query KarIssueReaction") {
+        assert_eq!(v["n"], 7);
+        let parent = if v["node"] == "comment-node" {
+            "issue-7"
+        } else {
+            "issue-9"
+        };
+        json!({"repository":{"issue":{"id":"issue-7"}},"node":{"__typename":"IssueComment","id":v["node"],"issue":{"id":parent},"reactionGroups":[{"content":"HEART","viewerHasReacted":db.issue_reacted}]}})
+    } else if q.starts_with("mutation KarSetIssueReaction") {
+        assert_eq!(v["node"], "comment-node");
+        assert_eq!(v["content"], "HEART");
+        let add = q.contains("addReaction");
+        assert_ne!(add, db.issue_reacted);
+        db.issue_reacted = add;
+        json!({(if add {"addReaction"}else{"removeReaction"}):{"subject":{"id":"comment-node"}}})
     } else if q.starts_with("query KarIssueDirectory") {
         if q.contains("issueTemplates") {
             json!({"repository":{"issueTemplates":[],"templateDirectory":{"__typename":"Tree","entries":[{"name":"config.yml","object":{"__typename":"Blob","isTruncated":false,"text":"blank_issues_enabled: false"}},{"name":"bug.yml","object":{"__typename":"Blob","isTruncated":false,"text":"name: Bug\ndescription: Report\nlabels: bug, alpha\nbody:\n - type: input\n   attributes:\n     label: Reproduce\n   validations:\n     required: true"}}]}}})

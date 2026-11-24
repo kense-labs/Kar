@@ -32,6 +32,7 @@ struct Forge {
     comments: Vec<Value>,
     review_comments: Vec<Value>,
     resolved: bool,
+    issue_reacted: bool,
     starred: bool,
     created_issue: Option<Value>,
 }
@@ -122,10 +123,14 @@ async fn get_issue(State(mock): State<Mock>, Param(n): Param<u64>) -> Response {
 }
 async fn patch_issue(State(mock): State<Mock>, Json(body): Json<Value>) -> Json<Value> {
     let mut db = mock.lock().unwrap();
-    if let Some(value)=body.get("state"){db.issue["state"]=value.clone();}
-    for field in ["title","body","labels","assignees"]{
-        if let Some(value)=body.get(field) && !(field=="labels" && value[0]=="triage-required"){
-            db.issue[field]=value.clone();
+    if let Some(value) = body.get("state") {
+        db.issue["state"] = value.clone();
+    }
+    for field in ["title", "body", "labels", "assignees"] {
+        if let Some(value) = body.get(field)
+            && !(field == "labels" && value[0] == "triage-required")
+        {
+            db.issue[field] = value.clone();
         }
     }
     Json(db.issue.clone())
@@ -192,6 +197,7 @@ async fn scenario() {
         comments: vec![],
         review_comments: vec![],
         resolved: false,
+        issue_reacted: false,
         starred: false,
         created_issue: None,
         issue: json!({"number":7,"title":"Fix notes","state":"open","html_url":"https://review.example/team/repo/issues/7"}),

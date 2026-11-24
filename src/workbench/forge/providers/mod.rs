@@ -7,6 +7,7 @@ pub(super) mod hosted;
 pub(super) mod issue;
 pub(super) mod issue_directory;
 pub(super) mod linear;
+pub(in crate::workbench::forge) mod reactions;
 pub(super) mod rest;
 pub(super) mod reviews;
 pub(in crate::workbench::forge) mod stack;

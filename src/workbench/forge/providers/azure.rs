@@ -246,6 +246,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         | Operation::SetThreadResolution { .. }
         | Operation::ReviewThreads { .. }
         | Operation::ThreadComments { .. }) => super::reviews::execute(c, op).await,
+        Operation::SetIssueReaction { .. } => super::reactions::execute(c, op, true).await,
         op @ (Operation::UpdateIssue { .. }
         | Operation::CreateIssue { .. }
         | Operation::CommentIssue { .. }
@@ -475,4 +476,83 @@ pub(in crate::workbench::forge::providers) async fn issue_fields(
             .collect::<Vec<_>>()
     );
     Ok(item)
+}
+
+pub(super) async fn reaction(
+    c: &Context,
+    n: u64,
+    subject: Option<&str>,
+    content: super::reactions::Content,
+    want: bool,
+    write: bool,
+) -> Result<(), ForgeError> {
+    let comment = subject
+        .ok_or_else(|| ForgeError::unsupported("Azure Boards reactions require a comment"))?;
+    let id = comment
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id > 0 && comment.len() <= 10 && id.to_string() == comment)
+        .ok_or_else(|| ForgeError::bad("invalid Azure comment ID"))?;
+    let kind = content
+        .azure()
+        .ok_or_else(|| ForgeError::unsupported("Azure Boards has no such reaction"))?;
+    let location = Location::from(c)?;
+    location.detail(c, n).await?;
+    let number = n.to_string();
+    let parts = ["workitems", &number, "comments", comment];
+    let mut url = location.url(c, true, "wit", &parts)?;
+    url.query_pairs_mut()
+        .clear()
+        .append_pair("api-version", "7.1-preview.4")
+        .append_pair("$expand", "reactions");
+    let row = get(c, url.clone()).await?;
+    if row["id"].as_u64() != Some(id)
+        || row.get("workItemId").is_some_and(|v| v.as_u64() != Some(n))
+        || row["isDeleted"] == true
+    {
+        return Err(ForgeError::remote(
+            404,
+            "comment does not belong to the selected work item",
+        ));
+    }
+    let mut engaged = false;
+    if !row["reactions"].is_null() {
+        let entries = row["reactions"]
+            .as_array()
+            .ok_or_else(|| invalid("Azure comment reactions"))?;
+        if let Some(entry) = entries.iter().find(|r| {
+            r["type"]
+                .as_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case(kind))
+        }) {
+            engaged = entry["isCurrentUserEngaged"]
+                .as_bool()
+                .ok_or_else(|| invalid("Azure viewer reaction"))?;
+        }
+    }
+    if super::reactions::satisfied(engaged, want, write)? {
+        return Ok(());
+    }
+    url.set_query(None);
+    let mut url = super::issue::child(url, &["reactions", kind]);
+    url.query_pairs_mut()
+        .append_pair("api-version", "7.1-preview.1");
+    send(
+        c,
+        if want { Method::PUT } else { Method::DELETE },
+        url,
+        None,
+        true,
+    )
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn viewer_id(c: &Context) -> Result<String, ForgeError> {
+    let loc = Location::from(c)?;
+    let identity = get(c, loc.url(c, false, "connectionData", &[])?).await?;
+    identity["authenticatedUser"]["id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| invalid("authenticated Azure user ID"))
 }

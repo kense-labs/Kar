@@ -90,6 +90,12 @@ pub(crate) enum Operation {
     Issue {
         number: u64,
     },
+    SetIssueReaction {
+        number: u64,
+        subject_id: Option<String>,
+        content: providers::reactions::Content,
+        reacted: bool,
+    },
     UpdateIssue {
         number: u64,
         #[serde(flatten)]
@@ -126,6 +132,7 @@ impl Operation {
                 | Self::SubmitReview { .. }
                 | Self::ReplyToThread { .. }
                 | Self::SetThreadResolution { .. }
+                | Self::SetIssueReaction { .. }
                 | Self::UpdateIssue { .. }
                 | Self::SetIssueState { .. }
                 | Self::CreateIssue { .. }
@@ -222,6 +229,8 @@ struct Mutation {
     issue_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     routing: Option<routing::Expected>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reaction_viewer: Option<String>,
     result: Option<Result<Value, ForgeError>>,
 }
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -460,6 +469,7 @@ impl Context {
             op,
             Operation::Issues
                 | Operation::Issue { .. }
+                | Operation::SetIssueReaction { .. }
                 | Operation::UpdateIssue { .. }
                 | Operation::SetIssueState { .. }
                 | Operation::CreateIssue { .. }

@@ -99,6 +99,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         | Operation::SetThreadResolution { .. }
         | Operation::ReviewThreads { .. }
         | Operation::ThreadComments { .. }) => providers::reviews::execute(c, op).await,
+        Operation::SetIssueReaction { .. } => providers::reactions::execute(c, op, true).await,
         op @ (Operation::UpdateIssue { .. }
         | Operation::CreateIssue { .. }
         | Operation::CommentIssue { .. }

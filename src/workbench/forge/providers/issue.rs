@@ -21,6 +21,14 @@ pub(in crate::workbench::forge) fn validate(op: &Operation) -> Result<(), ForgeE
                     .chain(assignees)
                     .all(|s| !s.is_empty() && s.trim() == s)
         }
+        Operation::SetIssueReaction {
+            number, subject_id, ..
+        } => {
+            *number > 0
+                && subject_id
+                    .as_ref()
+                    .is_none_or(|id| !id.is_empty() && id.trim() == id && id.len() <= 4096)
+        }
         Operation::UpdateIssue { number, fields } => *number > 0 && fields.valid(),
         Operation::CommentIssue { number, body } => {
             *number > 0 && !body.trim().is_empty() && body.encode_utf16().count() <= 65_536
@@ -123,7 +131,7 @@ async fn gitlab_users(c: &Context, names: &[String]) -> Result<Vec<u64>, ForgeEr
     Ok(ids)
 }
 
-fn verify_issue(c: &Context, raw: &Value, n: u64) -> Result<(), ForgeError> {
+pub(super) fn verify_issue(c: &Context, raw: &Value, n: u64) -> Result<(), ForgeError> {
     if raw.get("pull_request").is_some_and(|v| !v.is_null()) || raw["kind"] == "pull" {
         return Err(ForgeError::remote(
             404,
