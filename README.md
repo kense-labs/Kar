@@ -371,7 +371,7 @@ Rust 后端可以直接读取 `ChatTurn.checkpoint.files`。在已打开且空�
 
 ### 在原聊天回到早先的模型上下文
 
-先从 `kar chat history --chat <聊天UUID>` 选择一个已完成的回合，然后执行：
+先从 `kar chat history --chat <聊天UUID>` 选择一个已完成的回合，再用以下命令回退。
 
 ```sh
 kar chat rewind <目标回合UUID> --chat <聊天UUID> --id <命令UUID> --expected-head <当前末轮UUID>

@@ -16,7 +16,7 @@
 
 本地已接入同一聊天只回退模型上下文（`f5f1273`、`3ab6da6`）、模型 Issue 与工作流操作（`4553498`、`d9f0442`）、第三方 ACP 注册表（`2c53f5b`）、Muse 原生主动回合和父回合结束后的子代理审批（`a33f343`）。这个候选在 macOS arm64 上已通过 `cargo check --locked --offline --all-targets`。真实供应商已收件、Kar 尚未写回执时强杀 Kimi KAP/Codex 的证据仍须单独取得。统一实测由接手方执行。
 
-后续集成的模型工作树交接支持在模型自己的活动回合内提出请求，在回合结束后将同一聊天迁入经授权的工作树（`ee01eae`）。动态 ACP 在进程退出后允许卸载，并可按记录的分发版本重装（`cbd3c93`）。另有四个动态 ACP 使用差异：工作台配置本地命令或覆写启动器、代理登录/登出、动态模型菜单，以及仅能新建会话的代理。最后一种在 T3 可先聊；Kar 的持久聊天创建时即要求恢复能力。[逐项行为与固定源码](backend-workbench-acp-registry.md)
+后续集成的模型工作树交接支持在模型自己的活动回合内提出请求，在回合结束后将同一聊天迁入经授权的工作树（`ee01eae`）。动态 ACP 在进程退出后允许卸载，并可按记录的分发版本重装（`cbd3c93`）。动态 ACP 的其余差异涉及工作台配置本地命令或覆写启动器、代理登录/登出、动态模型菜单，以及仅能新建会话的代理。最后一种在 T3 可先聊；Kar 的持久聊天创建时即要求恢复能力。[逐项行为与固定源码](backend-workbench-acp-registry.md)
 
 ### 工作台模型工具覆盖
 
@@ -28,7 +28,7 @@
 | 部分接入（6） | Issue、工作流、工作树、项目、编排、线程管理 | 示例包括 Issue 的 5 个已接入操作、工作流运行控制、工作树交接、项目与聊天读取、Claude 后台等待，以及队列编辑和撤销。项目创建/克隆、工作台委派、跨聊天控制、待处理请求等尚有模型侧缺口。 |
 | 未找到对应工作台模型入口（10） | 预览操作、预览列表/关闭、PR、附件、设备、环境设置、反馈、HTML、向用户发消息、主题 | 涵盖 PR 的 18 个工具声明、预览操作的 12 个声明。例如普通客户端能打开预览或查看 PR，模型不能据此在当前工作台 MCP 会话调用这些操作。 |
 
-作为参照，GitHub `d02239d` 的同一注册函数只声明 8 个工具名称：能力查询、列项目、读项目、列聊天、读聊天、队列、工具搜索以及 Claude 后台等待。各项还受运行时、租约和工具搜索模式限制。该远端版本没有候选中新增的模型 Issue、工作流和工作树操作。[GitHub main 对应提交的注册表](https://github.com/kense-labs/Kar/blob/d02239d9234abb382d0a35c084d25dacc557738c/src/workbench/mcp/toolkit.rs)
+作为参照，GitHub `d02239d` 的同一注册函数声明的 8 个工具是能力查询、列项目、读项目、列聊天、读聊天、队列、工具搜索以及 Claude 后台等待。各项还受运行时、租约和工具搜索模式限制。该远端版本没有候选中新增的模型 Issue、工作流和工作树操作。[GitHub main 对应提交的注册表](https://github.com/kense-labs/Kar/blob/d02239d9234abb382d0a35c084d25dacc557738c/src/workbench/mcp/toolkit.rs)
 
 汇总范围仅为模型的 MCP 工具。Kar 的 HTTP 服务将 `tools/list` 和 `tools/call` 分派到同一个受权限约束的工具注册表；另一个 stdio MCP 服务管理自己的子代理，未转发这些工作台调用。可先在具备相应权限的 Codex/Claude 会话中查询工具，再直接调用，并核对实际服务回执。[T3 注册清单](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/apps/server/src/mcp/McpHttpServer.ts#L1434) · [95 个工具声明的逐项定位](backend-workbench-mcp-map.tsv) · [Kar 工作台 MCP 分派](../src/workbench/mcp/mod.rs) · [Kar 独立子代理 MCP](../src/mcp.rs)
 
