@@ -135,6 +135,14 @@ pub(super) fn cases() -> Vec<Case> {
     cases.push(cloud);
     for (test, conditions) in [
         (
+            "codex_tiers_require_the_same_model_session_and_native_turn",
+            "native-format usage attribution across model, session and native turn",
+        ),
+        (
+            "usage_skips_large_prompt_and_keeps_an_unterminated_complete_row",
+            "offline usage scan with a large prompt and an unterminated final row",
+        ),
+        (
             "kar_usage_is_scoped_by_open_child_and_handoff",
             "Kar usage from parent, child and handed-off controller streams",
         ),
@@ -148,6 +156,11 @@ pub(super) fn cases() -> Vec<Case> {
         cases.push(usage);
     }
     for (test, env, conditions) in [
+        (
+            "workbench-usage-live",
+            &["KAR_USAGE_LIVE_PROVIDER", "KAR_USAGE_LIVE_SINCE_DAY"][..],
+            "read existing provider usage; Cursor requires CURSOR_API_KEY, optional KAR_USAGE_LIVE_UNTIL_DAY and KAR_USAGE_LIVE_EXPECT_TOKENS",
+        ),
         (
             "workbench-simlock-live",
             &[
