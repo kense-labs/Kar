@@ -1041,3 +1041,33 @@ status = "HTTP 的停止与等待、Claude 调用方 MCP 等待和目录工作�
 implementation_ref = "91c518d,19a75e5,addd68e"
 test_target = "cargo test --locked --test workbench_handoff"
 accept = "对同一聊天 1 到 20 个任务标记等待和撤销，分列 matched/unmatched；工作台保留忙碌指示，普通回合按真实 result 完成。重启、任务结束、ID 复用或切换供应商时不得操作另一个任务。"
+
+[[gap]]
+id = "adapter-background-wait"
+phase = 2
+name = "供应商后台命令的等待标记"
+upstream = ["packages/provider-acp/src/server/adapter.ts:10240", "packages/provider-cursor/src/server/adapter.ts:3396", "packages/provider-opencode/src/server/v2/adapter.ts:5271"]
+kar = ["src/workbench/background.rs", "src/transport/background.rs"]
+status = "固定源码有 ACP（含 Antigravity）、Cursor、OpenCode 的独立匹配方式；Kar 已实现 Claude，其余供应商待补。"
+test_target = "cargo test --locked --test chat_restart -- workbench-background"
+accept = "对各适配器启动并跟踪一个真实命令，以原生命令的别名和任务 ID 标记/撤销等待。列出真实版本和 matched/unmatched，检查另外一个聊天的同名任务保持原状。"
+
+[[gap]]
+id = "delegation-recursive-stop"
+phase = 2
+name = "按实际委派关系递归停止并汇总部分失败"
+upstream = ["apps/server/src/orchestration-v2/ThreadManagementService.ts:1743", "packages/provider-opencode/src/server/v2/adapter.ts:5299"]
+kar = ["src/workbench/interactions.rs", "src/workbench/workflows"]
+status = "已核对普通原生任务停止和单个 Claude workflow。应用托管的本地及链接环境子聊天停止仍须实现。"
+test_target = "cargo test --locked --test workbench_handoff"
+accept = "同一子聊天从多个入口可达时只停止一次。覆盖已返回结果后再次活动、远程子环境不可达、一个子任务已结束和另一个停止失败；回执保留成功与失败两组。"
+
+[[gap]]
+id = "background-restart-note"
+phase = 2
+name = "把后台任务的中断说明一次性交回模型"
+upstream = ["apps/server/src/orchestration-v2/RestartBackgroundNote.ts"]
+kar = ["src/workbench/background.rs", "src/chat/queue.rs"]
+status = "原始任务启动游标、原回合和控制器丢失已保存。按主动取消/进程退出生成并投递说明以及重启去重待实现。"
+test_target = "cargo test --locked --test chat_restart -- workbench-background"
+accept = "后台命令失联后按是否标记等待选择下一次唤醒，恢复原会话后在原回合关联处读取说明。用户主动取消的记录有相应原因；连续两次崩溃最多向模型交付一次同一说明。"
