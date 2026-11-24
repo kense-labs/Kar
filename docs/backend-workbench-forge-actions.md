@@ -82,3 +82,18 @@ A missing write receipt can be reconciled by reading the same viewer, issue, sub
 `GET /forge/linked-chats?kind=issue&number=7&repository=github%3A%2F%2Fgithub.com%2Fteam%2Frepo` 使用绑定返回的仓库标识；PR 传 `kind=pull`。读取已登记且属于工作台授权目录的项目，按聊天去重，最近活动在先、同一毫秒按聊天 ID 排序；数据都来自本地持久化目录。聊天标题复用列表的重命名和首条用户消息规则。返回 `archivedAt`、`archived` 和 `settled`。旧版 Kar 仅记录归档布尔值，因此旧归档保留 `archived=true` 和 `archivedAt=null`。
 
 `cargo test --locked --test workbench_forge` 新增两项目关联同一 Issue、重复链接、相邻类型和另一 host 隔离、归档时间以及重启后顺序稳定的 HTTP 场景。待集中运行。
+
+### 多项目、多账号 Issue 搜索
+
+`POST /forge/issues/list` 接受固定契约的 `state`、`involvement`、`projectId`、`excludeProjectIds`、`host`、`limit`、`query`、`labels`、`assignee`、`sort`、`refresh` 和 `cursors`。每次读取原生页面。首次请求发现受授权项目的 Git 主远端、上游远端和已绑定的 Linear 团队。同一账号、host 和 scope 只读一次。续页把返回的 `nextCursors` 作为 `cursors`，每个失败的续页保留原游标。最终 entries 按更新时间跨范围排序。指定参与人筛选时按账号查询 viewer。
+
+| 驱动 | 原生范围与分页 |
+| --- | --- |
+| GitHub | GraphQL Issue search 以仓库及状态限定，文本逐词引用，支持游标、全部标签和三种参与人。 |
+| GitLab | 项目 REST Issue 页支持 assignee、author、搜索和标签。固定驱动对 mentioned 返回宽集合。 |
+| Forgejo | 专用 Issue 过滤、标签取交集、按 Link 决定下一页。 |
+| Azure Boards | 以项目为界，按流程类别解析关闭状态。WIQL 使用日期和编号作游标，再用 workitemsbatch 读取并恢复原顺序。mentioned 沿用固定宽集合。 |
+| TanStack Source | 合并原生开放/关闭流，按创建日期排序并去重，续页保留尚未交付的原生页。过滤隐藏行和多标签，创建日期兼作更新日期。 |
+| Linear | 原生 IssueFilter 和命名账号的 team 绑定，支持参与人、每个标签、文字和原生 ENG-7 式编号。续页限定账号及团队。 |
+
+集中复验使用 `cargo test --locked --test workbench_forge --test workbench_issue_accounts`，覆盖六种协议、同范围多个项目和同账号多个团队。当前为 macOS 编译证据，上述场景及真实托管账号尚待执行。

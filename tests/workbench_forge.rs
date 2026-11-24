@@ -376,6 +376,7 @@ async fn scenario() {
     assert_eq!(result.status(), StatusCode::CONFLICT);
     let second = actions::link_second_project(&a, &url, &root).await;
     let linked = actions::linked(&a, &url, second, p).await;
+    actions::issue_pages(&a, &url, [p, &second.0.to_string()]).await;
     let later = publication::first(&a, &url, &root, &mock).await;
     process.kill().await.unwrap();
     let (mut process, url) = server::serve_with_env(&state, &root, &native, &env).await;

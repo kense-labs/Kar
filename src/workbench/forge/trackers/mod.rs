@@ -296,3 +296,27 @@ pub(in crate::workbench::forge) fn bound(
     c.repository = key;
     Ok(Some((c, account.workspace.clone())))
 }
+
+pub(in crate::workbench::forge) fn listing_sources(
+    app: &Workbench,
+    project: &crate::workbench::Project,
+) -> Result<Vec<(Context, Option<Uuid>, Option<String>)>, ForgeError> {
+    let db = app.0.tracker_accounts.data.lock().unwrap();
+    let Some(binding) = db.bindings.get(&project.id) else {
+        return Ok(Vec::new());
+    };
+    let account = db
+        .accounts
+        .get(&binding.account())
+        .ok_or_else(|| ForgeError::remote(401, "bound account is unavailable"))?;
+    let context = connection::context(account)?;
+    Ok(std::iter::once(&binding.scope)
+        .chain(binding.additional_scopes.iter())
+        .map(|s| {
+            let mut c = context.clone();
+            c.repository = s.clone();
+            c.cwd = project.root.clone();
+            (c, binding.account_id, Some(account.workspace.clone()))
+        })
+        .collect())
+}

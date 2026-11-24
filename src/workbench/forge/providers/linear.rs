@@ -296,3 +296,38 @@ pub(in crate::workbench::forge::providers) async fn issue_fields(
         "assignees":row.get("assignee").filter(|v|!v.is_null()).into_iter().collect::<Vec<_>>() }),
     )
 }
+
+pub(super) fn listing_sources(
+    app: &Workbench,
+    project: &crate::workbench::Project,
+    config: &super::super::Config,
+) -> Result<Vec<(Context, Option<Uuid>, Option<String>)>, ForgeError> {
+    let bound = super::super::trackers::listing_sources(app, project)?;
+    if !bound.is_empty() {
+        return Ok(bound);
+    }
+    config
+        .issue_trackers
+        .iter()
+        .filter(|t| t.project == project.id)
+        .map(|t| {
+            let url = Context::base(
+                t.api_base
+                    .as_deref()
+                    .unwrap_or("https://api.linear.app/graphql"),
+            )?;
+            let token = std::env::var(t.token_env.as_deref().unwrap_or("LINEAR_API_KEY")).ok();
+            let c = Context {
+                kind: "linear".into(),
+                host: url.authority().to_owned(),
+                repository: t.team.to_ascii_uppercase(),
+                api_base: url,
+                token,
+                client: Context::client()?,
+                signin: None,
+                cwd: project.root.clone(),
+            };
+            Ok((c, None, t.workspace.clone()))
+        })
+        .collect()
+}

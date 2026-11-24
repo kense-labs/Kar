@@ -564,6 +564,7 @@ pub(super) fn routes() -> Router<Workbench> {
         .merge(clone_jobs::routes())
         .merge(providers::issue_directory::routes())
         .route("/forge/drivers", get(drivers))
+        .route("/forge/issues/list", post(providers::issue_listing::list))
         .route("/forge/linked-chats", get(linked_chats::read))
         .route(
             "/projects/{project}/forge/issue-tracker",

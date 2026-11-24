@@ -148,6 +148,21 @@ pub(super) async fn review_control(
             json!([{"path":"CHANGELOG.md","additions":1,"deletions":3},{"path":"requirements-dev.txt","additions":6,"deletions":4}])
         };
         json!({"repository":{"pullRequest":{"files":{"nodes":nodes,"pageInfo":{"hasNextPage":v["number"]==9||page==0,"endCursor":(page+1).to_string()}}}}})
+    } else if q.starts_with("query KarIssueSearch") {
+        let search = v["q"].as_str().unwrap();
+        assert!(search.contains("is:closed"));
+        assert!(search.contains("sort:created-desc"));
+        assert!(search.contains("label:\"release bug\""));
+        assert!(search.contains("mentions:\"kar-test\""));
+        assert!(search.contains("\"repo:foreign/repo\""));
+        if v["cursor"] == "lost-page" {
+            return Json(json!({"errors":[{"type":"RATE_LIMITED","message":"limited"}]}));
+        }
+        let next = v["cursor"].is_null();
+        let n = if next { 7 } else { 3 };
+        json!({"search":{"nodes":[{"number":n,"repository":{"nameWithOwner":"team/repo"},"title":"Closed item","state":"CLOSED","stateReason":"NOT_PLANNED",
+            "url":format!("https://review.example/team/repo/issues/{n}"),"createdAt":"2026-03-01T01:00:00Z","updatedAt":"2026-04-01T01:00:00Z","labels":{"nodes":[{"name":"release bug"}]},"assignees":{"nodes":[]},"comments":{"totalCount":2}},
+            {"number":1,"repository":{"nameWithOwner":"other/repo"}}],"pageInfo":{"hasNextPage":next,"endCursor":if next{Some("page2")}else{None}}}})
     } else if q.starts_with("query KarIssueReaction") {
         assert_eq!(v["n"], 7);
         let parent = if v["node"] == "comment-node" {
@@ -407,4 +422,34 @@ pub(super) async fn linked(
         assert_eq!(ok(query(kind, repository)).await["threads"], json!([]));
     }
     rows
+}
+
+pub(super) async fn issue_pages(c: &reqwest::Client, base: &str, projects: [&str; 2]) {
+    let endpoint = format!("{base}/forge/issues/list");
+    let mut input = json!({"state":"closed","involvement":"mentioned","sort":"created","limit":1,"labels":["release bug"],"query":"repo:foreign/repo"});
+    let first = ok(c.post(&endpoint).json(&input)).await;
+    let entries = first["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["state"]["closeReason"], "not-planned");
+    assert_eq!(entries[0]["key"], "7");
+    assert_eq!(first["viewers"]["review.example"], "kar-test");
+    assert_eq!(first["trackers"][0]["projectCount"], 2);
+    assert_eq!(first["scopes"].as_array().unwrap().len(), 1);
+    let scope = "review.example team/repo";
+    assert_eq!(first["nextCursors"][scope], "page2");
+    input["cursors"] = first["nextCursors"].clone();
+    let second = ok(c.post(&endpoint).json(&input)).await;
+    assert_eq!(second["entries"][0]["key"], "3");
+    assert_eq!(second["nextCursors"], json!({}));
+    input["cursors"] = json!({(scope):"lost-page"});
+    let failed = ok(c.post(&endpoint).json(&input)).await;
+    assert_eq!(failed["errors"].as_array().unwrap().len(), 1);
+    assert_eq!(failed["nextCursors"], input["cursors"]);
+    input["cursors"] = json!({"elsewhere team/repo":"unused"});
+    let skipped = ok(c.post(&endpoint).json(&input)).await;
+    assert_eq!(skipped["entries"], json!([]));
+    assert_eq!(skipped["viewers"], json!({}));
+    input["excludeProjectIds"] = json!(projects);
+    let excluded = ok(c.post(&endpoint).json(&input)).await;
+    assert_eq!(excluded["scopes"], json!([]));
 }

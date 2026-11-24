@@ -181,6 +181,9 @@ async fn peer(
     if kind == "linear" {
         return linear(&mut db, &b);
     }
+    if let Some(result) = issue_search_peer(kind, path, &uri, &b) {
+        return result;
+    }
     if path.ends_with("/403") {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -431,6 +434,12 @@ pub(super) async fn run() {
             ok(client.post(&query).json(&json!({"op":"identity"}))).await
         };
         assert_eq!(identity["account"], "viewer", "{kind}");
+        if matches!(
+            kind,
+            "gitlab" | "forgejo" | "tanstack-source" | "azure-devops"
+        ) {
+            verify_search(&client, &base, p, kind).await;
+        }
         let chat = Uuid::new_v4();
         ok(client
             .post(format!("{base}/projects/{p}/chats"))
@@ -547,4 +556,76 @@ pub(super) async fn run() {
     }
     kar.kill().await.unwrap();
     api.abort();
+}
+
+fn issue_search_peer(kind: &str, path: &str, uri: &Uri, b: &Value) -> Option<Response> {
+    let params = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
+        .into_owned()
+        .collect::<HashMap<_, _>>();
+    let date = "2026-11-01T00:00:00Z";
+    if kind == "azure-devops" {
+        if path.ends_with("/workitemtypes") {
+            return Some(Json(json!({"value":[{"name":"Task","states":[{"name":"ResolvedQA","category":"Resolved"}]}]})).into_response());
+        }
+        if path.ends_with("/wiql") && params.contains_key("timePrecision") {
+            let q = b["query"].as_str().unwrap();
+            assert!(q.contains("CONTAINS 'Issue ''search'''"));
+            assert!(q.contains("NOT IN ('resolvedqa')"));
+            assert_eq!(params["$top"], "2");
+            let ids = if q.contains("AND [System.Id] < 72") {
+                json!([{"id":71}])
+            } else {
+                json!([{"id":72},{"id":71}])
+            };
+            return Some(Json(json!({"workItems":ids})).into_response());
+        }
+        if path.ends_with("/workitemsbatch") && b["ids"][0].as_u64().is_some_and(|n| n >= 71) {
+            let n = &b["ids"][0];
+            return Some(Json(json!({"value":[{"id":n,"fields":{"System.TeamProject":"proj","System.CreatedDate":date,"System.ChangedDate":date,"System.Title":"selected","System.State":"Active","System.Tags":"red; blue"}}]})).into_response());
+        }
+    }
+    if !path.ends_with("/issues") || !params.values().any(|v| v == "Issue 'search'") {
+        return None;
+    }
+    if kind == "tanstack-source" {
+        assert_eq!(params["label"], "red");
+        assert_eq!(params["state"], "open");
+        return Some(Json(json!({"items":[{"number":72,"title":"visible","createdAt":3000,"state":"open","author":"bot","labels":["red","blue"]},
+            {"number":80,"title":"hidden","createdAt":2000,"state":"open","moderation":"hidden","labels":["red","blue"]},
+            {"number":71,"title":"older","createdAt":1000,"state":"open","labels":["red","blue"]}],"next":null})).into_response());
+    }
+    if !matches!(kind, "gitlab" | "forgejo") {
+        return None;
+    }
+    assert_eq!(params["labels"], "red,blue");
+    let n = if params["page"] == "1" { 72 } else { 71 };
+    let row = json!({"iid":n,"number":n,"state":"open","title":"result","web_url":"https://sample/issue","html_url":"https://sample/issue","created_at":date,"updated_at":date,
+        "assignees":[],"labels":["red","blue"]});
+    let mut res = Json(json!([row])).into_response();
+    if kind == "forgejo" {
+        res.headers_mut().insert(
+            "link",
+            if n == 72 {
+                "<next>; rel=next"
+            } else {
+                "<previous>; rel=prev"
+            }
+            .parse()
+            .unwrap(),
+        );
+    }
+    Some(res)
+}
+async fn verify_search(c: &reqwest::Client, base: &str, project: &str, kind: &str) {
+    let target = format!("{base}/forge/issues/list");
+    let mut input = json!({"projectId":project,"state":"open","query":"Issue 'search'","labels":["red","blue"],"limit":1});
+    let first = ok(c.post(&target).json(&input)).await;
+    assert_eq!(first["errors"], json!([]), "{kind} {first}");
+    assert_eq!(first["entries"][0]["key"], "72", "{kind}");
+    let next = &first["nextCursors"];
+    assert_eq!(next.as_object().unwrap().len(), 1, "{kind}");
+    input["cursors"] = next.clone();
+    let more = ok(c.post(&target).json(&input)).await;
+    assert_eq!(more["errors"], json!([]), "{kind}");
+    assert_eq!(more["entries"][0]["key"], "71", "{kind}");
 }

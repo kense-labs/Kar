@@ -23,6 +23,21 @@ async fn peer(headers: HeaderMap, Json(input): Json<Value>) -> Result<Json<Value
         json!({"viewer":{"id":name,"name":name},"organization":{"urlKey":"org"},"teams":{
             "nodes":[{"key":if second{"OPS"}else{"ENG"},"name":if second{"Operations"}else{"Engineering"}}],
             "pageInfo":{"hasNextPage":!second,"endCursor":"next"}}})
+    } else if query.contains("KarIssueListViewer") {
+        json!({"viewer":{"displayName":name}})
+    } else if query.contains("KarIssueList(") {
+        let v = &input["variables"];
+        let team = v["filter"]["team"]["key"]["eq"].as_str().unwrap();
+        assert_eq!(v["filter"]["creator"]["displayName"]["eq"], name);
+        assert_eq!(v["filter"]["and"][0]["labels"]["some"]["name"]["eq"], "bug");
+        let id = if v["after"].is_null() { 8 } else { 4 };
+        if !v["after"].is_null() {
+            assert_eq!(team, "OPS");
+            assert_eq!(v["after"], "OPS-after");
+        }
+        json!({"organization":{"urlKey":"org"},"issues":{"nodes":[{"number":id,"identifier":format!("{team}-{id}"),"team":{"key":team},"title":name,"url":format!("https://linear.app/org/issue/{team}-{id}"),
+          "state":{"name":"New","type":"unstarted"},"createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-02T00:00:00Z","labels":{"nodes":[{"name":"bug"}]}}],
+          "pageInfo":{"hasNextPage":id==8,"endCursor":format!("{team}-after")}}})
     } else if query.contains("KarScope") {
         let key = &input["variables"]["team"];
         json!({"organization":{"urlKey":"org"},"viewer":{"email":name},"teams":{"nodes":[{"key":key}]}})
@@ -98,6 +113,20 @@ async fn accounts_and_team_bindings_survive_restart_without_cross_account_fallba
     assert_eq!(existing["account_bindings"][p]["account_id"], *account);
     assert!(existing["bindings"].get(p).is_none());
     assert!(!existing.to_string().contains("sample-work"));
+    let endpoint = format!("{base}/forge/issues/list");
+    let mut filters =
+        json!({"state":"open","involvement":"authored","labels":["bug"],"projectId":p,"limit":1});
+    let page = ok(http.post(&endpoint).json(&filters)).await;
+    assert_eq!(page["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(page["viewers"].as_object().unwrap().len(), 1);
+    let cursors = page["nextCursors"].as_object().unwrap();
+    let ops = cursors.keys().find(|k| k.ends_with("/ops")).unwrap();
+    assert!(ops.contains(account.as_str().unwrap()));
+    filters["cursors"] = json!({(ops):"OPS-after"});
+    let page = ok(http.post(&endpoint).json(&filters)).await;
+    assert_eq!(page["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(page["entries"][0]["key"], "OPS-4");
+    assert_eq!(page["nextCursors"], json!({}));
     for key in ["ENG", "OPS"] {
         let issue = ok(http
             .post(&query)

@@ -556,3 +556,15 @@ pub(super) async fn viewer_id(c: &Context) -> Result<String, ForgeError> {
         .map(str::to_owned)
         .ok_or_else(|| invalid("authenticated Azure user ID"))
 }
+
+pub(super) fn issue_scope(c: &Context) -> Result<String, ForgeError> {
+    let l = Location::from(c)?;
+    Ok(if l.legacy {
+        l.project.into()
+    } else {
+        format!("{}/{}", l.org, l.project)
+    })
+}
+pub(super) fn wit_endpoint(c: &Context, parts: &[&str]) -> Result<Url, ForgeError> {
+    Location::from(c)?.url(c, true, "wit", parts)
+}
