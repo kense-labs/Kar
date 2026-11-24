@@ -356,9 +356,9 @@ id = "turn-control"
 phase = 2
 name = "定向中断、强制停止和活动回合输入"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts", "apps/server/src/orchestration-v2/ProviderTurnControlService.ts"]
-kar = ["src/session/prompt_run.rs","src/workbench/interactions.rs"]
-status = "按 input 和 request 定向中断已集成；指定回合续写及原生回执已接入；强制停止和派生任务终止待核对"
-implementation_ref = "a02f848, 67be12f, ed93575"
+kar = ["src/workbench/force_stop.rs", "src/workbench/interactions.rs", "src/chat/queue.rs"]
+status = "指定活动输入的中断/续写、选定最近已启动回合的强停、保留排队和共享进程隔离已集成。分别核对本地、托管和共享原生状态；工作流子任务停止另核。"
+implementation_ref = "67be12f, ed93575, dd63467"
 test_target = "cargo test --locked --test chat_restart -- workbench-requests"
 accept = "两端观察同一回合，在正确 input、过期 input、错 request 和同一 input 重试时发送中断；核对只有正确目标收到原生命令、两端终态及下一回合。分别核对子任务链、已离线会话和强停的清理结果。"
 
@@ -367,9 +367,9 @@ id = "queue-edit-control"
 phase = 2
 name = "已排队回合的编辑、重新排序、提升、延迟启动与重启投递"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/QueuedRunOrder.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
-kar = ["src/chat/queue.rs", "src/workbench/chat_controls.rs"]
-status = "持久 FIFO、撤回、暂停、编辑、改序、指定开始和恢复已集成；定向提升已接入；附件编辑待补"
-implementation_ref = "7c6ae33, d069f15, ed93575"
+kar = ["src/chat/queue.rs", "src/chat/queue/promotion.rs", "src/workbench/chat_controls.rs"]
+status = "排队、暂停、编辑正文和附件、改序、单项启动、定向续写与原回执重放已集成。确定无法发送的输入保留拒收状态，后续项可继续。待统一验收。"
+implementation_ref = "7c6ae33, d069f15, ed93575, 0241757, 6d8c534, df4c4be"
 test_target = "cargo test --locked --test chat_restart -- workbench-queue"
 accept = "活动回合中排入 A/B/C，编辑 B、调整顺序并重启。接收回执前后分别撤回、改序和提升为 steer，检查原生投递顺序、文本、ID 和是否重复。"
 
@@ -481,9 +481,10 @@ id = "native-chat-import"
 phase = 2
 name = "扫描并导入原生会话"
 upstream = ["apps/server/src/project/AgentSessionScanner.ts"]
-kar = ["src/chat/import.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart"
+kar = ["src/workbench/agent_sessions/mod.rs", "src/chat/import/native.rs", "src/provider_instance.rs"]
+status = "Codex、Claude 和 Pi 扫描、超大 JSONL 字段择取、实例隔离、重复导入、历史会话续聊已集成；详见 backend-workbench-agent-sessions.md 的实测前提。"
+implementation_ref = "d7d22e8, 30fe617, be4ab91"
+test_target = "cargo test --locked --test workbench_agent_sessions"
 accept = "分别扫描多个已配置的供应商，过滤范围、时间和重复原生 ID。导入保留原工作区、消息及可恢复标识；二次导入无重复。"
 
 [[gap]]
@@ -491,8 +492,9 @@ id = "assets-intake"
 phase = 2
 name = "受限资源 URL、附件上传、持久化和撤销"
 upstream = ["apps/server/src/assets/AttachmentUpload.ts", "apps/server/src/attachmentStore.ts", "apps/server/src/orchestration-v2/AttachmentClaims.ts"]
-kar = ["src/workbench/files.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+kar = ["src/workbench/assets.rs", "src/chat/attachments.rs"]
+status = "上传、领取、删除未领取文件、下载票据、消息与分叉祖先附件已集成，跨进程重启待统一实测。文档提取和问题回答附件另列。"
+implementation_ref = "88994d4, 0241757, c9ca60c"
 test_target = "cargo test --locked --test chat_restart -- workbench-queue"
 accept = "客户端领取上传 URL、上传文件、把暂存附件交给本轮聊天或删除。过期、跨项目、重复领取及失败后清理都应能复验。跟踪附件进入队列、编辑及供应商重启。"
 
@@ -553,7 +555,7 @@ name = "环境链接、配对、授权应答及远程聊天窗口"
 upstream = ["apps/server/src/peer/PeerLinks.ts", "apps/server/src/peer/PeerLinkRequests.ts"]
 kar = ["src/workbench/access/mod.rs"]
 status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
-test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+test_target = "cargo test --locked --test workbench_remote_access"
 accept = "相互授权两个环境，获取名称、远程历史分页、单条详情和实时更新；拒绝请求、撤销链接及远端离线时核对权限与游标。"
 
 [[gap]]
@@ -591,8 +593,9 @@ id = "workflow-management"
 phase = 2
 name = "工作流快照、计数、定义源及定时任务管理"
 upstream = ["apps/server/src/ws.ts", "apps/server/src/scheduledTasks/ScheduledTaskService.ts"]
-kar = ["src/workbench/workflows/routes.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+kar = ["src/workbench/workflows/routes.rs", "src/workbench/workflows/views.rs"]
+status = "快照/计数、调度启停、删除、手动运行及恢复已有实现。定义文件的校验、热加载和保留最后有效版本单独核对。"
+implementation_ref = "8e53b26, 27d180f"
 test_target = "cargo test --locked --test workbench_workflows"
 accept = "读取及观察工作流和定时任务列表、计数、脚本定义，保存和删除；应答、取消、恢复、立即运行及启停后重启，核对原有回执和下次时间。"
 
@@ -612,7 +615,8 @@ phase = 2
 name = "设备发现、宿主配置、本地和远程生命周期"
 upstream = ["apps/server/src/ws.ts"]
 kar = ["src/workbench/devices/mod.rs"]
-status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
+status = "本机发现/操作、SSH 宿主、Expo 和 Simlock 设备租用、控制及清理已有实现；实机条件、账单与拒绝场景分列于 backend-native-devices.md。待统一验收。"
+implementation_ref = "3e09aa4, dfc2b4d, 41dd136, 2ee40a3"
 test_target = "cargo test --locked --test chat_restart -- workbench-devices"
 accept = "分别使用 Mac 本地、SSH、Expo 和 Simlock 执行发现、打开、操作、抓屏和关闭，在设备重名、账号变化、租约过期和断线时验证隔离。"
 
@@ -635,3 +639,73 @@ kar = ["src/workbench/thread_state/queries.rs"]
 status = "已追溯固定 RPC 和服务接口，具体子操作按索引逐项开发及复验"
 test_target = "cargo test --locked --test chat_restart -- workbench-fork"
 accept = "查父子及跨项目分叉、归档、批量标题和链接、较早已结项目分页与工作树。大历史分页，重启从旧游标补发；单独核对侧聊天、原生子任务和完整 shell 事件。"
+
+[[gap]]
+id = "native-child-work"
+phase = 2
+name = "按原生任务归属读取子代理工作"
+upstream = ["apps/server/src/orchestration-v2/NativeChildWorkQuery.ts", "apps/server/src/provider/acp/AntigravityChildWork.ts"]
+kar = ["src/chat/log/acp_children.rs"]
+status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+test_target = "cargo test --locked --test chat_restart"
+accept = "同实例、同根会话、同批次的子任务按步骤列出文本与工具调用；回滚后用原尝试的会话。另一个批次及非原生子会话不能读到该记录。"
+
+[[gap]]
+id = "command-output"
+phase = 2
+name = "命令输出的实时尾部、替换及终态"
+upstream = ["apps/server/src/orchestration-v2/CommandOutputHub.ts"]
+kar = ["src/workbench/thread_find/mod.rs"]
+status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+test_target = "cargo test --locked --test chat_restart -- workbench-fork"
+accept = "两个客户端订阅同一工具项，检查首个替换、增量、尾部截断和慢端重置；断线后恢复，结束时只取本命令的最终输出。"
+
+[[gap]]
+id = "prompt-suggestion"
+phase = 2
+name = "供应商预测的下一条提示实时流"
+upstream = ["apps/server/src/orchestration-v2/ProviderSessionManager.ts", "packages/contracts/src/orchestrationV2.ts"]
+kar = ["src/workbench/interactions.rs"]
+status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+accept = "先订阅得到当前值，供应商发布时携带产生建议的回合，下一回合清空；重启后无过期建议。"
+
+[[gap]]
+id = "thread-launch"
+phase = 2
+name = "创建聊天及准备工作目录的幂等启动"
+upstream = ["apps/server/src/orchestration-v2/ThreadLaunchService.ts"]
+kar = ["src/workbench/project_lifecycle/mod.rs", "src/workbench/task_folders/mod.rs"]
+status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+test_target = "cargo test --locked --test chat_restart -- workbench-task-folders"
+accept = "以同一命令启动聊天、独立分支、任务目录和首条消息并重试。比较创建回执、准备进度/中断、恢复、冲突、首轮投递次数。"
+
+[[gap]]
+id = "attachment-text"
+phase = 2
+name = "文件正文提取及按问题传递附件"
+upstream = ["apps/server/src/provider/userInputAttachments.ts", "apps/server/src/provider/DocumentText.ts", "apps/server/src/provider/documentTextWorker.ts"]
+kar = ["src/chat/attachments.rs", "src/workbench/interactions.rs"]
+status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+accept = "DOCX/XLSX/PPTX、ODF、EPUB、RTF、笔记本分别读取可见文本；损坏、过大、超时保留原件；按问题追加可读路径与提取文件，跨聊天、未知问题须拒绝。"
+
+[[gap]]
+id = "workflow-sources"
+phase = 2
+name = "具名工作流定义的编辑、验证、重新加载"
+upstream = ["apps/server/src/workflows/WorkflowRuntime.ts", "apps/server/src/orchestration-v2/workflowScriptQuery.ts", "apps/server/src/orchestration-v2/workflowFileRead.ts"]
+kar = ["src/workbench/workflows/mod.rs"]
+status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+test_target = "cargo test --locked --test workbench_workflows"
+accept = "列出文件名、原文、工作流、诊断与最新修订。校验失败保留可运行版，外部编辑、删除、重启、未完成运行所用的定义均可核对。单独验证 Claude 目录中的脚本扩展、边界和 256 KiB 截断。"
+
+[[gap]]
+id = "secret-feedback"
+phase = 2
+name = "秘密请求与代理反馈的一次性应答"
+upstream = ["apps/server/src/secrets/SecretRequests.ts", "apps/server/src/feedback/FeedbackStore.ts"]
+kar = ["src/workbench/interactions.rs"]
+status = "已追到固定服务端实现；逐操作开发及统一复验待完成"
+test_target = "cargo test --locked --test chat_restart -- workbench-requests"
+accept = "发起请求后由两端竞争应答，拒绝旧请求与跨会话提交。秘密不出现在持久历史、订阅或诊断；反馈的确认、拒绝和重复请求分别留证。"

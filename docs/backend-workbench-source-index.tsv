@@ -4,7 +4,7 @@ projects.listIgnoredFiles	packages/contracts/src/rpc.ts#L488	apps/server/src/ws.
 projects.readFile	packages/contracts/src/rpc.ts#L489	apps/server/src/ws.ts#L3087	project-read-options	GET file	cargo test --locked --test chat_restart -- workbench-projects	162d633	实现已集成，待统一验收
 projects.searchContents	packages/contracts/src/rpc.ts#L490	apps/server/src/ws.ts#L3052	project-search-options	GET search	cargo test --locked --test chat_restart -- workbench-projects	1edc215	实现已集成，待统一验收
 projects.searchEntries	packages/contracts/src/rpc.ts#L491	apps/server/src/ws.ts#L3039	project-search-options	GET search/entries	cargo test --locked --test chat_restart -- workbench-projects	1edc215	实现已集成，待统一验收
-projects.writeFile	packages/contracts/src/rpc.ts#L492	apps/server/src/ws.ts#L3098					待源码核对
+projects.writeFile	packages/contracts/src/rpc.ts#L492	apps/server/src/ws.ts#L3098	project-read-options	src/workbench/files.rs	cargo test --locked --test chat_restart -- workbench-projects		已接入项目内写入，权限和原子替换待统一复验
 projects.mutate	packages/contracts/src/rpc.ts#L493	apps/server/src/ws.ts#L3110	project-lifecycle	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
 projects.ensureScratch	packages/contracts/src/rpc.ts#L494	apps/server/src/ws.ts#L3003	project-creation	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
 projects.createNew	packages/contracts/src/rpc.ts#L495	apps/server/src/ws.ts#L3009	project-creation	project lifecycle routes	cargo test --locked --test chat_restart -- workbench-projects	7c7be85	实现已集成，待统一验收
@@ -16,12 +16,12 @@ workspace.scanFolders	packages/contracts/src/rpc.ts#L502	apps/server/src/ws.ts#L
 workspace.taskFolder	packages/contracts/src/rpc.ts#L503	apps/server/src/ws.ts#L3139	task-folders	GET tasks/{id}/folder	cargo test --locked --test chat_restart -- workbench-task-folders	c4c9bbb	实现已集成，待统一验收
 workspace.addTaskFolderRepository	packages/contracts/src/rpc.ts#L504	apps/server/src/ws.ts#L3141	task-folders	POST tasks/{id}/folder/repositories	cargo test --locked --test chat_restart -- workbench-task-folders	c4c9bbb	实现已集成，待统一验收
 filesystem.getMetadata	packages/contracts/src/rpc.ts#L505	apps/server/src/ws.ts#L3125	filesystem-inspection	POST /filesystem/metadata	cargo test --locked --test chat_restart -- workbench-projects	3cf229a	实现已集成，待统一验收
-agentSessions.scan	packages/contracts/src/rpc.ts#L506	apps/server/src/ws.ts#L3144	native-chat-import	src/chat/import.rs	cargo test --locked --test chat_restart		已定位处理函数，逐操作对照中
-agentSessions.import	packages/contracts/src/rpc.ts#L507	apps/server/src/ws.ts#L3145	native-chat-import	src/chat/import.rs	cargo test --locked --test chat_restart		已定位处理函数，逐操作对照中
-assets.createUrl	packages/contracts/src/rpc.ts#L508	apps/server/src/ws.ts#L3147	assets-intake	src/workbench/files.rs	cargo test --locked --test chat_restart -- workbench-queue		已定位处理函数，逐操作对照中
-assets.persistChatAttachments	packages/contracts/src/rpc.ts#L509	apps/server/src/ws.ts#L3229	assets-intake	src/workbench/files.rs	cargo test --locked --test chat_restart -- workbench-queue		已定位处理函数，逐操作对照中
-attachments.createUploadUrl	packages/contracts/src/rpc.ts#L510	apps/server/src/ws.ts#L3142	assets-intake	src/workbench/files.rs	cargo test --locked --test chat_restart -- workbench-queue		已定位处理函数，逐操作对照中
-attachments.delete	packages/contracts/src/rpc.ts#L511	apps/server/src/ws.ts#L3143	assets-intake	src/workbench/files.rs	cargo test --locked --test chat_restart -- workbench-queue		已定位处理函数，逐操作对照中
+agentSessions.scan	packages/contracts/src/rpc.ts#L506	apps/server/src/ws.ts#L3144	native-chat-import	src/workbench/agent_sessions/mod.rs	cargo test --locked --test workbench_agent_sessions	d7d22e8,30fe617,be4ab91	扫描及恢复入口已集成，待统一实测
+agentSessions.import	packages/contracts/src/rpc.ts#L507	apps/server/src/ws.ts#L3145	native-chat-import	src/workbench/agent_sessions/mod.rs	cargo test --locked --test workbench_agent_sessions	d7d22e8,30fe617,be4ab91	扫描及恢复入口已集成，待统一实测
+assets.createUrl	packages/contracts/src/rpc.ts#L508	apps/server/src/ws.ts#L3147	assets-intake	src/workbench/assets.rs	cargo test --locked --test chat_restart -- workbench-queue	0241757,c9ca60c	聊天附件授权与传递已集成；其他资源 URL 逐类核对
+assets.persistChatAttachments	packages/contracts/src/rpc.ts#L509	apps/server/src/ws.ts#L3229	assets-intake	src/workbench/assets.rs	cargo test --locked --test chat_restart -- workbench-queue	0241757,c9ca60c	聊天附件授权与传递已集成；其他资源 URL 逐类核对
+attachments.createUploadUrl	packages/contracts/src/rpc.ts#L510	apps/server/src/ws.ts#L3142	assets-intake	src/workbench/assets.rs	cargo test --locked --test chat_restart -- workbench-queue	0241757,c9ca60c	聊天附件授权与传递已集成；其他资源 URL 逐类核对
+attachments.delete	packages/contracts/src/rpc.ts#L511	apps/server/src/ws.ts#L3143	assets-intake	src/workbench/assets.rs	cargo test --locked --test chat_restart -- workbench-queue	0241757,c9ca60c	聊天附件授权与传递已集成；其他资源 URL 逐类核对
 mcpApps.callTool	packages/contracts/src/rpc.ts#L513	apps/server/src/ws.ts#L2635	mcp-app-session	src/mcp.rs	cargo test --locked --test protocol		已定位处理函数，逐操作对照中
 mcpApps.toolInfo	packages/contracts/src/rpc.ts#L514	apps/server/src/ws.ts#L2636	mcp-app-session	src/mcp.rs	cargo test --locked --test protocol		已定位处理函数，逐操作对照中
 mcpApps.readResource	packages/contracts/src/rpc.ts#L515	apps/server/src/ws.ts#L2638	mcp-app-session	src/mcp.rs	cargo test --locked --test protocol		已定位处理函数，逐操作对照中
@@ -44,11 +44,11 @@ provider.install.start	packages/contracts/src/rpc.ts#L532	apps/server/src/ws.ts#
 provider.install.cancel	packages/contracts/src/rpc.ts#L533	apps/server/src/ws.ts#L2740	provider-install-jobs	src/workbench/mod.rs	cargo test --locked --test protocol		已定位处理函数，逐操作对照中
 provider.install.subscribe	packages/contracts/src/rpc.ts#L534	apps/server/src/ws.ts#L2741	provider-install-jobs	src/workbench/mod.rs	cargo test --locked --test protocol		已定位处理函数，逐操作对照中
 provider.install.remove	packages/contracts/src/rpc.ts#L535	apps/server/src/ws.ts#L2742	provider-install-jobs	src/workbench/mod.rs	cargo test --locked --test protocol		已定位处理函数，逐操作对照中
-vcs.pull	packages/contracts/src/rpc.ts#L537	apps/server/src/ws.ts#L3242					待源码核对
-vcs.refreshStatus	packages/contracts/src/rpc.ts#L538	apps/server/src/ws.ts#L3240					待源码核对
+vcs.pull	packages/contracts/src/rpc.ts#L537	apps/server/src/ws.ts#L3242	git-ref-actions	src/workbench/git.rs	cargo test --locked --test workbench_git	e516213	仓库工作树及状态观察已有实现；逐项核对刷新、交付和错误
+vcs.refreshStatus	packages/contracts/src/rpc.ts#L538	apps/server/src/ws.ts#L3240	git-ref-actions	src/workbench/git.rs	cargo test --locked --test workbench_git	e516213	仓库工作树及状态观察已有实现；逐项核对刷新、交付和错误
 vcs.listRefs	packages/contracts/src/rpc.ts#L539	apps/server/src/ws.ts#L3306	git-list-refs	projects/{project}/GET git/refs	cargo test --locked --test workbench_git	b091774	实现已集成，待统一验收
-vcs.createWorktree	packages/contracts/src/rpc.ts#L540	apps/server/src/ws.ts#L3307					待源码核对
-vcs.removeWorktree	packages/contracts/src/rpc.ts#L541	apps/server/src/ws.ts#L3325					待源码核对
+vcs.createWorktree	packages/contracts/src/rpc.ts#L540	apps/server/src/ws.ts#L3307	git-ref-actions	src/workbench/git.rs	cargo test --locked --test workbench_git	e516213	仓库工作树及状态观察已有实现；逐项核对刷新、交付和错误
+vcs.removeWorktree	packages/contracts/src/rpc.ts#L541	apps/server/src/ws.ts#L3325	git-ref-actions	src/workbench/git.rs	cargo test --locked --test workbench_git	e516213	仓库工作树及状态观察已有实现；逐项核对刷新、交付和错误
 vcs.createRef	packages/contracts/src/rpc.ts#L542	apps/server/src/ws.ts#L3349	git-ref-actions	projects/{project}/POST git op=create_branch	cargo test --locked --test workbench_git	b091774	实现已集成，待统一验收
 vcs.switchRef	packages/contracts/src/rpc.ts#L543	apps/server/src/ws.ts#L3361	git-ref-actions	projects/{project}/POST git op=switch_branch	cargo test --locked --test workbench_git	b091774	实现已集成，待统一验收
 vcs.init	packages/contracts/src/rpc.ts#L544	apps/server/src/ws.ts#L3366	git-init	projects/{project}/POST git op=init	cargo test --locked --test workbench_git	b091774	实现已集成，待统一验收
@@ -65,25 +65,25 @@ terminal.write	packages/contracts/src/rpc.ts#L557	apps/server/src/ws.ts#L3389	te
 terminal.resize	packages/contracts/src/rpc.ts#L558	apps/server/src/ws.ts#L3391	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
 terminal.clear	packages/contracts/src/rpc.ts#L559	apps/server/src/ws.ts#L3393	terminal-clear	projects/{project}/POST terminals/{id}/clear	cargo test --locked --test workbench_terminal_preview	1072da0	实现已集成，待统一验收
 terminal.close	packages/contracts/src/rpc.ts#L560	apps/server/src/ws.ts#L3394	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
-preview.open	packages/contracts/src/rpc.ts#L562	apps/server/src/ws.ts#L3409					待源码核对
+preview.open	packages/contracts/src/rpc.ts#L562	apps/server/src/ws.ts#L3409	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview		有项目预览及终端监听器；全局发现、观察与资源回收待复验
 preview.resize	packages/contracts/src/rpc.ts#L563	apps/server/src/ws.ts#L3410	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	95203f8	实现已集成，待统一验收
 preview.adjust	packages/contracts/src/rpc.ts#L564	apps/server/src/ws.ts#L3411	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	95203f8	实现已集成，待统一验收
-preview.close	packages/contracts/src/rpc.ts#L565	apps/server/src/ws.ts#L3412					待源码核对
-preview.list	packages/contracts/src/rpc.ts#L566	apps/server/src/ws.ts#L3413					待源码核对
+preview.close	packages/contracts/src/rpc.ts#L565	apps/server/src/ws.ts#L3412	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview		有项目预览及终端监听器；全局发现、观察与资源回收待复验
+preview.list	packages/contracts/src/rpc.ts#L566	apps/server/src/ws.ts#L3413	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview		有项目预览及终端监听器；全局发现、观察与资源回收待复验
 preview.clearProfile	packages/contracts/src/rpc.ts#L567	apps/server/src/ws.ts#L3414	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	95203f8	实现已集成，待统一验收
 preview.reportProfiles	packages/contracts/src/rpc.ts#L568	apps/server/src/ws.ts#L3415	preview-reports	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	357a2fb	实现已集成，待统一验收
 preview.reportStatus	packages/contracts/src/rpc.ts#L569	apps/server/src/ws.ts#L3416	preview-reports	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	357a2fb	实现已集成，待统一验收
 preview.stopLocalServer	packages/contracts/src/rpc.ts#L570	apps/server/src/ws.ts#L3442	preview-stop	projects/{project}/POST terminals/{id}/ports/stop	cargo test --locked --test workbench_terminal_preview	56fd8c0	实现已集成，待统一验收
-device.configure	packages/contracts/src/rpc.ts#L572	apps/server/src/ws.ts#L3418	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.list	packages/contracts/src/rpc.ts#L573	apps/server/src/ws.ts#L3422	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.testHost	packages/contracts/src/rpc.ts#L574	apps/server/src/ws.ts#L3419	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.easAccount	packages/contracts/src/rpc.ts#L575	apps/server/src/ws.ts#L3420	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.simlockIdentity	packages/contracts/src/rpc.ts#L576	apps/server/src/ws.ts#L3421	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.open	packages/contracts/src/rpc.ts#L577	apps/server/src/ws.ts#L3433	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.close	packages/contracts/src/rpc.ts#L578	apps/server/src/ws.ts#L3437	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.shutdown	packages/contracts/src/rpc.ts#L579	apps/server/src/ws.ts#L3438	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.detail	packages/contracts/src/rpc.ts#L580	apps/server/src/ws.ts#L3439	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
-device.action	packages/contracts/src/rpc.ts#L581	apps/server/src/ws.ts#L3440	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
+device.configure	packages/contracts/src/rpc.ts#L572	apps/server/src/ws.ts#L3418	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.list	packages/contracts/src/rpc.ts#L573	apps/server/src/ws.ts#L3422	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.testHost	packages/contracts/src/rpc.ts#L574	apps/server/src/ws.ts#L3419	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.easAccount	packages/contracts/src/rpc.ts#L575	apps/server/src/ws.ts#L3420	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.simlockIdentity	packages/contracts/src/rpc.ts#L576	apps/server/src/ws.ts#L3421	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.open	packages/contracts/src/rpc.ts#L577	apps/server/src/ws.ts#L3433	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.close	packages/contracts/src/rpc.ts#L578	apps/server/src/ws.ts#L3437	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.shutdown	packages/contracts/src/rpc.ts#L579	apps/server/src/ws.ts#L3438	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.detail	packages/contracts/src/rpc.ts#L580	apps/server/src/ws.ts#L3439	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
+device.action	packages/contracts/src/rpc.ts#L581	apps/server/src/ws.ts#L3440	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
 server.probe	packages/contracts/src/rpc.ts#L583	apps/server/src/ws.ts#L2429	server-settings	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
 server.getConfig	packages/contracts/src/rpc.ts#L584	apps/server/src/ws.ts#L2431	server-settings	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
 server.getNpmRelease	packages/contracts/src/rpc.ts#L585	apps/server/src/ws.ts#L2744	server-settings	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
@@ -136,104 +136,104 @@ server.signalProcess	packages/contracts/src/rpc.ts#L631	apps/server/src/ws.ts#L2
 server.reportClientActivity	packages/contracts/src/rpc.ts#L632	apps/server/src/ws.ts#L2824	host-observability	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
 server.getUsageSummary	packages/contracts/src/rpc.ts#L633	apps/server/src/ws.ts#L2817	host-observability	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
 server.refreshUsageRates	packages/contracts/src/rpc.ts#L634	apps/server/src/ws.ts#L2818	host-observability	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
-workflows.subscribe	packages/contracts/src/rpc.ts#L636	apps/server/src/ws.ts#L2374	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-workflows.counts	packages/contracts/src/rpc.ts#L637	apps/server/src/ws.ts#L2375	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
+workflows.subscribe	packages/contracts/src/rpc.ts#L636	apps/server/src/ws.ts#L2374	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows	8e53b26,27d180f	已有对应项目视图及变更入口，待统一验收
+workflows.counts	packages/contracts/src/rpc.ts#L637	apps/server/src/ws.ts#L2375	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows	8e53b26,27d180f	已有对应项目视图及变更入口，待统一验收
 workflows.get	packages/contracts/src/rpc.ts#L638	apps/server/src/ws.ts#L2376	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
 workflows.answer	packages/contracts/src/rpc.ts#L639	apps/server/src/ws.ts#L2378	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
 workflows.resume	packages/contracts/src/rpc.ts#L640	apps/server/src/ws.ts#L2385	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
 workflows.cancel	packages/contracts/src/rpc.ts#L641	apps/server/src/ws.ts#L2387	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-workflows.getDefinition	packages/contracts/src/rpc.ts#L642	apps/server/src/ws.ts#L2389	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-workflows.saveDefinition	packages/contracts/src/rpc.ts#L643	apps/server/src/ws.ts#L2390	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-workflows.deleteDefinition	packages/contracts/src/rpc.ts#L644	apps/server/src/ws.ts#L2392	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-scheduledTasks.subscribe	packages/contracts/src/rpc.ts#L646	apps/server/src/ws.ts#L2393	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-scheduledTasks.upsert	packages/contracts/src/rpc.ts#L647	apps/server/src/ws.ts#L2395	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-scheduledTasks.setEnabled	packages/contracts/src/rpc.ts#L648	apps/server/src/ws.ts#L2396	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-scheduledTasks.delete	packages/contracts/src/rpc.ts#L649	apps/server/src/ws.ts#L2400	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-scheduledTasks.runNow	packages/contracts/src/rpc.ts#L650	apps/server/src/ws.ts#L2404	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
+workflows.getDefinition	packages/contracts/src/rpc.ts#L642	apps/server/src/ws.ts#L2389	workflow-sources	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
+workflows.saveDefinition	packages/contracts/src/rpc.ts#L643	apps/server/src/ws.ts#L2390	workflow-sources	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
+workflows.deleteDefinition	packages/contracts/src/rpc.ts#L644	apps/server/src/ws.ts#L2392	workflow-sources	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
+scheduledTasks.subscribe	packages/contracts/src/rpc.ts#L646	apps/server/src/ws.ts#L2393	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows	8e53b26,27d180f	已有对应项目视图及变更入口，待统一验收
+scheduledTasks.upsert	packages/contracts/src/rpc.ts#L647	apps/server/src/ws.ts#L2395	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows	8e53b26,27d180f	已有对应项目视图及变更入口，待统一验收
+scheduledTasks.setEnabled	packages/contracts/src/rpc.ts#L648	apps/server/src/ws.ts#L2396	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows	8e53b26,27d180f	已有对应项目视图及变更入口，待统一验收
+scheduledTasks.delete	packages/contracts/src/rpc.ts#L649	apps/server/src/ws.ts#L2400	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows	8e53b26,27d180f	已有对应项目视图及变更入口，待统一验收
+scheduledTasks.runNow	packages/contracts/src/rpc.ts#L650	apps/server/src/ws.ts#L2404	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows	8e53b26,27d180f	已有对应项目视图及变更入口，待统一验收
 scheduledTasks.rotateWebhookToken	packages/contracts/src/rpc.ts#L651	apps/server/src/ws.ts#L2408	webhook-management	POST workflows/{id}/webhook/rotate	cargo test --locked --test workbench_workflows	7e196b3	实现已集成，待统一验收
-secrets.answerRequest	packages/contracts/src/rpc.ts#L652	apps/server/src/ws.ts#L2416					待源码核对
-agentFeedback.answerRequest	packages/contracts/src/rpc.ts#L653	apps/server/src/ws.ts#L2420					待源码核对
-guestShare.create	packages/contracts/src/rpc.ts#L654	apps/server/src/ws.ts#L2412					待源码核对
+secrets.answerRequest	packages/contracts/src/rpc.ts#L652	apps/server/src/ws.ts#L2416	secret-feedback	src/workbench/interactions.rs	cargo test --locked --test chat_restart -- workbench-requests		已追到固定实现，子操作待开发或复验
+agentFeedback.answerRequest	packages/contracts/src/rpc.ts#L653	apps/server/src/ws.ts#L2420	secret-feedback	src/workbench/interactions.rs	cargo test --locked --test chat_restart -- workbench-requests		已追到固定实现，子操作待开发或复验
+guestShare.create	packages/contracts/src/rpc.ts#L654	apps/server/src/ws.ts#L2412	guest-chat-delivery	src/workbench/access/mod.rs	cargo test --locked --test workbench_remote_access		访客授权和消息投递已接入，待统一验收
 scheduledTasks.listWebhookDeliveries	packages/contracts/src/rpc.ts#L655	apps/server/src/ws.ts#L2421	webhook-management	GET workflows/{id}/deliveries	cargo test --locked --test workbench_workflows	7e196b3	实现已集成，待统一验收
 scheduledTasks.getWebhookDelivery	packages/contracts/src/rpc.ts#L656	apps/server/src/ws.ts#L2425	webhook-management	GET workflows/{id}/deliveries/{delivery}	cargo test --locked --test workbench_workflows	7e196b3	实现已集成，待统一验收
 cloud.getRelayClientStatus	packages/contracts/src/rpc.ts#L658	apps/server/src/ws.ts#L2838	relay-install	src/workbench/access/mod.rs	cargo test --locked --test chat_restart -- workbench-requests		已定位处理函数，逐操作对照中
 cloud.installRelayClient	packages/contracts/src/rpc.ts#L659	apps/server/src/ws.ts#L2839	relay-install	src/workbench/access/mod.rs	cargo test --locked --test chat_restart -- workbench-requests		已定位处理函数，逐操作对照中
-pullRequests.list	packages/contracts/src/rpc.ts#L661	apps/server/src/ws.ts#L2864					待源码核对
-pullRequests.listStats	packages/contracts/src/rpc.ts#L662	apps/server/src/ws.ts#L2865					待源码核对
-pullRequests.filterOptions	packages/contracts/src/rpc.ts#L663	apps/server/src/ws.ts#L2866					待源码核对
-pullRequests.summary	packages/contracts/src/rpc.ts#L664	apps/server/src/ws.ts#L2869					待源码核对
-pullRequests.routing	packages/contracts/src/rpc.ts#L665	apps/server/src/ws.ts#L2868					待源码核对
-pullRequests.routingIdentity	packages/contracts/src/rpc.ts#L666	apps/server/src/ws.ts#L2867					待源码核对
-pullRequests.stack	packages/contracts/src/rpc.ts#L667	apps/server/src/ws.ts#L2871					待源码核对
-pullRequests.linkedThreads	packages/contracts/src/rpc.ts#L668	apps/server/src/ws.ts#L2873					待源码核对
-pullRequests.detail	packages/contracts/src/rpc.ts#L669	apps/server/src/ws.ts#L2883					待源码核对
-pullRequests.preview	packages/contracts/src/rpc.ts#L670	apps/server/src/ws.ts#L2885					待源码核对
-pullRequests.checks	packages/contracts/src/rpc.ts#L671	apps/server/src/ws.ts#L2887					待源码核对
-pullRequests.activity	packages/contracts/src/rpc.ts#L672	apps/server/src/ws.ts#L2889					待源码核对
-pullRequests.reviewGuide	packages/contracts/src/rpc.ts#L673	apps/server/src/ws.ts#L2891					待源码核对
-pullRequests.generateReviewGuide	packages/contracts/src/rpc.ts#L674	apps/server/src/ws.ts#L2893					待源码核对
-pullRequests.threadComments	packages/contracts/src/rpc.ts#L675	apps/server/src/ws.ts#L2895					待源码核对
-pullRequests.diffFileContents	packages/contracts/src/rpc.ts#L676	apps/server/src/ws.ts#L2897					待源码核对
-pullRequests.filesViewed	packages/contracts/src/rpc.ts#L677	apps/server/src/ws.ts#L2899					待源码核对
-pullRequests.changeBreakdown	packages/contracts/src/rpc.ts#L678	apps/server/src/ws.ts#L2901					待源码核对
-pullRequests.setFilesViewed	packages/contracts/src/rpc.ts#L679	apps/server/src/ws.ts#L2903					待源码核对
-pullRequests.runAction	packages/contracts/src/rpc.ts#L680	apps/server/src/ws.ts#L2905					待源码核对
-pullRequests.update	packages/contracts/src/rpc.ts#L681	apps/server/src/ws.ts#L2915					待源码核对
-pullRequests.comment	packages/contracts/src/rpc.ts#L682	apps/server/src/ws.ts#L2917					待源码核对
-pullRequests.updateComment	packages/contracts/src/rpc.ts#L683	apps/server/src/ws.ts#L2919					待源码核对
-pullRequests.submitReview	packages/contracts/src/rpc.ts#L684	apps/server/src/ws.ts#L2921	review-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	6c92ff9	实现已集成，待统一验收
-pullRequests.replyToThread	packages/contracts/src/rpc.ts#L685	apps/server/src/ws.ts#L2923	review-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	6c92ff9	实现已集成，待统一验收
-pullRequests.setThreadResolution	packages/contracts/src/rpc.ts#L686	apps/server/src/ws.ts#L2925	review-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	6c92ff9	实现已集成，待统一验收
-pullRequests.setReaction	packages/contracts/src/rpc.ts#L687	apps/server/src/ws.ts#L2927					待源码核对
-pullRequests.invalidate	packages/contracts/src/rpc.ts#L688	apps/server/src/ws.ts#L2930					待源码核对
-pullRequests.reportState	packages/contracts/src/rpc.ts#L689	apps/server/src/ws.ts#L2929					待源码核对
-pullRequests.subscribeRefreshes	packages/contracts/src/rpc.ts#L690	apps/server/src/ws.ts#L2944					待源码核对
-pullRequests.subscribeLinkedThreadRefreshes	packages/contracts/src/rpc.ts#L691	apps/server/src/ws.ts#L2945					待源码核对
-pullRequests.reviewerCandidates	packages/contracts/src/rpc.ts#L692	apps/server/src/ws.ts#L2947					待源码核对
-pullRequests.requestReviewers	packages/contracts/src/rpc.ts#L693	apps/server/src/ws.ts#L2949					待源码核对
-pullRequests.labelCandidates	packages/contracts/src/rpc.ts#L694	apps/server/src/ws.ts#L2951					待源码核对
-pullRequests.setLabels	packages/contracts/src/rpc.ts#L695	apps/server/src/ws.ts#L2953					待源码核对
-issues.list	packages/contracts/src/rpc.ts#L698	apps/server/src/ws.ts#L2009					待源码核对
-issues.detail	packages/contracts/src/rpc.ts#L699	apps/server/src/ws.ts#L2010					待源码核对
-issues.comments	packages/contracts/src/rpc.ts#L700	apps/server/src/ws.ts#L2011	issue-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	9172da1	实现已集成，待统一验收
-issues.templates	packages/contracts/src/rpc.ts#L701	apps/server/src/ws.ts#L2012					待源码核对
-issues.candidates	packages/contracts/src/rpc.ts#L702	apps/server/src/ws.ts#L2013					待源码核对
-issues.create	packages/contracts/src/rpc.ts#L703	apps/server/src/ws.ts#L2015	issue-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	9172da1	实现已集成，待统一验收
-issues.comment	packages/contracts/src/rpc.ts#L704	apps/server/src/ws.ts#L2016	issue-actions	src/workbench/forge/routes.rs	cargo test --locked --test workbench_forge	9172da1	实现已集成，待统一验收
-issues.update	packages/contracts/src/rpc.ts#L705	apps/server/src/ws.ts#L2017					待源码核对
-issues.setState	packages/contracts/src/rpc.ts#L706	apps/server/src/ws.ts#L2018					待源码核对
-issues.react	packages/contracts/src/rpc.ts#L707	apps/server/src/ws.ts#L2019					待源码核对
-issues.linkedThreads	packages/contracts/src/rpc.ts#L708	apps/server/src/ws.ts#L2014					待源码核对
-issueTrackers.list	packages/contracts/src/rpc.ts#L709	apps/server/src/ws.ts#L2020					待源码核对
-issueTrackers.connect	packages/contracts/src/rpc.ts#L710	apps/server/src/ws.ts#L2021					待源码核对
-issueTrackers.bindProject	packages/contracts/src/rpc.ts#L711	apps/server/src/ws.ts#L2022					待源码核对
-sourceControl.lookupRepository	packages/contracts/src/rpc.ts#L713	apps/server/src/ws.ts#L2955					待源码核对
-sourceControl.cloneRepository	packages/contracts/src/rpc.ts#L714	apps/server/src/ws.ts#L2957					待源码核对
-sourceControl.publishRepository	packages/contracts/src/rpc.ts#L715	apps/server/src/ws.ts#L3030					待源码核对
-sourceControl.signInStart	packages/contracts/src/rpc.ts#L716	apps/server/src/ws.ts#L2959					待源码核对
-sourceControl.signInWait	packages/contracts/src/rpc.ts#L717	apps/server/src/ws.ts#L2960					待源码核对
-sourceControl.signInCancel	packages/contracts/src/rpc.ts#L718	apps/server/src/ws.ts#L2961					待源码核对
-sourceControl.appAccess	packages/contracts/src/rpc.ts#L719	apps/server/src/ws.ts#L2962					待源码核对
-sourceControl.starred	packages/contracts/src/rpc.ts#L720	apps/server/src/ws.ts#L2963					待源码核对
-sourceControl.star	packages/contracts/src/rpc.ts#L721	apps/server/src/ws.ts#L2964					待源码核对
-projectClone.start	packages/contracts/src/rpc.ts#L722	apps/server/src/ws.ts#L2965	project-hosted-clone	src/workbench/forge/clone_jobs.rs	cargo test --locked --test workbench_forge	0800f7f	实现已集成，待统一验收
-projectClone.cancel	packages/contracts/src/rpc.ts#L723	apps/server/src/ws.ts#L3025	project-hosted-clone	src/workbench/forge/clone_jobs.rs	cargo test --locked --test workbench_forge	0800f7f	实现已集成，待统一验收
-projectClone.retry	packages/contracts/src/rpc.ts#L724	apps/server/src/ws.ts#L3027	project-hosted-clone	src/workbench/forge/clone_jobs.rs	cargo test --locked --test workbench_forge	0800f7f	实现已集成，待统一验收
+pullRequests.list	packages/contracts/src/rpc.ts#L661	apps/server/src/ws.ts#L2864	review-actions	forge/query pulls	cargo test --locked --test workbench_forge		仅单项目开放 PR，跨项目筛选与游标待补
+pullRequests.listStats	packages/contracts/src/rpc.ts#L662	apps/server/src/ws.ts#L2865	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		跨仓库计数、统计窗口和截断
+pullRequests.filterOptions	packages/contracts/src/rpc.ts#L663	apps/server/src/ws.ts#L2866	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		仓库、作者和标签候选聚合
+pullRequests.summary	packages/contracts/src/rpc.ts#L664	apps/server/src/ws.ts#L2869	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		分离摘要、来源项目与观察时间
+pullRequests.routing	packages/contracts/src/rpc.ts#L665	apps/server/src/ws.ts#L2868	review-actions	GET forge/routing	cargo test --locked --test workbench_forge		原生账号 + 工作区及项目名；操作复用同一 credential 校验预期 host/account。
+pullRequests.routingIdentity	packages/contracts/src/rpc.ts#L666	apps/server/src/ws.ts#L2867	review-actions	GET /forge/routing-identity?host	cargo test --locked --test workbench_forge		GitHub 按 host 查询原生用户 ID/login，REST 和 GraphQL 回退。
+pullRequests.stack	packages/contracts/src/rpc.ts#L667	apps/server/src/ws.ts#L2871	review-actions	GET forge/pulls/{n}/stack	cargo test --locked --test workbench_forge		GitHub 候选与详情、404；GitCafe 层排序与最新头；TanStack 同栈至少两层；其余驱动返回 null。
+pullRequests.linkedThreads	packages/contracts/src/rpc.ts#L668	apps/server/src/ws.ts#L2873	review-actions	forge/links	cargo test --locked --test workbench_forge		按仓库和对象聚合聊天、归档及 settled 状态
+pullRequests.detail	packages/contracts/src/rpc.ts#L669	apps/server/src/ws.ts#L2883	review-actions	forge/query pull	cargo test --locked --test workbench_forge		已有摘要与修订，缺 viewer 权限、合并状态及更多字段
+pullRequests.preview	packages/contracts/src/rpc.ts#L670	apps/server/src/ws.ts#L2885	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		轻量预览、作者及观察时间
+pullRequests.checks	packages/contracts/src/rpc.ts#L671	apps/server/src/ws.ts#L2887	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		远端检查状态及运行地址
+pullRequests.activity	packages/contracts/src/rpc.ts#L672	apps/server/src/ws.ts#L2889	review-actions	forge/query review_threads	cargo test --locked --test workbench_forge		已有审阅线程，缺普通讨论、提交、审阅与反应聚合
+pullRequests.reviewGuide	packages/contracts/src/rpc.ts#L673	apps/server/src/ws.ts#L2891	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		按修订读取模型生成的审阅指南
+pullRequests.generateReviewGuide	packages/contracts/src/rpc.ts#L674	apps/server/src/ws.ts#L2893	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		指南生成、并发合并与修订过期
+pullRequests.threadComments	packages/contracts/src/rpc.ts#L675	apps/server/src/ws.ts#L2895	review-actions	forge/query thread_comments	cargo test --locked --test workbench_forge		GitHub 限定所属 PR 与单线程游标、隐藏数
+pullRequests.diffFileContents	packages/contracts/src/rpc.ts#L676	apps/server/src/ws.ts#L2897	review-actions	forge/pulls/{n}/diff?path	cargo test --locked --test workbench_forge		现有补丁，缺按修订新旧完整内容
+pullRequests.filesViewed	packages/contracts/src/rpc.ts#L677	apps/server/src/ws.ts#L2899	review-actions	forge/pulls/{n}/diff	cargo test --locked --test workbench_forge		本地按 head 跟踪 viewed，缺原生 per-viewer dismissed
+pullRequests.changeBreakdown	packages/contracts/src/rpc.ts#L678	apps/server/src/ws.ts#L2901	review-actions	GET forge/pulls/{n}/change-breakdown	cargo test --locked --test workbench_forge		GitHub 最多五页、GitLab 比较文件总数、TanStack 原生截断标志。五类增加/删除；截断或不支持返回 null。
+pullRequests.setFilesViewed	packages/contracts/src/rpc.ts#L679	apps/server/src/ws.ts#L2903	review-actions	forge/pulls/{n}/reviewed	cargo test --locked --test workbench_forge		本地单文件已阅，缺原生批量及文件版本
+pullRequests.runAction	packages/contracts/src/rpc.ts#L680	apps/server/src/ws.ts#L2905	review-actions	forge/drivers	cargo test --locked --test workbench_forge		元数据已有，缺按驱动的 merge/close/draft 等真正动作
+pullRequests.update	packages/contracts/src/rpc.ts#L681	apps/server/src/ws.ts#L2915	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		PR 标题、正文及维护者修改权
+pullRequests.comment	packages/contracts/src/rpc.ts#L682	apps/server/src/ws.ts#L2917	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		在 PR 普通讨论区中发表评论
+pullRequests.updateComment	packages/contracts/src/rpc.ts#L683	apps/server/src/ws.ts#L2919	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		按普通评论或行评种类改写正文
+pullRequests.submitReview	packages/contracts/src/rpc.ts#L684	apps/server/src/ws.ts#L2921	review-actions	forge/operations submit_review	cargo test --locked --test workbench_forge		已接支持的 verdict、行和区间及部分回执
+pullRequests.replyToThread	packages/contracts/src/rpc.ts#L685	apps/server/src/ws.ts#L2923	review-actions	forge/operations reply_to_thread	cargo test --locked --test workbench_forge		按驱动远端回复、稳定 UUID
+pullRequests.setThreadResolution	packages/contracts/src/rpc.ts#L686	apps/server/src/ws.ts#L2925	review-actions	forge/operations set_thread_resolution	cargo test --locked --test workbench_forge		远端解决、重开并独立回读
+pullRequests.setReaction	packages/contracts/src/rpc.ts#L687	apps/server/src/ws.ts#L2927	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		按 subject 和 emoji 增删自己的反应
+pullRequests.invalidate	packages/contracts/src/rpc.ts#L688	apps/server/src/ws.ts#L2930	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		按对象或范围失效和广播刷新
+pullRequests.reportState	packages/contracts/src/rpc.ts#L689	apps/server/src/ws.ts#L2929	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		按观察时刻合并来源状态
+pullRequests.subscribeRefreshes	packages/contracts/src/rpc.ts#L690	apps/server/src/ws.ts#L2944	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		订阅托管数据刷新消息
+pullRequests.subscribeLinkedThreadRefreshes	packages/contracts/src/rpc.ts#L691	apps/server/src/ws.ts#L2945	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		订阅链接聊天变化
+pullRequests.reviewerCandidates	packages/contracts/src/rpc.ts#L692	apps/server/src/ws.ts#L2947	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		按项目/PR 列候选和截断
+pullRequests.requestReviewers	packages/contracts/src/rpc.ts#L693	apps/server/src/ws.ts#L2949	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		添加或移除用户/团队 reviewer
+pullRequests.labelCandidates	packages/contracts/src/rpc.ts#L694	apps/server/src/ws.ts#L2951	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		PR 已应用及可用标签
+pullRequests.setLabels	packages/contracts/src/rpc.ts#L695	apps/server/src/ws.ts#L2953	review-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		按名/ID 添加及移除 PR 标签
+issues.list	packages/contracts/src/rpc.ts#L698	apps/server/src/ws.ts#L2009	issue-actions	forge/query issues	cargo test --locked --test workbench_forge		有单范围未关闭项，缺跨范围分页筛选及汇总
+issues.detail	packages/contracts/src/rpc.ts#L699	apps/server/src/ws.ts#L2010	issue-actions	forge/query issue	cargo test --locked --test workbench_forge		有身份和摘要，缺完整 viewer 权限、关联 PR、时间线
+issues.comments	packages/contracts/src/rpc.ts#L700	apps/server/src/ws.ts#L2011	issue-actions	forge/query issue_comments	cargo test --locked --test workbench_forge		有分页与作者/正文/标识，部分反应及富元数据待补
+issues.templates	packages/contracts/src/rpc.ts#L701	apps/server/src/ws.ts#L2012	issue-actions	GET forge/issue-tracker/templates	cargo test --locked --test workbench_forge		GitHub/Forgejo/GitLab/Linear 的模板、空白许可及外部表单；Azure/TanStack 明确拒绝。
+issues.candidates	packages/contracts/src/rpc.ts#L702	apps/server/src/ws.ts#L2013	issue-actions	GET forge/issue-tracker/candidates	cargo test --locked --test workbench_forge		六 tracker 的标签、原生可写 assignee ID、账号/团队范围和截断。
+issues.create	packages/contracts/src/rpc.ts#L703	apps/server/src/ws.ts#L2015	issue-actions	forge/operations create_issue	cargo test --locked --test workbench_forge		六驱动创建、标签、指派和异常回执
+issues.comment	packages/contracts/src/rpc.ts#L704	apps/server/src/ws.ts#L2016	issue-actions	forge/operations comment_issue	cargo test --locked --test workbench_forge		六驱动评论、独立回读与去重
+issues.update	packages/contracts/src/rpc.ts#L705	apps/server/src/ws.ts#L2017	issue-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		修改标题、正文、标签及指派
+issues.setState	packages/contracts/src/rpc.ts#L706	apps/server/src/ws.ts#L2018	issue-actions	forge/operations set_issue_state	cargo test --locked --test workbench_forge		已写原生状态，缺完整状态及权限目录
+issues.react	packages/contracts/src/rpc.ts#L707	apps/server/src/ws.ts#L2019	issue-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		Issue 和评论反应，校验对象归属
+issues.linkedThreads	packages/contracts/src/rpc.ts#L708	apps/server/src/ws.ts#L2014	issue-actions	forge/links	cargo test --locked --test workbench_forge		现有按项目绑定，缺跨项目对象及聊天投影
+issueTrackers.list	packages/contracts/src/rpc.ts#L709	apps/server/src/ws.ts#L2020	issue-actions	forge/issue-tracker	cargo test --locked --test workbench_forge		已有单项目身份，缺账号、绑定与可用范围的目录
+issueTrackers.connect	packages/contracts/src/rpc.ts#L710	apps/server/src/ws.ts#L2021	issue-actions	详见 backend-workbench-forge-source-map.tsv	cargo test --locked --test workbench_forge		主动连接、验证、凭据存储和解除账号
+issueTrackers.bindProject	packages/contracts/src/rpc.ts#L711	apps/server/src/ws.ts#L2022	issue-actions	KAR_FORGE_CONFIG.issue_trackers	cargo test --locked --test workbench_forge		有 Linear 配置，缺公开绑定/解绑和多范围
+sourceControl.lookupRepository	packages/contracts/src/rpc.ts#L713	apps/server/src/ws.ts#L2955	git-publish-target	POST /forge/repositories/lookup	cargo test --locked --test workbench_forge		八个驱动读取原生仓库、校验身份，返回各自真实 HTTPS/SSH 地址。
+sourceControl.cloneRepository	packages/contracts/src/rpc.ts#L714	apps/server/src/ws.ts#L2957	project-hosted-clone	POST /forge/repositories/clone	cargo test --locked --test workbench_forge		接受 URL 或仓库查找结果，原子落盘。SSH 认证/主机指纹失败自动回 HTTPS，显式 ssh 保持错误；直接/进度克隆共用传输和凭据脱敏。
+sourceControl.publishRepository	packages/contracts/src/rpc.ts#L715	apps/server/src/ws.ts#L3030	git-publish-target	POST /projects/{project}/forge/publish	cargo test --locked --test workbench_forge		八种原生创建、私有性边界、冲突 remote、空仓/推送/SSH 回退。按 UUID 记录远端创建、断回执和本地重试。
+sourceControl.signInStart	packages/contracts/src/rpc.ts#L716	apps/server/src/ws.ts#L2959	git-publish-target	POST /forge/sign-in/start	cargo test --locked --test workbench_forge		Kar 应用客户端 ID、GitHub 设备码、替换旧请求及受限验证 URI。
+sourceControl.signInWait	packages/contracts/src/rpc.ts#L717	apps/server/src/ws.ts#L2960	git-publish-target	POST /forge/sign-in/wait	cargo test --locked --test workbench_forge		pending/slow_down/denied/expired、账号核验、持久会话、重新授权及刷新。
+sourceControl.signInCancel	packages/contracts/src/rpc.ts#L718	apps/server/src/ws.ts#L2961	git-publish-target	POST /forge/sign-in/cancel	cargo test --locked --test workbench_forge		中断轮询，等待者收到 cancelled；终态保持。
+sourceControl.appAccess	packages/contracts/src/rpc.ts#L719	apps/server/src/ws.ts#L2962	git-publish-target	POST /forge/app-access	cargo test --locked --test workbench_forge		应用凭据独立于环境令牌；all/selected 安装、分页、截断与显示备用。
+sourceControl.starred	packages/contracts/src/rpc.ts#L720	apps/server/src/ws.ts#L2963	git-publish-target	GET forge/starred	cargo test --locked --test workbench_forge		GitHub 原生 204 才返回 true，其余驱动及失败返回 false。
+sourceControl.star	packages/contracts/src/rpc.ts#L721	apps/server/src/ws.ts#L2964	git-publish-target	PUT forge/starred	cargo test --locked --test workbench_forge		GitHub 账号幂等 PUT，仅 204 为 true；其他驱动返回 false。
+projectClone.start	packages/contracts/src/rpc.ts#L722	apps/server/src/ws.ts#L2965	git-publish-target	POST /forge/project-clones	cargo test --locked --test workbench_forge		在授权空目录早建项目，SSE 进度/停滞、独立暂存和原子发布，聊天等待就绪。
+projectClone.cancel	packages/contracts/src/rpc.ts#L723	apps/server/src/ws.ts#L3025	git-publish-target	POST /forge/project-clones/{id}/cancel	cargo test --locked --test workbench_forge		终止自己的 git 进程树并等待结束，保留原项目可复验。
+projectClone.retry	packages/contracts/src/rpc.ts#L724	apps/server/src/ws.ts#L3027	git-publish-target	POST /forge/project-clones/{id}/retry	cargo test --locked --test workbench_forge		失败/取消原项目和输入可重试；中断后通过原子提交回执区分已发布和失败。
 subscribeProjectClones	packages/contracts/src/rpc.ts#L725	apps/server/src/ws.ts#L3029					待源码核对
-subscribeVcsStatus	packages/contracts/src/rpc.ts#L727	apps/server/src/ws.ts#L3234					待源码核对
-subscribeVcsBranch	packages/contracts/src/rpc.ts#L728	apps/server/src/ws.ts#L3231					待源码核对
-vcs.refreshBranch	packages/contracts/src/rpc.ts#L729	apps/server/src/ws.ts#L3232					待源码核对
-subscribeWorktreeSetup	packages/contracts/src/rpc.ts#L730	apps/server/src/ws.ts#L3235					待源码核对
-worktreeSetup.cancel	packages/contracts/src/rpc.ts#L731	apps/server/src/ws.ts#L3236					待源码核对
+subscribeVcsStatus	packages/contracts/src/rpc.ts#L727	apps/server/src/ws.ts#L3234	git-ref-actions	src/workbench/git.rs	cargo test --locked --test workbench_git	e516213	仓库工作树及状态观察已有实现；逐项核对刷新、交付和错误
+subscribeVcsBranch	packages/contracts/src/rpc.ts#L728	apps/server/src/ws.ts#L3231	git-ref-actions	src/workbench/git.rs	cargo test --locked --test workbench_git	e516213	仓库工作树及状态观察已有实现；逐项核对刷新、交付和错误
+vcs.refreshBranch	packages/contracts/src/rpc.ts#L729	apps/server/src/ws.ts#L3232	git-ref-actions	src/workbench/git.rs	cargo test --locked --test workbench_git	e516213	仓库工作树及状态观察已有实现；逐项核对刷新、交付和错误
+subscribeWorktreeSetup	packages/contracts/src/rpc.ts#L730	apps/server/src/ws.ts#L3235	task-folders	src/workbench/task_folders/mod.rs	cargo test --locked --test chat_restart -- workbench-task-folders	c4c9bbb	已有进度及取消入口，逐项验收待执行
+worktreeSetup.cancel	packages/contracts/src/rpc.ts#L731	apps/server/src/ws.ts#L3236	task-folders	src/workbench/task_folders/mod.rs	cargo test --locked --test chat_restart -- workbench-task-folders	c4c9bbb	已有进度及取消入口，逐项验收待执行
 subscribeTerminalMetadata	packages/contracts/src/rpc.ts#L732	apps/server/src/ws.ts#L3402	terminal-views	src/workbench/terminal_preview/mod.rs	cargo test --locked --test workbench_terminal_preview		已定位处理函数，逐操作对照中
 subscribePreviewEvents	packages/contracts/src/rpc.ts#L733	apps/server/src/ws.ts#L3417	preview-reports	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview	357a2fb	实现已集成，待统一验收
-subscribeDiscoveredLocalServers	packages/contracts/src/rpc.ts#L734	apps/server/src/ws.ts#L3443					待源码核对
-subscribeDeviceState	packages/contracts/src/rpc.ts#L735	apps/server/src/ws.ts#L3441	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices		已定位处理函数，逐操作对照中
+subscribeDiscoveredLocalServers	packages/contracts/src/rpc.ts#L734	apps/server/src/ws.ts#L3443	preview-controls	src/workbench/terminal_preview/routes.rs	cargo test --locked --test workbench_terminal_preview		有项目预览及终端监听器；全局发现、观察与资源回收待复验
+subscribeDeviceState	packages/contracts/src/rpc.ts#L735	apps/server/src/ws.ts#L3441	native-devices	src/workbench/devices/mod.rs	cargo test --locked --test chat_restart -- workbench-devices	dfc2b4d,41dd136,2ee40a3	驱动和权限已接入；逐设备验收详见 backend-native-devices.md
 subscribeServerConfig	packages/contracts/src/rpc.ts#L736	apps/server/src/ws.ts#L3469	server-settings	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
 subscribeServerLifecycle	packages/contracts/src/rpc.ts#L737	apps/server/src/ws.ts#L3627	server-settings	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
 subscribeAuthAccess	packages/contracts/src/rpc.ts#L738	apps/server/src/ws.ts#L3647	workbench-peers	src/workbench/access/mod.rs	cargo test --locked --test chat_restart -- workbench-requests		已定位处理函数，逐操作对照中
 subscribeResourceTelemetry	packages/contracts/src/rpc.ts#L739	apps/server/src/ws.ts#L3705	host-observability	src/workbench/mod.rs	cargo test --locked --test chat_restart -- workbench-projects		已定位处理函数，逐操作对照中
-orchestration.dispatchCommand	packages/contracts/src/orchestrationV2.ts#L4076	apps/server/src/ws.ts#L2023					待源码核对
+orchestration.dispatchCommand	packages/contracts/src/orchestrationV2.ts#L4076	apps/server/src/ws.ts#L2023	dispatch-preparation	docs/backend-workbench-command-map.tsv	cargo test --locked --test chat_restart -- workbench-task-folders	0f96f1d	58 个公开命令及 17 个内部命令已定位，按对应清单逐项核对
 orchestration.getTurnDiff	packages/contracts/src/orchestrationV2.ts#L4077	apps/server/src/ws.ts#L2096	checkpoint-patches	GET checkpoints/diff	cargo test --locked --test chat_restart -- workbench-fork	4e50ef6	实现已集成，待统一验收
 orchestration.getFullThreadDiff	packages/contracts/src/orchestrationV2.ts#L4078	apps/server/src/ws.ts#L2106	checkpoint-patches	GET checkpoints/diff	cargo test --locked --test chat_restart -- workbench-fork	4e50ef6	实现已集成，待统一验收
 orchestration.searchThreads	packages/contracts/src/orchestrationV2.ts#L4079	apps/server/src/ws.ts#L2124	chat-shell-read	src/workbench/thread_state/queries.rs	cargo test --locked --test chat_restart -- workbench-fork		已定位处理函数，逐操作对照中
@@ -246,13 +246,13 @@ orchestration.getThreadLinkMetadata	packages/contracts/src/orchestrationV2.ts#L4
 orchestration.getWorktreeThreadIds	packages/contracts/src/orchestrationV2.ts#L4086	apps/server/src/ws.ts#L2182	chat-shell-read	POST /chat-state/query	cargo test --locked --test chat_restart -- workbench-fork	a3970f2	查询已接入，跨原生子任务与侧聊天边界待核对
 orchestration.getOlderSettledThreads	packages/contracts/src/orchestrationV2.ts#L4087	apps/server/src/ws.ts#L2166	chat-shell-read	POST /chat-state/query	cargo test --locked --test chat_restart -- workbench-fork	a3970f2	查询已接入，跨原生子任务与侧聊天边界待核对
 orchestration.getThreadProjection	packages/contracts/src/orchestrationV2.ts#L4088	apps/server/src/ws.ts#L2187	chat-shell-read	src/workbench/thread_state/queries.rs	cargo test --locked --test chat_restart -- workbench-fork		已定位处理函数，逐操作对照中
-orchestration.getWorkflowScript	packages/contracts/src/orchestrationV2.ts#L4089	apps/server/src/ws.ts#L2081	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-orchestration.getNativeChildWork	packages/contracts/src/orchestrationV2.ts#L4090	apps/server/src/ws.ts#L2083					待源码核对
-orchestration.stopWorkflow	packages/contracts/src/orchestrationV2.ts#L4091	apps/server/src/ws.ts#L2078	workflow-management	src/workbench/workflows/routes.rs	cargo test --locked --test workbench_workflows		已定位处理函数，逐操作对照中
-orchestration.forceStopThread	packages/contracts/src/orchestrationV2.ts#L4092	apps/server/src/ws.ts#L2079	turn-control				已登记差异
+orchestration.getWorkflowScript	packages/contracts/src/orchestrationV2.ts#L4089	apps/server/src/ws.ts#L2081	workflow-sources	src/workbench/workflows/mod.rs	cargo test --locked --test workbench_workflows		已追到固定实现，子操作待开发或复验
+orchestration.getNativeChildWork	packages/contracts/src/orchestrationV2.ts#L4090	apps/server/src/ws.ts#L2083	native-child-work	src/chat/log/acp_children.rs	cargo test --locked --test chat_restart -- workbench-requests		现有实时子会话归属，原生只读批次查询待补
+orchestration.stopWorkflow	packages/contracts/src/orchestrationV2.ts#L4091	apps/server/src/ws.ts#L2078	turn-control	src/transport.rs	cargo test --locked --test chat_restart -- workbench-requests		原生 stop_task 可用，工作台所选工作流检查待补
+orchestration.forceStopThread	packages/contracts/src/orchestrationV2.ts#L4092	apps/server/src/ws.ts#L2079	turn-control	POST chats/{chat}/force-stop	cargo test --locked --test chat_restart -- workbench-requests	dd63467	定向释放与队列隔离已集成，共享及供应商场景待统一实测
 orchestration.getTurnItem	packages/contracts/src/orchestrationV2.ts#L4093	apps/server/src/ws.ts#L2085	thread-find	src/workbench/thread_find/mod.rs	cargo test --locked --test chat_restart -- workbench-fork	e93c30a	实现已接入，显示文本投影待核对
-orchestration.launchThread	packages/contracts/src/orchestrationV2.ts#L4094	apps/server/src/ws.ts#L2214					待源码核对
+orchestration.launchThread	packages/contracts/src/orchestrationV2.ts#L4094	apps/server/src/ws.ts#L2214	thread-launch	src/workbench/task_folders/mod.rs	cargo test --locked --test chat_restart -- workbench-task-folders	c4c9bbb	目录准备和独立会话均可用，合并为一次可重试启动待补
 orchestration.subscribeShell	packages/contracts/src/orchestrationV2.ts#L4095	apps/server/src/ws.ts#L2357	chat-shell-read	src/workbench/thread_state/queries.rs	cargo test --locked --test chat_restart -- workbench-fork		已定位处理函数，逐操作对照中
 orchestration.subscribeThread	packages/contracts/src/orchestrationV2.ts#L4096	apps/server/src/ws.ts#L2359	chat-shell-read	src/workbench/thread_state/queries.rs	cargo test --locked --test chat_restart -- workbench-fork		已定位处理函数，逐操作对照中
-orchestration.subscribeCommandOutput	packages/contracts/src/orchestrationV2.ts#L4097	apps/server/src/ws.ts#L2366					待源码核对
-orchestration.subscribePromptSuggestion	packages/contracts/src/orchestrationV2.ts#L4098	apps/server/src/ws.ts#L2372					待源码核对
+orchestration.subscribeCommandOutput	packages/contracts/src/orchestrationV2.ts#L4097	apps/server/src/ws.ts#L2366	command-output	src/chat/timeline.rs	cargo test --locked --test chat_restart -- workbench-fork		已追到固定实现，子操作待开发或复验
+orchestration.subscribePromptSuggestion	packages/contracts/src/orchestrationV2.ts#L4098	apps/server/src/ws.ts#L2372	prompt-suggestion	src/workbench/interactions.rs	cargo test --locked --test chat_restart -- workbench-requests		已追到固定实现，子操作待开发或复验
