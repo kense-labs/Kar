@@ -600,7 +600,8 @@ impl Session {
         let commands = Actor::start(
             runtime,
             &options,
-            crate::transport::LaunchFiles {
+            crate::transport::Launch {
+                opencode_v2: runtime.id == "opencode" && !opencode_v1,
                 dsh_patch,
                 pi_mcp,
                 qwen_defaults: memory.and_then(|m| m.directory),

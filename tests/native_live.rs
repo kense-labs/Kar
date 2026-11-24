@@ -107,6 +107,22 @@ fn respond_observed(
         })
         .map(Value::to_string)
         .unwrap_or_default();
+    if last.contains("kar-opencode-retry-once")
+        && request["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+        && let Some(dir) = workspace.and_then(std::path::Path::parent)
+        && std::fs::File::create_new(dir.join("first-model-overload")).is_ok()
+    {
+        let body = r#"{"type":"error","error":{"type":"overloaded_error","message":"temporary model overload"}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 529 Overloaded\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )?;
+        return stream.flush();
+    }
     if last.contains("kar-fixture-decline-credential") {
         let response = json!({"type":"error","error":{"type":"authentication_error","message":"fixture credential was rejected"}}).to_string();
         write!(

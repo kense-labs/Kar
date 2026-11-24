@@ -209,8 +209,18 @@ impl Projection {
                                 steps.insert(i, high_water(u, base));
                                 a.account(u, base, &mut events);
                             }
-                            if let Some(reason) = string(&v["retry"]["error"]["message"]) {
-                                events.push(Event::Retry { reason });
+                            let retry = &v["retry"];
+                            if retry["attempt"].is_number()
+                                || retry
+                                    .pointer("/error/message")
+                                    .is_some_and(Value::is_string)
+                            {
+                                events.push(Event::Retry {
+                                    attempt: retry["attempt"].as_u64(),
+                                    max_attempts: retry["max_attempts"].as_u64(),
+                                    delay_ms: retry["delay_ms"].as_u64(),
+                                    reason: string(&retry["error"]["message"]),
+                                });
                             }
                         }
                         "item.started" | "item.ended" | "item.updated" | "item.delta" => {

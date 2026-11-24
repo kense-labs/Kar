@@ -239,7 +239,10 @@ impl Projection {
                 Some("llm_retry") => {
                     if let Some(reason) = e["text"].as_str() {
                         events.push(Event::Retry {
-                            reason: reason.into(),
+                            attempt: None,
+                            max_attempts: None,
+                            delay_ms: None,
+                            reason: Some(reason.into()),
                         });
                     }
                 }

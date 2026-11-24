@@ -687,3 +687,78 @@ async fn kill_controller_after_native_end_and_deliver_queue() {
 #[cfg(unix)]
 #[path = "opencode_queue.rs"]
 mod queue_crash;
+
+#[tokio::test]
+#[ignore = "requires a real OpenCode ACP executable and a local scripted Anthropic endpoint"]
+async fn native_retry_is_projected_once_and_replayed_at_its_original_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    let (opts, calls) = fixture(&base);
+    let program: std::path::PathBuf = std::env::var_os("KAR_OPENCODE_BIN")
+        .expect("set KAR_OPENCODE_BIN")
+        .into();
+    let (version, v2) = queue_crash::version(&program);
+    let store = ChatStore::open(base.join("chats")).unwrap();
+    let session = store
+        .create("opencode", Some(&program), opts)
+        .await
+        .unwrap();
+    let id = session.info().id;
+    let snapshot = store.feed_snapshot(id).unwrap();
+    let mut feed = store.follow(id, Some(snapshot.cursor)).unwrap();
+    let mut replica = kar::chat::ChatReplica::from_snapshot(snapshot);
+    let turn = tokio::time::timeout(
+        Duration::from_secs(60),
+        session.send(uuid::Uuid::new_v4(), "kar-opencode-retry-once"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(turn.status, TurnStatus::Completed);
+    assert!(base.join("first-model-overload").exists());
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.to_string().contains("kar-opencode-retry-once"))
+            .count()
+            >= 2
+    );
+    let notices: Vec<_> = turn
+        .items
+        .iter()
+        .filter_map(|item| match &item.item {
+            kar::chat::Item::Retry { status } => Some(status),
+            _ => None,
+        })
+        .collect();
+    if v2 {
+        assert_eq!(notices.len(), 1, "{version}: {notices:?}");
+        assert!(notices[0].attempt.is_some_and(|n| n > 0));
+        assert!(notices[0].delay_ms.is_some());
+        assert!(notices[0].received_ms > 0);
+    } else {
+        assert!(notices.is_empty(), "{version}: {notices:?}");
+    }
+    session.close().await.unwrap();
+    let latest = store.feed_snapshot(id).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while replica.cursor() != latest.cursor {
+            let next = feed.recv().await.unwrap();
+            assert!(replica.apply(next.clone()).unwrap());
+            assert!(!replica.apply(next).unwrap());
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(replica.turns(), latest.history.turns);
+    assert_eq!(
+        ChatStore::open(base.join("chats"))
+            .unwrap()
+            .history(id)
+            .unwrap()
+            .turns,
+        vec![turn]
+    );
+}

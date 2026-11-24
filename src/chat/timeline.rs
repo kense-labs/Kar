@@ -45,6 +45,9 @@ pub enum Item {
         id: String,
         activity: Tool,
     },
+    Retry {
+        status: RetryStatus,
+    },
     Compaction {
         report: crate::CompactionReport,
     },
@@ -53,6 +56,20 @@ pub enum Item {
         diff: String,
     },
 }
+/// A provider retry as observed at the time of its native notification.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetryStatus {
+    pub received_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TimelineItem {
     pub source: Agent,
@@ -479,6 +496,12 @@ impl ChatTurn {
                     }
                 }
 
+                Edit::Retry { status } => self.items.push(TimelineItem {
+                    source: frame.source.clone(),
+                    item: Item::Retry {
+                        status: status.clone(),
+                    },
+                }),
                 Edit::Compaction { report } => self.items.push(TimelineItem {
                     source: frame.source.clone(),
                     item: Item::Compaction {
@@ -941,6 +964,9 @@ pub enum Edit {
         id: String,
         text: String,
     },
+    Retry {
+        status: RetryStatus,
+    },
     Compaction {
         report: crate::CompactionReport,
     },
@@ -1144,6 +1170,23 @@ impl MessageIds {
         let mut compactions = r.compactions();
         for event in &r.events {
             let (role, text, final_text) = match event {
+                Event::Retry {
+                    attempt,
+                    max_attempts,
+                    delay_ms,
+                    reason,
+                } => {
+                    edits.push(Edit::Retry {
+                        status: RetryStatus {
+                            received_ms: r.timestamp_ms,
+                            attempt: *attempt,
+                            max_attempts: *max_attempts,
+                            delay_ms: *delay_ms,
+                            reason: reason.clone(),
+                        },
+                    });
+                    continue;
+                }
                 Event::Compaction { .. } => {
                     if let Some(report) = compactions.next() {
                         edits.push(Edit::Compaction { report });

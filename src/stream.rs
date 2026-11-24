@@ -305,7 +305,14 @@ pub enum Event {
         state: String,
     },
     Retry {
-        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_attempts: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delay_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     UserMessage {
         text: String,

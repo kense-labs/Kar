@@ -19,7 +19,7 @@ pub(crate) use queue::Admission;
 pub use queue::{InputStatus, QueuedInput};
 mod timeline;
 pub(crate) use log::Sink;
-pub use timeline::{ChatTurn, Item, Role, TimelineItem, TurnStatus};
+pub use timeline::{ChatTurn, Item, RetryStatus, Role, TimelineItem, TurnStatus};
 
 use crate::{
     ApprovalMode, Error, PendingRequest, PermissionDecision, Protocol, Result, Session,

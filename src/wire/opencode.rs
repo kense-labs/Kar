@@ -65,6 +65,7 @@ pub(crate) fn spawned(update: &Value) -> Option<&str> {
 
 #[derive(Default)]
 pub(crate) struct Children {
+    v2: bool,
     pub extended: bool,
     claims: HashSet<(String, String)>,
     spawns: HashSet<(String, String)>,
@@ -72,6 +73,12 @@ pub(crate) struct Children {
 }
 pub(crate) const STEER: &str = "_session/steering";
 impl Children {
+    pub fn new(v2: bool) -> Self {
+        Self {
+            v2,
+            ..Self::default()
+        }
+    }
     fn link(
         &mut self,
         parent: &str,
@@ -102,6 +109,7 @@ impl Children {
         &mut self,
         root: Option<&str>,
         packet: &Value,
+        received_ms: u64,
         compactions: &mut super::compaction::Compactions,
     ) -> Option<Vec<Event>> {
         let method = packet["method"].as_str()?;
@@ -173,9 +181,103 @@ impl Children {
             events.extend(compactions.observe(Protocol::Acp, packet));
             carrier
         };
+        if self.v2
+            && let Some(event) = retry(update, received_ms)
+        {
+            events.push(event);
+        }
         if let Some(child) = spawned(update).filter(|id| Some(*id) != root) {
             self.link(source, child, false, false, &mut events);
         }
         Some(events)
+    }
+}
+
+// The ACP prompt response can carry the last retry again. Only the scheduled update is an event.
+fn retry(update: &Value, received_ms: u64) -> Option<Event> {
+    if update["sessionUpdate"] != "session_info_update" {
+        return None;
+    }
+    let retry = update.pointer("/_meta/opencode~1retry")?;
+    let attempt = retry["attempt"]
+        .as_f64()
+        .filter(|n| n.fract() == 0.0 && (1.0..=9_007_199_254_740_991.0).contains(n))?
+        as u64;
+    let delay_ms = retry["nextRetryAt"]
+        .as_str()
+        .and_then(|s| s.parse::<jiff::Timestamp>().ok())
+        .map(|at| {
+            u64::try_from(at.as_millisecond())
+                .unwrap_or(0)
+                .saturating_sub(received_ms)
+        });
+    let reason = retry
+        .pointer("/error/type")
+        .and_then(Value::as_str)
+        .filter(|s| {
+            s.split('.').all(|part| {
+                let mut chars = part.bytes();
+                chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                    && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+            })
+        })
+        .map(str::to_owned);
+    Some(Event::Retry {
+        attempt: Some(attempt),
+        max_attempts: None,
+        delay_ms,
+        reason,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduled_retry_uses_the_original_record_clock_and_native_category() {
+        let at = 1_795_082_202_838;
+        let retry = json!({"attempt": 2, "nextRetryAt": "2026-11-19T09:56:45.119Z", "error":{"type":"provider.internal","message":"private details"}});
+        let project = |v2, root, attempt: Value, now| {
+            Children::new(v2).project(Some(root), &json!({"method":"session/update","params":{
+                "sessionId":"root","update":{"sessionUpdate":"session_info_update","_meta":{"opencode/retry":attempt}}
+            }}), now, &mut Default::default()).unwrap()
+        };
+        let projected = project(true, "root", retry.clone(), at);
+        assert_eq!(
+            serde_json::to_value(&projected).unwrap(),
+            json!([{"kind":"retry","attempt":2,"delay_ms":2281,"reason":"provider.internal"}])
+        );
+        assert!(matches!(
+            project(true, "root", retry.clone(), at + 3000).as_slice(),
+            [Event::Retry {
+                delay_ms: Some(0),
+                ..
+            }]
+        ));
+        assert!(project(false, "root", retry.clone(), at).is_empty());
+        assert!(project(true, "other", retry, at).is_empty());
+        assert!(project(true, "root", Value::Null, at).is_empty());
+        assert!(project(true, "root", json!({"attempt":0}), at).is_empty());
+        assert!(project(true, "root", json!({"attempt":9007199254740992u64}), at).is_empty());
+        let partial = project(
+            true,
+            "root",
+            json!({"attempt":2,"nextRetryAt":"invalid","error":{"type":"provider: private details"}}),
+            at,
+        );
+        assert_eq!(
+            serde_json::to_value(partial).unwrap(),
+            json!([{"kind":"retry","attempt":2}])
+        );
+        assert_eq!(
+            serde_json::from_value::<Event>(json!({"kind":"retry","reason":"existing"})).unwrap(),
+            Event::Retry {
+                attempt: None,
+                max_attempts: None,
+                delay_ms: None,
+                reason: Some("existing".into())
+            }
+        );
     }
 }

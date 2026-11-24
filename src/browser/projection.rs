@@ -224,11 +224,16 @@ impl Projection {
                 || new["generation"]["retry"]["at"] != previous["generation"]["retry"]["at"])
         {
             events.push(Event::Retry {
-                reason: retry
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .into(),
+                attempt: new["generation"]["attempt"].as_u64(),
+                max_attempts: None,
+                delay_ms: None,
+                reason: Some(
+                    retry
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .into(),
+                ),
             });
         }
         for c in array(&new["compactions"]) {

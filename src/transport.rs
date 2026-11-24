@@ -240,7 +240,8 @@ struct Pending {
     steer: Option<SteeringReceipt>,
 }
 
-pub(crate) struct LaunchFiles {
+pub(crate) struct Launch {
+    pub opencode_v2: bool,
     pub pi_mcp: Option<crate::pi_mcp::Config>,
     pub dsh_patch: Option<crate::dsh::profile::Patch>,
     pub qwen_defaults: Option<crate::private_dir::PrivateDir>,
@@ -269,7 +270,7 @@ pub(crate) struct Actor {
     child: crate::process::OwnedProcess,
     stdin: Option<ChildStdin>,
     close_ack: Option<(uuid::Uuid, Reply<()>)>,
-    files: LaunchFiles,
+    files: Launch,
     journal: Journal,
     identity: Arc<Mutex<Identity>>,
     next: u64,
@@ -312,7 +313,7 @@ impl Actor {
     pub fn start(
         runtime: &crate::Runtime,
         options: &crate::SessionOptions,
-        files: LaunchFiles,
+        files: Launch,
         mut child: crate::process::OwnedProcess,
         journal: Journal,
         identity: Arc<Mutex<Identity>>,
@@ -361,7 +362,7 @@ impl Actor {
             cursor_children: (runtime.protocol == Protocol::Acp && runtime.id == "cursor")
                 .then(Default::default),
             opencode: (runtime.protocol == Protocol::Acp && runtime.id == "opencode")
-                .then(Default::default),
+                .then(|| wire::opencode::Children::new(files.opencode_v2)),
             output_schema: options.settings.output_schema.clone(),
             files,
             mode: options.approvals,
@@ -1901,7 +1902,14 @@ impl Actor {
         let mut events = self
             .opencode
             .as_mut()
-            .and_then(|c| c.project(root.as_deref(), &v, &mut self.compactions))
+            .and_then(|c| {
+                c.project(
+                    root.as_deref(),
+                    &v,
+                    received.timestamp_ms,
+                    &mut self.compactions,
+                )
+            })
             .unwrap_or_else(|| {
                 let mut events = wire::project(self.protocol, &v, self.cursor_children.is_some());
                 if self.protocol == Protocol::Qwen {

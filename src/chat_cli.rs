@@ -218,6 +218,19 @@ fn display(turn: &ChatTurn) -> Result<()> {
                 "Tool{owner}> {} ({id})",
                 activity.name.as_deref().unwrap_or("tool")
             )?,
+            Item::Retry { status } => {
+                write!(out, "Retry{owner}")?;
+                if let Some(n) = status.attempt {
+                    write!(out, " attempt {n}")?;
+                }
+                if let Some(ms) = status.delay_ms {
+                    write!(out, " after {ms} ms")?;
+                }
+                if let Some(reason) = &status.reason {
+                    write!(out, " ({reason})")?;
+                }
+                writeln!(out)?;
+            }
             Item::Compaction { report } => writeln!(out, "Compaction{owner}> {}", report.state)?,
             Item::Diff { diff, .. } => writeln!(out, "Diff{owner}>\n{diff}")?,
         }

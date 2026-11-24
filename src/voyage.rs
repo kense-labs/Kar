@@ -309,7 +309,10 @@ fn project(v: &Value) -> Option<Event> {
             input_id: text("inputId")?,
         },
         "retry" => Event::Retry {
-            reason: text("reason")?,
+            attempt: v["attempt"].as_u64(),
+            max_attempts: v["maxAttempts"].as_u64(),
+            delay_ms: v["delayMs"].as_u64(),
+            reason: text("reason"),
         },
         "compaction_started" => Event::Compaction {
             state: "started".into(),

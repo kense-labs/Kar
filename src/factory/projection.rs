@@ -179,7 +179,10 @@ impl Projection {
             }
             Some("error") => self.error = n["message"].as_str().map(str::to_owned),
             Some("llm_retry") => events.push(Event::Retry {
-                reason: n["reason"].as_str().unwrap_or("model request retry").into(),
+                attempt: n["attempt"].as_u64(),
+                max_attempts: None,
+                delay_ms: None,
+                reason: Some(n["reason"].as_str().unwrap_or("model request retry").into()),
             }),
             Some("agent_turn_completed") if n["turnId"] == active => {
                 if let Some(t) = crate::wire::usage::factory_tokens(&n["tokenUsage"]) {
