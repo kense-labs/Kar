@@ -24,6 +24,13 @@ pub struct NativeRequest {
 }
 
 impl NativeRequest {
+    pub fn prompt(&self, file_name: &str) -> String {
+        format!(
+            "Edit the provided copy in the current directory and save the complete result to {file_name}.\n\n{}",
+            self.instructions
+        )
+    }
+
     /// Stable identifier for Session::prompt_with_id and its native turn receipt.
     pub fn input_id(&self, document_id: &str) -> Uuid {
         let mut digest = Sha256::new();
@@ -51,8 +58,16 @@ pub enum NativeBegin {
     Ready(NativeJob),
     Finished(Receipt),
     Running,
-    Interrupted { native_session_id: Option<String> },
-    Failed { reason: String },
+    /// Server-only recovery context. The path is the retained copy, and
+    /// prompt is the exact text dispatched for this operation.
+    Interrupted {
+        native_session_id: Option<String>,
+        cwd: PathBuf,
+        prompt: String,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -225,11 +240,7 @@ impl NativeJob {
         self.entry.request.input_id(&self.entry.document)
     }
     pub fn prompt(&self) -> String {
-        format!(
-            "Edit the provided copy in the current directory and save the complete result to {}.\n\n{}",
-            self.filename(),
-            self.entry.request.instructions
-        )
+        self.entry.request.prompt(self.filename())
     }
     /// Persist admission intent before dispatching the prompt. An interrupted
     /// turn must be reconciled using the same native session and input ID.
@@ -309,8 +320,15 @@ impl DocumentStore {
                     return Ok(NativeBegin::Finished(receipt));
                 }
                 Phase::Dispatched { session_id } => {
+                    entry
+                        .workspace
+                        .reopen()
+                        .context("retained native workspace is unavailable or has changed")?;
+                    let prompt = entry.request.prompt(&entry.workspace.filename);
                     return Ok(NativeBegin::Interrupted {
                         native_session_id: session_id,
+                        cwd: entry.workspace.path,
+                        prompt,
                     });
                 }
                 Phase::Failed { reason } => {

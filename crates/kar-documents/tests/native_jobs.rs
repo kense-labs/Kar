@@ -103,7 +103,7 @@ fn interrupted_native_turn_is_never_automatically_redispatched() -> Result<()> {
     drop(store);
     let mut reopened = DocumentStore::open(&state, &file)?;
     assert!(
-        matches!(reopened.begin_native(req.clone())?,NativeBegin::Interrupted{native_session_id:Some(id)} if id=="session-1")
+        matches!(reopened.begin_native(req.clone())?,NativeBegin::Interrupted{native_session_id:Some(id),cwd,prompt} if id=="session-1" && cwd.join("document.txt")==copy && prompt==req.prompt("document.txt"))
     );
     assert!(reopened.recover_native(&req, "other-session").is_err());
     let mut recovered = reopened.recover_native(&req, "session-1")?;
