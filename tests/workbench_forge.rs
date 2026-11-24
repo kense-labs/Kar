@@ -68,7 +68,10 @@ async fn create_pull(
     let mut db = mock.lock().unwrap();
     db.mutations += 1;
     let n = db.pulls.len() + 1;
-    let pr = json!({"number":n,"title":input["title"],"body":input["body"],"head":{"sha":db.head,"ref":input["head"]},"base":{"sha":db.base,"ref":input["base"]},
+    let raw_head = input["head"].as_str().unwrap();
+    let (owner, branch) = raw_head.split_once(':').unwrap_or(("team", raw_head));
+    let repository = format!("{owner}/{}", input["head_repo"].as_str().unwrap_or("repo"));
+    let pr = json!({"number":n,"title":input["title"],"body":input["body"],"head":{"sha":db.head,"ref":branch,"repo":{"full_name":repository}},"base":{"sha":db.base,"ref":input["base"]},
         "html_url":format!("https://review.example/team/repo/pull/{n}"),"state":"open","updated_at":"2026-11-01T10:00:00Z"});
     db.pulls.push(pr.clone());
     if input["title"] == "lost response" {

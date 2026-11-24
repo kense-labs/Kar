@@ -37,3 +37,11 @@
 Issue 成功场景还需 `KAR_FORGE_ACTION_CLOSE_STATE`（例如 GitHub 的 `closed`、Linear 的本团队状态）。PR 场景需要 `KAR_FORGE_ACTION_PR`，成功场景使用专用测试 PR 的 `KAR_FORGE_ACTION_PATH` 和新增行号 `KAR_FORGE_ACTION_LINE`。GitCafe 另选已有、未解决的专用线程 `KAR_FORGE_ACTION_THREAD`，它只能把回复关联到已有线程。每次实测会保留远端带标记的 Issue / 审阅 / 评论。Forgejo 单测其源端明确拒绝的两个动作。只读验证需明确提供实际只读账号及对应的 `permission` 预期。
 
 当前证据为固定源码对照及 macOS Rust 全目标编译。离线与外部场景都已登记，实际作者、ID、结果和时间等待统一执行后记录。供应商未支持的操作见上表；缺少授权的专用仓库/团队、具备权限的账号或匹配行的 PR 属于实测条件不足。
+
+## Git 发布目标与分叉 PR
+
+组合操作通过 `POST /projects/{project}/git/actions` 接收 `create_pr`、`commit_push_pr`、`push`。发布先读取当前分支的 `pushRemote`，其次 `remote.pushDefault`。跟踪同一头分支时保留拉取远端。以另一个分支为比较基线时，Kar 用 `branch.<name>.kar-merge-base` 和 `kar-merge-base-ref` 记录旧基线，再将新分支设为跟踪目标。结果里 `branch` 是本地分支，`published_branch` 和 `upstream_branch` 标明实际发布位置。多个推送 URL 指向不同托管仓库时拒绝创建 PR。
+
+PR 在主仓库中查询和创建，匹配源仓库和源分支。同名的外部 PR 不会被误认。GitHub 发送 owner、分支及源仓库名，GitLab 从源项目创建并传递目标项目 ID，Bitbucket 传完整源仓库名，GitCafe 读取源仓库 ID，Forgejo 发送 owner:branch。TanStack Source 的固定驱动明确拒绝跨仓库创建。Cursor Origin 和 Azure 固定创建路径只接收分支名，Kar 在跨仓库请求下返回 unsupported。此限制取自固定驱动的请求契约。
+
+固定工作台源码 `apps/server/src/vcs/GitVcsDriverCore.ts` 的 `resolvePushDestination`、`pushCurrentBranch` 和 `apps/server/src/git/GitManager.ts` 的 `resolveBranchHeadContext`、`openPrFromBranch`。macOS 统一复验命令为 `cargo test --locked --test workbench_forge`。用例在本地裸仓检查跟踪配置、分叉删除后的重新发布、异仓同名 PR、同名头和基线与各驱动的 HTTP 请求。它使用协议 fixture；真实托管请求仍待统一验收。

@@ -136,15 +136,11 @@ impl Operation {
         let status = checkout.repo.status()?;
         let input = &self.input;
         let planned = input.action;
+        // A pull upstream may be current while the separately configured fork is stale.
         let wants_push = matches!(
             planned,
-            Action::Push | Action::CommitPush | Action::CommitPushPr
-        ) || planned == Action::CreatePr
-            && (status.upstream.is_none()
-                || status.ahead > 0
-                || !status.branch.as_deref().is_some_and(|name| {
-                    status.upstream.as_deref() == Some(&format!("origin/{name}"))
-                }));
+            Action::Push | Action::CommitPush | Action::CommitPushPr | Action::CreatePr
+        );
         let phases: Vec<_> = [
             (input.feature_branch, "branch"),
             (planned.commit(), "commit"),
@@ -158,22 +154,6 @@ impl Operation {
         if !input.feature_branch && (wants_push || planned.pr()) && status.branch.is_none() {
             return Err(Error::Refused("cannot publish a detached HEAD".into()));
         }
-        let base = if planned.pr() {
-            let base = match &input.base {
-                Some(b) => b.clone(),
-                None => forge::default_branch(self.app.clone(), project)
-                    .await
-                    .map_err(|e| Error::Refused(e.detail))?,
-            };
-            if !input.feature_branch && status.branch.as_deref() == Some(&base) {
-                return Err(Error::Refused(
-                    "pull request head and base are the same".into(),
-                ));
-            }
-            Some(base)
-        } else {
-            None
-        };
         let skipped = || json!({"status":"skipped_not_requested"});
         let mut result = json!({"action":planned,"branch":skipped(),"commit":skipped(),"push":skipped(),"pr":skipped()});
         let mut branch = status.branch;
@@ -194,14 +174,39 @@ impl Operation {
                     Some(name) => name.clone(),
                     None => generated_branch(message.as_deref().unwrap_or_default(), input.id),
                 };
-                if base.as_deref() == Some(&name) {
-                    return Err(Error::Refused(
-                        "pull request head and base are the same".into(),
-                    ));
-                }
-                checkout.branch(&name)?;
-                result["branch"] = json!({"status":"created","name":name});
                 branch = Some(name);
+            }
+        }
+        let target = if wants_push {
+            let name = branch
+                .as_deref()
+                .ok_or_else(|| Error::Refused("no branch to publish".into()))?;
+            Some(checkout.publish_target(name)?)
+        } else {
+            None
+        };
+        let pull = if planned.pr() {
+            let target = target.as_ref().expect("PR includes push");
+            Some(
+                forge::PullTarget::resolve(
+                    self.app.clone(),
+                    project,
+                    &checkout,
+                    branch.as_deref().unwrap(),
+                    target,
+                    input.base.as_deref(),
+                )
+                .await
+                .map_err(|e| Error::Refused(e.detail))?,
+            )
+        } else {
+            None
+        };
+        if planned.commit() {
+            if input.feature_branch {
+                let name = branch.as_deref().expect("feature branch was selected");
+                checkout.branch(name)?;
+                result["branch"] = json!({"status":"created","name":name});
             }
             self.phase("commit")?;
             let commit = if let Some(message) = message.clone() {
@@ -223,20 +228,23 @@ impl Operation {
                 None => json!({"status":"skipped_no_changes"}),
             };
         }
-        if wants_push {
+        if let Some(target) = target {
             self.phase("push")?;
             let check = checkout.clone();
-            let head = branch
-                .clone()
-                .ok_or_else(|| Error::Refused("no branch to push".into()))?;
-            let (state, remote) = tokio::task::spawn_blocking(move || check.push(&head))
+            let local = branch.clone().expect("publish requires a branch");
+            let (state, set_upstream, target) =
+                tokio::task::spawn_blocking(move || -> Result<_> {
+                    let (state, set_upstream) = check.push(&local, &target)?;
+                    Ok((state, set_upstream, target))
+                })
                 .await
                 .map_err(|e| Error::Closed(e.to_string()))??;
-            result["push"] = json!({"status":state,"remote":remote,"branch":branch});
+            result["push"] = json!({"status":state,"remote":target.remote,"branch":branch,
+                "upstream_branch":format!("{}/{}",target.remote,target.branch),"published_branch":target.branch,"set_upstream":set_upstream});
         }
-        if let Some(base) = base {
+        if let Some(pull) = pull {
             self.phase("pr")?;
-            let head = branch.ok_or_else(|| Error::Refused("no branch to review".into()))?;
+            let head = pull.head.clone();
             let title = input
                 .title
                 .clone()
@@ -252,8 +260,7 @@ impl Operation {
                 project,
                 input.id,
                 input.chat,
-                head,
-                base,
+                pull,
                 title,
                 input.body.clone(),
             )

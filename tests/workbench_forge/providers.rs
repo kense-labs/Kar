@@ -151,13 +151,42 @@ async fn peer(
     });
     let resource = if path == repo && method == Method::GET {
         match kind {
-            "gitlab" => json!({"path_with_namespace":"team/repo"}),
+            "gitlab" => json!({"id":11,"path_with_namespace":"team/repo"}),
             "forgejo" | "bitbucket" => json!({"full_name":"team/repo"}),
             "azure-devops" => {
                 json!({"id":"repo-id","name":"repo","project":{"id":"p","name":"proj"}})
             }
             _ => json!({"id":"repo-id","name":"repo","defaultBranch":"main"}),
         }
+    } else if kind == "gitcafe" && path == "repos/fork/renamed" && method == Method::GET {
+        json!({"id":"fork-id"})
+    } else if method == Method::POST && b["title"] == "Fork PR" {
+        match kind {
+            "gitcafe" => {
+                assert_eq!(path, "repos/team/repo/pulls");
+                assert_eq!(b["source"], "feature");
+                assert_eq!(b["repo"], "fork-id");
+            }
+            "forgejo" => {
+                assert_eq!(path, "repos/team/repo/pulls");
+                assert_eq!(b["head"], "fork:feature");
+            }
+            "bitbucket" => {
+                assert_eq!(path, "repositories/team/repo/pullrequests");
+                assert_eq!(b["source"]["repository"]["full_name"], "fork/renamed");
+            }
+            "gitlab" => {
+                assert_eq!(path, "projects/fork%2Frenamed/merge_requests");
+                assert_eq!(b["source_branch"], "feature");
+                assert_eq!(b["target_project_id"], 11);
+            }
+            _ => panic!("driver sent an unrepresentable fork create"),
+        }
+        *db.writes.entry(kind.into()).or_default() += 1;
+        native_pull(
+            kind,
+            b["body"].as_str().or(b["description"].as_str()).unwrap(),
+        )
     } else if matches!(
         path,
         "user" | "auth/principal" | "namespaces" | "org/_apis/connectionData"
@@ -346,6 +375,17 @@ pub(super) async fn run() {
             assert_eq!(created["number"], 2);
             assert_eq!(created, ok(client.post(&operations).json(&create)).await);
             assert_eq!(store.lock().unwrap().writes[kind], 1);
+            let fork = json!({"op":"create_pull","id":Uuid::new_v4(),"chat":chat,"head":"feature",
+                              "head_repository":"fork/renamed","base":"main","title":"Fork PR","body":"fork"});
+            let reply = client.post(&operations).json(&fork).send().await.unwrap();
+            if ["gitlab", "bitbucket", "gitcafe", "forgejo"].contains(&kind) {
+                assert!(reply.status().is_success(), "{kind}");
+                assert_eq!(store.lock().unwrap().writes[kind], 2);
+            } else {
+                assert_eq!(reply.status(), 422, "{kind}");
+                assert_eq!(reply.json::<Value>().await.unwrap()["kind"], "unsupported");
+                assert_eq!(store.lock().unwrap().writes[kind], 1);
+            }
         }
         if matches!(kind, "bitbucket" | "cursor-origin" | "gitcafe") {
             let r = client

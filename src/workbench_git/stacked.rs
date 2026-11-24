@@ -14,6 +14,8 @@ pub(crate) struct StackCheckout {
     _pin: Option<File>,
     _lease: WorkspaceLease,
 }
+mod publish;
+pub(crate) use publish::PublishTarget;
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum HookEvent {
@@ -54,12 +56,14 @@ impl StackCheckout {
     pub fn selected(&self, paths: Option<&[PathBuf]>) -> Result<Vec<PathBuf>> {
         let status = self.repo.status()?;
         if let Some(paths) = paths {
-            if paths.is_empty() || paths.iter().any(|p| {
-                p.as_os_str().is_empty()
+            if paths.is_empty()
+                || paths.iter().any(|p| {
+                    p.as_os_str().is_empty()
                     || p.components().any(
                         |c| !matches!(c,Component::Normal(s) if !s.eq_ignore_ascii_case(".git")),
                     )
-            }) {
+                })
+            {
                 return Err(Error::Refused(
                     "expected literal checkout-relative files".into(),
                 ));
@@ -143,45 +147,6 @@ impl StackCheckout {
         }
         commit_output(cmd, &mut notify)?;
         self.repo.resolve("HEAD").map(Some)
-    }
-    pub fn push(&self, branch: &str) -> Result<(&'static str, String)> {
-        if self.repo.branch()? != branch {
-            return Err(Error::Refused("checkout branch changed before push".into()));
-        }
-        let config = |key: &str| -> Result<Option<String>> {
-            let out = command(self.repo.root())
-                .args(["config", "--get", key])
-                .output()?;
-            match out.status.code() {
-                Some(0) => Ok(Some(utf8(line(&out.stdout))?.into())),
-                Some(1) => Ok(None),
-                _ => checked(out).map(|_| None),
-            }
-        };
-        let remote = config(&format!("branch.{branch}.pushRemote"))?
-            .or(config("remote.pushDefault")?)
-            .or(config(&format!("branch.{branch}.remote"))?)
-            .unwrap_or_else(|| "origin".into());
-        // A transport-level rejection, including a protected or diverged branch, stays an error.
-        let upstream = self.repo.status()?.upstream;
-        let mut cmd = command(self.repo.root());
-        cmd.args(["push", "--porcelain"]);
-        if upstream.is_none() {
-            cmd.arg("--set-upstream");
-        }
-        let out = checked(
-            cmd.arg("--")
-                .arg(&remote)
-                .arg(format!("refs/heads/{branch}:refs/heads/{branch}"))
-                .output()?,
-        )?;
-        let lines = utf8(&out)?;
-        let state = if lines.lines().any(|s| s.starts_with("=\t")) {
-            "skipped_up_to_date"
-        } else {
-            "pushed"
-        };
-        Ok((state, remote))
     }
 }
 

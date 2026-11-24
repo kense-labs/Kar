@@ -152,20 +152,35 @@ pub(in crate::workbench) async fn stacked_pull(
     project: Uuid,
     id: Uuid,
     chat: Option<Uuid>,
-    head: String,
-    base: String,
+    target: PullTarget,
     title: String,
     body: String,
 ) -> Result<Value, ForgeError> {
-    let c = Context::open(app.clone(), project).await?;
+    let PullTarget {
+        head,
+        base,
+        repository,
+        context: c,
+    } = target;
+    let expected = repository.as_deref().unwrap_or(&c.repository);
     let pulls = c.execute(&Operation::Pulls).await?;
-    if let Some(open) = pulls.as_array().into_iter().flatten().find(|r| {
-        r["head_ref"] == head
-            && r["base_ref"] == base
-            && !matches!(r["state"].as_str(), Some("closed" | "merged"))
-    }) {
-        return Ok(json!({"status":"opened_existing","pull":open}));
+    for r in pulls
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["head_ref"] == head && r["base_ref"] == base && r["state"] == "open")
+    {
+        if publish::matches_repository(&c, expected, r).await? {
+            return Ok(json!({"status":"opened_existing","pull":r}));
+        }
     }
+    let mut operation = Operation::CreatePull {
+        head,
+        head_repository: repository,
+        base,
+        title,
+        body,
+    };
     let pull = if let Some(chat) = chat {
         execute(
             app,
@@ -174,28 +189,19 @@ pub(in crate::workbench) async fn stacked_pull(
                 id,
                 chat,
                 routing: None,
-                operation: Operation::CreatePull {
-                    head,
-                    base,
-                    title,
-                    body,
-                },
+                operation,
             },
         )
         .await?
         .0
     } else {
-        c.execute(&Operation::CreatePull {
-            head,
-            base,
-            title,
-            body: format!("{body}\n\n<!-- kar-operation:{id} -->"),
-        })
-        .await?
+        if let Operation::CreatePull { body, .. } = &mut operation {
+            body.push_str(&format!("\n\n<!-- kar-operation:{id} -->"));
+        }
+        c.execute(&operation).await?
     };
     Ok(json!({"status":"created","pull":pull}))
 }
-
 async fn mutate(
     State(app): State<Workbench>,
     Path(project): Path<Uuid>,
@@ -243,12 +249,24 @@ async fn reconcile(
         _ => {}
     }
     let value = match m.operation {
-        Operation::CreatePull { head, base, .. } => {
+        Operation::CreatePull {
+            head,
+            head_repository,
+            base,
+            ..
+        } => {
             let v = c
                 .execute(&Operation::Pull {
                     number: input.number,
                 })
                 .await?;
+            if let Some(source) = head_repository
+                && !publish::matches_repository(&c, &source, &v).await?
+            {
+                return Err(ForgeError::bad(
+                    "PR belongs to a different source repository",
+                ));
+            }
             if v["head_ref"] != head
                 || v["base_ref"] != base
                 || !v["body"]

@@ -87,7 +87,7 @@ impl<'a> Location<'a> {
         Ok(
             json!({"number":n,"title":r["title"],"body":r["description"],"state":state,
             "url":r.pointer("/_links/web/href").and_then(Value::as_str).unwrap_or(&fallback),"updated_at":r.get("closedDate").filter(|v|!v.is_null()).unwrap_or(&r["creationDate"]),
-            "head_ref":branch(&r["sourceRefName"])?,"base_ref":branch(&r["targetRefName"])?,"base_sha":r.pointer("/lastMergeTargetCommit/commitId"),"head_sha":r.pointer("/lastMergeSourceCommit/commitId")}),
+            "single_repository":r["forkSource"].is_null(),"head_ref":branch(&r["sourceRefName"])?,"base_ref":branch(&r["targetRefName"])?,"base_sha":r.pointer("/lastMergeTargetCommit/commitId"),"head_sha":r.pointer("/lastMergeSourceCommit/commitId")}),
         )
     }
     async fn confirmed_pull(&self, c: &Context, n: u64) -> Result<Value, ForgeError> {
@@ -290,6 +290,7 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         }
         Operation::CreatePull {
             head,
+            head_repository: _,
             base,
             title,
             body,

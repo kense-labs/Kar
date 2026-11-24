@@ -165,3 +165,16 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         ))),
     }
 }
+
+pub(super) async fn gitlab_project_matches(
+    c: &Context,
+    path_name: &str,
+    id: u64,
+) -> Result<bool, ForgeError> {
+    let mut target = c.clone();
+    if let Some(token) = credentials::resolve(c).await? {
+        target.token = Some(token);
+    }
+    let project = get(&target, path(&target, &["projects", path_name])?).await?;
+    Ok(number(&project["id"])? == id)
+}

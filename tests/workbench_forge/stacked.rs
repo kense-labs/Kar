@@ -119,4 +119,118 @@ pub(super) async fn run(
         "action_failed"
     );
     assert_eq!(git(bare, &["rev-parse", "stacked-topic"]), ahead);
+    fork_and_base(client, &endpoint, repo, bare, mock).await;
+}
+
+async fn fork_and_base(client: &Client, endpoint: &str, repo: &Path, origin: &Path, mock: &Mock) {
+    let fork = tempfile::tempdir().unwrap();
+    git(fork.path(), &["init", "--bare"]);
+    git(
+        repo,
+        &[
+            "remote",
+            "add",
+            "publication",
+            "https://review.example/contributor/renamed.git",
+        ],
+    );
+    git(
+        repo,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "publication",
+            fork.path().to_str().unwrap(),
+        ],
+    );
+    git(repo, &["switch", "main"]);
+    git(repo, &["push", "-u", "origin", "main"]);
+    let origin_main = git(origin, &["rev-parse", "main"]);
+    fs::write(repo.join("fork-change"), "only for the fork").unwrap();
+    git(repo, &["add", "fork-change"]);
+    git(
+        repo,
+        &[
+            "commit",
+            "--only",
+            "-m",
+            "Fork-only change",
+            "--",
+            "fork-change",
+        ],
+    );
+    let fork_head = git(repo, &["rev-parse", "main"]);
+    git(repo, &["config", "remote.pushDefault", "origin"]);
+    git(repo, &["config", "branch.main.pushRemote", "publication"]);
+    // The base repository and another contributor already have a PR with this head branch name.
+    {
+        let mut db = mock.lock().unwrap();
+        for repository in ["team/repo", "unrelated/renamed"] {
+            let n = db.pulls.len() + 1;
+            let mut other = db.pulls[0].clone();
+            other["number"] = json!(n);
+            other["head"]["ref"] = json!("main");
+            other["head"]["repo"] = json!({"full_name":repository});
+            db.pulls.push(other);
+        }
+    }
+    let before = mock.lock().unwrap().mutations;
+    let op = || json!({"id":Uuid::new_v4(),"action":"create_pr","base":"main","title":"Fork main"});
+    let first = execute(client, endpoint, &op()).await;
+    assert_eq!(
+        result(&first)["push"]["upstream_branch"],
+        "publication/main"
+    );
+    assert_eq!(result(&first)["pr"]["status"], "created");
+    let number = result(&first)["pr"]["pull"]["number"].clone();
+    assert_eq!(
+        result(&first)["pr"]["pull"]["head_repository"],
+        "contributor/renamed"
+    );
+    assert_eq!(
+        git(repo, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "origin/main"
+    );
+    // Deleting the published head out of band leaves both the local tracking ref and pull base current.
+    git(fork.path(), &["update-ref", "-d", "refs/heads/main"]);
+    let second = execute(client, endpoint, &op()).await;
+    assert_eq!(result(&second)["push"]["status"], "pushed");
+    assert_eq!(result(&second)["pr"]["status"], "opened_existing");
+    assert_eq!(result(&second)["pr"]["pull"]["number"], number);
+    assert_eq!(mock.lock().unwrap().mutations, before + 1);
+    assert_eq!(git(fork.path(), &["rev-parse", "main"]), fork_head);
+
+    // A local comparison base publishes the full local name even when it looks like a remote ref.
+    git(repo, &["config", "remote.pushDefault", "publication"]);
+    git(
+        repo,
+        &["switch", "--track", "-c", "publication/main", "main"],
+    );
+    let r = execute(
+        client,
+        endpoint,
+        &json!({"id":Uuid::new_v4(),"action":"create_pr"}),
+    )
+    .await;
+    let r = result(&r);
+    assert_eq!(r["push"]["published_branch"], "publication/main");
+    assert_eq!(r["pr"]["pull"]["head_ref"], "publication/main");
+    assert_eq!(r["pr"]["pull"]["base_ref"], "main");
+    assert_eq!(
+        git(
+            repo,
+            &["config", "branch.publication/main.kar-merge-base-ref"]
+        ),
+        "refs/heads/main"
+    );
+    assert_eq!(
+        git(repo, &["config", "branch.publication/main.remote"]),
+        "publication"
+    );
+    assert_eq!(
+        git(repo, &["config", "branch.publication/main.merge"]),
+        "refs/heads/publication/main"
+    );
+    assert_eq!(git(origin, &["rev-parse", "main"]), origin_main);
 }

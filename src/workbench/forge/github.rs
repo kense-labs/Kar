@@ -12,7 +12,7 @@ fn pull(v: &Value) -> Result<Value, ForgeError> {
     };
     Ok(
         json!({"number":number,"title":v["title"],"body":v["body"],"state":state,"url":v["html_url"],"base_sha":v.pointer("/base/sha"),"head_sha":v.pointer("/head/sha"),
-        "head_ref":v.pointer("/head/ref"),"base_ref":v.pointer("/base/ref"),"updated_at":v["updated_at"]}),
+        "head_repository":v.pointer("/head/repo/full_name"),"head_ref":v.pointer("/head/ref"),"base_ref":v.pointer("/base/ref"),"updated_at":v["updated_at"]}),
     )
 }
 fn issue(v: &Value) -> Result<Value, ForgeError> {
@@ -164,22 +164,26 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         }
         Operation::CreatePull {
             head,
+            head_repository,
             base,
             title,
             body,
         } => {
             parts.push("pulls");
-            pull(
-                &request(
-                    c,
-                    Method::POST,
-                    &parts,
-                    &[],
-                    Some(json!({"head":head,"base":base,"title":title,"body":body})),
-                )
-                .await?,
-            )
-            .map_err(|_| ForgeError::uncertain("GitHub did not identify the created pull request"))
+            let mut payload = json!({"head":head,"base":base,"title":title,"body":body});
+            if let Some(source) = head_repository
+                .as_ref()
+                .filter(|s| !s.eq_ignore_ascii_case(&c.repository))
+            {
+                let (owner, repo) = source
+                    .split_once('/')
+                    .ok_or_else(|| ForgeError::bad("expected owner/repository"))?;
+                payload["head"] = json!(format!("{owner}:{head}"));
+                payload["head_repo"] = json!(repo);
+            }
+            pull(&request(c, Method::POST, &parts, &[], Some(payload)).await?).map_err(|_| {
+                ForgeError::uncertain("GitHub did not identify the created pull request")
+            })
         }
         Operation::SetIssueState { number, state } => {
             if !matches!(state.as_str(), "open" | "closed") {

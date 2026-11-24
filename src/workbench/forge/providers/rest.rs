@@ -93,6 +93,18 @@ fn item(c: &Context, raw: &Value, pull: bool) -> Result<Value, ForgeError> {
         };
         out["base_ref"] = base.clone();
         out["head_ref"] = head.clone();
+        if gitlab {
+            out["head_project_id"] = v["source_project_id"].clone();
+            if v["source_project_id"].is_number()
+                && v["target_project_id"] == v["source_project_id"]
+            {
+                out["head_repository"] = json!(c.repository);
+            }
+        } else if bitbucket {
+            out["head_repository"] = v["source"]["repository"]["full_name"].clone();
+        } else {
+            out["head_repository"] = v["head"]["repo"]["full_name"].clone();
+        }
         out["base_sha"] = bsha.clone();
         out["head_sha"] = hsha.clone();
     }
@@ -271,25 +283,37 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         }
         Operation::CreatePull {
             head,
+            head_repository,
             base,
             title,
             body,
         } => {
+            let source = head_repository
+                .as_ref()
+                .filter(|s| !s.eq_ignore_ascii_case(&c.repository));
+            let mut url = project_resource(c, coll, None)?;
             let payload = if gitlab {
-                json!({"source_branch":head,"target_branch":base,"title":title,"description":body})
+                let mut v = json!({"source_branch":head,"target_branch":base,"title":title,"description":body});
+                if let Some(source) = source {
+                    let target = get(c, project(c)?).await?;
+                    v["target_project_id"] = json!(number(&target["id"])?);
+                    url = path(c, &["projects", source, coll])?;
+                }
+                v
             } else if bb {
-                json!({"source":{"branch":{"name":head}},"destination":{"branch":{"name":base}},"title":title,"description":body})
+                let mut v = json!({"source":{"branch":{"name":head}},"destination":{"branch":{"name":base}},"title":title,"description":body});
+                if let Some(source) = source {
+                    v["source"]["repository"] = json!({"full_name":source});
+                }
+                v
             } else {
-                json!({"head":head,"base":base,"title":title,"body":body})
+                let selector = source
+                    .and_then(|s| s.split_once('/'))
+                    .map(|(owner, _)| format!("{owner}:{head}"))
+                    .unwrap_or_else(|| head.clone());
+                json!({"head":selector,"base":base,"title":title,"body":body})
             };
-            let raw = send(
-                c,
-                Method::POST,
-                project_resource(c, coll, None)?,
-                Some(payload),
-                true,
-            )
-            .await?;
+            let raw = send(c, Method::POST, url, Some(payload), true).await?;
             item(c, &raw, true)
                 .map_err(|_| ForgeError::uncertain("created pull request identity is unconfirmed"))
         }

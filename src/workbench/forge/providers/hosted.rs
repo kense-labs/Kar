@@ -101,6 +101,27 @@ fn item(c: &Context, v: &Value, pull: bool) -> Result<Value, ForgeError> {
         } else {
             head.clone()
         };
+        out["head_repository"] = if cafe {
+            v["sourceRepo"]["owner"]
+                .as_str()
+                .zip(v["sourceRepo"]["name"].as_str())
+                .map(|(o, r)| json!(format!("{o}/{r}")))
+                .unwrap_or(Value::Null)
+        } else if origin {
+            v.pointer("/head/repo/full_name")
+                .cloned()
+                .unwrap_or_else(|| json!(c.repository))
+        } else {
+            let owner = head
+                .as_str()
+                .and_then(|s| s.split_once(':'))
+                .map(|(o, _)| o)
+                .unwrap_or(owner);
+            v.get("headRepo")
+                .filter(|r| r.is_string())
+                .cloned()
+                .unwrap_or_else(|| json!(format!("{owner}/{repo}")))
+        };
         out["base_sha"] = bsha.clone();
         out["head_sha"] = hsha.clone();
     }
@@ -254,12 +275,19 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         }
         Operation::CreatePull {
             head,
+            head_repository,
             base,
             title,
             body,
         } => {
             let payload = if cafe {
-                let repo = get(c, resource(c, None, None)?).await?;
+                let source = Context {
+                    repository: head_repository
+                        .clone()
+                        .unwrap_or_else(|| c.repository.clone()),
+                    ..c.clone()
+                };
+                let repo = get(c, resource(&source, None, None)?).await?;
                 let id = repo["id"]
                     .as_str()
                     .ok_or_else(|| invalid("head repository ID"))?;

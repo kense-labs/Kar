@@ -9,7 +9,7 @@ use std::{
 
 mod branches;
 mod stacked;
-pub(crate) use stacked::StackCheckout;
+pub(crate) use stacked::{PublishTarget, StackCheckout};
 mod worktrees;
 pub use branches::{Branch, BranchKind, BranchPage, BranchQuery};
 pub use worktrees::ManagedWorktree;

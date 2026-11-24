@@ -3,8 +3,10 @@ mod actions;
 pub(super) mod clone_jobs;
 mod github;
 mod providers;
+mod publish;
 mod repository;
 mod review;
+pub(in crate::workbench) use publish::PullTarget;
 mod routes;
 pub(super) use routes::stacked_pull;
 pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<String, ForgeError> {
@@ -48,6 +50,8 @@ pub(crate) enum Operation {
     Pulls,
     CreatePull {
         head: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        head_repository: Option<String>,
         base: String,
         title: String,
         body: String,
@@ -455,7 +459,19 @@ impl Context {
     async fn open(app: Workbench, project: Uuid) -> Result<Self, ForgeError> {
         tokio::task::spawn_blocking(move || {
             let repo = app.repository(project)?;
-            let remote = crate::workbench_git::git(repo.root(), &["remote", "get-url", "origin"])?;
+            let names = crate::workbench_git::git(repo.root(), &["remote"])?;
+            let names =
+                std::str::from_utf8(&names).map_err(|_| ForgeError::bad("non-UTF-8 remote"))?;
+            let primary = if names.lines().any(|n| n == "origin") {
+                "origin"
+            } else {
+                names
+                    .lines()
+                    .next()
+                    .ok_or_else(|| ForgeError::bad("no Git remote configured"))?
+            };
+            let remote =
+                crate::workbench_git::git(repo.root(), &["remote", "get-url", "--", primary])?;
             let (host, repository) = remote_identity(
                 std::str::from_utf8(&remote)
                     .map_err(|_| ForgeError::bad("origin is not UTF-8"))?
@@ -518,6 +534,13 @@ impl Context {
         format!("{}://{}/{}", self.kind, self.host, self.repository)
     }
     async fn execute(&self, op: &Operation) -> Result<Value, ForgeError> {
+        if let Operation::CreatePull {
+            head_repository: Some(source),
+            ..
+        } = op
+        {
+            publish::check_source(self, source)?;
+        }
         let mut result = if self.kind == "github" {
             github::execute(self, op).await?
         } else {
