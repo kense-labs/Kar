@@ -173,7 +173,14 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
     let bb = c.kind == "bitbucket";
     let pull = matches!(
         op,
-        Operation::Pull { .. } | Operation::CreatePull { .. } | Operation::Pulls
+        Operation::Pull { .. }
+            | Operation::CreatePull { .. }
+            | Operation::Pulls
+            | Operation::SubmitReview { .. }
+            | Operation::ReviewThreads { .. }
+            | Operation::ThreadComments { .. }
+            | Operation::ReplyToThread { .. }
+            | Operation::SetThreadResolution { .. }
     );
     let coll = if !pull {
         "issues"
@@ -190,6 +197,11 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         ));
     }
     match op {
+        op @ (Operation::SubmitReview { .. }
+        | Operation::ReplyToThread { .. }
+        | Operation::SetThreadResolution { .. }
+        | Operation::ReviewThreads { .. }
+        | Operation::ThreadComments { .. }) => super::reviews::execute(c, op).await,
         op @ (Operation::CreateIssue { .. }
         | Operation::CommentIssue { .. }
         | Operation::IssueComments { .. }) => super::issue::execute(c, op).await,

@@ -9,7 +9,7 @@ use axum::{
 async fn drivers() -> Json<Value> {
     Json(json!(DRIVER_KINDS.iter().map(|kind|json!({
         "kind":kind,"upstream_pull_actions":declared_pull_actions(kind),"issues_in_upstream":matches!(*kind,"github"|"gitlab"|"tanstack-source"|"forgejo"|"azure-devops"|"linear"),
-        "pulls_in_upstream":*kind!="linear","enabled":*kind!="tanstack-source" || std::env::var("KAR_TANSTACK_SOURCE").as_deref()==Ok("1")
+        "reviews":actions::capabilities(kind),"pulls_in_upstream":*kind!="linear","enabled":*kind!="tanstack-source" || std::env::var("KAR_TANSTACK_SOURCE").as_deref()==Ok("1")
     })).collect::<Vec<_>>()))
 }
 
@@ -31,6 +31,7 @@ async fn read(
         ));
     }
     providers::issue::validate(&op)?;
+    actions::validate(&op)?;
     let c = Context::for_operation(app.clone(), project, &op).await?;
     if let Operation::Pull { number } = op {
         return review::refresh(&app, project, &c, number).await.map(Json);
@@ -50,6 +51,9 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
         if let Ok(v) = &result {
             let (number, kind) = match m.operation {
                 Operation::CreatePull { .. } => (v["number"].as_u64(), "pull"),
+                Operation::SubmitReview { number, .. }
+                | Operation::ReplyToThread { number, .. }
+                | Operation::SetThreadResolution { number, .. } => (Some(number), "pull"),
                 Operation::CreateIssue { .. } => (v["number"].as_u64(), "issue"),
                 Operation::SetIssueState { number, .. }
                 | Operation::CommentIssue { number, .. } => (Some(number), "issue"),
@@ -79,6 +83,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
         return Err(ForgeError::bad("use /query for reads"));
     }
     providers::issue::validate(&input.operation)?;
+    actions::validate(&input.operation)?;
     let c = Context::for_operation(app.clone(), project, &input.operation).await?;
     let identity = c.identity();
     let id = input.id;
@@ -200,6 +205,13 @@ async fn reconcile(
                 ));
             }
             v
+        }
+        Operation::SubmitReview { .. }
+        | Operation::ReplyToThread { .. }
+        | Operation::SetThreadResolution { .. } => {
+            return Err(ForgeError::uncertain(
+                "inspect the remote review before creating any new operation",
+            ));
         }
         Operation::CreateIssue { .. } | Operation::CommentIssue { .. } => {
             return Err(ForgeError::uncertain(

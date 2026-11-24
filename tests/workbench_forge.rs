@@ -29,6 +29,8 @@ struct Forge {
     base: String,
     mutations: usize,
     comments: Vec<Value>,
+    review_comments: Vec<Value>,
+    resolved: bool,
     created_issue: Option<Value>,
 }
 type Mock = Arc<Mutex<Forge>>;
@@ -158,6 +160,8 @@ async fn scenario() {
         pulls: vec![],
         mutations: 0,
         comments: vec![],
+        review_comments: vec![],
+        resolved: false,
         created_issue: None,
         issue: json!({"number":7,"title":"Fix notes","state":"open","html_url":"https://review.example/team/repo/issues/7"}),
     }));
@@ -178,6 +182,11 @@ async fn scenario() {
             "/repos/team/repo/issues/8/comments",
             get(actions::comments).post(actions::post_comment),
         )
+        .route(
+            "/repos/team/repo/pulls/1/reviews",
+            axum::routing::post(actions::review_submission),
+        )
+        .route("/graphql", axum::routing::post(actions::review_control))
         .with_state(mock.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
@@ -334,6 +343,7 @@ async fn scenario() {
     let links = ok(a.get(format!("{forge}/links"))).await;
     assert_eq!(links.as_array().unwrap().len(), 4);
     actions::issue(&a, &forge, id).await;
+    actions::review(&a, &forge, id).await;
     assert!(
         !fs::read_to_string(state.join("workbench/projects.json"))
             .unwrap()

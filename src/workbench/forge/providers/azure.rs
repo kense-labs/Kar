@@ -230,6 +230,11 @@ impl<'a> Location<'a> {
 pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeError> {
     let l = Location::from(c)?;
     match op {
+        op @ (Operation::SubmitReview { .. }
+        | Operation::ReplyToThread { .. }
+        | Operation::SetThreadResolution { .. }
+        | Operation::ReviewThreads { .. }
+        | Operation::ThreadComments { .. }) => super::reviews::execute(c, op).await,
         op @ (Operation::CreateIssue { .. }
         | Operation::CommentIssue { .. }
         | Operation::IssueComments { .. }) => issue_actions::execute(c, op).await,

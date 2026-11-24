@@ -91,6 +91,11 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
     };
     let mut parts = vec!["repos", *owner, *repo];
     match op {
+        op @ (Operation::SubmitReview { .. }
+        | Operation::ReplyToThread { .. }
+        | Operation::SetThreadResolution { .. }
+        | Operation::ReviewThreads { .. }
+        | Operation::ThreadComments { .. }) => providers::reviews::execute(c, op).await,
         op @ (Operation::CreateIssue { .. }
         | Operation::CommentIssue { .. }
         | Operation::IssueComments { .. }) => providers::issue::execute(c, op).await,

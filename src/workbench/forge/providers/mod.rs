@@ -5,6 +5,7 @@ mod hosted;
 pub(super) mod issue;
 pub(super) mod linear;
 mod rest;
+pub(super) mod reviews;
 use super::{Context, ForgeError, Operation};
 use reqwest::Method;
 use serde_json::{Value, json};

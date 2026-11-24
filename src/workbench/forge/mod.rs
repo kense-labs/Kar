@@ -1,4 +1,5 @@
 //! Repository-scoped change requests, issue bindings and revision-specific review state.
+mod actions;
 mod github;
 mod providers;
 mod review;
@@ -37,6 +38,34 @@ pub(crate) enum Operation {
         title: String,
         body: String,
     },
+    SubmitReview {
+        number: u64,
+        verdict: actions::Verdict,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        comments: Vec<actions::Comment>,
+    },
+    ReviewThreads {
+        number: u64,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    ThreadComments {
+        number: u64,
+        thread_id: String,
+        cursor: String,
+    },
+    ReplyToThread {
+        number: u64,
+        thread_id: String,
+        body: String,
+    },
+    SetThreadResolution {
+        number: u64,
+        thread_id: String,
+        resolved: bool,
+    },
     Issues,
     Issue {
         number: u64,
@@ -69,6 +98,9 @@ impl Operation {
         matches!(
             self,
             Self::CreatePull { .. }
+                | Self::SubmitReview { .. }
+                | Self::ReplyToThread { .. }
+                | Self::SetThreadResolution { .. }
                 | Self::SetIssueState { .. }
                 | Self::CreateIssue { .. }
                 | Self::CommentIssue { .. }
