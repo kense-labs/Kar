@@ -23,7 +23,7 @@ fn issue(v: &Value) -> Result<Value, ForgeError> {
         json!({"number":checked_number(v)?,"title":v["title"],"body":v["body"],"state":v["state"],"url":v["html_url"],"updated_at":v["updated_at"]}),
     )
 }
-async fn request(
+pub(super) async fn request(
     c: &Context,
     method: Method,
     parts: &[&str],

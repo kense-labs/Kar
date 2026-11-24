@@ -15,6 +15,7 @@ pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<Stri
         .map(str::to_owned)
         .ok_or_else(|| ForgeError::bad("forge returned no default branch"))
 }
+mod routing;
 pub(super) fn routes() -> axum::Router<Workbench> {
     routes::routes()
 }
@@ -196,6 +197,8 @@ struct Mutation {
     chat: Uuid,
     repository: String,
     operation: Operation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    routing: Option<routing::Expected>,
     result: Option<Result<Value, ForgeError>>,
 }
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

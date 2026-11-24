@@ -17,14 +17,24 @@ async fn drivers() -> Json<Value> {
 struct Input {
     id: Uuid,
     chat: Uuid,
+    #[serde(default)]
+    routing: Option<routing::Expected>,
+    #[serde(flatten)]
+    operation: Operation,
+}
+#[derive(Deserialize)]
+struct ReadInput {
+    #[serde(default)]
+    routing: Option<routing::Expected>,
     #[serde(flatten)]
     operation: Operation,
 }
 async fn read(
     State(app): State<Workbench>,
     Path(project): Path<Uuid>,
-    Json(op): Json<Operation>,
+    Json(input): Json<ReadInput>,
 ) -> Reply<Value> {
+    let op = input.operation;
     if op.mutates() {
         return Err(ForgeError::bad(
             "use /operations and a stable request ID for writes",
@@ -33,6 +43,7 @@ async fn read(
     providers::issue::validate(&op)?;
     actions::validate(&op)?;
     let c = Context::for_operation(app.clone(), project, &op).await?;
+    routing::verify(&c, input.routing.as_ref()).await?;
     if let Operation::Pull { number } = op {
         return review::refresh(&app, project, &c, number).await.map(Json);
     }
@@ -85,6 +96,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
     providers::issue::validate(&input.operation)?;
     actions::validate(&input.operation)?;
     let c = Context::for_operation(app.clone(), project, &input.operation).await?;
+    routing::verify(&c, input.routing.as_ref()).await?;
     let identity = c.identity();
     let id = input.id;
     let remembered = app.update(|db| {
@@ -97,6 +109,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
             if old.project != project
                 || old.repository != identity
                 || old.chat != input.chat
+                || old.routing != input.routing
                 || old.operation != input.operation
             {
                 return Err(Error::Refused(
@@ -112,6 +125,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
                 chat: input.chat,
                 repository: identity,
                 operation: input.operation.clone(),
+                routing: input.routing.clone(),
                 result: None,
             },
         );
@@ -159,6 +173,7 @@ pub(in crate::workbench) async fn stacked_pull(
             Input {
                 id,
                 chat,
+                routing: None,
                 operation: Operation::CreatePull {
                     head,
                     base,
@@ -216,6 +231,7 @@ async fn reconcile(
 ) -> Reply<Value> {
     let Json(m) = operation(State(app.clone()), Path((project, id))).await?;
     let c = Context::for_operation(app.clone(), project, &m.operation).await?;
+    routing::verify(&c, m.routing.as_ref()).await?;
     if c.identity() != m.repository {
         return Err(ForgeError::bad(
             "project origin changed since the operation",
@@ -377,10 +393,12 @@ struct PathFilter {
 }
 async fn diff(
     State(app): State<Workbench>,
+    headers: axum::http::HeaderMap,
     Path((project, n)): Path<(Uuid, u64)>,
     Query(q): Query<PathFilter>,
 ) -> Reply<Value> {
     let c = Context::open(app.clone(), project).await?;
+    routing::verify(&c, routing::headers(&headers)?.as_ref()).await?;
     let pull = review::refresh(&app, project, &c, n).await?;
     let key = review::key(project, &c, n);
     let head = pull["head_sha"].as_str().unwrap_or_default();
@@ -404,10 +422,12 @@ struct Mark {
 }
 async fn mark(
     State(app): State<Workbench>,
+    headers: axum::http::HeaderMap,
     Path((project, n)): Path<(Uuid, u64)>,
     Json(input): Json<Mark>,
 ) -> Reply<Value> {
     let c = Context::open(app.clone(), project).await?;
+    routing::verify(&c, routing::headers(&headers)?.as_ref()).await?;
     let key = review::key(project, &c, n);
     let pull = review::refresh(&app, project, &c, n).await?;
     if pull["head_sha"] != input.head {
@@ -441,10 +461,12 @@ struct Checkout {
 }
 async fn checkout(
     State(app): State<Workbench>,
+    headers: axum::http::HeaderMap,
     Path((project, n)): Path<(Uuid, u64)>,
     Json(input): Json<Checkout>,
 ) -> Reply<ManagedWorktree> {
     let c = Context::open(app.clone(), project).await?;
+    routing::verify(&c, routing::headers(&headers)?.as_ref()).await?;
     let pull = review::refresh(&app, project, &c, n).await?;
     if pull["head_sha"] != input.head {
         return Err(ForgeError::remote(409, "pull request head changed"));
@@ -463,6 +485,7 @@ async fn issue_tracker(State(app): State<Workbench>, Path(project): Path<Uuid>) 
 }
 pub(super) fn routes() -> Router<Workbench> {
     Router::new()
+        .merge(routing::routes())
         .route("/forge/drivers", get(drivers))
         .route(
             "/projects/{project}/forge/issue-tracker",

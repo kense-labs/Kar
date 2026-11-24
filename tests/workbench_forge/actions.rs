@@ -149,3 +149,58 @@ pub(super) async fn review(client: &reqwest::Client, forge: &str, chat: Uuid) {
         StatusCode::NOT_FOUND
     );
 }
+
+pub(super) async fn starred(State(mock): State<Mock>) -> StatusCode {
+    if mock.lock().unwrap().starred {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+pub(super) async fn star(State(mock): State<Mock>) -> StatusCode {
+    mock.lock().unwrap().starred = true;
+    StatusCode::NO_CONTENT
+}
+pub(super) async fn routing(c: &reqwest::Client, forge: &str, base: &str, chat: Uuid) {
+    let identity = ok(c
+        .get(format!("{base}/forge/routing-identity"))
+        .query(&[("host", "REVIEW.EXAMPLE")]))
+    .await;
+    assert_eq!(
+        identity,
+        json!({"host":"review.example","provider":"github","accountId":"5432","viewer":"kar-test"})
+    );
+    let project = ok(c.get(format!("{forge}/routing"))).await;
+    assert_eq!(project["accountId"], identity["accountId"]);
+    assert_eq!(project["projectTitle"], "repo");
+    let req =
+        json!({"op":"pull","number":1,"routing":{"host":"review.example","account_id":"5432"}});
+    let read = ok(c.post(format!("{forge}/query")).json(&req)).await;
+    assert_eq!(read["number"], 1);
+    let denied = json!({"id":Uuid::new_v4(),"chat":chat,"op":"create_issue","title":"wrong account","routing":{"host":"review.example","account_id":"999"}});
+    assert_eq!(
+        c.post(format!("{forge}/operations"))
+            .json(&denied)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        c.get(format!("{forge}/pulls/1/diff"))
+            .header("x-kar-forge-host", "wrong.example")
+            .header("x-kar-forge-account-id", "5432")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let star = format!("{forge}/starred");
+    assert_eq!(ok(c.get(&star)).await, false);
+    for _ in 0..2 {
+        assert_eq!(ok(c.put(&star)).await, true);
+    }
+    assert_eq!(ok(c.get(&star)).await, true);
+}

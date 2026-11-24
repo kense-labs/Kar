@@ -31,6 +31,7 @@ struct Forge {
     comments: Vec<Value>,
     review_comments: Vec<Value>,
     resolved: bool,
+    starred: bool,
     created_issue: Option<Value>,
 }
 type Mock = Arc<Mutex<Forge>>;
@@ -38,7 +39,7 @@ async fn identity() -> Json<Value> {
     Json(json!({"full_name":"team/repo","permissions":{"push":true},"default_branch":"main"}))
 }
 async fn user() -> Json<Value> {
-    Json(json!({"login":"kar-test"}))
+    Json(json!({"login":"kar-test","id":5432}))
 }
 async fn pulls(State(mock): State<Mock>) -> Json<Value> {
     Json(json!(mock.lock().unwrap().pulls))
@@ -162,11 +163,16 @@ async fn scenario() {
         comments: vec![],
         review_comments: vec![],
         resolved: false,
+        starred: false,
         created_issue: None,
         issue: json!({"number":7,"title":"Fix notes","state":"open","html_url":"https://review.example/team/repo/issues/7"}),
     }));
     let api = Router::new()
         .route("/user", get(user))
+        .route(
+            "/user/starred/team/repo",
+            get(actions::starred).put(actions::star),
+        )
         .route("/repos/team/repo", get(identity))
         .route("/repos/team/repo/pulls", get(pulls).post(create_pull))
         .route("/repos/team/repo/pulls/{n}", get(get_pull))
@@ -342,6 +348,7 @@ async fn scenario() {
     assert_eq!(stale["state"], "closed");
     let links = ok(a.get(format!("{forge}/links"))).await;
     assert_eq!(links.as_array().unwrap().len(), 4);
+    actions::routing(&a, &forge, &url, id).await;
     actions::issue(&a, &forge, id).await;
     actions::review(&a, &forge, id).await;
     stacked::run(&a, &format!("{url}/projects/{p}"), &repo, &bare, id, &mock).await;
