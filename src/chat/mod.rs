@@ -125,7 +125,7 @@ pub struct ChatHistory {
     pub chat: ChatInfo,
     pub cursor: Option<crate::Cursor>,
     pub turns: Vec<ChatTurn>,
-    /// Native notification activity observed before a queued host input starts.
+    /// Independent native activity, including Claude notifications and Pi extension runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notifications: Vec<ChatNotification>,
     #[serde(

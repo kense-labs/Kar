@@ -111,6 +111,8 @@ impl SessionSnapshot {
     }
 }
 struct Run {
+    // Pi does not assign a native span ID to independent extension activity.
+    independent: Option<uuid::Uuid>,
     span: Option<String>,
     since_seq: u64,
     since_ms: u64,
@@ -186,24 +188,41 @@ impl SessionReducer {
         self.fold(r);
         Ok(())
     }
-    fn run_index(&self, span: &Option<String>) -> Option<usize> {
-        if let Some(span) = span {
-            self.runs
-                .iter()
-                .position(|t| t.span.as_ref() == Some(span))
-                .or_else(|| self.runs.iter().position(|t| t.span.is_none()))
-        } else {
-            (!self.runs.is_empty()).then_some(0)
+    fn independent(r: &Record) -> Option<uuid::Uuid> {
+        if r.span_id.is_some() {
+            return None;
         }
+        r.events.iter().find_map(|e| match e {
+            Event::NotificationActivity { id } => Some(*id),
+            _ => None,
+        })
+    }
+    fn run_index(&self, r: &Record) -> Option<usize> {
+        let group = Self::independent(r);
+        let mut candidates = self
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.independent == group);
+        if let Some(span) = &r.span_id {
+            candidates
+                .clone()
+                .find(|(_, t)| t.span.as_ref() == Some(span))
+                .or_else(|| candidates.find(|(_, t)| t.span.is_none()))
+        } else {
+            candidates.next()
+        }
+        .map(|(i, _)| i)
     }
     fn start(&mut self, r: &Record) {
-        if let Some(i) = self.run_index(&r.span_id) {
+        if let Some(i) = self.run_index(r) {
             if self.runs[i].span.is_none() {
                 self.runs[i].span = r.span_id.clone();
             }
             return;
         }
         self.runs.push(Run {
+            independent: Self::independent(r),
             span: r.span_id.clone(),
             since_seq: r.seq,
             since_ms: r.timestamp_ms,
@@ -355,7 +374,7 @@ impl SessionReducer {
                     self.snapshot.last_failure = r.turn_failure().cloned();
                     self.last_outcome = Some(outcome);
                 }
-                if let Some(i) = self.run_index(&r.span_id) {
+                if let Some(i) = self.run_index(r) {
                     self.runs.remove(i);
                 }
                 continue;
@@ -392,7 +411,7 @@ impl SessionReducer {
                     self.released = true;
                 }
                 _ => {
-                    if let Some(i) = self.run_index(&r.span_id) {
+                    if let Some(i) = self.run_index(r) {
                         let run = &mut self.runs[i];
                         if Self::phase(run, e) {
                             run.last_event_ms = r.timestamp_ms;
@@ -411,26 +430,31 @@ impl SessionReducer {
                 };
                 return;
             }
-            self.snapshot.status = self.runs.first().map_or_else(
-                || match self.queued.values().min() {
-                    Some(&(seq, ms)) => AgentStatus::Running {
-                        since_seq: seq,
-                        since_ms: ms,
-                        last_event_ms: r.timestamp_ms,
-                        phase: Phase::WaitingModel,
+            self.snapshot.status = self
+                .runs
+                .iter()
+                .find(|run| run.independent.is_some())
+                .or_else(|| self.runs.first())
+                .map_or_else(
+                    || match self.queued.values().min() {
+                        Some(&(seq, ms)) => AgentStatus::Running {
+                            since_seq: seq,
+                            since_ms: ms,
+                            last_event_ms: r.timestamp_ms,
+                            phase: Phase::WaitingModel,
+                        },
+                        None => AgentStatus::Idle {
+                            last_outcome: self.last_outcome.clone(),
+                            released: self.released,
+                        },
                     },
-                    None => AgentStatus::Idle {
-                        last_outcome: self.last_outcome.clone(),
-                        released: self.released,
+                    |t| AgentStatus::Running {
+                        since_seq: t.since_seq,
+                        since_ms: t.since_ms,
+                        last_event_ms: t.last_event_ms,
+                        phase: t.phase.clone(),
                     },
-                },
-                |t| AgentStatus::Running {
-                    since_seq: t.since_seq,
-                    since_ms: t.since_ms,
-                    last_event_ms: t.last_event_ms,
-                    phase: t.phase.clone(),
-                },
-            );
+                );
         }
     }
 }

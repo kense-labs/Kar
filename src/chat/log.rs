@@ -378,11 +378,11 @@ impl State {
             ChatUpdate::NotificationsInterrupted => self.interrupt_notifications(),
             ChatUpdate::SteeringUnconfirmed => self.unconfirm_steering(),
             ChatUpdate::Notification { id, at, frame } => {
-                if self.info.protocol != Protocol::Claude
+                if !matches!(self.info.protocol, Protocol::Claude | Protocol::Pi)
                     || self.stream != Some(frame.cursor.stream_id)
                 {
                     return Err(Error::Protocol(
-                        "notification outside its Claude stream".into(),
+                        "notification outside its native stream".into(),
                     ));
                 }
                 if self
@@ -1535,7 +1535,7 @@ impl Log {
             self.commit(ChatUpdate::GoalChanged { goal: goal.clone() })?;
         }
         self.native_begin(r, historical)?;
-        if self.state.info.protocol == Protocol::Claude {
+        if matches!(self.state.info.protocol, Protocol::Claude | Protocol::Pi) {
             if root
                 && self.state.observing_notifications()
                 && r.events
@@ -1549,7 +1549,7 @@ impl Log {
                 _ => None,
             }) {
                 if let Some(frame) = self.notification_ids.entry(id).or_default().frame(
-                    Protocol::Claude,
+                    self.state.info.protocol,
                     &self.state.info.native_id,
                     r,
                 ) {

@@ -576,7 +576,7 @@ impl Journal {
     pub(crate) fn request_dispose(&self) -> Uuid {
         self.control_request(serde_json::json!({"type":"dispose"}))
     }
-    fn control_request(&self, mut body: Value) -> Uuid {
+    pub(crate) fn control_request(&self, mut body: Value) -> Uuid {
         let id = Uuid::new_v4();
         body["id"] = id.to_string().into();
         self.push(

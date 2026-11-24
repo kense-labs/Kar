@@ -270,9 +270,14 @@ fn respond_observed(
             && (last.contains("KAR-LIVE-STEER-") || last.contains("kar-queue-held-at-model"))
             && !last.contains("KAR-LIVE-FOLLOWUP")
         {
-            std::fs::write(work.join("requested"), "")?;
+            let (requested, release) = if last.contains("kar-queue-held-at-model-EXT") {
+                ("extension-requested", "extension-release")
+            } else {
+                ("requested", "release")
+            };
+            std::fs::write(work.join(requested), "")?;
             let until = std::time::Instant::now() + Duration::from_secs(12);
-            while !work.join("release").exists() && std::time::Instant::now() < until {
+            while !work.join(release).exists() && std::time::Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }

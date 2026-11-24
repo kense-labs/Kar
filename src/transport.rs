@@ -245,6 +245,8 @@ pub(crate) struct Actor {
     pi_deadlines: HashMap<String, (tokio::time::Instant, Value)>,
     // Modern Pi closes a prompt after retries and compaction have settled.
     pi_pending_end: Option<Vec<Event>>,
+    // A native Pi run can start and settle while the host command is in preflight.
+    pi_independent: Option<uuid::Uuid>,
     pi_leaf: Option<String>,
     turn: Option<Turn>,
     queue: VecDeque<Queued>,
@@ -325,6 +327,7 @@ impl Actor {
             requests: HashMap::new(),
             pi_deadlines: HashMap::new(),
             pi_pending_end: None,
+            pi_independent: None,
             pi_leaf: None,
             turn: None,
             queue: VecDeque::new(),
@@ -356,8 +359,16 @@ impl Actor {
         tokio::spawn(actor.run(stdout, rx));
         tx
     }
+    fn awaiting_pi_admission(&self) -> bool {
+        self.turn.as_ref().is_some_and(|t| {
+            self.pending
+                .values()
+                .any(|p| p.prompt_request == Some(t.prompt_request))
+        })
+    }
     fn idle_for_interrupt(&self) -> bool {
         self.turn.is_none()
+            && self.pi_independent.is_none()
             && !self.claude_notifications.active()
             && !(self.claude_cancel_queued && self.claude_steering.waiting())
             && self.observed_root_turn().is_none()
@@ -670,7 +681,9 @@ impl Actor {
         .await
     }
     fn finish(&mut self, result: Result<Outcome>) {
-        self.pi_pending_end = None;
+        if self.pi_independent.is_none() {
+            self.pi_pending_end = None;
+        }
         if let Some(turn) = self.turn.take() {
             if let Some(capture) = &self.files.capture {
                 capture.reader.ended(&result);
@@ -794,6 +807,7 @@ impl Actor {
                     return Ok(true);
                 }
                 if self.turn.is_some()
+                    || self.pi_independent.is_some()
                     || self.claude_notifications.active()
                     || self.claude_steering.waiting()
                     || self.observed_root_turn().is_some()
@@ -948,6 +962,7 @@ impl Actor {
             }
             Command::Prompt(id, prompt, admission, tx, done) => {
                 if self.turn.is_some()
+                    || self.pi_independent.is_some()
                     || self.claude_notifications.active()
                     || self.claude_steering.waiting()
                     || self.observed_root_turn().is_some()
@@ -1049,6 +1064,16 @@ impl Actor {
                     &self.secrets,
                 );
                 let _ = tx.send(Err(error));
+            }
+            Command::Abort(tx)
+                if self.protocol == Protocol::Pi
+                    && self.pi_independent.is_none()
+                    && self.awaiting_pi_admission() =>
+            {
+                let id = self.journal.control_request(json!({"type":"abort"}));
+                self.turn.as_mut().expect("pending prompt").aborted = true;
+                self.journal.control_decision(id, None);
+                let _ = tx.send(Ok(Value::Null));
             }
             Command::Abort(tx) => match self.protocol {
                 Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
@@ -1703,8 +1728,26 @@ impl Actor {
                 events.extend(self.compactions.observe(self.protocol, &v));
                 events
             });
+        let mut independent = None;
         if self.protocol == Protocol::Pi {
-            if let Some(turn) = &mut self.turn
+            let kind = v["type"].as_str().unwrap_or_default();
+            if kind == "agent_start" && self.pi_pending_end.is_none() {
+                // Native preflight responds "started" before its own agent_start.
+                // Older Pi also acknowledges prompt before sending model events.
+                if self.turn.is_none() || self.awaiting_pi_admission() {
+                    self.pi_independent = Some(uuid::Uuid::new_v4());
+                }
+            }
+            if kind.starts_with("agent_")
+                || kind.starts_with("turn_")
+                || kind.starts_with("message_")
+                || kind.starts_with("tool_execution_")
+                || kind.starts_with("auto_")
+            {
+                independent = self.pi_independent;
+            }
+            if independent.is_none()
+                && let Some(turn) = &mut self.turn
                 && matches!(v["type"].as_str(), Some("message_start" | "message_end"))
                 && let Some(stamp) = v["message"]["timestamp"].as_u64()
             {
@@ -2151,6 +2194,7 @@ impl Actor {
             .or_else(|| v.pointer("/params/turnId"))
             .and_then(Value::as_str);
         let mut current_turn = is_root
+            && independent.is_none()
             && (self.protocol != Protocol::Codex
                 || self
                     .turn
@@ -2343,7 +2387,7 @@ impl Actor {
                 self.claude_followup = None;
             }
             let anchor = match self.protocol {
-                Protocol::Pi if outcome == Some(Outcome::Completed) => {
+                Protocol::Pi if current_turn && outcome == Some(Outcome::Completed) => {
                     self.turn.as_mut().and_then(|t| t.pi_anchor.take())
                 }
                 Protocol::Codex if outcome.is_some() => v
@@ -2383,6 +2427,19 @@ impl Actor {
             && let Some(removed) = grok.host_ended()
         {
             events.insert(i, removed);
+        }
+        if let Some(id) = independent {
+            events.insert(0, Event::NotificationActivity { id });
+            if v["type"] == "message_start"
+                && v["message"]["role"] == "user"
+                && let Some(mut text) = crate::observe::input_text(&v["message"]["content"])
+            {
+                redact_text(&mut text, &self.secrets);
+                events.push(Event::UserMessage { text });
+            }
+            if outcome.is_some() {
+                self.pi_independent = None;
+            }
         }
         self.record(
             received,
@@ -2441,6 +2498,17 @@ impl Actor {
                     vec![],
                 );
             }
+        }
+        // Pi can enter an asynchronous extension command before it starts its
+        // model. An interrupt accepted in that window belongs to this admission.
+        if self.protocol == Protocol::Pi
+            && v["type"] == "agent_start"
+            && self
+                .turn
+                .as_mut()
+                .is_some_and(|t| std::mem::take(&mut t.aborted))
+        {
+            self.rpc("abort", json!({}), None, false, false).await?;
         }
         if let Some((tx, result)) = prompt_ack {
             let _ = tx.send(result);
@@ -2574,7 +2642,8 @@ impl Actor {
         if !pi {
             return crate::context::qwen(&body);
         }
-        if packet["type"] == "agent_settled"
+        if self.pi_independent.is_none()
+            && packet["type"] == "agent_settled"
             && packet["aborted"] == false
             && self.session().is_some_and(|root| body["sessionId"] == root)
             && let Some((users, assistant)) = self
@@ -2685,6 +2754,7 @@ impl Actor {
         let mut buffered = BufferedLines::new();
         let reason = loop {
             if self.turn.is_none()
+                && self.pi_independent.is_none()
                 && !self.claude_notifications.active()
                 && !self.claude_steering.waiting()
                 && self.observed_root_turn().is_none()

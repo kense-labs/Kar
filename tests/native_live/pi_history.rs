@@ -1,5 +1,7 @@
 #[path = "../support/busy_prompt.rs"]
 mod busy_prompt;
+#[path = "pi_history/extension_runs.rs"]
+mod extension_runs;
 use super::{interrupted_copy, respond_in_workspace, sse::SseClient};
 use kar::{
     Event, SessionOptions,

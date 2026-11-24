@@ -37,6 +37,10 @@ pub(crate) fn sent_prompt_text(packet: &Value) -> Option<String> {
             _ => return None,
         }
     };
+    input_text(content)
+}
+
+pub(crate) fn input_text(content: &Value) -> Option<String> {
     if let Some(s) = content.as_str() {
         return Some(s.to_owned());
     }
