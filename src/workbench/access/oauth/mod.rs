@@ -293,6 +293,19 @@ async fn token(
         return Err(Failure("invalid_client", "Unknown client ID"));
     }
     let code = digest(get("code"));
+    if !auth
+        .app
+        .0
+        .access
+        .registry
+        .lock()
+        .unwrap()
+        .oauth
+        .codes
+        .contains_key(&code)
+    {
+        return Err(rejected());
+    }
     let verifier = get("code_verifier");
     let result=auth.app.0.access.update(|db|{
         let Some(c)=db.oauth.codes.remove(&code) else{return Ok(None)};
@@ -318,7 +331,18 @@ async fn revoke(
         .get("token")
         .filter(|s| !s.is_empty())
         .ok_or_else(invalid)?;
-    if raw.starts_with("kmcp_") {
+    if raw.starts_with("kmcp_")
+        && auth
+            .app
+            .0
+            .access
+            .registry
+            .lock()
+            .unwrap()
+            .oauth
+            .sessions
+            .contains_key(&digest(raw))
+    {
         auth.app
             .0
             .access

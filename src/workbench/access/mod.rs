@@ -312,6 +312,8 @@ async fn grant(State(app): State<Workbench>) -> AccessResult<Json<Value>> {
 }
 #[derive(Deserialize)]
 struct Pair {
+    #[serde(default)]
+    purpose: Option<String>,
     credential: String,
     label: String,
 }
@@ -322,6 +324,12 @@ async fn pair(State(app): State<Workbench>, Json(p): Json<Pair>) -> AccessResult
             return Err(AccessError::Bad(
                 "specify a device label of 1 to 120 characters".into(),
             ));
+        }
+        if let Some(purpose) = p.purpose {
+            if purpose != "peer-link" {
+                return Err(AccessError::Bad("Unknown pairing purpose".into()));
+            }
+            return browser::direct_peer(db, &p.credential, label);
         }
         let current = now();
         if db

@@ -1,4 +1,6 @@
 //! Local HTTP authentication with real PKCE and P-256 proofs. No hosted account is used.
+#[path = "support/workbench_connect_cases.rs"]
+mod connect_cases;
 #[path = "support/workbench_server.rs"]
 #[allow(dead_code)]
 mod server;

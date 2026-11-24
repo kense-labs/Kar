@@ -123,6 +123,19 @@ fn revoke(db: &mut Registry) {
     db.devices
         .retain(|_, d| d.account.as_ref().is_none_or(|a| a.cloud.is_none()));
 }
+pub(super) fn clear_other_clients(db: &mut Registry, keep: Option<Uuid>) {
+    let thumb = keep.and_then(|id| db.devices.get(&id)?.account.as_ref()?.proof.clone());
+    db.environment
+        .cloud
+        .trusted
+        .retain(|k| Some(k) == thumb.as_ref());
+    db.environment.cloud.pending.clear();
+    db.environment.grants.retain(|_, g| {
+        g.cloud
+            .as_ref()
+            .is_none_or(|b| Some(&b.thumb) == thumb.as_ref())
+    });
+}
 pub(super) fn validate_device(
     db: &mut Registry,
     g: &Grant,

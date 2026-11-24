@@ -168,7 +168,7 @@ pub(super) async fn approve(app: &Workbench, card: &cards::Card, input: Value) -
     let local = id(app)?;
     let r = client
         .post(address.join("access/pair").unwrap())
-        .json(&json!({"credential":a.credential,"label":format!("Kar {}",local)}))
+        .json(&json!({"credential":a.credential,"label":format!("Kar {}",local),"purpose":"peer-link"}))
         .send()
         .await
         .map_err(|_| bad("remote pairing outcome unknown; inspect the remote device list"))?;

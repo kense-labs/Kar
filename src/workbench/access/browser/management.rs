@@ -117,6 +117,7 @@ async fn others(State(auth): State<Auth>, h: HeaderMap) -> AccessResult<Json<Val
         "access:write",
     )?;
     let count = auth.app.0.access.update(|db| {
+        super::connect::clear_other_clients(db, id);
         let old = db.devices.len();
         db.devices.retain(|k, _| Some(*k) == id);
         let n = old - db.devices.len();

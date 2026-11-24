@@ -139,7 +139,9 @@ fn credentials(auth: &Auth, h: &HeaderMap, method: &Method, path: &str) -> Acces
         let d = find(auth, raw)?;
         match d.account.as_ref() {
             None if kind == "Bearer" => {}
-            Some(a) if a.method == "bearer-access-token" && kind == "Bearer" => {}
+            Some(a)
+                if matches!(a.method.as_str(), "bearer-access-token" | "peer-link")
+                    && kind == "Bearer" => {}
             Some(a) if a.method == "dpop-access-token" && kind == "DPoP" => {
                 let p = proof::verify(auth, h, method, path, Some(raw), a.proof.as_deref())?;
                 auth.app.0.access.update(|db| p.consume(db))?;
@@ -198,6 +200,25 @@ fn consume(db: &mut Registry, code: &str) -> AccessResult<Grant> {
         });
     }
     Err(AccessError::Invalid)
+}
+pub(super) fn direct_peer(db: &mut Registry, raw: &str, label: &str) -> AccessResult<Value> {
+    let mut g = consume(db, raw)?;
+    if g.cloud.is_some()
+        || g.access.is_some() && !g.peer
+        || !g.scopes.contains("orchestration:read")
+    {
+        return Err(AccessError::Denied);
+    }
+    g.label = label.into();
+    g.access = None;
+    let (device, token) = session(
+        db,
+        g,
+        "peer-link",
+        Some(BTreeSet::from(["orchestration:read".into()])),
+        None,
+    )?;
+    Ok(json!({"id":device.id,"label":device.label,"token":token}))
 }
 pub(super) fn consume_approval(
     db: &mut Registry,
@@ -336,6 +357,12 @@ pub(super) fn authenticate(auth: &Auth, req: &Request) -> AccessResult<DeviceLea
         d
     };
     if let Some(a) = &d.account {
+        if a.method == "peer-link"
+            && !((path == "/environment" && req.method() == Method::GET)
+                || (path == "/access/current-device" && req.method() == Method::DELETE))
+        {
+            return Err(AccessError::Denied);
+        }
         if path == "/mcp" {
             return Err(AccessError::Invalid);
         }
