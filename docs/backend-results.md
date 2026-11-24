@@ -52,10 +52,24 @@
 
 该提交通过格式、Clippy 和完整 Cargo 测试门禁。标准汇总 116 项通过、137 项默认忽略；包含 31 个子场景的 `acp_deadlines` 使用独立测试入口。上述模拟时限与供应商程序运行结果分别记账。
 
+## 子任务、技能目录与浏览器 / CLI
+
+以下测试运行在同一台 macOS arm64 主机。源码断言均指固定的 OAR v0.130.1。
+
+| 上游契约 / Kar 验收项 | 供应商、版本及传输 / Kar 提交 | 操作及期望 | 复验命令与实际结果 | 状态 |
+| --- | --- | --- | --- | --- |
+| `tests/claude/claude-session-model.test.ts`、`tests/replay/codex-collaboration.test.ts`、`tests/acp/acp-grok-wire-shapes.test.ts` / agents | Claude stream-json、Codex app-server、Grok ACP 协议对端；`163c29c` | 交错发送根、子、兄弟和孙任务的模型帧，同时混入未上报值及重复帧。模型只在对应的会话或调用路径变动。 | `cargo test --locked --test protocol` 的 `child_models::exercise`。Claude 收到 5 个模型变化，包含根初始化和 3 条不同子路径。Codex 子会话由 selected 改为 later，根模型保持原值。Codex、Grok 的任务列表保留启动时的 initial，兄弟任务的缺失值为 None。 | 已验收，协议实验 |
+| `tests/dsh/projection.test.ts` / agents | DSH Web 协议、0.2.2-rc.5 官方原生 Web；`163c29c` | 同一子会话的 descriptor 和后续请求头按字段更新；重复和迟到的 descriptor 不覆盖请求头。另用真实子任务核对源会话 ID 和模型值。 | `cargo test --locked --lib child_descriptor_and_headers`；置 `KAR_DSH_BIN` 后运行 `cargo test --locked --test dsh_live native_session_log_upload -- --ignored --nocapture`。原生子任务上报 deepseek-official/deepseek-flash，路径、原生请求和模型记录对应，父会话查询仍为父模型。 | 已验收，协议和实机分别执行 |
+| `sea-trial/vendor/antigravity-skills.vendor.test.ts` 中工作区、插件及登录状态断言 / inventory | Antigravity 1.5.14 与 1.5.15，官方 macOS arm64 程序；`324ad5f` | 未登录查询空目录，再创建工作区技能和插件。用原生 `--print=/skills` 对照 Kar CLI 返回的名字、来源、调用标记、部分目录标记和隐藏项，检查目录查询没有创建聊天。 | 分别设置 `KAR_ANTIGRAVITY_BIN`，运行 `cargo test --locked --test skill_inventory_live antigravity_skills -- --ignored`。两版均通过。1.5.14 下载文件的 SHA-512 与固定源码 `.github/runtime-versions.json` 一致。未登录时对空目录的查询没有创建 .gemini。 | 已验收，两个真实版本 |
+| `packages/cli/src/mcp{,-tools}.ts` / coverage、lifecycle | Kar MCP stdio CLI、官方 Kimi 2.7.2 ACP、官方 DSH 0.2.2-rc.5 Web；`0979c85` | 从同一进程查询已提供的两个运行时。分别选 Kimi 和 DSH，向两个独立的回环模型端点发送不同标记；比对返回文本、模型请求及实际 DSH 会话 ID。 | 设置 `KAR_KIMI_ACP_BIN`、`KAR_DSH_BIN`，运行 `cargo test --locked --test dsh_live cli_routes_to_the_selected_native_runtime -- --ignored`。两次调用均完成，仅各自端点看到对应标记。另以 `cargo test --locked --test protocol` 检查 Codex/Claude 协议对端各收到一次、深度为 1，未提供的运行时得到拒绝。 | 已验收，实机及协议分别执行 |
+| `tests/pi-durable/projection.test.ts` / tools、lifecycle | Pi Durable 真实 Harness、Chromium / IndexedDB、Kar Rust Wasm；`cd3e19e` | 重新打开 IndexedDB 后让模型调用外层工具，再由原生 Harness 调用子工具。核对原生实收参数和 Rust 输出的两条工具记录，参数含引号、换行和数字。 | 按 README 构建 Wasm 后运行 `node tests/browser/live.mjs`（Node 24，`KAR_BROWSER_DEPS` 和 `PLAYWRIGHT_BROWSERS_PATH` 指向安装目录）。实际 7 次模型调用；外层 root-lookup 与内层 root-lookup/child 各产生一次开始和一次完整参数，内层保留独立值。 | 已验收，真实浏览器及 IndexedDB，模型端点为回环服务 |
+
+DSH 另以 Node 24.15.0 运行 `cargo test --locked --test dsh_live -- --ignored --nocapture --test-threads=2`。当时的 23 个用例全部通过，包括两种传输的提示词、创建 hook、MCP、标题、工具限制与日志上传；Web 的多客户端队列、工具 ID 重用、缺失会话、目标重启、压缩和定向停止后台作业；另覆盖工作区可写目录。对应 `KAR_DSH_BIN` 为 0.2.2-rc.5 的 Web，`KAR_DSH_ACP_BIN` 为 0.2.1-rc.5，`KAR_DSH_ACP_ROOTS_BIN` 为 0.2.2-rc.3。上表的跨供应商 CLI 用例随后单独执行。桌面 app 随附的 Node 首次运行没有载入 DSH 原生模块，换用上述 Node 后通过。DSH 的实机证据以通过的这次运行计。
+
 ## 尚未核销的范围
 
 - **未完成或失败。** 对固定提交逐一读取了公共 suite 注册的 8 个模块，提取出的 20 个不同用例 ID 与清单完全相同。覆盖核销仍须对 20 个用例逐供应商记录结果，检查 40 个契约目录条目、公开入口、CLI 和 149 个 `.vendor.test.ts` 文件中的适用断言。各文件中的参数化断言可能适用于多种供应商。
-- **未完成或失败。** 实时推送、重启和队列已有上述平台证据。其余供应商、完整强制终止切点、三轮检查点及分叉、并行工作树、原生目标、子任务模型归属、用量、凭据传递以及运行时专有目录仍须按清单各自核销。
+- **未完成或失败。** 实时推送、重启和队列已有上述平台证据。其余供应商、完整强制终止切点、三轮检查点及分叉、并行工作树、原生目标、其余供应商的子任务归属、用量、凭据传递以及未覆盖的运行时专有目录仍须按清单各自核销。
 - **供应商不支持。** 本批次没有把未实测的功能登记为供应商不支持。
 - **缺环境待验证。** 表中实机结果来自 macOS arm64。Linux 原生运行仍须提供可执行这些供应商程序的 Linux 环境及对应架构安装包，设置同表环境变量后逐项复跑。交叉编译只验证编译。
 - **本轮排除：Windows 实机验证。** 此排除项沿用固定清单。
