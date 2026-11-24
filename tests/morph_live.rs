@@ -125,6 +125,18 @@ async fn actual_morph_shared_console_turn_and_resume() {
     );
     let catalog: Value = serde_json::from_slice(&cli.stdout).unwrap();
     assert_eq!(catalog[0]["resolvedId"], "fixture");
+    let picker = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+        .args(["models", "morph", "--picker", "--bin"])
+        .arg(&program)
+        .env("MISTER_MORPH_FILE_STATE_DIR", &state)
+        .env("MISTER_MORPH_CONFIG", &cfg)
+        .output()
+        .await
+        .unwrap();
+    assert!(picker.status.success());
+    let picker: Value = serde_json::from_slice(&picker.stdout).unwrap();
+    assert_eq!(picker["status"], "live");
+    assert_eq!(picker["models"], catalog);
     assert!(
         one.models()
             .await

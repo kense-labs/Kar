@@ -31,6 +31,17 @@ impl Runtime {
             if self.protocol == crate::Protocol::Qoder && self.id == "qoder" {
                 return crate::qoder::picker::read(self, options).await;
             }
+            if self.protocol == crate::Protocol::Morph && self.id == "morph" {
+                if !options.env.is_empty() || !options.unset_env.is_empty() {
+                    return Err(Error::Unsupported(
+                        "Morph Console owns its environment".into(),
+                    ));
+                }
+                let value = crate::community::Morph::from_env(&self.program)?
+                    .models()
+                    .await?;
+                return Ok(serde_json::from_value(value)?);
+            }
             if self.protocol == crate::Protocol::Claude && self.id == "claude" {
                 let rows = crate::inventory::claude_models(&self.selected(options).await?, options)
                     .await?;

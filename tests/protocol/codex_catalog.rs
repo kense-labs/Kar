@@ -2,6 +2,14 @@ use super::*;
 use kar::forms::{ListingReason, ModelListing};
 
 pub(super) fn peer(mode: &str) {
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("codex-cli 0.171.0");
+        return;
+    }
+    if mode == "stalled" {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        return;
+    }
     for line in std::io::stdin()
         .lock()
         .lines()
@@ -82,5 +90,54 @@ pub(super) async fn run() -> kar::Result<()> {
     assert_eq!(menu["status"], "live");
     assert_eq!(menu["models"][1]["id"], "b");
     assert_eq!(menu["models"][1]["default"], true);
+    // CLI reports isolate failures per installation, including when a deadline expires.
+    for (selection, format, mode, succeeds) in [
+        (None, "--json", "b", true),
+        (Some("all"), "--json", "b", true),
+        (Some("codex"), "--text", "b", true),
+        (Some("all"), "--json", "stalled", false),
+    ] {
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"));
+        cmd.arg("models")
+            .args(selection)
+            .arg(format)
+            .arg("--cwd")
+            .arg(tmp.path())
+            .args(["--timeout-ms", if succeeds { "5000" } else { "1200" }])
+            .env("KAR_TEST_CODEX_CATALOG", mode);
+        for provider in kar::runtimes().into_iter().chain([kar::runtime("morph")?]) {
+            cmd.env(
+                format!("KAR_{}_BIN", provider.id.to_ascii_uppercase()),
+                if provider.id == "codex" {
+                    rt.program.clone()
+                } else {
+                    tmp.path().join("absent")
+                },
+            );
+        }
+        let out = cmd.output().await?;
+        assert_eq!(
+            out.status.success(),
+            succeeds,
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if format == "--text" {
+            assert!(
+                String::from_utf8_lossy(&out.stdout)
+                    .contains("codex\tb effort [low*,high] tiers [priority*] (default)")
+            );
+            continue;
+        }
+        let rows: Vec<Value> = serde_json::from_slice(&out.stdout)?;
+        assert_eq!(rows.len(), kar::runtimes().len() + 2);
+        let row = |id: &str| rows.iter().find(|r| r["runtime"] == id).unwrap();
+        assert_eq!(row("pi")["installation"]["kind"], "missing");
+        if succeeds {
+            assert_eq!(row("codex")["choices"], menu);
+        } else {
+            assert!(row("codex")["error"].is_string());
+        }
+    }
     Ok(())
 }

@@ -147,14 +147,6 @@ fn catalog() -> Result<Vec<Case>> {
             "session.queue-runs-after-turn",
             "session.withdraw-before-dispatch",
         ] {
-            if public_case == "session.effort-listed-levels-apply-across-resume"
-                && !matches!(
-                    rt.id.as_str(),
-                    "codex" | "claude" | "qwen" | "cursor" | "grok" | "factory" | "opencode"
-                )
-            {
-                continue;
-            }
             if public_case == "account-usage.snapshot" && !rt.supports_account_usage() {
                 continue;
             }

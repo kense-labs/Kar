@@ -215,7 +215,7 @@ async fn models(console: &Console) -> Result<Value> {
             && !result.iter().any(|p: &Value| p["id"] == id)
         {
             let mut entry = json!({"id":id});
-            if let Some(model) = profile["model"].as_str() {
+            if let Some(model) = profile["model"].as_str().filter(|s| !s.is_empty()) {
                 entry["resolvedId"] = model.into();
             }
             result.push(entry);
