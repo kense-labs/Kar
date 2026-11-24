@@ -655,6 +655,7 @@ async fn exercise(protocol: Protocol) -> kar::Result<()> {
     assert_eq!(session.models().await?.as_array().unwrap().len(), 1);
     let readbacks = r.open(opts.clone()).await?;
     public_readbacks::check(&readbacks).await?;
+    public_readbacks::stream::check(&readbacks).await?;
     readbacks.close().await?;
     let mut stream = session.subscribe(None)?;
     let result = session.prompt("normal").await?.wait().await?;

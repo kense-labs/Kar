@@ -881,10 +881,10 @@ impl Frame {
             });
         }
         edits.push(Edit::Activity {
-            event: Event::TurnEnded { outcome },
+            event: Event::ForkAnchor { anchor: id.into() },
         });
         edits.push(Edit::Activity {
-            event: Event::ForkAnchor { anchor: id.into() },
+            event: Event::TurnEnded { outcome },
         });
         snapshot_tools(&mut edits, record.elided);
         Some(Self {

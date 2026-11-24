@@ -1618,6 +1618,7 @@ async fn public_prompt_readbacks() {
         options.settings.append_system_prompt = Some("KAR_PUBLIC_READBACK_FIXTURE".into());
         let session = f.runtime.open(options).await.unwrap();
         public_readbacks::check(&session).await.unwrap();
+        public_readbacks::stream::check(&session).await.unwrap();
         session.close().await.unwrap();
     }
 }

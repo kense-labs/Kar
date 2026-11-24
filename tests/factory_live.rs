@@ -828,5 +828,6 @@ async fn public_prompt_readbacks() {
     f.model.tool_seen.send_replace(true);
     let session = f.runtime.open(f.opts.clone()).await.unwrap();
     public_readbacks::check(&session).await.unwrap();
+    public_readbacks::stream::check(&session).await.unwrap();
     session.close().await.unwrap();
 }

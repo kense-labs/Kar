@@ -172,12 +172,12 @@ impl Projection {
                         Outcome::Failed
                     }
                 };
-                out.push(Event::TurnEnded { outcome });
                 if let Some(seq) = e["seq"].as_u64() {
                     out.push(Event::ForkAnchor {
                         anchor: seq.to_string(),
                     });
                 }
+                out.push(Event::TurnEnded { outcome });
             }
             Some("assistant/message") => {
                 let msg = text(&d["message"]["content"], "text");

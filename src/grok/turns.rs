@@ -63,15 +63,14 @@ impl Turns {
         id
     }
 
-    pub fn host_ended(&mut self, events: &mut Vec<Event>) {
+    pub fn host_ended(&mut self) -> Option<Event> {
         self.host_prompt = None;
-        if self.host_receipt.take() == Some(InputReceipt::Queued)
-            && let Some(input_id) = self.host_input
-        {
-            events.push(Event::InputRemoved {
-                input_id: input_id.to_string(),
-            });
+        if self.host_receipt.take() != Some(InputReceipt::Queued) {
+            return None;
         }
+        self.host_input.map(|id| Event::InputRemoved {
+            input_id: id.to_string(),
+        })
     }
 
     fn adopt(&mut self, id: String) {

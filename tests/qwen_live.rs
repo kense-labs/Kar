@@ -352,6 +352,7 @@ async fn public_prompt_readbacks() {
     let f = fixture().await;
     let session = runtime("qwen").unwrap().open(f.opts.clone()).await.unwrap();
     public_readbacks::check(&session).await.unwrap();
+    public_readbacks::stream::check(&session).await.unwrap();
     session.close().await.unwrap();
     f.http.abort();
 }

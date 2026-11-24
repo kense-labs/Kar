@@ -2,6 +2,9 @@
 use kar::{Outcome, Protocol, Session};
 use uuid::Uuid;
 
+#[path = "public_stream.rs"]
+pub(crate) mod stream;
+
 pub(crate) async fn check(session: &Session) -> kar::Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(45), check_turns(session))
         .await

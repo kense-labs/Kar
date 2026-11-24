@@ -78,6 +78,13 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
                 value: value.clone(),
             });
         }
+        if event["kind"] == "turn_ended"
+            && let Some(anchor) = event["forkAnchor"].as_str()
+        {
+            events.push(Event::ForkAnchor {
+                anchor: anchor.into(),
+            });
+        }
         if let Some(e) = project(event) {
             events.push(e)
         }
@@ -88,13 +95,6 @@ fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
             events.push(Event::ContextUsage { usage });
         }
         project_tool_detail(event, &mut events);
-        if event["kind"] == "turn_ended"
-            && let Some(anchor) = event["forkAnchor"].as_str()
-        {
-            events.push(Event::ForkAnchor {
-                anchor: anchor.into(),
-            });
-        }
     }
     if kind == RecordKind::Request
         && v["direction"] == "toApp"

@@ -2232,10 +2232,10 @@ impl Actor {
                 }
             }
         }
-        let outcome = events.iter().find_map(|e| match e {
-            Event::TurnEnded { outcome } => Some(outcome.clone()),
-            _ => None,
-        });
+        let terminal = events
+            .iter()
+            .position(|e| matches!(e, Event::TurnEnded { .. }));
+        let outcome = terminal.and_then(|i| events[i].resolved_input());
         let dropped = events.iter().find_map(|e| match e {
             Event::NativeInput { receipt, .. } => receipt.dropped_outcome(),
             _ => None,
@@ -2279,16 +2279,17 @@ impl Actor {
                 }
                 _ => None,
             };
-            if let Some(anchor) = anchor {
-                events.push(Event::ForkAnchor { anchor });
+            if let (Some(anchor), Some(i)) = (anchor, terminal) {
+                events.insert(i, Event::ForkAnchor { anchor });
             }
         }
         if current_turn
             && self.turn.is_some()
-            && outcome.is_some()
+            && let Some(i) = terminal
             && let Some(grok) = &mut self.grok
+            && let Some(removed) = grok.host_ended()
         {
-            grok.host_ended(&mut events);
+            events.insert(i, removed);
         }
         self.record(
             received,

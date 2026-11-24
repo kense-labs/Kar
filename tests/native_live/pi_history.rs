@@ -680,5 +680,8 @@ async fn public_prompt_readbacks() {
     runtime.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
     let session = runtime.open(fixture.options.clone()).await.unwrap();
     super::public_readbacks::check(&session).await.unwrap();
+    super::public_readbacks::stream::check(&session)
+        .await
+        .unwrap();
     session.close().await.unwrap();
 }
