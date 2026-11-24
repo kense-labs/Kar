@@ -385,7 +385,7 @@ phase = 2
 name = "聊天内查找、结果导航、分阶段返回和单条时间线读取"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/ThreadFind.ts", "apps/server/src/orchestration-v2/ProjectionStore.ts"]
 kar = ["src/workbench/thread_find/mod.rs", "src/chat/timeline.rs"]
-status = "稳定条目标识、出现位置和两阶段查找已集成；富文本显示投影仍待核对"
+status = "有两阶段查找、稳定位置和普通 Markdown 渲染。文件链接的可见行号、同名文件后缀、折叠内容与引用批注仍未完整覆盖。"
 implementation_ref = "e93c30a"
 test_target = "cargo test --locked --test chat_restart -- workbench-fork"
 accept = "在分叉前后添加同词的多条消息，按文本出现序号、游标和正负偏移导航，核对首个匹配与完整计数共享同一快照。读取匹配项，对不存在或别的聊天的标识返回空。"
@@ -440,7 +440,7 @@ phase = 2
 name = "用户问题关闭、请求送达失败和来自供应商的链接/反馈/秘密请求记录"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
 kar = ["src/workbench/interactions.rs"]
-status = "复合命令已展开并对照分派，子操作待逐项补齐和验收"
+status = "在线可按准确请求游标回答。控制器失联后会清空原生请求；符合条件的普通问题转成可回答或关闭的新消息，以及未确认送达的时间线错误仍缺。"
 test_target = "cargo test --locked --test chat_restart -- workbench-requests"
 accept = "用两个客户端答复或关闭同一请求，重试旧回复。把用户输入取消、交付失败和成功关联至正确请求，并核对服务重启后可见范围及机密值脱敏。"
 
@@ -450,8 +450,8 @@ phase = 2
 name = "委派子任务的唤醒、交付确认、远端完成与合并回父聊天"
 upstream = ["packages/contracts/src/orchestrationV2.ts", "apps/server/src/orchestration-v2/Orchestrator.ts"]
 kar = ["src/workbench/mcp/orchestrator/tasks.rs", "src/workbench/mcp/collaboration_tools/environment"]
-implementation_commit = "194c43c"
-status = "已有本地和远端委派、授权范围、稳定任务 ID、停止、父聊天结果回传及重启对账。完成通知显式确认/丢弃、变更父级唤醒策略仍待逐操作核实。"
+implementation_commit = "263079e"
+status = "已接入父回合归属、按策略唤醒、兄弟通知合并、确认和处置、原生已收和模型观察分开记账。旧记录没有归属或原生回执时无法补证；Interrupted 缺少取消标志时无法辨认主动强停。待双机和真供应商复验。"
 test_target = "cargo test --locked --test workbench_mcp"
 accept = "并发启动两个委派任务，设置唤醒条件，停止或完成子任务，从子聊天合并回父聊天。重放完成通知和确认，检查代次、目标父回合以及不会重复投递。"
 
@@ -1168,9 +1168,9 @@ phase = 1
 name = "原生安装计划说明与实际执行结果"
 upstream = ["packages/oar/src/contracts/install.ts","packages/oar/src/contracts/update.ts"]
 kar = ["src/setup.rs","src/setup/plan.rs","src/setup/update.rs"]
-implementation_commit = "1a01ff5"
-status = "计划给出来源、命令、网络及执行身份。install/update 当前返回 Installation 或 Error；已安装和刚安装未分别分类、部分拒绝原因不可机器区分，实际安装器的合并输出与退出码未完整返回。"
-test_target = "cargo test --locked --test setup_cli"
+implementation_commit = "a5af388"
+status = "SDK 与 CLI 现有宿主预检、拒绝分类、安装后实测、同一路径更新读回及退出码与输出。隔离 npm/脚本/更新器夹具已通过；真实供应商发布物未执行。"
+test_target = "cargo test --locked --test setup_receipts"
 accept = "对选择和缺少发布线、缺少依赖、权限不足及已安装和新安装分别运行。计划不得下载；真实执行在可丢弃的受管目录核对返回分类、来源、版本和诊断。"
 
 [[gap]]
