@@ -281,7 +281,7 @@ impl Admission {
         {
             return Err(Error::Busy);
         }
-        log.begin(self.id, &self.text, self.checkpoint.before.tree.clone())?;
+        log.begin(self.id, &self.text, &self.checkpoint.before)?;
         log.checkpoint = Some(self.checkpoint);
         Ok(())
     }

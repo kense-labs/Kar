@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 mod diff;
 pub use diff::TurnDiff;
+pub(crate) mod scopes;
+pub use scopes::{RepositoryCheckpoint, RepositoryScope};
 mod restore;
 pub use restore::RollbackReport;
 
@@ -25,6 +27,8 @@ pub struct Checkpoint {
     pub parent: Option<CheckpointPoint>,
     pub before_tree: String,
     pub after_tree: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<RepositoryCheckpoint>,
     pub files: Vec<FileChange>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +88,7 @@ struct Leaf {
 }
 pub(super) struct Capture {
     pub tree: String,
+    pub repositories: Vec<RepositoryCheckpoint>,
     files: Files,
 }
 fn changes(old: &Files, new: &Files) -> Vec<FileChange> {
@@ -223,6 +228,20 @@ impl ChatStore {
         point: CheckpointPoint,
         required_tree: Option<&str>,
     ) -> Result<Capture> {
+        let scopes = if point.before && required_tree.is_none() {
+            self.scope_baselines(chat)?
+        } else {
+            Vec::new()
+        };
+        self.capture_with_scopes(chat, point, required_tree, scopes)
+    }
+    pub(super) fn capture_with_scopes(
+        &self,
+        chat: &ChatInfo,
+        point: CheckpointPoint,
+        required_tree: Option<&str>,
+        mut repositories: Vec<RepositoryCheckpoint>,
+    ) -> Result<Capture> {
         let odb = self.odb_path(chat.checkpoint_store());
         let repo = if odb.exists() {
             gix::open(&odb).map_err(err)?
@@ -248,7 +267,9 @@ impl ChatStore {
             self.write_workspace_tree(&repo, &chat.workspace)?
         };
         Self::pin_tree(&repo, chat, point, id)?;
+        self.capture_scopes(&repo, chat, point, &mut repositories);
         Ok(Capture {
+            repositories,
             tree: id.to_string(),
             files,
         })
@@ -297,10 +318,16 @@ impl ChatStore {
         .map_err(err)?;
         Ok(())
     }
-    pub(super) fn saved_capture(&self, chat: &ChatInfo, id: &str) -> Result<Capture> {
+    pub(super) fn saved_capture(
+        &self,
+        chat: &ChatInfo,
+        id: &str,
+        repositories: Vec<RepositoryCheckpoint>,
+    ) -> Result<Capture> {
         let repo = gix::open(self.odb_path(chat.checkpoint_store())).map_err(err)?;
         let tree = restore::read_tree(&repo, id)?;
         Ok(Capture {
+            repositories,
             tree: id.into(),
             files: restore::tree_files(&tree)?,
         })

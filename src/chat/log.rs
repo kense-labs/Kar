@@ -1,6 +1,7 @@
 mod acp_children;
 mod claude;
 pub(crate) mod pi;
+use super::checkpoint::RepositoryCheckpoint;
 use super::{
     ChatInfo, ChatTurn, Checkpoint, CheckpointPoint, FileChange, TurnStatus,
     timeline::{Frame, MessageIds},
@@ -81,12 +82,16 @@ pub enum ChatUpdate {
         text: String,
         #[serde(default)]
         before_tree: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        repositories: Vec<RepositoryCheckpoint>,
     },
     NativeBegin {
         id: Uuid,
         native_turn: String,
         at: u64,
         before_tree: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        repositories: Vec<RepositoryCheckpoint>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steered_from: Option<Uuid>,
     },
@@ -114,6 +119,8 @@ pub enum ChatUpdate {
         id: Uuid,
         tree: String,
         files: Vec<FileChange>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        repositories: Vec<RepositoryCheckpoint>,
     },
     RestoreStarted {
         target: CheckpointPoint,
@@ -331,6 +338,7 @@ impl State {
         text: Option<String>,
         native_turn: Option<String>,
         before_tree: Option<String>,
+        repositories: Vec<RepositoryCheckpoint>,
     ) -> Result<()> {
         if self.active().is_some() || self.ids.contains_key(&id) {
             return Err(Error::Protocol(
@@ -345,6 +353,7 @@ impl State {
                 parent: self.position,
                 before_tree,
                 after_tree: None,
+                repositories,
                 files: vec![],
             });
             self.position = Some(CheckpointPoint {
@@ -637,8 +646,9 @@ impl State {
                 at,
                 text,
                 before_tree,
+                repositories,
             } => {
-                self.begin_turn(id, at, Some(text), None, before_tree)?;
+                self.begin_turn(id, at, Some(text), None, before_tree, repositories)?;
                 if let Some(h) = self
                     .handoffs
                     .iter_mut()
@@ -654,9 +664,10 @@ impl State {
                 native_turn,
                 at,
                 before_tree,
+                repositories,
                 steered_from,
             } => {
-                self.begin_turn(id, at, None, Some(native_turn), before_tree)?;
+                self.begin_turn(id, at, None, Some(native_turn), before_tree, repositories)?;
                 if let Some(from) = steered_from {
                     let input = self.take_steering_message(from, id)?;
                     let turn = self.turns.last_mut().expect("just began turn");
@@ -666,7 +677,12 @@ impl State {
                     turn.items.push(input);
                 }
             }
-            ChatUpdate::Captured { id, tree, files } => {
+            ChatUpdate::Captured {
+                id,
+                tree,
+                files,
+                repositories,
+            } => {
                 let cp = self
                     .turns
                     .last_mut()
@@ -675,6 +691,7 @@ impl State {
                     .filter(|cp| cp.after_tree.is_none())
                     .ok_or_else(|| Error::Protocol("unexpected final checkpoint".into()))?;
                 cp.after_tree = Some(tree);
+                cp.repositories = repositories;
                 cp.files = files;
                 self.position = Some(CheckpointPoint {
                     turn: id,
@@ -1367,14 +1384,20 @@ impl Log {
         }
         Ok(None)
     }
-    pub fn begin(&mut self, id: Uuid, text: &str, before_tree: String) -> Result<()> {
+    pub fn begin(
+        &mut self,
+        id: Uuid,
+        text: &str,
+        before: &super::checkpoint::Capture,
+    ) -> Result<()> {
         self.ids = MessageIds::default();
         self.dispatched = false;
         self.commit(ChatUpdate::Begin {
             id,
             at: super::now(),
             text: text.into(),
-            before_tree: Some(before_tree),
+            before_tree: Some(before.tree.clone()),
+            repositories: before.repositories.clone(),
         })
     }
     pub fn input_sent(&mut self, id: Uuid) -> Result<()> {
@@ -1383,21 +1406,38 @@ impl Log {
         }
         self.commit(ChatUpdate::InputSent { id })
     }
-    pub fn captured(&mut self, id: Uuid, tree: String, files: Vec<FileChange>) -> Result<()> {
-        self.commit(ChatUpdate::Captured { id, tree, files })
+    pub fn captured(
+        &mut self,
+        id: Uuid,
+        tree: String,
+        files: Vec<FileChange>,
+        repositories: Vec<RepositoryCheckpoint>,
+    ) -> Result<()> {
+        self.commit(ChatUpdate::Captured {
+            id,
+            tree,
+            files,
+            repositories,
+        })
     }
     pub(super) fn finish_checkpoint(&mut self, id: Uuid) -> Result<()> {
         if self.checkpoint.as_ref().is_some_and(|c| c.id == id) {
             let pending = self.checkpoint.take().expect("matched pending checkpoint");
-            let after = pending.store.capture(
+            let after = pending.store.capture_with_scopes(
                 &self.state.info,
                 CheckpointPoint {
                     turn: id,
                     before: false,
                 },
                 None,
+                pending.before.repositories.clone(),
             )?;
-            self.captured(id, after.tree.clone(), pending.before.changes(&after))?;
+            self.captured(
+                id,
+                after.tree.clone(),
+                pending.before.changes(&after),
+                after.repositories.clone(),
+            )?;
             if self.state.info.protocol == Protocol::Claude
                 && self.state.find(id).is_some_and(|t| {
                     t.steered_inputs
@@ -1405,6 +1445,10 @@ impl Log {
                         .any(|s| *s == crate::SteerStatus::Queued)
                 })
             {
+                let mut after = after;
+                for repo in &mut after.repositories {
+                    repo.before_tree = repo.after_tree.take();
+                }
                 self.steering_boundary = Some(TurnCapture {
                     before: after,
                     ..pending
@@ -1509,6 +1553,10 @@ impl Log {
             native_turn: native.into(),
             at: r.timestamp_ms,
             before_tree: checkpoint.as_ref().map(|c| c.before.tree.clone()),
+            repositories: checkpoint
+                .as_ref()
+                .map(|c| c.before.repositories.clone())
+                .unwrap_or_default(),
             steered_from: steering.map(|(_, from)| from),
         })?;
         self.checkpoint = checkpoint;
@@ -1540,6 +1588,7 @@ impl Log {
                 .unwrap_or_else(Uuid::new_v4),
             at,
             text,
+            repositories: Vec::new(),
             before_tree: None,
         })
     }
@@ -1841,7 +1890,11 @@ impl Log {
                     && turn.status != TurnStatus::Interrupted
                     && let Some(cp) = turn.checkpoint.as_ref().filter(|c| c.after_tree.is_none())
                 {
-                    let before = store.saved_capture(&self.state.info, &cp.before_tree)?;
+                    let before = store.saved_capture(
+                        &self.state.info,
+                        &cp.before_tree,
+                        cp.repositories.clone(),
+                    )?;
                     self.checkpoint = Some(TurnCapture {
                         store,
                         id,

@@ -140,20 +140,31 @@ impl Workbench {
         };
         let task_folders = task_folders::Store::new(state.join("task-folders"));
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
-        let app = Self(Arc::new(Inner {
-            workflows: workflows::Engine::open(&state, clock)?,
-            terminal_preview,
-            task_folders,
-            chats,
-            roots: allowed,
-            catalog: Mutex::new(catalog),
-            clones: Default::default(),
-            pump: Default::default(),
-            access: access::AccessStore::open(&state)?,
-            state,
-            documents: Default::default(),
-            _lease: lease,
-            controllers: Default::default(),
+        let workflows = workflows::Engine::open(&state, clock)?;
+        let access = access::AccessStore::open(&state)?;
+        let app = Self(Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
+            let service = weak.clone();
+            let chats = chats.with_repository_scopes(Arc::new(move |chat| {
+                let inner = service
+                    .upgrade()
+                    .ok_or_else(|| Error::Closed("workbench stopped".into()))?;
+                task_folders::checkpoints::repositories(&Workbench(inner), chat)
+            }));
+            Inner {
+                workflows,
+                terminal_preview,
+                task_folders,
+                chats,
+                roots: allowed,
+                catalog: Mutex::new(catalog),
+                clones: Default::default(),
+                pump: Default::default(),
+                access,
+                state,
+                documents: Default::default(),
+                _lease: lease,
+                controllers: Default::default(),
+            }
         }));
         git_actions::recover(&app)?;
         forge::clone_jobs::recover(&app)?;

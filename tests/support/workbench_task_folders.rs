@@ -190,10 +190,37 @@ async fn scenario() {
     let first = events.chunk().await.unwrap().unwrap();
     assert!(String::from_utf8_lossy(&first).contains("\"phase\":\"done\""));
     drop(events);
+    let message = json(
+        c.post(format!("{scope}/chats/{id}/messages"))
+            .json(&json!({"id":Uuid::new_v4(),"text":"edit selected repositories"})),
+    )
+    .await;
+    assert_eq!(message["status"], "completed");
+    let diff_suffix = format!("/chats/{id}/checkpoints/diff?to=1");
+    let diff = json(c.get(format!("{scope}{diff_suffix}"))).await;
+    assert_eq!(diff["diff"], "");
+    let repos = diff["repositories"].as_array().unwrap();
+    assert_eq!(repos.len(), 2);
+    for (path, directory, marker) in [
+        (&api, "api", "+api change"),
+        (&web, "wrapper/web", "+web change"),
+    ] {
+        let row = repos
+            .iter()
+            .find(|r| r["repository_path"].as_str() == path.to_str())
+            .unwrap();
+        assert_eq!(row["relative_path"], directory);
+        assert!(row["diff"].as_str().unwrap().contains(marker));
+        assert!(!path.join("turn-change.txt").exists());
+    }
     server.kill().await.unwrap();
     server.wait().await.unwrap();
     let (mut restored, newbase) = serve(&state, &root, &native).await;
     let suffix = scope.strip_prefix(&base).unwrap();
+    assert_eq!(
+        json(c.get(format!("{newbase}{suffix}{diff_suffix}"))).await,
+        diff
+    );
     let found = json(
         c.get(format!("{newbase}{suffix}/folders/containing"))
             .query(&[("path", cwd.join("wrapper/web").to_str().unwrap())]),

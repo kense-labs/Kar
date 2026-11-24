@@ -3,8 +3,9 @@ use super::{ChatStore, err};
 use crate::{Error, Result, chat::TurnStatus};
 use serde::Serialize;
 use std::{
+    collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
     process::Stdio,
 };
 use uuid::Uuid;
@@ -18,6 +19,28 @@ pub struct TurnDiff {
     pub from: usize,
     pub to: usize,
     pub diff: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repositories: Option<Vec<RepositoryDiff>>,
+}
+
+#[derive(Serialize)]
+pub struct RepositoryDiff {
+    pub name: String,
+    pub repository_path: PathBuf,
+    pub relative_path: PathBuf,
+    pub diff: String,
+}
+
+fn relative(from: &Path, to: &Path) -> PathBuf {
+    let Some(base) = from.ancestors().find(|base| to.starts_with(base)) else {
+        return to.to_owned();
+    };
+    let mut result = PathBuf::new();
+    for _ in from.strip_prefix(base).unwrap().components() {
+        result.push("..");
+    }
+    result.push(to.strip_prefix(base).unwrap());
+    result
 }
 
 fn bounded_patch(
@@ -114,6 +137,7 @@ impl ChatStore {
             from,
             to,
             diff: String::new(),
+            repositories: None,
         };
         if from == to {
             return Ok(result);
@@ -143,13 +167,49 @@ impl ChatStore {
                 .ok_or_else(missing)?
         };
         let after = end.after_tree.as_ref().ok_or_else(missing)?;
-        result.diff = bounded_patch(
-            &self.odb_path(history.chat.checkpoint_store()),
-            before,
-            after,
-            ignore_whitespace,
-            OUTPUT_LIMIT,
-        )?;
+        let odb = self.odb_path(history.chat.checkpoint_store());
+        result.diff = bounded_patch(&odb, before, after, ignore_whitespace, OUTPUT_LIMIT)?;
+        let mut ranges = BTreeMap::new();
+        let mut has_scopes = false;
+        for cp in history.turns[from..to]
+            .iter()
+            .filter_map(|t| t.checkpoint.as_ref())
+        {
+            has_scopes |= !cp.repositories.is_empty();
+            for scope in &cp.repositories {
+                if let (Some(first), Some(last)) = (&scope.before_tree, &scope.after_tree)
+                    && first != last
+                {
+                    let row = ranges.entry(&scope.scope.repository_path).or_insert((
+                        &scope.scope,
+                        first,
+                        last,
+                    ));
+                    row.2 = last;
+                }
+            }
+        }
+        if has_scopes {
+            let mut bytes = OUTPUT_LIMIT.saturating_sub(result.diff.len());
+            let mut patches = Vec::new();
+            for (_, (scope, before, after)) in ranges {
+                if bytes < TRUNCATED.len() {
+                    break;
+                }
+                let patch = bounded_patch(&odb, before, after, ignore_whitespace, bytes)?;
+                if patch.is_empty() {
+                    continue;
+                }
+                bytes -= patch.len();
+                patches.push(RepositoryDiff {
+                    name: scope.name.clone(),
+                    repository_path: scope.repository_path.clone(),
+                    relative_path: relative(&history.chat.workspace, &scope.worktree_path),
+                    diff: patch,
+                });
+            }
+            result.repositories = Some(patches);
+        }
         Ok(result)
     }
 }

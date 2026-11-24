@@ -200,6 +200,10 @@ pub(crate) fn agent() {
                         fs::write("shared", text).unwrap();
                     }
                     "shared-next" | "shared-child" => fs::write("shared", text).unwrap(),
+                    "edit selected repositories" => {
+                        fs::write("api/turn-change.txt", "api change\n").unwrap();
+                        fs::write("wrapper/web/turn-change.txt", "web change\n").unwrap();
+                    }
                     "edit-one" => {
                         fs::write("staged.txt", b"first").unwrap();
                         fs::write("binary", [0, 255, 6]).unwrap();

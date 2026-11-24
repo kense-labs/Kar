@@ -1,4 +1,5 @@
 //! Multi-repository project discovery and managed task workspaces.
+pub(super) mod checkpoints;
 mod folders;
 mod setup;
 mod task;

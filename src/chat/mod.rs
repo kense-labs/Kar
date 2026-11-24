@@ -195,6 +195,7 @@ impl SessionOptions {
 #[derive(Clone)]
 pub struct ChatStore {
     dir: PathBuf,
+    repository_scopes: Option<checkpoint::scopes::Lookup>,
 }
 impl ChatStore {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
@@ -208,6 +209,7 @@ impl ChatStore {
         create.create(dir.as_ref())?;
         Ok(Self {
             dir: dir.as_ref().canonicalize()?,
+            repository_scopes: None,
         })
     }
     pub fn local() -> Result<Self> {

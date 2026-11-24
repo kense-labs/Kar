@@ -126,7 +126,7 @@ impl Store {
     fn path(&self, id: Uuid) -> PathBuf {
         self.dir.join(format!("{id}.json"))
     }
-    fn read(&self, id: Uuid) -> Result<Option<Record>> {
+    pub(super) fn read(&self, id: Uuid) -> Result<Option<Record>> {
         match fs::File::open(self.path(id)) {
             Ok(file) => Ok(Some(serde_json::from_reader(file)?)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),

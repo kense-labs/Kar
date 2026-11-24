@@ -210,6 +210,7 @@ mod tests {
                 at: 2,
                 text: "one".into(),
                 before_tree: None,
+                repositories: Vec::new(),
             })
             .unwrap();
         state.turns[0].items[0].source.session_id = Some("old".into());
