@@ -37,3 +37,13 @@ The macOS transaction tests exercised all three decisions, stale resolution, ret
 ```sh
 cargo test --locked --manifest-path crates/kar-documents/Cargo.toml --test transactions
 ```
+
+## Local service
+
+```sh
+cargo run --locked --manifest-path crates/kar-documents/Cargo.toml -- --file /path/to/notes.docx --state /path/to/document-state
+```
+
+The process prints the loopback address and path of a local bearer token. Clients send the token in the Authorization header. A single service serves one working file. It accepts JSON commands at `POST /operations`, reports the head at `GET /state` and returns exact file bytes at `GET /revisions/{revision}`. `GET /events?after=12&wait_ms=25000` waits for the next receipt and can resume from the same cursor after a service restart. A property conflict returns HTTP 409 with the persisted receipt. The local bearer token grants access to the document. The author field identifies the contributor supplied by that client.
+
+The `http_clients` integration test is prepared for final acceptance. It starts a real service subprocess, connects two independent TCP clients, submits simultaneous edits, waits on a subscription, loses a response, stops and restarts the process, resumes and settles a conflict. It has only been compiled in this implementation phase.

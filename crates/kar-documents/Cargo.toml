@@ -5,6 +5,11 @@ edition = "2024"
 publish = false
 
 [dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.4"
+subtle = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 sha2 = "0.11"
 anyhow = "1"
 docs_engine = { git = "https://github.com/kense-labs/kantor", rev = "9b780379e32d3fa4d293499f33fbc2483655567d" }
