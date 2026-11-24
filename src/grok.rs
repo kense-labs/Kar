@@ -18,6 +18,15 @@ impl Runtime {
     ) -> crate::forms::ModelListing {
         use crate::forms::{ListingReason, ModelListing};
         let read = async {
+            if self.protocol == crate::Protocol::Codex && self.id == "codex" {
+                let models = crate::inventory::codex_models::read(
+                    &self.selected(options).await?,
+                    options,
+                    true,
+                )
+                .await?;
+                return Ok(serde_json::from_value(models)?);
+            }
             if self.protocol == crate::Protocol::Qwen && self.id == "qwen" {
                 let catalog = self
                     .catalog(crate::Catalog::Models, options.clone())

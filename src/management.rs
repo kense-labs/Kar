@@ -106,6 +106,18 @@ impl Runtime {
             && options.mcp_servers.is_empty()
             && options.retained_bytes.is_none();
         if standalone
+            && self.protocol == Protocol::Codex
+            && self.id == "codex"
+            && matches!(kind, Catalog::Models)
+        {
+            return crate::inventory::codex_models::read(
+                &self.selected(&options).await?,
+                &options,
+                false,
+            )
+            .await;
+        }
+        if standalone
             && matches!(
                 self.id.as_str(),
                 "kimi"

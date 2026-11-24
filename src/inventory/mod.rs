@@ -2,6 +2,7 @@
 mod antigravity;
 mod claude;
 mod codex;
+pub(crate) mod codex_models;
 mod cursor;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod dsh;

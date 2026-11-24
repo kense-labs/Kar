@@ -17,6 +17,8 @@ mod billing_fixture;
 mod child_models;
 #[path = "protocol/claude_input.rs"]
 mod claude_input;
+#[path = "protocol/codex_catalog.rs"]
+mod codex_catalog;
 #[path = "protocol/dsh_skills.rs"]
 mod dsh_skills;
 #[path = "protocol/environment.rs"]
@@ -1462,6 +1464,7 @@ async fn main() {
         std::fs::write(path, serde_json::to_vec(&args[1..]).unwrap()).unwrap();
     }
     match args.get(1).map(String::as_str) {
+        Some("codex-catalog") => return codex_catalog::run().await.unwrap(),
         Some("launch-args") => return launch_args::run().await.unwrap(),
         Some("claude-mcp-native") => return mcp_handoff::claude().await,
         Some("qoder-mcp-native") => return mcp_handoff::qoder().await,
@@ -1471,6 +1474,9 @@ async fn main() {
         Some("environment-sessions") => return environment::sessions().await,
         Some("peer") => environment::capture(),
         _ => {}
+    }
+    if let Ok(mode) = std::env::var("KAR_TEST_CODEX_CATALOG") {
+        return codex_catalog::peer(&mode);
     }
     if std::env::var_os("KAR_TEST_CLAUDE_INPUT").is_some() {
         return claude_input::peer(&args);
@@ -1541,6 +1547,7 @@ async fn main() {
         peer(&args[2]);
         return;
     }
+    codex_catalog::run().await.unwrap();
     environment::exercise(&std::env::current_exe().unwrap());
     launch_args::run().await.unwrap();
     account::exercise().await;
