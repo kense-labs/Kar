@@ -2,6 +2,7 @@
 mod access;
 mod documents;
 mod files;
+mod handoff;
 mod http;
 mod search;
 pub use search::{Hit, SearchKind};

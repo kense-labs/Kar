@@ -184,6 +184,17 @@ impl ChatStore {
                 .position(|t| t.id == turn)
                 .ok_or_else(|| Error::Refused("unknown turn in this chat".into()))?;
             let cut = &log.state.turns[index];
+            if !log.state.handoffs.is_empty()
+                && cut
+                    .items
+                    .first()
+                    .and_then(|i| i.source.session_id.as_deref())
+                    != Some(parent.native_id.as_str())
+            {
+                return Err(Error::Refused(
+                    "switch to the native session that owns this turn before forking".into(),
+                ));
+            }
             if cut.status == TurnStatus::Running
                 || cut
                     .checkpoint

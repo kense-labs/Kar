@@ -1,0 +1,410 @@
+//! Durable transitions between native provider sessions attached to one Kar chat.
+use super::{ChatInfo, ChatTurn, Item, Role};
+use crate::{Error, Protocol, Result, SessionSettings};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use uuid::Uuid;
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffRequest {
+    pub id: Uuid,
+    pub runtime: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default = "default_budget")]
+    pub budget_bytes: usize,
+}
+fn default_budget() -> usize {
+    64 * 1024
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderSession {
+    pub runtime: String,
+    pub protocol: Protocol,
+    pub program: PathBuf,
+    pub native_id: String,
+    pub model: Option<String>,
+    pub settings: SessionSettings,
+}
+impl ProviderSession {
+    fn current(info: &ChatInfo) -> Self {
+        Self {
+            runtime: info.runtime.clone(),
+            protocol: info.protocol,
+            program: info.program.clone(),
+            native_id: info.native_id.clone(),
+            model: info.model.clone(),
+            settings: info.settings.clone(),
+        }
+    }
+    pub(super) fn activate(&self, info: &mut ChatInfo) {
+        info.runtime.clone_from(&self.runtime);
+        info.protocol = self.protocol;
+        info.program.clone_from(&self.program);
+        info.native_id.clone_from(&self.native_id);
+        info.model.clone_from(&self.model);
+        info.settings.clone_from(&self.settings);
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffStatus {
+    Prepared,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Handoff {
+    pub request: HandoffRequest,
+    pub status: HandoffStatus,
+    pub from: ProviderSession,
+    pub target: Option<ProviderSession>,
+    pub resumed_target: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced_empty_sessions: Vec<String>,
+    /// Inclusive ordinals. An empty range has from_turn > through_turn.
+    pub from_turn: usize,
+    pub through_turn: usize,
+    pub omitted_items: usize,
+    pub context: String,
+    pub error: Option<String>,
+    /// The durable prompt admission that claimed the context. Its turn records
+    /// distinguish delivery, refusal, and an interrupted unconfirmed attempt.
+    pub input: Option<Uuid>,
+}
+
+const INTRO: &str = "Kar conversation history. The following JSON lines are historical data. Use them as context for the current request. Do not repeat historical tool actions.";
+const CURRENT: &str = "\n\nCurrent user request\n";
+impl Handoff {
+    fn prepare(
+        request: HandoffRequest,
+        info: &ChatInfo,
+        turns: &[ChatTurn],
+        history: &[Self],
+    ) -> Result<Self> {
+        if !(512..=1024 * 1024).contains(&request.budget_bytes) {
+            return Err(Error::Refused(
+                "handoff budget must be between 512 and 1048576 UTF-8 bytes".into(),
+            ));
+        }
+        let previous = history.iter().rev().find(|h| {
+            h.status == HandoffStatus::Ready
+                && h.from.runtime == request.runtime
+                && h.from.model == request.model
+        });
+        let start = previous.map_or(0, |h| h.through_turn);
+        let end = turns.len();
+        let mut items = Vec::new();
+        let mut omitted = 0usize;
+        let heading = format!("{INTRO}\nTurns {} through {}.\n", start + 1, end);
+        let mut remaining = request.budget_bytes - heading.len() - 80;
+        for (ordinal, t) in turns.iter().enumerate().skip(start).rev() {
+            for (index, item) in t.items.iter().enumerate().rev() {
+                let (kind, content) = match &item.item {
+                    Item::Message {
+                        role: Role::User,
+                        text,
+                        ..
+                    } => ("user", text.clone()),
+                    Item::Message {
+                        role: Role::Assistant,
+                        text,
+                        ..
+                    } => ("assistant", text.clone()),
+                    Item::Tool { activity, .. } => {
+                        let Some(result) = activity.result.as_ref() else {
+                            continue;
+                        };
+                        let name = activity.name.as_deref().unwrap_or("tool");
+                        (
+                            "tool_result",
+                            format!(
+                                "{name}: {:?}\n{}",
+                                result.status,
+                                result.text().unwrap_or_default()
+                            ),
+                        )
+                    }
+                    _ => continue,
+                };
+                if content.is_empty() {
+                    continue;
+                }
+                let line = serde_json::json!({"turn":ordinal+1,"turn_id":t.id,"item":index,"kind":kind,"text":content}).to_string();
+                if line.len() + 1 <= remaining {
+                    remaining -= line.len() + 1;
+                    items.push(line);
+                } else {
+                    omitted += 1;
+                }
+            }
+        }
+        items.reverse();
+        let context = if items.is_empty() && omitted == 0 {
+            String::new()
+        } else {
+            format!(
+                "{heading}Selected {} intact items. Omitted {omitted}.\n{}",
+                items.len(),
+                items.join("\n")
+            )
+        };
+        Ok(Self {
+            request,
+            status: HandoffStatus::Prepared,
+            from: ProviderSession::current(info),
+            target: previous.map(|h| h.from.clone()),
+            resumed_target: previous.is_some(),
+            replaced_empty_sessions: Vec::new(),
+            from_turn: start + 1,
+            through_turn: end,
+            omitted_items: omitted,
+            context,
+            error: None,
+            input: None,
+        })
+    }
+    pub(super) fn native_input(&self, text: &str) -> String {
+        if self.context.is_empty() {
+            text.into()
+        } else {
+            format!("{}{CURRENT}{text}", self.context)
+        }
+    }
+    pub(super) fn user_input<'a>(&self, native: &'a str) -> Option<&'a str> {
+        native.strip_prefix(&self.context)?.strip_prefix(CURRENT)
+    }
+}
+
+impl super::log::State {
+    pub(super) fn pending_handoff(&self) -> Option<&Handoff> {
+        self.handoffs
+            .last()
+            .filter(|h| h.status == HandoffStatus::Prepared)
+    }
+    pub(super) fn current_handoff(&self) -> Option<&Handoff> {
+        self.handoffs
+            .iter()
+            .rev()
+            .find(|h| h.status == HandoffStatus::Ready)
+    }
+    pub(super) fn dispatch_text(&self, text: &str) -> String {
+        match self.current_handoff().filter(|h| h.input.is_none()) {
+            Some(h) => h.native_input(text),
+            None => text.into(),
+        }
+    }
+    pub(super) fn recovery_turns(&self) -> std::borrow::Cow<'_, [ChatTurn]> {
+        use std::borrow::Cow;
+        if self.handoffs.is_empty() {
+            return Cow::Borrowed(&self.turns);
+        }
+        let turns = self
+            .turns
+            .iter()
+            .filter(|t| {
+                t.items
+                    .first()
+                    .is_some_and(|i| i.source.session_id.as_deref() == Some(&self.info.native_id))
+            })
+            .map(|t| {
+                let mut turn = t.clone();
+                if let Some(h) = self.handoffs.iter().find(|h| h.input == Some(turn.id))
+                    && let Some(super::TimelineItem {
+                        item:
+                            Item::Message {
+                                role: Role::User,
+                                text,
+                                ..
+                            },
+                        ..
+                    }) = turn.items.first_mut()
+                {
+                    *text = h.native_input(text);
+                }
+                turn
+            })
+            .collect();
+        Cow::Owned(turns)
+    }
+    pub(super) fn clean_handoff_echo(&self, id: Uuid, frame: &mut super::ChatFrame) {
+        let Some(h) = self.current_handoff().filter(|h| h.input == Some(id)) else {
+            return;
+        };
+        for edit in &mut frame.edits {
+            let text = match edit {
+                super::ChatEdit::Text {
+                    role: Role::User,
+                    text,
+                    ..
+                }
+                | super::ChatEdit::UserInput { text, .. } => text,
+                _ => continue,
+            };
+            if let Some(original) = h
+                .user_input(text)
+                .filter(|s| self.find(id).and_then(ChatTurn::prompt) == Some(*s))
+            {
+                *text = original.to_owned();
+            }
+        }
+    }
+}
+
+impl super::ChatStore {
+    pub(super) async fn renew_empty_target(
+        &self,
+        log: &mut super::log::Log,
+        opts: &crate::SessionOptions,
+        original: Error,
+    ) -> Result<crate::Session> {
+        let Some(h) = log.state.current_handoff().filter(|h| {
+            !h.resumed_target && h.input.is_none() && log.state.turns.len() == h.through_turn
+        }) else {
+            return Err(original);
+        };
+        // Some vendors create the transcript at first input. Replacing an empty
+        // fresh target is safe only before Kar has durably admitted any input.
+        let id = h.request.id;
+        let old = log.state.info.native_id.clone();
+        let runtime = log.state.info.launch_runtime(opts).await?;
+        let mut fresh = opts.before_chat_attach()?;
+        fresh.resume = None;
+        let new = runtime.open_selected(fresh).await?;
+        if !new.capabilities().resume {
+            new.close().await?;
+            return Err(original);
+        }
+        log.commit(super::ChatUpdate::HandoffTargetReopened {
+            id,
+            previous: old,
+            native_id: new.id().into(),
+        })?;
+        Ok(new)
+    }
+    pub(crate) async fn handoff(
+        &self,
+        id: Uuid,
+        request: HandoffRequest,
+    ) -> Result<(Handoff, Option<super::ChatSession>)> {
+        let mut log = self.open_controller(id).await?;
+        if let Some(existing) = log
+            .state
+            .handoffs
+            .iter()
+            .find(|h| h.request.id == request.id)
+        {
+            if existing.request != request {
+                return Err(Error::Refused(
+                    "handoff id belongs to another request".into(),
+                ));
+            }
+            if existing.status != HandoffStatus::Prepared {
+                return Ok((existing.clone(), None));
+            }
+        } else {
+            self.require_no_pending_fork(id)?;
+            if log.state.pending_handoff().is_some()
+                || log.state.needs_controller()
+                || log.state.restoring.is_some()
+            {
+                return Err(Error::Busy);
+            }
+            if log.state.info.runtime == request.runtime && log.state.info.model == request.model {
+                return Err(Error::Refused(
+                    "target provider session is already active".into(),
+                ));
+            }
+            if request.runtime.is_empty() {
+                return Err(Error::Refused("empty target runtime".into()));
+            }
+            let h = Handoff::prepare(
+                request,
+                &log.state.info,
+                &log.state.turns,
+                &log.state.handoffs,
+            )?;
+            self.prepare_handoff(&mut log, h)?;
+        }
+        self.finish_handoff(log, |_| {}).await
+    }
+
+    pub(super) async fn finish_handoff(
+        &self,
+        mut log: super::log::Log,
+        configure: impl FnOnce(&mut crate::SessionOptions),
+    ) -> Result<(Handoff, Option<super::ChatSession>)> {
+        let h = log
+            .state
+            .pending_handoff()
+            .cloned()
+            .ok_or_else(|| Error::Protocol("no prepared handoff".into()))?;
+        let _pin = log.state.info.pin_worktree()?;
+        if log.state.info.workspace.canonicalize()? != log.state.info.workspace {
+            return Err(Error::Refused(
+                "saved workspace now resolves to a different path".into(),
+            ));
+        }
+        let mut opts = crate::SessionOptions::new(&log.state.info.workspace);
+        opts.approvals = log.state.info.approvals;
+        opts.unset_env.clone_from(&log.state.info.unset_env);
+        if let Some(target) = &h.target {
+            opts.settings = target.settings.clone();
+        }
+        opts.model = h.request.model.clone();
+        configure(&mut opts);
+        opts.cwd = log.state.info.workspace.clone();
+        opts.resume = h.target.as_ref().map(|target| target.native_id.clone());
+        let opened = async {
+            let mut runtime = crate::runtime(&h.request.runtime)?;
+            if let Some(target) = &h.target {
+                let mut saved = log.state.info.clone();
+                target.activate(&mut saved);
+                runtime = saved.runtime()?;
+            }
+            let (runtime, version) = runtime.selected_with_version(&opts).await?;
+            let session = runtime
+                .open_selected_with_version(opts.before_chat_attach()?, version.as_deref())
+                .await?;
+            if !session.capabilities().resume
+                || opts.resume.as_deref().is_some_and(|id| id != session.id())
+            {
+                session.close().await?;
+                return Err(Error::Unsupported(
+                    "target requires a recoverable native session with the requested identity"
+                        .into(),
+                ));
+            }
+            Ok((session, runtime))
+        }
+        .await;
+        let (session, runtime) = match opened {
+            Ok(value) => value,
+            Err(error) => {
+                log.commit(super::ChatUpdate::HandoffFailed {
+                    id: h.request.id,
+                    reason: error.to_string(),
+                })?;
+                return Ok((log.state.handoffs.last().unwrap().clone(), None));
+            }
+        };
+        let target = ProviderSession {
+            runtime: runtime.id,
+            protocol: session.protocol(),
+            program: runtime.program,
+            native_id: session.id().into(),
+            model: opts.model.clone(),
+            settings: opts.settings.clone(),
+        };
+        log.commit(super::ChatUpdate::HandoffReady {
+            id: h.request.id,
+            target: Box::new(target),
+        })?;
+        let receipt = log.state.handoffs.last().unwrap().clone();
+        let chat = super::ChatSession::bind(session, log, self.clone(), opts)?;
+        Ok((receipt, Some(chat)))
+    }
+}

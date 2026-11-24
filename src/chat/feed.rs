@@ -128,6 +128,12 @@ impl ChatReplica {
     pub fn goal(&self) -> Option<Option<&crate::GoalSnapshot>> {
         self.state.goal.as_ref().map(Option::as_ref)
     }
+    pub fn chat(&self) -> &ChatInfo {
+        &self.state.info
+    }
+    pub fn handoffs(&self) -> &[super::Handoff] {
+        &self.state.handoffs
+    }
     pub fn turns(&self) -> &[ChatTurn] {
         &self.state.turns
     }
@@ -173,13 +179,18 @@ impl ChatStore {
     pub fn follow(&self, chat: Uuid, after: Option<ChatCursor>) -> Result<ChatFeed> {
         let mut file = File::open(self.path(chat))?;
         let length = log::with_lock(&mut file, false, |f| Ok(f.metadata()?.len()))?;
-        let (state, start) = log::parse_header(&mut BufReader::new(&mut file), Some(chat))?;
+        let (mut state, start) = log::parse_header(&mut BufReader::new(&mut file), Some(chat))?;
         let cursor = after.unwrap_or(ChatCursor {
             chat,
             offset: start,
         });
         if cursor.chat != chat || cursor.offset < start || cursor.offset > length {
             return Err(Error::InvalidCursor);
+        }
+        if cursor.offset > start {
+            file.seek(SeekFrom::Start(start))?;
+            let prefix = BufReader::new((&mut file).take(cursor.offset - start));
+            log::read_info_changes(prefix, &mut state.info)?;
         }
         file.seek(SeekFrom::Start(cursor.offset - 1))?;
         let mut last = [0];
@@ -285,6 +296,12 @@ impl ChatFeed {
                     self.may_have_steering = true;
                 }
                 match &event.update {
+                    ChatUpdate::HandoffReady { target, .. } => {
+                        target.activate(&mut self.info);
+                    }
+                    ChatUpdate::HandoffTargetReopened { native_id, .. } => {
+                        self.info.native_id.clone_from(native_id);
+                    }
                     ChatUpdate::RequestsChanged { requests } => {
                         self.may_have_requests = !requests.is_empty()
                     }

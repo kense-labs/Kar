@@ -25,6 +25,22 @@ struct Header {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChatUpdate {
+    HandoffPrepared {
+        handoff: Box<super::Handoff>,
+    },
+    HandoffReady {
+        id: Uuid,
+        target: Box<super::ProviderSession>,
+    },
+    HandoffTargetReopened {
+        id: Uuid,
+        previous: String,
+        native_id: String,
+    },
+    HandoffFailed {
+        id: Uuid,
+        reason: String,
+    },
     Inherited {
         turns: Vec<ChatTurn>,
     },
@@ -139,6 +155,7 @@ pub enum ChatUpdate {
     },
 }
 pub(super) struct State {
+    pub handoffs: Vec<super::Handoff>,
     pub notifications: Vec<super::ChatNotification>,
     pub info: ChatInfo,
     pub turns: Vec<ChatTurn>,
@@ -164,6 +181,7 @@ impl State {
     }
     fn new(info: ChatInfo) -> Self {
         Self {
+            handoffs: Vec::new(),
             info,
             notifications: vec![],
             turns: vec![],
@@ -196,6 +214,7 @@ impl State {
             .map(|c| (c.stream_id, c.after_seq))
             .collect();
         Self {
+            handoffs: history.handoffs,
             info: history.chat,
             notifications: history.notifications,
             turns: history.turns,
@@ -383,6 +402,60 @@ impl State {
     }
     pub(super) fn apply(&mut self, row: ChatUpdate) -> Result<()> {
         match row {
+            ChatUpdate::HandoffPrepared { handoff } => self.handoffs.push(*handoff),
+            ChatUpdate::HandoffReady { id, target } => {
+                let h = self
+                    .handoffs
+                    .last_mut()
+                    .filter(|h| h.request.id == id && h.status == super::HandoffStatus::Prepared)
+                    .ok_or_else(|| {
+                        Error::Protocol("handoff readiness has no matching preparation".into())
+                    })?;
+                target.activate(&mut self.info);
+                h.target = Some(*target);
+                h.status = super::HandoffStatus::Ready;
+                self.pending_requests.clear();
+                self.context_usage = None;
+                self.tasks.clear();
+                self.goal = None;
+                self.manual_compaction = None;
+                self.last_compaction = None;
+                self.morph = None;
+            }
+            ChatUpdate::HandoffTargetReopened {
+                id,
+                previous,
+                native_id,
+            } => {
+                let h = self
+                    .handoffs
+                    .iter_mut()
+                    .rev()
+                    .find(|h| h.status == super::HandoffStatus::Ready)
+                    .filter(|h| h.request.id == id && h.input.is_none() && !h.resumed_target)
+                    .ok_or_else(|| {
+                        Error::Protocol("cannot replace an admitted handoff session".into())
+                    })?;
+                let target = h
+                    .target
+                    .as_mut()
+                    .filter(|t| t.native_id == previous && self.info.native_id == previous)
+                    .ok_or_else(|| Error::Protocol("handoff target changed".into()))?;
+                target.native_id.clone_from(&native_id);
+                h.replaced_empty_sessions.push(previous);
+                self.info.native_id = native_id;
+            }
+            ChatUpdate::HandoffFailed { id, reason } => {
+                let h = self
+                    .handoffs
+                    .last_mut()
+                    .filter(|h| h.request.id == id && h.status == super::HandoffStatus::Prepared)
+                    .ok_or_else(|| {
+                        Error::Protocol("handoff failure has no matching preparation".into())
+                    })?;
+                h.error = Some(reason);
+                h.status = super::HandoffStatus::Failed;
+            }
             ChatUpdate::NotificationsInterrupted => self.interrupt_notifications(),
             ChatUpdate::SteeringUnconfirmed => self.unconfirm_steering(),
             ChatUpdate::Notification { id, at, frame } => {
@@ -566,6 +639,15 @@ impl State {
                 before_tree,
             } => {
                 self.begin_turn(id, at, Some(text), None, before_tree)?;
+                if let Some(h) = self
+                    .handoffs
+                    .iter_mut()
+                    .rev()
+                    .find(|h| h.status == super::HandoffStatus::Ready)
+                    && h.input.is_none()
+                {
+                    h.input = Some(id);
+                }
             }
             ChatUpdate::NativeBegin {
                 id,
@@ -954,8 +1036,43 @@ pub(super) fn parse_header(reader: &mut impl BufRead, id: Option<Uuid>) -> Resul
     }
     Ok((State::new(header.chat), line.len() as u64))
 }
-pub(super) fn info(file: File, id: Uuid) -> Result<ChatInfo> {
-    Ok(parse_header(&mut BufReader::new(file), Some(id))?.0.info)
+pub(super) fn read_info_changes(mut reader: impl BufRead, info: &mut ChatInfo) -> Result<()> {
+    // Listing a project and checking its workspace authorization need only the
+    // provider binding, not every turn, tool result and checkpoint in the chat.
+    #[derive(Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum Change {
+        HandoffReady {
+            target: Box<super::ProviderSession>,
+        },
+        HandoffTargetReopened {
+            native_id: String,
+        },
+        #[serde(other)]
+        Other,
+    }
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        reader.read_until(b'\n', &mut line)?;
+        if line.last() != Some(&b'\n') {
+            break;
+        }
+        match serde_json::from_slice(&line)? {
+            Change::HandoffReady { target } => target.activate(info),
+            Change::HandoffTargetReopened { native_id } => info.native_id = native_id,
+            Change::Other => {}
+        }
+    }
+    Ok(())
+}
+pub(super) fn info(mut file: File, id: Uuid) -> Result<ChatInfo> {
+    with_lock(&mut file, false, |f| {
+        let mut reader = BufReader::new(f);
+        let mut info = parse_header(&mut reader, Some(id))?.0.info;
+        read_info_changes(reader, &mut info)?;
+        Ok(info)
+    })
 }
 pub(super) fn staged_info(file: File) -> Result<ChatInfo> {
     Ok(parse_header(&mut BufReader::new(file), None)?.0.info)
@@ -1073,7 +1190,7 @@ impl Log {
         }
         Ok(())
     }
-    fn commit(&mut self, row: ChatUpdate) -> Result<()> {
+    pub(super) fn commit(&mut self, row: ChatUpdate) -> Result<()> {
         self.healthy()?;
         let result = append(&mut self.file, &row).and_then(|_| self.state.apply(row));
         if let Err(e) = &result {
@@ -1106,7 +1223,8 @@ impl Log {
         store: &super::ChatStore,
     ) -> Result<()> {
         if session.protocol() == Protocol::Claude {
-            let history = claude::history(&self.state.info, options, &self.state.turns).await?;
+            let turns = self.state.recovery_turns();
+            let history = claude::history(&self.state.info, options, &turns).await?;
             for id in history.received {
                 self.input_sent(id)?;
             }
@@ -1151,7 +1269,10 @@ impl Log {
                 }
             }
         }
-        if let Some(last) = self.state.unfinished_turn()
+        let recovery = self.state.recovery_turns();
+        if let Some(last) = recovery
+            .last()
+            .filter(|t| matches!(t.status, TurnStatus::Running | TurnStatus::Interrupted))
             && let Some(frame) = if session.protocol() == Protocol::Factory {
                 if let Some(prompt) = last.prompt() {
                     session.recover_factory_turn(options, last, prompt).await?
@@ -1208,7 +1329,10 @@ impl Log {
                     })
             }
         {
-            self.commit(ChatUpdate::Reconciled { id: last.id, frame })?;
+            let id = last.id;
+            let mut frame = frame;
+            self.state.clean_handoff_echo(id, &mut frame);
+            self.commit(ChatUpdate::Reconciled { id, frame })?;
         }
         if let Some(id) = self.state.active() {
             self.end(id, TurnStatus::Interrupted)?;
@@ -1226,6 +1350,9 @@ impl Log {
             return Ok(Some(prior.clone()));
         }
         self.state.check_new_prompt_id(id)?;
+        if self.state.pending_handoff().is_some() {
+            return Err(Error::Busy);
+        }
         if self.state.restoring.is_some() {
             return Err(Error::Refused(
                 "finish the pending workspace rollback first".into(),
@@ -1696,10 +1823,11 @@ impl Log {
         {
             self.commit(ChatUpdate::PiInput { id, timestamp_ms })?;
         }
-        if let Some(frame) = self
-            .ids
-            .frame(self.state.info.protocol, &self.state.info.native_id, r)
+        if let Some(mut frame) =
+            self.ids
+                .frame(self.state.info.protocol, &self.state.info.native_id, r)
         {
+            self.state.clean_handoff_echo(id, &mut frame);
             self.commit(ChatUpdate::Frame { id, frame })?;
             if self.state.active().is_none() {
                 if self.state.info.protocol == Protocol::Codex

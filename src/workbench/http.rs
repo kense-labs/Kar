@@ -65,6 +65,10 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .route("/projects/{project}/chats/{chat}/snapshot", get(snapshot))
         .route("/projects/{project}/chats/{chat}/events", get(events))
         .route("/projects/{project}/chats/{chat}/messages", post(send))
+        .route(
+            "/projects/{project}/chats/{chat}/handoffs",
+            get(handoffs).post(handoff),
+        )
         .route("/projects/{project}/chats/{chat}/archive", put(archive))
         .merge(super::documents::routes())
         .route("/projects/{project}/search", get(search_project))
@@ -129,6 +133,19 @@ async fn send(
     Json(m): Json<Message>,
 ) -> Reply<ChatTurn> {
     Ok(Json(app.send(p, c, m.id, m.text).await?))
+}
+async fn handoffs(
+    State(app): State<Workbench>,
+    Path((p, c)): Path<(Uuid, Uuid)>,
+) -> Reply<Vec<crate::chat::Handoff>> {
+    blocking(move || app.handoffs(p, c)).await
+}
+async fn handoff(
+    State(app): State<Workbench>,
+    Path((p, c)): Path<(Uuid, Uuid)>,
+    Json(request): Json<crate::chat::HandoffRequest>,
+) -> Reply<crate::chat::Handoff> {
+    Ok(Json(app.handoff(p, c, request).await?))
 }
 #[derive(Deserialize)]
 struct Archive {

@@ -104,14 +104,30 @@ impl ChatStore {
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 return Ok(Inbox {
                     chat: chat.id,
-                    native_id: chat.native_id.clone(),
+                    native_id: super::log::parse_header(
+                        &mut std::io::BufReader::new(File::open(self.path(chat.id))?),
+                        Some(chat.id),
+                    )?
+                    .0
+                    .info
+                    .native_id,
                     entries: vec![],
                 });
             }
             Err(e) => return Err(e.into()),
         };
         let inbox: Inbox = serde_json::from_reader(std::io::BufReader::new(file))?;
-        if inbox.chat != chat.id || inbox.native_id != chat.native_id {
+        if inbox.chat != chat.id
+            || (inbox.native_id != chat.native_id
+                && inbox.native_id
+                    != super::log::parse_header(
+                        &mut std::io::BufReader::new(File::open(self.path(chat.id))?),
+                        Some(chat.id),
+                    )?
+                    .0
+                    .info
+                    .native_id)
+        {
             return Err(Error::Protocol(
                 "input queue belongs to a different session".into(),
             ));
@@ -141,6 +157,25 @@ impl ChatStore {
         File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
+    pub(super) fn prepare_handoff(
+        &self,
+        log: &mut super::log::Log,
+        handoff: super::Handoff,
+    ) -> Result<()> {
+        let _lock = self.inbox_lock(log.state.info.id)?;
+        let inbox = self.read_inbox(&log.state.info)?;
+        if inbox.entries.iter().any(|e| {
+            matches!(
+                e.status(&log.state.info, log.state.find(e.id)),
+                InputStatus::Pending | InputStatus::Sending
+            )
+        }) {
+            return Err(Error::Busy);
+        }
+        log.commit(super::ChatUpdate::HandoffPrepared {
+            handoff: Box::new(handoff),
+        })
+    }
     /// Persist before returning. Multiple producers are ordered by admission under the file lock.
     pub fn enqueue(&self, chat: Uuid, id: Uuid, text: impl Into<String>) -> Result<QueuedInput> {
         self.change_input(chat, id, Some(text.into()))
@@ -169,6 +204,9 @@ impl ChatStore {
                 return Ok(entry.receipt(&state.info, turn));
             }
             if turn.is_none() {
+                if state.pending_handoff().is_some() {
+                    return Err(Error::Busy);
+                }
                 crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
             }
             let entry = Entry {

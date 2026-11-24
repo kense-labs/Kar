@@ -1,8 +1,10 @@
 //! Persistent native chats. A per-chat file lock gives one process ownership of the provider session.
 pub(crate) mod checkpoint;
 pub(crate) mod feed;
+mod handoff;
 mod http_feed;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
+pub use handoff::{Handoff, HandoffRequest, HandoffStatus, ProviderSession};
 pub use http_feed::HttpChatFeed;
 pub use log::ChatUpdate;
 pub use timeline::{Edit as ChatEdit, Frame as ChatFrame, MorphProgress};
@@ -137,6 +139,8 @@ pub struct ChatNotification {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatHistory {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handoffs: Vec<Handoff>,
     pub chat: ChatInfo,
     pub cursor: Option<crate::Cursor>,
     pub turns: Vec<ChatTurn>,
@@ -322,6 +326,7 @@ impl ChatStore {
             workspace_position: state.position,
             pending_rollback: state.restoring,
             pending_fork: self.pending_fork(id)?,
+            handoffs: state.handoffs,
             chat: state.info,
             turns: state.turns,
             goal: state.goal,
@@ -415,6 +420,12 @@ impl ChatStore {
         configure: impl FnOnce(&mut SessionOptions),
     ) -> Result<ChatSession> {
         let mut log = self.open_controller(id).await?;
+        if log.state.pending_handoff().is_some() {
+            let (result, session) = self.finish_handoff(log, configure).await?;
+            return session.ok_or_else(|| {
+                Error::Refused(result.error.unwrap_or_else(|| "handoff failed".into()))
+            });
+        }
         self.require_no_pending_fork(id)?;
         if log.state.restoring.is_some() {
             return Err(Error::Refused(
@@ -431,7 +442,10 @@ impl ChatStore {
         let mut opts = info.options();
         configure(&mut opts);
         opts.cwd = info.workspace.clone();
-        let session = Self::open_saved(&log.state, opts.before_chat_attach()?).await?;
+        let session = match Self::open_saved(&log.state, opts.before_chat_attach()?).await {
+            Ok(session) => session,
+            Err(error) => self.renew_empty_target(&mut log, &opts, error).await?,
+        };
         log.recover(&session, &opts, self).await?;
         ChatSession::bind(session, log, self.clone(), opts)
     }
@@ -526,6 +540,7 @@ impl ChatSession {
         let log = self.sender.sink.0.lock().unwrap();
         log.healthy()?;
         Ok(ChatHistory {
+            handoffs: log.state.handoffs.clone(),
             chat: self.sender.info.clone(),
             workspace_position: log.state.position,
             pending_rollback: log.state.restoring,
@@ -746,6 +761,8 @@ impl Sender {
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;
+        let wire_text = self.sink.0.lock().unwrap().state.dispatch_text(&text);
+        crate::input::check_text(&wire_text, crate::input::text_limit(&self.info.runtime))?;
         let admission = Admission {
             store: store.clone(),
             sink: self.sink.clone(),
@@ -760,7 +777,7 @@ impl Sender {
         };
         let result = match self
             .session
-            .start_prompt(id, crate::input::Input::text(text), Some(admission))
+            .start_prompt(id, crate::input::Input::text(wire_text), Some(admission))
             .await
         {
             Ok(turn) => {
