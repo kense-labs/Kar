@@ -1,5 +1,9 @@
 //! Host-owned diagnostics, identified by PID and process birth time.
 mod history;
+mod otlp;
+mod trace;
+mod triage;
+pub(super) use trace::observe;
 #[cfg(target_os = "macos")]
 mod macos;
 mod routes;
@@ -103,14 +107,18 @@ struct State {
     last: Option<Instant>,
 }
 pub(super) struct Service {
+    traces: Arc<trace::Trace>,
+    triage: Arc<triage::Triage>,
     state: Arc<Mutex<State>>,
     updates: watch::Sender<Option<Arc<Frame>>>,
     polling: std::sync::atomic::AtomicBool,
     refresh: tokio::sync::Mutex<()>,
 }
-impl Default for Service {
-    fn default() -> Self {
+impl Service {
+    pub(super) fn open(directory: &std::path::Path) -> Self {
         Self {
+            traces: Arc::new(trace::Trace::new(directory)),
+            triage: Arc::new(triage::Triage::new(directory)),
             state: Arc::new(Mutex::new(State {
                 #[cfg(target_os = "macos")]
                 collector: sysinfo::System::new(),

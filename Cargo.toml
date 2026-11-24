@@ -47,7 +47,7 @@ unicode-width = "0.2"
 serde-saphyr = { version = "2.2", default-features = false, features = ["deserialize"] }
 icu_collator = "2"
 indexmap = { version = "2", features = ["serde"] }
-axum = { version = "0.8", default-features = false, features = ["json", "http1", "tokio", "ws", "query"] }
+axum = { version = "0.8", default-features = false, features = ["json", "http1", "tokio", "ws", "query", "matched-path"] }
 gix = { version = "0.75", default-features = false, features = ["tree-editor", "excludes"] }
 ignore = "0.4"
 base64 = "0.22"

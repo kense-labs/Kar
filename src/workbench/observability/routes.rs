@@ -13,6 +13,9 @@ use serde::Deserialize;
 
 pub(in crate::workbench) fn routes() -> Router<Workbench> {
     Router::new()
+        .route("/diagnostics/otlp", post(otlp::check))
+        .route("/diagnostics/triage", post(triage::prepare))
+        .route("/diagnostics/traces", get(trace::read))
         .route("/diagnostics/host-resources", get(host))
         .route("/diagnostics/processes", get(processes))
         .route("/diagnostics/processes/signal", post(signal))

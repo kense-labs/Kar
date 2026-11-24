@@ -177,7 +177,7 @@ impl Workbench {
                 task_folders::checkpoints::repositories(&Workbench(inner), chat)
             }));
             Inner {
-                observability: Default::default(),
+                observability: observability::Service::open(&state),
                 workflows,
                 terminal_preview,
                 task_folders,
