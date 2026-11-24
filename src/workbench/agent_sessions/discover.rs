@@ -73,8 +73,12 @@ fn stamp(m: &Metadata) -> String {
     #[cfg(not(unix))]
     let identity = String::new();
     format!(
-        "{}:{}:{}",
+        "{}:{}:{}:{}",
         identity,
+        m.created()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos()),
         m.len(),
         m.modified()
             .ok()
@@ -117,7 +121,7 @@ impl Found {
         Ok(())
     }
 }
-pub(super) fn cwd(row: &Value, source: Source) -> Result<Option<&Path>, ()> {
+pub(super) fn cwd(row: &Value, source: Source) -> Result<Option<PathBuf>, ()> {
     if source == Source::Codex
         && row["type"] == "session_meta"
         && row["payload"]["source"]
@@ -129,8 +133,14 @@ pub(super) fn cwd(row: &Value, source: Source) -> Result<Option<&Path>, ()> {
     Ok(row["cwd"]
         .as_str()
         .or_else(|| row["payload"]["cwd"].as_str())
-        .map(Path::new)
-        .filter(|p| p.is_absolute()))
+        .and_then(|s| {
+            let p = Path::new(s.trim());
+            if let Ok(suffix) = p.strip_prefix("~") {
+                std::env::home_dir().map(|h| h.join(suffix))
+            } else {
+                p.is_absolute().then(|| p.to_owned())
+            }
+        }))
 }
 pub(super) fn bounded_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
     let parent = Dir::open_ambient_dir(path.parent()?, ambient_authority()).ok()?;
@@ -170,7 +180,7 @@ pub(super) struct Git {
     repository: Option<String>,
 }
 pub(super) fn git(root: &Path) -> Option<Git> {
-    if !root.join(".git").is_dir() {
+    if !root.join(".git").symlink_metadata().ok()?.is_dir() {
         return None;
     }
     let remote = (|| {
@@ -304,7 +314,8 @@ impl Home {
             let Ok(stream) = input(&file, part) else {
                 continue;
             };
-            let mut reader = BufReader::new(stream.take(MIB.min(budget.bytes)));
+            let allowance = MIB.min(budget.bytes);
+            let mut reader = BufReader::new(stream.take(allowance));
             let mut line = vec![];
             let mut complete = false;
             for _ in 0..1000.min(budget.records) {
@@ -314,7 +325,8 @@ impl Home {
                 };
                 budget.bytes -= n as u64;
                 if n == 0 {
-                    complete = true;
+                    complete = reader.get_ref().limit() != 0
+                        || (part.extension().is_none_or(|e| e != "zst") && size <= allowance);
                     break;
                 }
                 budget.records -= 1;
@@ -334,10 +346,10 @@ impl Home {
                     .or_else(|| row.pointer("/payload/session_id"))
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let workspace = if excluded(raw) {
+                let workspace = if excluded(&raw) {
                     self.codex_projects.get(id).map(PathBuf::as_path)
                 } else {
-                    Some(raw)
+                    Some(raw.as_path())
                 };
                 let Some(cwd) = workspace
                     .and_then(|p| p.canonicalize().ok())

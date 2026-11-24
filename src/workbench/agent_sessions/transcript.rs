@@ -6,7 +6,7 @@ use crate::chat::{
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    io::{BufRead, BufReader, Read},
+    io::{BufReader, Read},
     path::Path,
 };
 use uuid::Uuid;
@@ -145,6 +145,7 @@ struct Projection {
     real: bool,
     base: Option<(String, u64)>,
     bytes: usize,
+    dropped: usize,
 }
 impl Projection {
     fn append(&mut self, source: Source, row: &Value, at: u64) -> Option<()> {
@@ -284,6 +285,15 @@ impl Projection {
         }
         if source == Source::Pi || record.message.is_some() {
             self.rows.push(record);
+            if source == Source::Claude && self.rows.len() > MAX_MESSAGES {
+                let keep_first = self.rows[0]
+                    .message
+                    .as_ref()
+                    .is_some_and(|m| m.role == Role::User);
+                let evicted = self.rows.remove(usize::from(keep_first));
+                self.bytes -= evicted.message.map_or(0, |m| m.text.len());
+                self.dropped += 1;
+            }
         }
         Some(())
     }
@@ -368,26 +378,18 @@ fn read(found: &Found, offset: Option<u64>, budget: &mut u64) -> Option<Projecti
     let stream = discover::input(&file, &found.path).ok()?;
     let mut reader = BufReader::new(stream.take(offset.unwrap_or(u64::MAX)));
     let mut projection = Projection::default();
-    let mut line = Vec::new();
     let mut bytes = 0;
     let mut first_cwd = false;
-    for index in 0..=100_000 {
-        line.clear();
-        let n = (&mut reader)
-            .take((MAX_HISTORY as u64 + 1).min(limit.saturating_sub(bytes) + 1))
-            .read_until(b'\n', &mut line)
-            .ok()? as u64;
+    loop {
+        let (n, row) = super::jsonl::record(&mut reader, budget, projection.bytes).ok()?;
         if n == 0 {
             break;
         }
-        *budget = budget.saturating_sub(n);
         bytes += n;
-        if bytes > limit || n > MAX_HISTORY as u64 || index == 100_000 {
+        if bytes > limit {
             return None;
         }
-        let Ok(row) = serde_json::from_slice::<Value>(&line) else {
-            continue;
-        };
+        let Some(row) = row else { continue };
         if !first_cwd && let Some(path) = discover::cwd(&row, found.source).ok()? {
             if path != found.original_cwd {
                 return None;
@@ -400,6 +402,9 @@ fn read(found: &Found, offset: Option<u64>, budget: &mut u64) -> Option<Projecti
             .and_then(|v| v.as_millisecond().try_into().ok())
             .unwrap_or(found.modified);
         projection.append(found.source, &row, at)?;
+        if projection.rows.len() > 100_000 {
+            return None;
+        }
     }
     if !first_cwd || offset.is_some_and(|o| o != bytes) {
         return None;
@@ -407,11 +412,15 @@ fn read(found: &Found, offset: Option<u64>, budget: &mut u64) -> Option<Projecti
     found.check(&file).ok()?;
     Some(projection)
 }
+pub(super) enum Parsed {
+    Empty,
+    Ready(Box<Transcript>),
+}
 pub(super) fn parse(
     found: &Found,
     bases: &HashMap<String, &Found>,
     budget: &mut u64,
-) -> Option<Transcript> {
+) -> Option<Parsed> {
     let mut data = read(found, None, budget)?;
     if found.source == Source::Codex {
         let mut inherited = Vec::new();
@@ -444,8 +453,11 @@ pub(super) fn parse(
             .collect();
         data.dedup_codex()
     }
-    if found.source == Source::Pi {
+    if found.source == Source::Pi && !data.rows.is_empty() {
         data.active_pi()?
+    }
+    if data.rows.iter().all(|r| r.message.is_none()) && data.dropped == 0 {
+        return Some(Parsed::Empty);
     }
     let native_id = data.id.or_else(|| {
         (found.source == Source::Claude)
@@ -457,7 +469,7 @@ pub(super) fn parse(
         if uuid.hyphenated().to_string() != native_id.to_lowercase()
             || !(1..=8).contains(&uuid.get_version_num())
             || uuid.get_variant() != uuid::Variant::RFC4122
-            || (data.synthetic && !data.real)
+            || (data.dropped == 0 && data.synthetic && !data.real)
         {
             return None;
         }
@@ -490,7 +502,7 @@ pub(super) fn parse(
             messages.drain(..omitted);
         }
     }
-    Some(Transcript {
+    Some(Parsed::Ready(Box::new(Transcript {
         workspace: found.cwd.clone(),
         model: data.model,
         origin: Origin {
@@ -499,11 +511,11 @@ pub(super) fn parse(
             native_id,
             transcript: found.path.clone(),
             title: name,
-            omitted_messages: omitted,
+            omitted_messages: omitted + data.dropped,
             stamp: found.stamp.clone(),
         },
         messages,
-    })
+    })))
 }
 
 pub(super) fn rollout(path: &Path) -> Option<&str> {

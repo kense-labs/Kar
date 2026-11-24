@@ -93,6 +93,14 @@ pub(crate) enum ImportStatus {
     Changed,
 }
 
+fn messages(turns: &[ChatTurn]) -> impl Iterator<Item = (Role, &str)> {
+    turns.iter().flat_map(|turn| {
+        turn.items.iter().filter_map(|item| match &item.item {
+            Item::Message { role, text, .. } => Some((*role, text.as_str())),
+            _ => None,
+        })
+    })
+}
 impl ChatStore {
     pub(crate) fn adopt_native(&self, data: Transcript) -> Result<ImportStatus> {
         let id = data.id();
@@ -134,7 +142,7 @@ impl ChatStore {
                         && x.runtime == info.runtime
                         && x.native_id == info.native_id
                 })
-                && saved.turns == turns;
+                && messages(&saved.turns).eq(messages(&turns));
             return Ok(if same {
                 ImportStatus::AlreadyPresent
             } else {

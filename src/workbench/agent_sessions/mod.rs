@@ -1,6 +1,7 @@
 //! Read local provider history into the existing chat journal and resume its native binding.
 mod codex;
 mod discover;
+mod jsonl;
 mod transcript;
 use super::{
     Workbench,
@@ -203,9 +204,16 @@ fn adopt(app: &Workbench, project: Uuid, request: Request) -> Result<Outcome> {
             continue;
         }
         remaining -= 1;
-        let Some(mut history) = transcript::parse(f, &bases, &mut bytes) else {
-            result.skipped_count += 1;
-            continue;
+        let mut history = match transcript::parse(f, &bases, &mut bytes) {
+            Some(transcript::Parsed::Empty) => {
+                remaining += 1;
+                continue;
+            }
+            Some(transcript::Parsed::Ready(history)) => *history,
+            None => {
+                result.skipped_count += 1;
+                continue;
+            }
         };
         let id = history.id();
         history.origin.project = Some(p.id);
