@@ -154,7 +154,18 @@ fn native_error(error: &Value) -> Option<(Outcome, Option<TurnFailure>)> {
             let reason = error["data"]["message"]
                 .as_str()
                 .unwrap_or("OpenCode prompt failed");
-            TurnFailure::new(crate::failure::prose(reason), reason)
+            let status = error["data"]["statusCode"]
+                .as_u64()
+                .and_then(|n| u16::try_from(n).ok())
+                .filter(|n| (100..600).contains(n));
+            let class = match crate::wire::failure::from_status(status) {
+                FailureClass::Unknown => crate::failure::prose(reason),
+                class => class,
+            };
+            TurnFailure {
+                status,
+                ..TurnFailure::new(class, reason)
+            }
         }
     };
     Some((Outcome::Failed, Some(failure)))

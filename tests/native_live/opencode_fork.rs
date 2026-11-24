@@ -472,7 +472,7 @@ async fn recover_finished_turn_from_native_archive() {
 }
 
 #[tokio::test]
-#[ignore = "requires OpenCode 2; real failed model step after a completed native read"]
+#[ignore = "requires OpenCode 1 or 2; real failed model step after a completed native read"]
 async fn recover_failed_turn_after_tool() {
     use kar::chat::{ChatEdit, ChatUpdate};
     use uuid::Uuid;
@@ -480,14 +480,11 @@ async fn recover_failed_turn_after_tool() {
     let base = temp.path().canonicalize().unwrap();
     let (mut opts, _) = fixture(&base);
     std::fs::write(
-        base.join("shared/grant.txt"),
+        opts.cwd.join("queue-read.txt"),
         "kar-fixture-decline-credential",
     )
     .unwrap();
     opts.model = Some("fixture/fixture".into());
-    opts.settings
-        .additional_directories
-        .push(base.join("shared"));
     let store = ChatStore::open(base.join("original")).unwrap();
     let program = std::env::var_os("KAR_OPENCODE_BIN").unwrap();
     let chat = store
@@ -500,7 +497,7 @@ async fn recover_failed_turn_after_tool() {
         .unwrap();
     let id = chat.info().id;
     let request = Uuid::new_v4();
-    let prompt = "KAR-FORK-READ-SHARED";
+    let prompt = "KAR-QUEUE-READ-LOCAL";
     let mut events = store
         .follow(id, Some(store.feed_snapshot(id).unwrap().cursor))
         .unwrap();
@@ -531,6 +528,7 @@ async fn recover_failed_turn_after_tool() {
     assert_eq!(repaired.status, TurnStatus::Failed);
     let failure = repaired.failure.unwrap();
     assert_eq!(failure.class, kar::FailureClass::Auth, "{failure:?}");
+    assert_eq!(failure.status, Some(401));
     assert_eq!(repaired.items, failed.items);
     session.close().await.unwrap();
 }
