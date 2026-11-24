@@ -2,6 +2,7 @@
 //! stores admission order. The chat journal is authoritative about dispatch attempts.
 mod commands;
 mod merge;
+mod app_context;
 pub use merge::MergedContext;
 mod workspace_move;
 mod promotion;
@@ -179,6 +180,8 @@ impl Entry {
 #[derive(Serialize, Deserialize)]
 struct Inbox {
     #[serde(default,skip_serializing_if="std::collections::BTreeMap::is_empty")]
+    app_context:std::collections::BTreeMap<String,app_context::Entry>,
+    #[serde(default,skip_serializing_if="std::collections::BTreeMap::is_empty")]
     context_transfers:std::collections::BTreeMap<Uuid,merge::Transfer>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     workspace_gate: Option<workspace_move::WorkspaceGate>,
@@ -212,6 +215,7 @@ impl ChatStore {
                 return Ok(Inbox {
                     workspace_gate:None,
                     context_transfers:Default::default(),
+                    app_context:Default::default(),
                     chat: chat.id,
                     native_id: self.initial_info(chat.id)?.native_id,
                     entries: vec![],
@@ -451,6 +455,7 @@ fn different_prompt() -> Error {
 /// Executed by the actor after its busy check and before its first native prompt write.
 /// A durable Begin consumes the input even if the process dies before a receipt arrives.
 pub(crate) struct Admission {
+    pub(super) app_context:Option<String>,
     pub(super) merged_context: Option<MergedContext>,
     pub(super) requested_output_schema: Option<serde_json::Value>,
     pub(super) background_note: Option<super::BackgroundNote>,
@@ -522,7 +527,7 @@ impl Admission {
         if self.background_note != expected || automatic && !inbox.allows_background(&log.state) {
             return Err(Error::Busy);
         }
-        if inbox.next_merge(&log.state) != self.merged_context.as_ref() {
+        if inbox.next_merge(&log.state) != self.merged_context.as_ref() || inbox.app_snapshot(&log.state)? != self.app_context {
             return Err(Error::Busy);
         }
         let transfer_id = self.merged_context.as_ref().map(|m|m.id);
@@ -532,6 +537,7 @@ impl Admission {
             &self.checkpoint.before,
             self.attachments,
             self.background_note,
+            self.app_context,
             self.merged_context,
             self.requested_output_schema,
         )?;

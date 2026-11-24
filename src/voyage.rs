@@ -241,6 +241,7 @@ fn project_tool_detail(v: &Value, events: &mut Vec<Event>) {
                 && (v["server"].is_string() || v["toolName"].is_string())
             {
                 events.push(Event::ToolIdentity {
+                    mcp_app_uri:None,
                     id: id.into(),
                     native_type: v["tool"].as_str().unwrap().into(),
                     server: v["server"].as_str().map(str::to_owned),

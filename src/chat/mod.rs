@@ -1028,7 +1028,7 @@ impl Sender {
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;
-        let (wire_text, background_note, merged_context) = {
+        let (wire_text, background_note, merged_context, app_context) = {
             let log = self.sink.0.lock().unwrap();
             let delivery = log.state.background_delivery(automatic);
             if automatic && delivery.as_ref().is_none_or(|d| d.input != id) {
@@ -1038,9 +1038,10 @@ impl Sender {
             let prompt = note
                 .as_ref()
                 .map_or_else(|| text.clone(), |n| n.prompt(&text));
-            let merge = store.next_merge(&log.state)?;
+            let (merge,app_context) = store.next_contexts(&log.state)?;
             let prompt = merge.as_ref().map_or(prompt.clone(), |m| m.prompt(&prompt));
-            (log.state.dispatch_text(&prompt), note, merge)
+            let prompt=ChatTurn::app_prompt(app_context.as_deref(),prompt);
+            (log.state.dispatch_text(&prompt), note, merge,app_context)
         };
         let requested_output_schema=store.run_schema(self.info.id,id)?;
         let mut wire_text=wire_text;
@@ -1060,6 +1061,7 @@ impl Sender {
             ));
         }
         let admission = Admission {
+            app_context,
             merged_context,
             requested_output_schema,
             background_note,

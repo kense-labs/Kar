@@ -58,6 +58,7 @@ pub(crate) fn project(root: Option<&str>, v: &Value, events: &mut Vec<Event>) {
         }
     }
     events.push(Event::ToolIdentity {
+        mcp_app_uri:None,
         id: id.into(),
         native_type: native_type.into(),
         server: None,

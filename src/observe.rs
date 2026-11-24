@@ -110,6 +110,8 @@ pub struct Tool {
     pub server: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub mcp_app_uri:Option<String>,
     pub finished: bool,
     #[serde(default)]
     pub input: Option<Value>,
@@ -145,9 +147,11 @@ impl Tool {
                 native_type,
                 server,
                 tool_name,
+                mcp_app_uri,
                 ..
             } => {
                 self.native_type = Some(native_type.clone());
+                if mcp_app_uri.is_some(){self.mcp_app_uri.clone_from(mcp_app_uri);}
                 if server.is_some() {
                     self.server.clone_from(server);
                 }

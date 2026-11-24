@@ -165,6 +165,7 @@ pub struct Session {
     pub(crate) image_input: bool,
     pub(crate) opencode_shells: bool,
     opencode_shell_stop: bool,
+    pub(crate) claude_mcp_apps:Arc<std::sync::atomic::AtomicBool>,
     native_resume: bool,
     cursor_parameterized: bool,
     acp_steering: bool,
@@ -203,6 +204,7 @@ impl Session {
             image_input: matches!(protocol, Protocol::Cybion | Protocol::KimiKap),
             request_capture: None,
             process_root: None,
+            claude_mcp_apps:Default::default(),
             opencode_shells:false,
             opencode_shell_stop:false,
             factory_dir: None,
@@ -725,11 +727,13 @@ impl Session {
         options.bind_bridge_process(process_root.as_ref());
         let native_memory = memory.as_ref().and_then(|m| m.effective);
         let preflight_secrets = Arc::new(secrets.clone());
+        let claude_mcp_apps=Arc::new(std::sync::atomic::AtomicBool::new(false));
         let commands = Actor::start(
             runtime,
             &options,
             crate::transport::Launch {
                 registry_installation,
+                claude_mcp_apps:claude_mcp_apps.clone(),
                 opencode_shells,
                 opencode_v2: runtime.id == "opencode" && !opencode_v1,
                 dsh_patch,
@@ -771,6 +775,7 @@ impl Session {
             ),
             request_capture,
             process_root,
+            claude_mcp_apps,
             opencode_shells,
             opencode_shell_stop,
             factory_dir: (runtime.protocol == Protocol::Factory)
@@ -819,7 +824,11 @@ impl Session {
                 };
             }
             Protocol::Codex => {
-                session.rpc("initialize",json!({"clientInfo":{"name":"kar","title":"Kar","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
+                let mut capabilities=json!({"experimentalApi":true});
+                if options.workbench_registration.is_some(){
+                    capabilities["extensions"]=json!({"io.modelcontextprotocol/ui":{"mimeTypes":["text/html;profile=mcp-app"]}});
+                }
+                session.rpc("initialize",json!({"clientInfo":{"name":"kar","title":"Kar","version":env!("CARGO_PKG_VERSION")},"capabilities":capabilities})).await?;
                 session
                     .call(|tx| Command::Send(json!({"jsonrpc":"2.0","method":"initialized"}), tx))
                     .await?;

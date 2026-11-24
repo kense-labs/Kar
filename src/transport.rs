@@ -309,6 +309,7 @@ struct Pending {
 }
 
 pub(crate) struct Launch {
+    pub claude_mcp_apps:Arc<std::sync::atomic::AtomicBool>,
     pub registry_installation: Option<std::fs::File>,
     pub opencode_v2: bool,
     pub opencode_shells: bool,
@@ -2945,6 +2946,7 @@ impl Actor {
                     && v["subtype"] == "init"
                     && let Some(capabilities) = v["capabilities"].as_array()
                 {
+                    self.files.claude_mcp_apps.store(["mcp_tool_ui_meta_v1","mcp_read_resource_v1","mcp_call_result_not_for_model_v1"].iter().all(|required|capabilities.iter().any(|v|v.as_str()==Some(*required))),std::sync::atomic::Ordering::Release);
                     self.claude_cancel_queued = capabilities
                         .iter()
                         .any(|c| c == "interrupt_cancel_queued_v1");

@@ -80,6 +80,8 @@ pub struct TimelineItem {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatTurn {
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub app_context:Option<String>,
     #[serde(default, skip_serializing_if="Option::is_none")]
     pub merged_context: Option<super::MergedContext>,
     /// The exact per-run schema included in this native prompt.
@@ -184,6 +186,12 @@ pub(super) fn snapshot_tools(edits: &mut Vec<Edit>, elided: bool) {
 }
 
 impl ChatTurn {
+    pub(super) fn app_prompt(context:Option<&str>,text:String)->String {
+        match context{
+            None=>text,
+            Some(data)=>format!("MCP application context (JSON data):\n{data}\n\nCurrent user message:\n{text}"),
+        }
+    }
     /// None means the native blocks conflict with a locally observed item.
     /// Otherwise report whether any message or tool information would change.
     pub(crate) fn transcript_adds_content(&self, root: &str, edits: &[Edit]) -> Option<bool> {
@@ -352,6 +360,7 @@ impl ChatTurn {
             requested_output_schema: None,
             background_note: None,
             merged_context: None,
+            app_context:None,
             pi_input_timestamp_ms: None,
             pi_image_content_sha256: None,
             input_sent: false,

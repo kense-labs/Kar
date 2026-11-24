@@ -27,6 +27,7 @@ mod git_actions;
 mod handoff;
 mod http;
 mod interactions;
+mod mcp_apps;
 mod suggestions;
 mod project_lifecycle;
 mod public_web;

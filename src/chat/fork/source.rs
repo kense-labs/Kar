@@ -225,6 +225,7 @@ mod tests {
                 requested_output_schema: None,
                 background_note: None,
                 merged_context: None,
+                app_context:None,
                 attachments: Vec::new(),
                 id: turn,
                 at: 2,

@@ -244,6 +244,22 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                     reply(json!({"turnId":turn}));
                 }
             }
+            Some("mcpServerStatus/list")=>{
+                assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["serverName"],"weather");
+                reply(json!({"data":[{"name":"weather","tools":{
+                    "lookup":{"name":"lookup","title":"Weather lookup","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},
+                    "hidden":{"name":"hidden","_meta":{"ui":{"visibility":["model"]}}}
+                }}],"nextCursor":null}));
+            }
+            Some("mcpServer/resource/read")=>{
+                assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["server"],"weather");
+                let uri=&v["params"]["uri"];reply(json!({"contents":[{"uri":uri,"mimeType":"text/html;profile=mcp-app","text":"<p>weather app</p>"}]}));
+            }
+            Some("mcpServer/tool/call")=>{
+                assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["server"],"weather");assert_eq!(v["params"]["tool"],"lookup");
+                writeln!(OpenOptions::new().create(true).append(true).open(database.join("mcp-user-calls")).unwrap(),"call").unwrap();
+                reply(json!({"content":[],"structuredContent":v["params"]["arguments"]}));
+            }
             Some("turn/start") => {
                 if let Some(stale) = late_sample.take() {
                     emit(stale);
@@ -336,6 +352,12 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                 emit(
                     json!({"method":"turn/started","params":{"threadId":session,"turn":{"id":turn}}}),
                 );
+                if text.contains("KAR-MCP-APP-CONTEXT-NEXT"){fs::write(database.join("app-wire-next"),text).unwrap();}
+                if text=="KAR-MCP-APP-ITEM" {
+                    for method in ["item/started","item/completed"] {
+                        emit(json!({"method":method,"params":{"threadId":session,"turnId":turn,"item":{"type":"mcpToolCall","id":"card","server":"weather","tool":"launch","mcpAppUi":{"resourceUri":"ui://weather/main"},"arguments":{},"status":"completed","result":{"content":[]}}}}));
+                    }
+                }
                 if text.starts_with("mcp collaboration run") {
                     assert!(text.contains("kar_submit_output"));
                     fs::write(database.join("collaboration-ready"), &turn).unwrap();

@@ -95,7 +95,11 @@ fn codex(v: &Value, events: &mut Vec<Event>) {
                 _ => return,
             };
             if item["tool"].is_string() || item["server"].is_string() {
+                let mcp_app_uri=(item["type"]=="mcpToolCall").then(|| item.pointer("/mcpAppUi/resourceUri").and_then(Value::as_str)
+                    .or_else(||item["mcpAppResourceUri"].as_str()).or_else(||item.pointer("/appContext/resourceUri").and_then(Value::as_str)))
+                    .flatten().filter(|s|s.starts_with("ui://") && s.len()<=4096).map(str::to_owned);
                 events.push(Event::ToolIdentity {
+                    mcp_app_uri,
                     id: id.into(),
                     native_type: item["type"].as_str().unwrap().into(),
                     server: item["server"].as_str().map(str::to_owned),

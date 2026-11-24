@@ -373,6 +373,8 @@ pub enum Event {
         id: String,
     },
     ToolIdentity {
+        #[serde(default,skip_serializing_if="Option::is_none")]
+        mcp_app_uri:Option<String>,
         id: String,
         native_type: String,
         server: Option<String>,

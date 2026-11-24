@@ -99,6 +99,8 @@ pub enum ChatUpdate {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         background_note: Option<super::BackgroundNote>,
         #[serde(default,skip_serializing_if="Option::is_none")]
+        app_context:Option<String>,
+        #[serde(default,skip_serializing_if="Option::is_none")]
         merged_context: Option<super::MergedContext>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<super::Attachment>,
@@ -771,6 +773,7 @@ impl State {
                 requested_output_schema,
                 background_note,
                 merged_context,
+                app_context,
                 attachments,
                 id,
                 at,
@@ -783,6 +786,7 @@ impl State {
                 turn.attachments = attachments;
                 turn.background_note = background_note;
                 turn.merged_context = merged_context;
+                turn.app_context=app_context;
                 turn.requested_output_schema = requested_output_schema;
                 if let Some(h) = self
                     .handoffs
@@ -1685,6 +1689,7 @@ impl Log {
         before: &super::checkpoint::Capture,
         attachments: Vec<super::Attachment>,
         background_note: Option<super::BackgroundNote>,
+        app_context:Option<String>,
         merged_context: Option<super::MergedContext>,
         requested_output_schema: Option<serde_json::Value>,
     ) -> Result<()> {
@@ -1693,6 +1698,7 @@ impl Log {
         self.commit(ChatUpdate::Begin {
             requested_output_schema,
             background_note,
+            app_context,
             merged_context,
             attachments,
             id,
@@ -1895,6 +1901,7 @@ impl Log {
             requested_output_schema: None,
             background_note: None,
             merged_context: None,
+            app_context:None,
             attachments: Vec::new(),
             id: input
                 .filter(|id| self.state.find(*id).is_none())

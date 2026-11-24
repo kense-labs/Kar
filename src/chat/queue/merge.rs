@@ -110,10 +110,11 @@ impl ChatStore {
             (id,serde_json::json!({"source_thread_id":r.note.source,"target_thread_id":chat,"turn_id":r.note.turn,"base_turn":r.note.base,"status":status,"input_id":turn,"superseded_by":r.superseded_by}))
         }).collect())
     }
-    pub(in crate::chat) fn next_merge(
+    pub(in crate::chat) fn next_contexts(
         &self,
         state: &super::super::log::State,
-    ) -> Result<Option<MergedContext>> {
-        Ok(self.read_inbox(&state.info)?.next_merge(state).cloned())
+    ) -> Result<(Option<MergedContext>,Option<String>)> {
+        let inbox=self.read_inbox(&state.info)?;
+        Ok((inbox.next_merge(state).cloned(),inbox.app_snapshot(state)?))
     }
 }

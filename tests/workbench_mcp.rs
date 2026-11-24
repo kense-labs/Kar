@@ -36,7 +36,10 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path="workbench_mcp/apps.rs"]
+mod apps;
 fn main() {
+    if std::env::args().nth(1).as_deref()==Some("apps"){tokio::runtime::Runtime::new().unwrap().block_on(apps::scenario());return;}
     if matches!(std::env::args().nth(1).as_deref(),Some("simctl"|"devices"|"-s"|"-version"|"version"|"-list-avds"|"--find")){
         devices::peer(&std::env::args().skip(1).collect::<Vec<_>>());
         return;

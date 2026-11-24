@@ -306,7 +306,7 @@ impl super::log::State {
             && self
                 .turns
                 .iter()
-                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty() && t.background_note.is_none() && t.merged_context.is_none() && t.requested_output_schema.is_none())
+                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty() && t.background_note.is_none() && t.app_context.is_none() && t.merged_context.is_none() && t.requested_output_schema.is_none())
         {
             return Cow::Borrowed(&self.turns);
         }
@@ -340,6 +340,7 @@ impl super::log::State {
                                 *text = note.prompt(text);
                             }
                             if let Some(m)=&turn.merged_context { *text=m.prompt(text); }
+                            *text=super::ChatTurn::app_prompt(turn.app_context.as_deref(),std::mem::take(text));
                             if let Some(h) = handoff {
                                 *text = h.native_input(text);
                             }
@@ -369,7 +370,7 @@ impl super::log::State {
         let Some(original) = turn.prompt() else {
             return;
         };
-        if handoff.is_none() && turn.background_note.is_none() && turn.merged_context.is_none() && turn.requested_output_schema.is_none() {
+        if handoff.is_none() && turn.background_note.is_none() && turn.app_context.is_none() && turn.merged_context.is_none() && turn.requested_output_schema.is_none() {
             return;
         }
         if !frame.source.path.is_empty()
@@ -392,6 +393,7 @@ impl super::log::State {
             let carried = handoff.and_then(|h| h.user_input(authored)).unwrap_or(authored);
             let mut expected=turn.background_note.as_ref().map_or_else(||original.to_owned(),|n|n.prompt(original));
             if let Some(m)=&turn.merged_context {expected=m.prompt(&expected);}
+            expected=super::ChatTurn::app_prompt(turn.app_context.as_deref(),expected);
             let matches=carried==expected;
             if matches {
                 *text = original.to_owned();
