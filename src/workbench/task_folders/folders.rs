@@ -216,10 +216,24 @@ pub(super) fn scan(app: &Workbench, project: &Project, root: &Path) -> Result<Sc
 }
 pub(super) fn list(app: &Workbench, project: &Project) -> Result<Vec<Folder>> {
     let scanned = scan(app, project, &project.root)?;
+    let ignored = app
+        .workspace(project)?
+        .read_bytes(Path::new("kar.json"), 1024 * 1024)
+        .ok()
+        .and_then(|b| document(&b))
+        .and_then(|v| v["ignoreRepositories"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| Some(project.root.join(v.as_str()?).canonicalize().ok()?))
+        .collect::<Vec<_>>();
     let mut found: Vec<_> = scanned
         .folders
         .into_iter()
-        .filter(|f| f.path.starts_with(&project.root) && owns(&f.path))
+        .filter(|f| {
+            f.path.starts_with(&project.root)
+                && owns(&f.path)
+                && !ignored.iter().any(|p| f.path.starts_with(p))
+        })
         .map(|f| Folder {
             name: f.name,
             path: f.path,

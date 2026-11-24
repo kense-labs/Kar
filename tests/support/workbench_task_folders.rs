@@ -83,6 +83,39 @@ async fn scenario() {
             .len(),
         2
     );
+    let registered = json(
+        c.post(format!("{base}/projects"))
+            .json(&json!({"root":&api,"name":"single"})),
+    )
+    .await;
+    let sid = Uuid::new_v4();
+    let dir = root.join("single-task");
+    let single = format!("{base}/projects/{}", registered["id"].as_str().unwrap());
+    let worktree=json(c.post(format!("{single}/git")).json(&json!({"op":"worktree_add","id":sid,"directory":dir,"branch":"single-demo","start":"HEAD"}))).await;
+    assert_eq!(worktree["id"], sid.to_string());
+    let mut updates = c
+        .get(format!("{single}/tasks/{sid}/setup/events"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&updates.chunk().await.unwrap().unwrap())
+            .contains("\"phase\":\"done\"")
+    );
+    drop(updates);
+    let not_multi = json(
+        c.get(format!("{single}/folders/containing"))
+            .query(&[("path", dir.to_str().unwrap())]),
+    )
+    .await;
+    assert!(not_multi.is_null());
+    json(
+        c.post(format!("{single}/git"))
+            .json(&json!({"op":"worktree_remove","id":sid})),
+    )
+    .await;
     let q = json!({"directory":task,"branch":"task-sample","repositories":[api]});
     let endpoint = format!("{scope}/tasks/{id}/folder");
     let created = json(c.put(&endpoint).json(&q)).await;
@@ -111,6 +144,24 @@ async fn scenario() {
         json(c.put(&endpoint).json(&q)).await["root"],
         created["root"]
     );
+    let blocked = project.join("blocked");
+    repo(&blocked);
+    std::fs::create_dir(cwd.join("blocked")).unwrap();
+    std::fs::write(cwd.join("blocked/keep"), "user bytes").unwrap();
+    assert!(
+        !c.post(&append)
+            .json(&json!({"repository_path":blocked}))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    assert_eq!(
+        std::fs::read(cwd.join("blocked/keep")).unwrap(),
+        b"user bytes"
+    );
+    cancellation(&c, &scope, &root, &project).await;
     let chat = json(
         c.post(format!("{scope}/chats"))
             .json(&json!({"id":id,"runtime":"codex"})),
@@ -149,3 +200,63 @@ async fn scenario() {
     restored.kill().await.unwrap();
     restored.wait().await.unwrap();
 }
+
+#[cfg(unix)]
+async fn cancellation(c: &reqwest::Client, scope: &str, root: &Path, project: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let source = project.join("cancel-source");
+    repo(&source);
+    let hook = source.join(".git/hooks/post-checkout");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho running > \"$0.started\"\nexec sleep 90\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let target = root.join("cancel-target");
+    let id = Uuid::new_v4();
+    let req = c
+        .put(format!("{scope}/tasks/{id}/folder"))
+        .json(&json!({"directory":target,"branch":"cancel-demo","repositories":[source]}));
+    let put = tokio::spawn(async move { req.send().await.unwrap().status() });
+    let marker = source.join(".git/hooks/post-checkout.started");
+    for _ in 0..250 {
+        if marker.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    assert!(
+        marker.exists(),
+        "the checkout did not enter its native hook"
+    );
+    let setup = format!("{scope}/tasks/{id}/setup");
+    let stopped = tokio::time::timeout(
+        Duration::from_secs(12),
+        json(c.post(format!("{setup}/cancel"))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stopped, json!({"cancelled":true}));
+    assert!(!put.await.unwrap().is_success());
+    assert_eq!(
+        json(c.post(format!("{setup}/cancel"))).await,
+        json!({"cancelled":false})
+    );
+    let mut stream = c
+        .get(format!("{setup}/events"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&stream.chunk().await.unwrap().unwrap())
+            .contains("\"phase\":\"cancelled\"")
+    );
+    assert!(!target.join("cancel-source/.git").exists());
+    assert!(source.join(".git").is_dir());
+    assert!(marker.exists()); // user-owned files in the source repository survive.
+}
+#[cfg(not(unix))]
+async fn cancellation(_: &reqwest::Client, _: &str, _: &Path, _: &Path) {}

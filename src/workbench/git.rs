@@ -147,11 +147,8 @@ async fn change(
                 branch,
                 start,
             } => {
-                return Ok(json!(repo.create_worktree(
-                    id,
-                    &app.destination(&directory)?,
-                    &branch,
-                    &start
+                return Ok(json!(super::task_folders::single(
+                    &app, project, id, directory, branch, start
                 )?));
             }
             Action::WorktreeRemove { id } => repo.remove_worktree_if(id, |path| {

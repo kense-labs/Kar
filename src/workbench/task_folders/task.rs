@@ -26,6 +26,8 @@ pub(super) struct Create {
     #[serde(default = "head")]
     base: String,
     repositories: Option<Vec<PathBuf>>,
+    #[serde(default)]
+    single_checkout: bool,
 }
 fn head() -> String {
     "HEAD".into()
@@ -36,6 +38,8 @@ pub(super) struct Member {
     pub repository_path: PathBuf,
     pub worktree_path: PathBuf,
     worktree_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selected_branch: Option<String>,
     pub ready: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -136,11 +140,36 @@ impl Store {
         let Some(r) = self.get(p, id)? else {
             return Ok(None);
         };
+        if r.request.single_checkout {
+            return Ok(None);
+        }
         if r.progress.phase != "done" {
             return Err(Error::Refused(format!(
                 "task workspace setup is {}",
                 r.progress.phase
             )));
+        }
+        if r.task.root.canonicalize()? != r.task.root
+            || r.task.project_path.canonicalize()? != r.task.project_path
+        {
+            return Err(denied());
+        }
+        if !r.task.project_is_worktree || r.task.project_path != r.task.root {
+            let marker = r.task.root.join(".kar-task-owner");
+            let meta = fs::symlink_metadata(&marker)?;
+            if !meta.is_file() || meta.len() != 36 || fs::read_to_string(marker)? != id.to_string()
+            {
+                return Err(denied());
+            }
+        }
+        for member in r.task.repositories.iter().filter(|m| m.ready) {
+            if !crate::workbench_git::pin_checkout(&member.worktree_path)?
+                .is_some_and(|(actual, _)| actual == member.worktree_id)
+            {
+                return Err(Error::Refused(
+                    "a recorded task checkout was removed or replaced".into(),
+                ));
+            }
         }
         Ok(Some(r.task.project_path))
     }
@@ -191,6 +220,7 @@ impl Store {
             };
             if let Some(r) = self.read(id)?
                 && r.task.project_id == p
+                && !r.request.single_checkout
                 && r.progress.phase == "done"
                 && (real.starts_with(&r.task.root) || named.starts_with(&r.task.root))
                 && best
@@ -243,11 +273,12 @@ fn member(task: &Task, path: &Path, name: String) -> Result<Member> {
         repository_path: path.into(),
         worktree_path: task.root.join(rel),
         worktree_id: Uuid::new_v4(),
+        selected_branch: None,
         ready: false,
     })
 }
 fn plan(app: &Workbench, id: Uuid, project: Project, q: Create) -> Result<Record> {
-    if app.0.chats.saved_info(id).is_ok() {
+    if !q.single_checkout && app.0.chats.saved_info(id).is_ok() {
         return Err(Error::Refused("a chat already owns this ID".into()));
     }
     if q.branch.is_empty()
@@ -260,6 +291,31 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create) -> Result<Record
         ));
     }
     let dir = app.destination(&q.directory)?;
+    if q.single_checkout {
+        let task = Task {
+            root: dir.clone(),
+            project_id: project.id,
+            project_root: project.root.clone(),
+            anchor: project.root.clone(),
+            project_path: dir.clone(),
+            project_is_worktree: true,
+            repositories: vec![Member {
+                name: project.name,
+                repository_path: project.root,
+                worktree_path: dir.clone(),
+                worktree_id: id,
+                selected_branch: None,
+                ready: false,
+            }],
+        };
+        let progress = Snapshot::new(id, &q.branch, &q.base, &dir);
+        return Ok(Record {
+            id,
+            request: q,
+            task,
+            progress,
+        });
+    }
     if fs::symlink_metadata(&dir).is_ok() {
         return Err(Error::Refused("task directory already exists".into()));
     }
@@ -431,7 +487,9 @@ fn checkout(
         .trim_start_matches("origin/");
     let local = format!("refs/heads/{from}");
     let remote = format!("refs/remotes/origin/{from}");
-    let start = if from == "HEAD" {
+    let start = if q.single_checkout {
+        q.base.as_str()
+    } else if from == "HEAD" {
         "HEAD"
     } else if repo.ref_exists(&local)? {
         &local
@@ -443,9 +501,9 @@ fn checkout(
     repo.create_worktree_for(
         entry.worktree_id,
         &app.destination(&entry.worktree_path)?,
-        &q.branch,
+        entry.selected_branch.as_deref().unwrap_or(&q.branch),
         start,
-        true,
+        !q.single_checkout,
         cancel,
     )?;
     Ok(())
@@ -539,7 +597,7 @@ pub(super) fn create(app: &Workbench, p: Uuid, id: Uuid, q: Create) -> Result<Ta
     let cancel = life.begin()?;
     let operation = (|| {
         let controller = app.controller(id);
-        let chat = controller.owner.blocking_lock();
+        let chat = (!q.single_checkout).then(|| controller.owner.blocking_lock());
         let mut r = match store.get(p, id)? {
             Some(r) if r.request != q => {
                 return Err(Error::Refused(
@@ -616,6 +674,11 @@ pub(super) fn add(app: &Workbench, p: Uuid, id: Uuid, src: PathBuf) -> Result<Ta
     if r.progress.phase != "done" {
         return Err(Error::Busy);
     }
+    if r.request.single_checkout {
+        return Err(Error::Refused(
+            "a single checkout has no task folder".into(),
+        ));
+    }
     let src = src.canonicalize()?;
     let f = folders::list(app, &app.project(p)?)?
         .into_iter()
@@ -635,6 +698,18 @@ pub(super) fn add(app: &Workbench, p: Uuid, id: Uuid, src: PathBuf) -> Result<Ta
         Some(i) => r.task.repositories[i].clone(),
         None => member(&r.task, &src, f.name)?,
     };
+    if pending.is_none() {
+        let anchor = r.task.repositories.iter().find(|m| m.ready);
+        if let Some(anchor) = anchor
+            && app.allowed(&anchor.worktree_path).is_ok()
+            && anchor.worktree_path.canonicalize().ok().as_ref() == Some(&anchor.worktree_path)
+        {
+            m.selected_branch = Repository::open(&anchor.worktree_path)
+                .and_then(|r| r.status())
+                .ok()
+                .and_then(|s| s.branch);
+        }
+    }
     let to = &m.worktree_path;
     // Open actual directory components in a plain mirrored project without writing through
     // a link to the source. Other siblings keep pointing at their original files.
@@ -689,4 +764,26 @@ pub(super) fn add(app: &Workbench, p: Uuid, id: Uuid, src: PathBuf) -> Result<Ta
     r.task.repositories[i] = m;
     store.save(&r, &life)?;
     Ok(r.task)
+}
+
+pub(in super::super) fn single(
+    app: &Workbench,
+    p: Uuid,
+    id: Uuid,
+    directory: PathBuf,
+    branch: String,
+    start: String,
+) -> Result<crate::workbench_git::ManagedWorktree> {
+    let q = Create {
+        directory,
+        branch: branch.clone(),
+        base: start.clone(),
+        repositories: None,
+        single_checkout: true,
+    };
+    let task = create(app, p, id, q)?;
+    // Run the registry's ordinary readback. It also recognizes older worktrees,
+    // detects a replaced directory, and refuses reuse of a retired request.
+    app.repository(p)?
+        .create_worktree(id, &task.project_path, &branch, &start)
 }
