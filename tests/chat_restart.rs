@@ -199,6 +199,19 @@ fn agent() {
                             symlink("../elsewhere", "link").unwrap();
                         }
                     }
+                    "edit-three" => {
+                        fs::write("staged.txt", "third").unwrap();
+                        fs::write("new file", [0, 255, 3]).unwrap();
+                        fs::remove_file("shape/child").unwrap();
+                        fs::remove_dir("shape").unwrap();
+                        fs::write("binary", [0, 128, 255]).unwrap();
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            fs::set_permissions("mode", fs::Permissions::from_mode(0o644)).unwrap();
+                            fs::remove_file("link").unwrap();
+                        }
+                    }
                     "branch-edit" => fs::write("branch", "branch").unwrap(),
                     _ => {}
                 }
@@ -1198,6 +1211,55 @@ fn legacy_recording() {
     assert_eq!(h["turns"][0]["items"][0]["text"], "original text");
     assert_eq!(h["turns"][0]["items"].as_array().unwrap().len(), 3);
 }
+// Independent observations of the checkout, including ignored files and symlink targets.
+fn checkout_bytes(work: &Path) -> std::collections::BTreeMap<PathBuf, (u32, Vec<u8>)> {
+    ignore::WalkBuilder::new(work)
+        .standard_filters(false)
+        .filter_entry(|e| e.file_name() != ".git")
+        .build()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let meta = fs::symlink_metadata(path).unwrap();
+            #[cfg(unix)]
+            let mode = {
+                use std::os::unix::fs::PermissionsExt;
+                meta.permissions().mode()
+            };
+            #[cfg(not(unix))]
+            let mode = u32::from(meta.is_dir());
+            let contents = if meta.is_symlink() {
+                fs::read_link(path)
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .to_vec()
+            } else if meta.is_file() {
+                fs::read(path).unwrap()
+            } else {
+                Vec::new()
+            };
+            (
+                path.strip_prefix(work).unwrap().to_owned(),
+                (mode, contents),
+            )
+        })
+        .collect()
+}
+
+fn check_paths(files: &Value, expected: &[(&str, &str)]) {
+    let mut actual: Vec<_> = files
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| (f["path"].as_str().unwrap(), f["kind"].as_str().unwrap()))
+        .collect();
+    let mut expected = expected.to_vec();
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
+}
+
 fn checkpoints() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();
@@ -1243,28 +1305,63 @@ fn checkpoints() {
         work.to_str().unwrap(),
     ]));
     let first = one["id"].as_str().unwrap();
+    check_paths(
+        &success(run(&["changes", first])),
+        &[
+            ("binary", "added"),
+            ("gone", "deleted"),
+            ("shape", "added"),
+            ("staged.txt", "modified"),
+        ],
+    );
     fs::write(work.join("manual"), "outside turns").unwrap();
     let two = success(run(&["resume", "edit-two"]));
     let second = two["id"].as_str().unwrap();
     let files = success(run(&["changes", second]));
     assert_eq!(files, two["checkpoint"]["files"]);
-    for (p, kind) in [
+    let mut second_changes = vec![
         ("staged.txt", "modified"),
         ("shape", "deleted"),
         ("shape/child", "added"),
         ("binary", "deleted"),
         ("new file", "added"),
-    ] {
-        assert!(
-            files
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|f| f["path"] == p && f["kind"] == kind),
-            "{files}"
-        );
+    ];
+    if cfg!(unix) {
+        second_changes.extend([("mode", "modified"), ("link", "added")]);
     }
-    assert!(!files.to_string().contains("ignored.tmp"));
+    check_paths(&files, &second_changes);
+    let middle = checkout_bytes(&work);
+    let three = success(run(&["resume", "edit-three"]));
+    let mut third_changes = vec![
+        ("staged.txt", "modified"),
+        ("shape/child", "deleted"),
+        ("binary", "added"),
+        ("new file", "modified"),
+    ];
+    if cfg!(unix) {
+        third_changes.extend([("mode", "modified"), ("link", "deleted")]);
+    }
+    check_paths(
+        &success(run(&["changes", three["id"].as_str().unwrap()])),
+        &third_changes,
+    );
+    assert_eq!(
+        three["checkpoint"]["before_tree"],
+        two["checkpoint"]["after_tree"]
+    );
+    assert_ne!(
+        three["checkpoint"]["after_tree"],
+        two["checkpoint"]["after_tree"]
+    );
+    assert_eq!(fs::read(work.join("binary")).unwrap(), [0, 128, 255]);
+    assert!(
+        success(run(&["rollback", second]))["applied"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(checkout_bytes(&work), middle);
+    assert_eq!(fs::read(repo.index_path()).unwrap(), staged);
+    assert_eq!(fs::read(repo.git_dir().join("HEAD")).unwrap(), head);
     fs::write(work.join("staged.txt"), "my later edit").unwrap();
     let conflict = run(&["rollback", first]);
     assert!(!conflict.status.success());
@@ -1343,7 +1440,7 @@ fn checkpoints() {
             .as_array()
             .unwrap()
             .len(),
-        3
+        4
     );
     let shadow = gix::open(
         base.join("store")

@@ -521,3 +521,153 @@ async fn queue_waits_for_native_retry_to_settle() {
     assert!(calls[2].to_string().contains("queued after retry"));
     session.close().await.unwrap();
 }
+
+// The model requests a real Pi file write for each stage. Its final response lists
+// only stage markers found in the native request so stale contexts are observable.
+pub(super) fn checkpoint_response(request: &Value) -> Option<Vec<Value>> {
+    let messages = request["messages"].as_array()?;
+    let mut stages = Vec::new();
+    let mut finished = false;
+    for msg in messages.iter().filter(|msg| msg["role"] == "user") {
+        let mut visit = |text: &str| {
+            if let Some(stage) = text.strip_prefix("kar-fork-stage ")
+                && ["first", "middle", "late", "child", "inspect"].contains(&stage)
+            {
+                stages.push(stage.to_owned());
+                finished = false;
+            }
+        };
+        if let Some(text) = msg["content"].as_str() {
+            visit(text);
+        } else if let Some(parts) = msg["content"].as_array() {
+            for text in parts.iter().filter_map(|p| p["text"].as_str()) {
+                visit(text);
+            }
+            if parts.iter().any(|part| part["type"] == "tool_result") {
+                finished = true;
+            }
+        }
+    }
+    let stage = stages.last()?;
+    let (block, delta, stop) = if finished || stage == "inspect" {
+        let reply = stages.join("/");
+        (
+            json!({"type":"text","text":""}),
+            json!({"type":"text_delta","text":reply}),
+            "end_turn",
+        )
+    } else {
+        let args = json!({"path":format!("{stage}.txt"),"content":format!("file for {stage}\n")});
+        (
+            json!({"type":"tool_use","id":format!("toolu_{stage}"),"name":"write","input":{}}),
+            json!({"type":"input_json_delta","partial_json":args.to_string()}),
+            "tool_use",
+        )
+    };
+    Some(vec![
+        json!({"type":"message_start","message":{"id":format!("msg_{}",Uuid::new_v4().simple()),"role":"assistant","type":"message","model":request["model"],"content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":block}),
+        json!({"type":"content_block_delta","index":0,"delta":delta}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":stop,"stop_sequence":null},"usage":{"output_tokens":2}}),
+        json!({"type":"message_stop"}),
+    ])
+}
+
+#[tokio::test]
+#[ignore = "requires KAR_PI_BIN; native write tools in three turns and a mid-history fork"]
+async fn three_native_writes_fork_at_middle_and_reopen_both_contexts() {
+    use kar::chat::{ChangeKind, ChatTurn};
+    let fixture = fixture(true).await;
+    let root = fixture.temp.path();
+    let work = root.join("work");
+    let store = ChatStore::open(root.join("chats")).unwrap();
+    let bin = std::env::var_os("KAR_PI_BIN").unwrap();
+    let parent = store
+        .create("pi", Some(Path::new(&bin)), fixture.options.clone())
+        .await
+        .unwrap();
+    let parent_id = parent.info().id;
+    let source = parent.info().native_id.clone();
+    let mut turns = Vec::new();
+    let wrote = |turn: &ChatTurn, stage: &str| {
+        assert_eq!(turn.status, TurnStatus::Completed);
+        let checkpoint = turn.checkpoint.as_ref().unwrap();
+        assert_eq!(checkpoint.files.len(), 1, "stage {stage}");
+        assert_eq!(checkpoint.files[0].kind, ChangeKind::Added);
+        assert_eq!(checkpoint.files[0].path, Path::new(&format!("{stage}.txt")));
+        assert_eq!(
+            fs::read_to_string(work.join(format!("{stage}.txt"))).unwrap(),
+            format!("file for {stage}\n")
+        );
+        assert!(
+            turn.items
+                .iter()
+                .any(|item| matches!(&item.item, Item::Tool { .. }))
+        );
+    };
+    let replied = |turn: &ChatTurn, expected: &str| {
+        assert!(turn.items.iter().any(|item|matches!(&item.item,Item::Message{role:Role::Assistant,text,..} if text==expected)),
+            "model did not return stage sequence {expected}");
+    };
+    for stage in ["first", "middle", "late"] {
+        let turn = parent
+            .send(Uuid::new_v4(), format!("kar-fork-stage {stage}"))
+            .await
+            .unwrap();
+        wrote(&turn, stage);
+        turns.push(turn);
+    }
+    replied(&turns[2], "first/middle/late");
+    parent.close().await.unwrap();
+    let child = store
+        .fork_at_with(parent_id, turns[1].id, |o| {
+            o.env = fixture.options.env.clone()
+        })
+        .await
+        .unwrap();
+    assert_ne!(child.info().native_id, source);
+    assert_eq!(
+        child
+            .history()
+            .unwrap()
+            .turns
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>(),
+        [turns[0].id, turns[1].id]
+    );
+    for name in ["first", "middle"] {
+        assert_eq!(
+            fs::read_to_string(work.join(format!("{name}.txt"))).unwrap(),
+            format!("file for {name}\n")
+        );
+    }
+    assert!(!work.join("late.txt").exists());
+    let child_id = child.info().id;
+    child.close().await.unwrap();
+    drop(store);
+    let store = ChatStore::open(root.join("chats")).unwrap();
+    let child = store
+        .resume_with(child_id, |o| o.env = fixture.options.env.clone())
+        .await
+        .unwrap();
+    let turn = child
+        .send(Uuid::new_v4(), "kar-fork-stage child")
+        .await
+        .unwrap();
+    wrote(&turn, "child");
+    replied(&turn, "first/middle/child");
+    child.close().await.unwrap();
+    let parent = store
+        .resume_with(parent_id, |o| o.env = fixture.options.env.clone())
+        .await
+        .unwrap();
+    assert_eq!(parent.info().native_id, source);
+    let turn = parent
+        .send(Uuid::new_v4(), "kar-fork-stage inspect")
+        .await
+        .unwrap();
+    replied(&turn, "first/middle/late/inspect");
+    parent.close().await.unwrap();
+}

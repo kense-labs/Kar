@@ -188,6 +188,9 @@ fn respond_observed(
                 );
             }
         }
+        if let Some(frames) = pi_history::checkpoint_response(&request) {
+            return send_events(stream, &frames);
+        }
         let schema_turn = last.contains("schema-probe");
         let isolated_question = last.contains("isolated-side-question");
         if schema_turn || isolated_question {
