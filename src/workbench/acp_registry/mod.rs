@@ -1,5 +1,6 @@
 //! Workbench-owned, versioned ACP installations. A saved chat resolves its pinned
 //! executable from this store without npm, uv or registry network access.
+pub(crate) mod models;
 mod archive;
 mod catalog;
 mod packages;

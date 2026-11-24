@@ -62,6 +62,97 @@ fn peer(local: bool) {
         std::io::stdout().flush().unwrap();
     }
 }
+fn model_peer(mode: &str) {
+    assert!(std::env::var_os("KAR_WORKBENCH_TOKEN").is_none());
+    let session = "model-peer";
+    let mut current = "native".to_string();
+    let options = |selected: &str| json!([{"id":"engine","category":"model","type":"select","currentValue":selected,"options":[{"group":"live","options":[{"value":"native","name":"Native model"}]}]}]);
+    for line in std::io::stdin().lock().lines() {
+        let req: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let value = match req["method"].as_str().unwrap() {
+            "initialize" => {
+                json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"delete":{}}}})
+            }
+            "session/new" if mode == "locked" => {
+                println!(
+                    "{}",
+                    json!({"jsonrpc":"2.0","id":req["id"],"error":{"code":-32000,"message":"Sign in"}})
+                );
+                continue;
+            }
+            "session/new" | "session/load" if mode == "legacy" => {
+                json!({"sessionId":session,"models":{"currentModelId":"native","availableModels":[{"modelId":"native","name":"Native model"}]}})
+            }
+            "session/new" | "session/load" => {
+                println!(
+                    "{}",
+                    json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"config_option_update","configOptions":options("native")}}})
+                );
+                json!({"sessionId":session,"configOptions":options("native")})
+            }
+            "session/set_config_option" => {
+                assert_eq!(req["params"]["configId"], "engine");
+                current = req["params"]["value"].as_str().unwrap().into();
+                json!({"configOptions":options(&current)})
+            }
+            "session/set_model" => {
+                assert_eq!(mode, "legacy");
+                current = req["params"]["modelId"].as_str().unwrap().into();
+                json!({})
+            }
+            "session/prompt" => {
+                println!(
+                    "{}",
+                    json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":format!("active {current}")}}}})
+                );
+                json!({"stopReason":"end_turn"})
+            }
+            "session/delete" => json!({}),
+            method => panic!("unexpected {method}"),
+        };
+        println!("{}", json!({"jsonrpc":"2.0","id":req["id"],"result":value}));
+        std::io::stdout().flush().unwrap();
+    }
+}
+
+async fn model_menu(client: &Client, base: &str, project: &str, exe: &Path) {
+    for mode in ["select", "legacy", "locked"] {
+        let config = json!({"source":"local","name":"Menu","command_path":exe,"command_args":["menu-fixture",mode],"custom_models":[{"id":"custom","displayName":"Private model"}]});
+        let profile = server::json(
+            client
+                .put(format!("{base}/acp-registry/profiles/menu-{mode}"))
+                .json(&config),
+        )
+        .await;
+        let runtime = profile["runtime"].as_str().unwrap();
+        let menu =
+            server::json(client.get(format!("{base}/projects/{project}/models/{runtime}"))).await;
+        if mode == "locked" {
+            assert_eq!(menu["reason"], "unauthenticated");
+            assert_eq!(menu["source"], "configured");
+            assert_eq!(menu["models"][0]["id"], "custom");
+            continue;
+        }
+        assert_eq!(menu["status"], "live");
+        assert_eq!(menu["models"][0]["id"], "native");
+        assert_eq!(menu["models"][0]["default"], true);
+        assert_eq!(menu["models"][1]["isCustom"], true);
+        let chat = Uuid::new_v4();
+        server::json(
+            client
+                .post(format!("{base}/projects/{project}/chats"))
+                .json(&json!({"id":chat,"runtime":runtime,"model":"custom"})),
+        )
+        .await;
+        let answer = server::json(
+            client
+                .post(format!("{base}/projects/{project}/chats/{chat}/messages"))
+                .json(&json!({"id":Uuid::new_v4(),"text":"which model?"})),
+        )
+        .await;
+        assert!(answer.to_string().contains("active custom"));
+    }
+}
 fn manager(kind: &str, args: &[String]) {
     assert!(std::env::var_os("KAR_WORKBENCH_TOKEN").is_none());
     let prefix = PathBuf::from(
@@ -299,6 +390,7 @@ async fn exercise() {
     .await;
     let token = device["token"].as_str().unwrap();
     let exe = std::env::current_exe().unwrap();
+    model_menu(&client, &base, project, &exe).await;
     let template = json!({"source":"local","name":"Local","command_path":exe,"command_args":["local-fixture","one argument with spaces"]});
     let mut profiled_chats = Vec::new();
     for (name, config) in [
@@ -608,6 +700,10 @@ fn main() {
     }
     if args == ["local-fixture", "one argument with spaces"] {
         peer(true);
+        return;
+    }
+    if args.len() == 2 && args[0] == "menu-fixture" {
+        model_peer(&args[1]);
         return;
     }
     if args == ["acp-fixture"] {

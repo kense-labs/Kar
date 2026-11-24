@@ -199,7 +199,9 @@ async fn models(
     let mut opts = crate::SessionOptions::new(project.root);
     opts.remove_env("KAR_WORKBENCH_TOKEN")?;
     let rt = app.0.chats.resolve_runtime(&runtime, &mut opts)?;
-    Ok(Json(rt.form_model_listing(&opts, Vec::new()).await))
+    let custom = super::acp_registry::models::custom(&app.0.chats, &runtime)?;
+    let listing = rt.form_model_listing(&opts, Vec::new()).await;
+    Ok(Json(super::acp_registry::models::merge(listing, custom)))
 }
 
 #[derive(Deserialize)]

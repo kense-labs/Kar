@@ -215,6 +215,7 @@ pub enum ListingReason {
 #[serde(rename_all = "lowercase")]
 pub enum ListingSource {
     Bundled,
+    Configured,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase")]

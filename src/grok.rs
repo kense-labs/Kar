@@ -18,6 +18,9 @@ impl Runtime {
     ) -> crate::forms::ModelListing {
         use crate::forms::{ListingReason, ModelListing};
         let read = async {
+            if crate::workbench::acp_registry::dynamic(&self.id) {
+                return crate::workbench::acp_registry::models::list(self, options).await;
+            }
             if let Some(menu) = crate::acp_models::Menu::for_runtime(self) {
                 return menu.list(self, options).await;
             }
