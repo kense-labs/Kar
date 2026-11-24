@@ -3,6 +3,8 @@
 mod routes;
 mod runner;
 mod schedule;
+mod script;
+mod sources;
 mod views;
 mod webhook;
 pub(super) use routes::{hooks, routes};
@@ -222,6 +224,8 @@ pub enum Action {
 struct Data {
     #[serde(default)]
     revision: u64,
+    #[serde(default)]
+    sources: BTreeMap<Uuid, BTreeMap<String, sources::Saved>>,
     workflows: BTreeMap<Uuid, Workflow>,
     secrets: BTreeMap<Uuid, String>,
     #[serde(default)]
@@ -237,6 +241,7 @@ struct Data {
 }
 
 pub(super) struct Engine {
+    source_lock: Mutex<()>,
     file: PathBuf,
     db: Mutex<Data>,
     clock: Arc<dyn Clock>,
@@ -252,6 +257,7 @@ impl Engine {
             Err(e) => return Err(e.into()),
         };
         let engine = Self {
+            source_lock: Mutex::new(()),
             file,
             db: Mutex::new(db),
             clock,
@@ -354,6 +360,69 @@ fn insert_run(d: &mut Data, w: &Workflow, trigger: Trigger, input: Value, now: i
     Ok(run)
 }
 
+fn install_definition(
+    d: &mut Data,
+    project: Uuid,
+    id: Uuid,
+    definition: Definition,
+    webhook_secret: Option<String>,
+    now: i64,
+) -> Result<Workflow> {
+    definition.validate()?;
+    let candidate = definition.schedule.next_after(now)?;
+    let old = d.workflows.get(&id);
+    if let Some(old) = old {
+        same_project(project, old.project)?;
+    }
+    if old.is_none()
+        && d.runs
+            .values()
+            .any(|r| r.workflow == id && r.project != project)
+    {
+        return Err(missing());
+    }
+    let preserved =
+        old.filter(|old| old.definition.enabled && old.definition.schedule == definition.schedule);
+    let next_ms = if !definition.enabled {
+        None
+    } else if let Some(old) = preserved {
+        old.next_ms
+    } else {
+        if matches!(definition.schedule, Schedule::Once { .. }) && candidate.is_none() {
+            return Err(Error::Refused(
+                "one-time schedule must be in the future".into(),
+            ));
+        }
+        candidate
+    };
+    if matches!(definition.schedule, Schedule::Webhook) {
+        if let Some(secret) = webhook_secret {
+            if secret.len() < 16 || secret.len() > 4096 {
+                return Err(Error::Refused(
+                    "webhook signing secret must be 16 to 4096 bytes".into(),
+                ));
+            }
+            d.secrets.insert(id, secret);
+        }
+        // Token-only hooks are reachable after the owner issues a URL.
+        // The permanent URL always requires an explicit signing secret.
+    } else {
+        d.secrets.remove(&id);
+        d.webhook_tokens.remove(&id);
+        d.webhook_rules.remove(&id);
+        d.webhook_windows.remove(&id);
+    }
+    let w = Workflow {
+        project,
+        id,
+        next_ms,
+        last_missed_ms: old.and_then(|w| w.last_missed_ms),
+        definition,
+    };
+    d.workflows.insert(id, w.clone());
+    Ok(w)
+}
+
 impl Workbench {
     pub fn save_workflow(
         &self,
@@ -363,63 +432,17 @@ impl Workbench {
         webhook_secret: Option<String>,
     ) -> Result<Workflow> {
         self.project(project)?;
-        definition.validate()?;
         let engine = &self.0.workflows;
-        let now = engine.clock.now_ms();
-        let candidate = definition.schedule.next_after(now)?;
         engine.update(|d| {
-            let old = d.workflows.get(&id);
-            if let Some(old) = old {
-                same_project(project, old.project)?;
-            }
-            if old.is_none()
-                && d.runs
-                    .values()
-                    .any(|r| r.workflow == id && r.project != project)
-            {
-                return Err(missing());
-            }
-            let preserved = old.filter(|old| {
-                old.definition.enabled && old.definition.schedule == definition.schedule
-            });
-            let next_ms = if !definition.enabled {
-                None
-            } else if let Some(old) = preserved {
-                old.next_ms
-            } else {
-                if matches!(definition.schedule, Schedule::Once { .. }) && candidate.is_none() {
-                    return Err(Error::Refused(
-                        "one-time schedule must be in the future".into(),
-                    ));
-                }
-                candidate
-            };
-            if matches!(definition.schedule, Schedule::Webhook) {
-                if let Some(secret) = webhook_secret {
-                    if secret.len() < 16 || secret.len() > 4096 {
-                        return Err(Error::Refused(
-                            "webhook signing secret must be 16 to 4096 bytes".into(),
-                        ));
-                    }
-                    d.secrets.insert(id, secret);
-                }
-                // Token-only hooks are reachable after the owner issues a URL.
-                // The permanent URL always requires an explicit signing secret.
-            } else {
-                d.secrets.remove(&id);
-                d.webhook_tokens.remove(&id);
-                d.webhook_rules.remove(&id);
-                d.webhook_windows.remove(&id);
-            }
-            let w = Workflow {
+            sources::allow_direct(d, id)?;
+            install_definition(
+                d,
                 project,
                 id,
-                next_ms,
-                last_missed_ms: old.and_then(|w| w.last_missed_ms),
                 definition,
-            };
-            d.workflows.insert(id, w.clone());
-            Ok(w)
+                webhook_secret,
+                engine.clock.now_ms(),
+            )
         })
     }
     pub fn workflows(&self, project: Uuid) -> Result<Vec<Workflow>> {

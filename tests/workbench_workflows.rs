@@ -539,6 +539,109 @@ async fn http_scenarios() {
     child.kill().await.unwrap();
 }
 
+async fn source_scenarios() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("project");
+    let state = tmp.path().join("state");
+    let native = tmp.path().join("native");
+    let claude = tmp.path().join("claude");
+    let scripts = claude.join("projects").join("fixture");
+    for dir in [&root, &native, &scripts] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let env = [("CLAUDE_CONFIG_DIR", claude.as_os_str())];
+    let host = server::client();
+    let (mut child, base) = server::serve_with_env(&state, &root, &native, &env).await;
+    let project = ok(host
+        .post(format!("{base}/projects"))
+        .json(&json!({"root":root,"name":"sources"})))
+    .await;
+    let p = project["id"].as_str().unwrap();
+    let list = format!("{base}/projects/{p}/workflow-definitions");
+    let save = format!("{list}/review.kar.json");
+    let id = Uuid::new_v4();
+    let spec = |title: &str| {
+        json!({"workflows":[{"id":id,"version":1,"name":title,"enabled":true,"schedule":{"type":"manual"},"steps":[{"type":"ask","question":"Proceed?"}]}]}).to_string()
+    };
+    let original = spec("review");
+    let changed = ok(host.put(&save).json(&json!({"source":original}))).await;
+    assert_eq!(changed["changed"], true);
+    let refused = ok(host.put(&save).json(&json!({"source":"invalid JSON"}))).await;
+    assert_eq!(refused["changed"], false);
+    assert!(!refused["problems"].as_array().unwrap().is_empty());
+    let duplicate = ok(host
+        .put(format!("{list}/colliding.kar.json"))
+        .json(&json!({"source":original})))
+    .await;
+    assert_eq!(duplicate["changed"], false);
+    let listed = ok(host.get(&list)).await;
+    assert_eq!(listed["files"][0]["source"], original);
+    let file = std::path::Path::new(listed["directory"].as_str().unwrap()).join("review.kar.json");
+    fs::write(&file, "{").unwrap();
+    let invalid = ok(host.get(&list)).await;
+    assert!(invalid["files"][0]["problem"].is_string());
+    let run = start(&host, &base, p, id).await;
+    let waiting = wait(&host, &base, p, &run, "asking").await;
+    let retained = ok(host.delete(&save)).await;
+    assert_eq!(retained["changed"], false);
+    assert!(file.exists());
+    child.kill().await.unwrap();
+    let (mut child, base) = server::serve_with_env(&state, &root, &native, &env).await;
+    let stable = wait(&host, &base, p, &run, "asking").await;
+    assert_eq!(stable["attempt"], waiting["attempt"]);
+    action(&host,&base,p,&run,&json!({"type":"answer","operation":Uuid::new_v4(),"attempt":stable["attempt"]["id"],"answer":"ok"})).await;
+    wait(&host, &base, p, &run, "completed").await;
+    fs::write(&file, spec("new review")).unwrap();
+    let tasks = format!("{base}/projects/{p}/workflows");
+    loop {
+        let items = ok(host.get(&tasks)).await;
+        if items[0]["name"] == "new review" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let removed = ok(host.delete(format!(
+        "{base}/projects/{p}/workflow-definitions/review.kar.json"
+    )))
+    .await;
+    assert_eq!(removed["changed"], true);
+    assert!(!file.exists());
+    let script = scripts.join("review.js");
+    fs::write(&script, vec![b'x'; 256 * 1024 + 1]).unwrap();
+    let script_url = format!("{base}/workflows/scripts");
+    let preview = ok(host.get(&script_url).query(&[("path", &script)])).await;
+    assert_eq!(preview["truncated"], true);
+    assert_eq!(preview["contents"].as_str().unwrap().len(), 256 * 1024);
+    let outside = root.join("other.js");
+    fs::write(&outside, "outside").unwrap();
+    assert!(
+        !host
+            .get(&script_url)
+            .query(&[("path", &outside)])
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    #[cfg(unix)]
+    {
+        let link = scripts.join("link.js");
+        std::os::unix::fs::symlink(outside, &link).unwrap();
+        assert!(
+            !host
+                .get(&script_url)
+                .query(&[("path", &link)])
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .is_success()
+        );
+    }
+    child.kill().await.unwrap();
+}
+
 fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("app-server") => codex_chat_peer::agent(),
@@ -547,6 +650,7 @@ fn main() {
             tokio::time::timeout(Duration::from_secs(120), async {
                 scheduling().await;
                 http_scenarios().await;
+                source_scenarios().await;
             })
             .await
             .unwrap();

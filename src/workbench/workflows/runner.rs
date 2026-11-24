@@ -158,6 +158,7 @@ impl Workbench {
         if self.0.workflows.started.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
+        self.watch_sources();
         let weak = Arc::downgrade(&self.0);
         let mut changed = self.0.workflows.changed.subscribe();
         handle.spawn(async move {

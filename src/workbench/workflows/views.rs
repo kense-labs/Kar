@@ -123,6 +123,7 @@ async fn enable(
         app.project(p)?;
         let engine = &app.0.workflows;
         engine.update(|db| {
+            super::sources::allow_direct(db, id)?;
             let w = db.workflows.get_mut(&id).ok_or_else(missing)?;
             same_project(p, w.project)?;
             if q.enabled != w.definition.enabled {
@@ -156,6 +157,16 @@ fn cancel_deferred(runs: &mut std::collections::BTreeMap<Uuid, super::Run>, work
         r.webhook_templates = None;
     }
 }
+pub(super) fn erase_workflow(db: &mut Data, id: Uuid) {
+    db.workflows.remove(&id);
+    db.secrets.remove(&id);
+    db.webhook_tokens.remove(&id);
+    db.webhook_rules.remove(&id);
+    db.webhook_windows.remove(&id);
+    db.deliveries.remove(&id);
+    cancel_deferred(&mut db.runs, id);
+}
+
 pub(super) async fn remove(
     State(app): State<Workbench>,
     Path((p, id)): Path<(Uuid, Uuid)>,
@@ -165,13 +176,8 @@ pub(super) async fn remove(
         app.0.workflows.update(|db| {
             let w = db.workflows.get(&id).ok_or_else(missing)?;
             same_project(p, w.project)?;
-            db.workflows.remove(&id);
-            db.secrets.remove(&id);
-            db.webhook_tokens.remove(&id);
-            db.webhook_rules.remove(&id);
-            db.webhook_windows.remove(&id);
-            db.deliveries.remove(&id);
-            cancel_deferred(&mut db.runs, id);
+            super::sources::allow_direct(db, id)?;
+            erase_workflow(db, id);
             Ok(json!({"id":id}))
         })
     })
