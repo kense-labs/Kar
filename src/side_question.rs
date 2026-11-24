@@ -37,8 +37,8 @@ struct Reply {
     kind: String,
     subtype: String,
     is_error: bool,
-    session_id: Uuid,
-    result: String,
+    session_id: Option<Uuid>,
+    result: Option<String>,
 }
 impl Runtime {
     /// Read one answer from an ephemeral native fork, with tool execution disabled.
@@ -148,21 +148,24 @@ impl Runtime {
         .map_err(|_| Error::Timeout("Claude side question".into()))??;
         if !output.status.success() {
             return Err(Error::Refused(format!(
-                "Claude side question returned {}",
+                "Claude did not return a successful side answer ({})",
                 output.status
             )));
         }
         let reply: Reply = serde_json::from_slice(&output.stdout)?;
-        if reply.kind != "result"
-            || reply.subtype != "success"
-            || reply.is_error
-            || reply.session_id != fork
-        {
-            return Err(Error::Protocol(
-                "expected a successful answer from the disposable Claude fork".into(),
+        if reply.kind != "result" || reply.subtype != "success" || reply.is_error {
+            return Err(Error::Refused(
+                "Claude did not return a successful side answer".into(),
             ));
         }
-        let mut answer = reply.result;
+        let mut answer = reply
+            .result
+            .filter(|_| reply.session_id == Some(fork))
+            .ok_or_else(|| {
+                Error::Protocol(
+                    "expected an answer attributed to the disposable Claude fork".into(),
+                )
+            })?;
         let mut secrets = crate::options::environment_secrets(&opts.env);
         secrets.sort_by_key(|v| std::cmp::Reverse(v.len()));
         for secret in secrets {

@@ -436,18 +436,24 @@ async fn side_questions_leave_running_and_stopped_native_transcripts_intact() {
         .unwrap();
     assert!(source.status().is_running());
     ask("question for running source", true).await;
+    assert!(
+        source.status().is_running(),
+        "side question stopped the source turn"
+    );
     release.notify_one();
     assert_eq!(turn.wait().await.unwrap(), Outcome::Completed);
     source.close().await.unwrap();
     ask("question for stopped source", false).await;
-    assert!(
-        rt.side_question(
+    let missing = rt
+        .side_question(
             &Uuid::new_v4().to_string(),
             "question for missing source",
-            &side
+            &side,
         )
         .await
-        .is_err()
+        .unwrap_err();
+    assert!(
+        matches!(missing, kar::Error::Refused(reason) if reason.contains("successful side answer"))
     );
     assert!(!calls.lock().unwrap().iter().any(|body| {
         body["messages"]
