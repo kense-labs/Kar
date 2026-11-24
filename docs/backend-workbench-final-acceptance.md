@@ -28,7 +28,26 @@
 | 已安装的 Codex 实际修改原生文档副本 | macOS，Codex CLI 能运行且支持该入口的写入策略。测试使用隔离供应商配置与回环模型 | `cargo test --locked --test workbench_coediting actual_codex_merges_a_native_file_edit_with_a_concurrent_owner_save -- --ignored`。由已安装的原生 CLI 在工作副本中实际执行文件工具 |
 | 真实 GitHub 项目 | 明确选择可写的临时 `owner/repository`，准备 `GH_TOKEN` 和可推送该仓库的 Git 认证 | `KAR_FORGE_TEST_REPO=OWNER/DISPOSABLE_REPO cargo test --locked --test workbench_forge -- hosted-github`。会推送测试分支、创建并关闭一个 PR。分支和已关闭 PR 会作为远端记录保留 |
 
-同一组实际托管凭据和两个真实供应商共同运行整条链路仍待实机验证。上表三个入口提供分别可复核的原生供应商和真实托管证据。
+## 同一状态下的真实 GitHub、Codex 和 Qwen
+
+在 macOS 显式选择专用 GitHub 仓库和一条已有 PR。测试读取源 PR 的提交，在同一个 Kar 状态目录新建受管工作树，沿用同一个聊天 UUID 直至服务重启后复核。两个供应商使用本机安装的 CLI 和其真实模型。运行时记录 CLI 实际版本、原生输入总数和会话 ID。
+
+| 环境或入口 | 要求 |
+| --- | --- |
+| `KAR_FORGE_TEST_REPO`、`KAR_FORGE_SOURCE_PR` | 提供 `OWNER/REPO` 和仓库内已有 PR 编号。选用允许测试推送、新建及关闭 PR 的专用仓库，运行期间保持源 PR 头提交稳定。 |
+| `GH_TOKEN`、Git 凭据 | 为 GitHub REST 提供该库读写权限。Git 本身还需 HTTPS credential helper 的克隆、推送权限以及有效提交者配置。令牌由运行环境注入，供应商转发器会移除进程环境中的 `GH_TOKEN` 和 `GITHUB_TOKEN`。 |
+| `KAR_CODEX_BIN`、`KAR_QWEN_BIN` | 传入已安装 CLI 的绝对可执行路径，准备其模型凭据和可用额度。Codex 需要读随机文件的工具权限，以及在文档编辑入口确认隔离副本的 workspace-write 策略并实际保存文件。 |
+| 源工作树 | 根目录的 `notes.md`、`plan.docx`、`plan.xlsx`、`plan.pptx`、`.kar-preview-port` 和 `webhook-count` 均须空缺；对同名文件、目录、符号链接立即退出。测试在新的临时状态和工作树上运行。 |
+
+设置上表环境后，单独复验的入口为 `cargo test --locked --test workbench_acceptance -- hosted-codex-qwen`。也可用 `cargo run --locked --example backend_suite -- --runtime workbench --filter hosted-codex-qwen --execute --output /tmp/kar-hosted-evidence` 保存退出结果和输出。普通 `cargo test --locked --test workbench_acceptance` 始终走本地协议夹具。
+
+- 主人和经配对的设备分别订阅同一回合的进行中事件。Codex 实际读取随机文件并返回工具证据，Qwen 凭转交内容复述两个事实。Rust 转发器核对输入 UUID、原生会话和实际调用次数。第二个客户端断开，服务重启后从原游标补收，并与主人和访客逐回合核对。
+- PTY 启动本地服务，预览请求读回 Markdown。主人修改日期行，真实 Codex 在已固定的基准副本中修改作者行。正常文档接口合并兼容提议。Word 段落、Excel 单元格和 PPT 对象由两个作者身份通过正常 HTTP 文档接口提交结构化提议，使用 Kantor 真文件。三种 Office 格式的第二个客户端提交确定性结构化修改；该断言验证 Kar 双写行为。
+- Git 只暂存这四个文件并创建一个新提交，检查推送目的地和新分支名后推送 `kar/review-<源PR>-<UUID>`。GitHub REST 独立读取远端分支、提交树、四个 blob 和新 PR。Markdown 逐字节对照，Office 从下载的远端字节重新用 Kantor 打开。随后按头提交标记已审路径。
+- 测试向 Kar 正常 Webhook 路由发送签名 HTTP 请求，复用同一事件检查脚本只执行一次。经真实 Qwen 接纳访客提议，检查提议、聊天回合和原生输入三处 UUID 一致。重启后再次查询审阅、冲突候选、Kantor 文件、工作流和订阅，继续在原 Qwen 会话发言并核对回答。
+- 只有本次 Kar 操作标记、仓库、分支、提交和目标分支全部匹配的新增 PR 才会关闭。断言失败或测试超时也会尝试这项清理。保留专用分支及关闭的 PR 作为证据。若进程被外部直接终止或 GitHub 拒绝清理，可用 stderr 记录的仓库、分支与 `kar-operation` UUID 定位运行。工作流事件在本机主动签名投递，真实跨设备连接与 GitHub 主动出站 Webhook 另需各自环境。
+
+该综合实机入口已在 `aarch64-apple-darwin` 通过 `cargo check --locked --all-targets`，整条链路和远端实际结果待统一验收。
 
 ## 本批证据
 

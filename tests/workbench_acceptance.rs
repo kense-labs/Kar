@@ -1,7 +1,9 @@
-//! One macOS workspace and one restarted Kar service. Git, PTY, preview, the
-//! document engines and workflow scripts are real; native CLIs/forge are protocol peers.
+//! One macOS workspace and one restarted Kar service. The default uses local provider/forge
+//! peers; the explicit hosted-codex-qwen entry uses installed CLIs and a dedicated GitHub repo.
 #[path = "workbench_acceptance/forge.rs"]
 mod forge;
+#[path = "workbench_acceptance/hosted.rs"]
+mod hosted;
 #[path = "workbench_acceptance/office.rs"]
 mod office;
 #[path = "workbench_acceptance/preview.rs"]
@@ -45,6 +47,8 @@ struct Host {
     root: PathBuf,
     native: PathBuf,
     config: PathBuf,
+    programs: Option<[PathBuf; 2]>,
+    owner_token: String,
     workspace: PathBuf,
     server: Option<tokio::process::Child>,
     base: String,
@@ -52,7 +56,7 @@ struct Host {
     worktree: Uuid,
 }
 impl Host {
-    async fn new() -> (Self, forge::Peer) {
+    fn isolated(programs: Option<[PathBuf; 2]>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().canonicalize().unwrap();
         let root = base.join("roots");
@@ -66,22 +70,31 @@ impl Host {
                 .or_else(|_| fs::copy(&exe, dst).map(|_| ()))
                 .unwrap();
         }
-        let checkout = root.join("base");
-        let bare = base.join("origin.git");
-        forge::seed(&checkout, &bare);
-        let api = forge::serve(&bare).await;
-        fs::write(&config,format!("[[hosts]]\nhost='review.example'\nkind='github'\napi_base='http://{}'\ntoken_env='KAR_FIXTURE_FORGE_TOKEN'\n",api.addr)).unwrap();
-        let mut f = Self {
+        Self {
             dir,
             root: root.clone(),
             native,
             config,
+            owner_token: if programs.is_some() {
+                Uuid::new_v4().to_string()
+            } else {
+                "kar-workbench-fixture".into()
+            },
+            programs,
             workspace: root.join("review"),
             server: None,
             base: String::new(),
             project: String::new(),
             worktree: Uuid::new_v4(),
-        };
+        }
+    }
+    async fn new() -> (Self, forge::Peer) {
+        let mut f = Self::isolated(None);
+        let checkout = f.root.join("base");
+        let bare = f.bare();
+        forge::seed(&checkout, &bare);
+        let api = forge::serve(&bare).await;
+        fs::write(&f.config,format!("[[hosts]]\nhost='review.example'\nkind='github'\napi_base='http://{}'\ntoken_env='KAR_FIXTURE_FORGE_TOKEN'\n",api.addr)).unwrap();
         f.start().await;
         let client = server::client();
         let project = ok(client
@@ -124,15 +137,26 @@ impl Host {
         let qwen = self
             .native
             .join(format!("qwen{}", std::env::consts::EXE_SUFFIX));
+        let (real_codex, real_qwen, protocol) = match &self.programs {
+            Some([c, q]) => (c.as_os_str(), q.as_os_str(), OsStr::new("https")),
+            None => (OsStr::new(""), OsStr::new(""), OsStr::new("file")),
+        };
+        let hosted = if self.programs.is_some() {
+            OsStr::new("1")
+        } else {
+            OsStr::new("0")
+        };
         let vars = [
+            ("KAR_HOSTED_ACCEPTANCE_PROXY", hosted),
+            ("KAR_WORKBENCH_TOKEN", OsStr::new(&self.owner_token)),
             ("KAR_CODEX_BIN", codex.as_os_str()),
             ("KAR_QWEN_BIN", qwen.as_os_str()),
             ("KAR_HANDOFF_FIXTURE", self.native.as_os_str()),
-            ("KAR_HANDOFF_REAL_CODEX", OsStr::new("")),
-            ("KAR_HANDOFF_REAL_QWEN", OsStr::new("")),
+            ("KAR_HANDOFF_REAL_CODEX", real_codex),
+            ("KAR_HANDOFF_REAL_QWEN", real_qwen),
             ("KAR_FORGE_CONFIG", self.config.as_os_str()),
             ("KAR_FIXTURE_FORGE_TOKEN", OsStr::new("fixture-only")),
-            ("GIT_ALLOW_PROTOCOL", OsStr::new("file")),
+            ("GIT_ALLOW_PROTOCOL", protocol),
         ];
         let (server, ready) = server::serve_with_env(
             &self.dir.path().join("state"),
@@ -184,7 +208,8 @@ async fn coedit(f: &Host, owner: &Client, ai: &Client) -> Value {
     fs::write(f.native.join("hold-document"), []).unwrap();
     let request = json!({"operation_id":"md-native","base_revision":0,"runtime":"codex","instructions":"kar-acceptance-edit-notes: replace author=original with author=assistant; preserve the rest."});
     let native = tokio::spawn(ai.post(doc("native")).json(&request).send());
-    tokio::time::timeout(Duration::from_secs(15), async {
+    let startup = if f.programs.is_some() { 180 } else { 15 };
+    tokio::time::timeout(Duration::from_secs(startup), async {
         while !f.native.join("entered-document").is_file() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -623,6 +648,16 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("preview-server") {
         return preview::service();
+    }
+    let selected = std::env::args().nth(1);
+    if selected.as_deref() == Some("hosted-codex-qwen") {
+        assert!(
+            cfg!(target_os = "macos"),
+            "hosted workbench acceptance requires macOS"
+        );
+        return tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(hosted::run());
     }
     if !cfg!(target_os = "macos") {
         println!("The combined PTY and native document acceptance requires macOS.");

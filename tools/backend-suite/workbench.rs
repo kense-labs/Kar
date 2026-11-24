@@ -112,10 +112,12 @@ pub(super) fn cases() -> Vec<Case> {
         "workbench_handoff",
         "installed-codex-qwen",
         &["--test", "workbench_handoff"],
-        "both installed CLIs, authenticated models and permission to read the disposable workspace",
+        "installed Codex >=0.143.0 and Qwen, authenticated models and permission to read the disposable workspace and fork the recorded Codex turn",
     );
     live.environment = ["KAR_CODEX_BIN", "KAR_QWEN_BIN"].map(String::from).into();
     live.switches.insert("KAR_HANDOFF_LIVE".into(), "1".into());
+    live.switches
+        .insert("KAR_HANDOFF_FORK_LIVE".into(), "1".into());
     cases.push(live);
     let mut hosted = scenario(
         "workbench_forge",
@@ -125,5 +127,21 @@ pub(super) fn cases() -> Vec<Case> {
     );
     hosted.environment = ["KAR_FORGE_TEST_REPO", "GH_TOKEN"].map(String::from).into();
     cases.push(hosted);
+    let mut chain = scenario(
+        "workbench_acceptance",
+        "hosted-codex-qwen",
+        &["--test", "workbench_acceptance", "--", "hosted-codex-qwen"],
+        "macOS, dedicated GitHub repo and existing read-only source PR, Git push credentials and signed-in Codex/Qwen, native document tools and PTY; retains its own branch and closes its marked PR",
+    );
+    chain.environment = [
+        "KAR_FORGE_TEST_REPO",
+        "KAR_FORGE_SOURCE_PR",
+        "GH_TOKEN",
+        "KAR_CODEX_BIN",
+        "KAR_QWEN_BIN",
+    ]
+    .map(String::from)
+    .into();
+    cases.push(chain);
     cases
 }

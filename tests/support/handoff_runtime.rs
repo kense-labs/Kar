@@ -30,7 +30,11 @@ fn input<'a>(runtime: &str, v: &'a Value) -> Option<&'a str> {
     content.as_str().or_else(|| content[0]["text"].as_str())
 }
 fn proxy(runtime: &str, binary: &Path) -> ! {
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    if std::env::var("KAR_HOSTED_ACCEPTANCE_PROXY").as_deref() == Ok("1") {
+        command.env_remove("GH_TOKEN").env_remove("GITHUB_TOKEN");
+    }
+    let mut child = command
         .args(std::env::args_os().skip(1))
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
@@ -47,6 +51,11 @@ fn proxy(runtime: &str, binary: &Path) -> ! {
             bytes.clear();
             stdin.read_until(b'\n', &mut bytes).unwrap_or(0) > 0
         } {
+            let packet = serde_json::from_slice::<Value>(&bytes).ok();
+            let admitted = packet.as_ref().and_then(|v| input(&name, v));
+            if admitted.is_some_and(|text| text.contains("kar-acceptance-edit-notes")) {
+                gate(&directory(), "document");
+            }
             if writer
                 .write_all(&bytes)
                 .and_then(|_| writer.flush())
@@ -54,10 +63,10 @@ fn proxy(runtime: &str, binary: &Path) -> ! {
             {
                 break;
             }
-            if let Ok(v) = serde_json::from_slice::<Value>(&bytes)
-                && let Some(text) = input(&name, &v)
-            {
-                audit(json!({"runtime":name,"text":text,"cwd":std::env::current_dir().unwrap()}));
+            if let (Some(v), Some(text)) = (&packet, admitted) {
+                audit(
+                    json!({"runtime":name,"text":text,"cwd":std::env::current_dir().unwrap(),"uuid":v["uuid"],"session":v["params"]["threadId"].as_str().or(v["session_id"].as_str())}),
+                );
             }
         }
     });
