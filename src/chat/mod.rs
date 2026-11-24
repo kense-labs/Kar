@@ -364,6 +364,20 @@ impl ChatStore {
         program: Option<&Path>,
         mut opts: SessionOptions,
     ) -> Result<ChatSession> {
+        let lease = self.lease(id, true)?;
+        match lease.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Err(Error::Busy),
+            Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
+        if self.fork_claimed(id)? {
+            return Err(Error::Refused(
+                "chat UUID belongs to a native fork request".into(),
+            ));
+        }
+        if self.path(id).try_exists()? {
+            return Err(Error::Refused("chat UUID already exists".into()));
+        }
         opts.cwd = opts.cwd.canonicalize()?;
         let worktree = crate::workbench_git::pin_checkout(&opts.cwd)?;
         let mut rt = runtime(runtime_id)?;
@@ -403,8 +417,6 @@ impl ChatStore {
             forked_from: None,
         };
         let mut tmp = tempfile::NamedTempFile::new_in(&self.dir)?;
-        let lease = self.lease(info.id, true)?;
-        lease.try_lock().map_err(std::io::Error::from)?;
         log::header(tmp.as_file_mut(), &info)?;
         let chat = ChatSession::bind(
             session,

@@ -32,6 +32,10 @@ pub struct ForkWorktreeBase {
 }
 
 impl ChatStore {
+    pub(super) fn fork_claimed(&self, id: Uuid) -> Result<bool> {
+        Ok(Request::path(self, id).try_exists()?)
+    }
+
     fn fork_stage(&self, source: Uuid) -> PathBuf {
         self.dir.join(format!("{source}.forking"))
     }
@@ -112,6 +116,19 @@ impl ChatStore {
         worktree: Option<PathBuf>,
         configure: impl FnOnce(&mut SessionOptions),
     ) -> Result<super::ChatHistory> {
+        self.fork_request(source, turn, child_id, worktree, None, configure)
+            .await
+    }
+
+    async fn fork_request(
+        &self,
+        source: Uuid,
+        turn: Uuid,
+        child_id: Uuid,
+        worktree: Option<PathBuf>,
+        live: Option<(Sink, SessionOptions)>,
+        configure: impl FnOnce(&mut SessionOptions),
+    ) -> Result<super::ChatHistory> {
         let path = worktree.as_deref();
         if source == child_id {
             return Err(Error::Refused(
@@ -133,11 +150,16 @@ impl ChatStore {
             return Ok(published);
         }
         let request = Request::claim(self, source, turn, child_id, path, lease)?;
-        let log = self.open_controller(source).await?;
-        let mut opts = log.state.info.options();
+        let (source, mut opts) = match live {
+            Some(controller) => controller,
+            None => {
+                let log = self.open_controller(source).await?;
+                let opts = log.state.info.options();
+                (Sink(Arc::new(Mutex::new(log))), opts)
+            }
+        };
         configure(&mut opts);
         crate::stream::retention::check_limit(opts.retained_bytes)?;
-        let source = Sink(Arc::new(Mutex::new(log)));
         let store = self.clone();
         // Closing the HTTP stream does not cancel native dispatch, publication, or release.
         tokio::spawn(async move {
@@ -307,6 +329,7 @@ impl ChatStore {
             let log = source.0.lock().unwrap();
             log.healthy()?;
             if log.state.active().is_some()
+                || !log.state.pending_requests.is_empty()
                 || log.state.compacting()
                 || log.state.waiting_steering()
                 || log.state.observing_notifications()
@@ -607,6 +630,27 @@ impl ChatSession {
             .fork_from(self.sender.sink.clone(), turn, self.launch.clone(), None)
             .await
     }
+    /// Submit a stable fork request through this controller, preserving its live native session.
+    pub async fn fork_at_with_id(
+        &self,
+        turn: Uuid,
+        child_id: Uuid,
+        worktree: Option<PathBuf>,
+        configure: impl FnOnce(&mut SessionOptions),
+    ) -> Result<super::ChatHistory> {
+        self.sender
+            .store
+            .fork_request(
+                self.info().id,
+                turn,
+                child_id,
+                worktree,
+                Some((self.sender.sink.clone(), self.launch.clone())),
+                configure,
+            )
+            .await
+    }
+
     pub async fn fork_at_in_worktree(
         &self,
         turn: Uuid,

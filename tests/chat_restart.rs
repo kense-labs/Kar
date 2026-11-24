@@ -1451,6 +1451,24 @@ async fn fork_from_open_session() {
         .unwrap();
     let first = parent.send(Uuid::new_v4(), "first").await.unwrap();
     parent.send(Uuid::new_v4(), "branch-edit").await.unwrap();
+    let stable = Uuid::new_v4();
+    let result = parent
+        .fork_at_with_id(first.id, stable, None, |opts| {
+            opts.remove_env("KAR_WORKBENCH_TOKEN").unwrap();
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.chat.id, stable);
+    assert_eq!(result.turns.len(), 1);
+    assert!(result.chat.unset_env.contains("KAR_WORKBENCH_TOKEN"));
+    let replay = parent
+        .fork_at_with_id(first.id, stable, None, |_| {
+            panic!("published child should not be relaunched")
+        })
+        .await
+        .unwrap();
+    assert_eq!(replay.chat.native_id, result.chat.native_id);
+    assert_eq!(parent.history().unwrap().turns.len(), 2);
     let child = parent.fork_at(first.id).await.unwrap();
     assert!(!work.join("branch").exists());
     assert_eq!(child.history().unwrap().turns, vec![first]);

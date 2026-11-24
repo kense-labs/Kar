@@ -59,7 +59,7 @@ impl Binding {
 }
 
 impl Request {
-    fn path(store: &ChatStore, child: Uuid) -> PathBuf {
+    pub(super) fn path(store: &ChatStore, child: Uuid) -> PathBuf {
         store.dir.join(format!("{child}.fork-request"))
     }
 
@@ -180,5 +180,38 @@ impl Request {
         let mut binding: Binding = serde_json::from_reader(File::open(&self.path)?)?;
         binding.failed = true;
         binding.write(&self.path, false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ordinary_chat_creation_preserves_dispatched_fork_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ChatStore::open(dir.path().join("chats")).unwrap();
+        let child = Uuid::new_v4();
+        let lease = store.lease(child, true).unwrap();
+        lease.try_lock().unwrap();
+        let request = Request {
+            id: child,
+            path: Request::path(&store, child),
+            lease,
+        };
+        request.begin(Uuid::new_v4(), Uuid::new_v4(), None).unwrap();
+        drop(request);
+        let result = store
+            .create_with_id(
+                child,
+                "codex",
+                Some(&dir.path().join("unavailable")),
+                SessionOptions::new(dir.path()),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(Error::Refused(reason)) if reason.contains("belongs to a native fork request"))
+        );
+        assert!(!store.path(child).exists());
     }
 }
