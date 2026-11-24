@@ -72,6 +72,7 @@ struct Inner {
     chats: ChatStore,
     roots: Vec<Root>,
     catalog: Mutex<Catalog>,
+    clones: forge::clone_jobs::Tracker,
     state: PathBuf,
     pump: chat_controls::QueuePump,
     access: access::AccessStore,
@@ -146,6 +147,7 @@ impl Workbench {
             chats,
             roots: allowed,
             catalog: Mutex::new(catalog),
+            clones: Default::default(),
             pump: Default::default(),
             access: access::AccessStore::open(&state)?,
             state,
@@ -154,6 +156,7 @@ impl Workbench {
             controllers: Default::default(),
         }));
         git_actions::recover(&app)?;
+        forge::clone_jobs::recover(&app)?;
         Ok(app)
     }
 
@@ -337,6 +340,7 @@ impl Workbench {
         approvals: crate::ApprovalMode,
         mut settings: crate::SessionSettings,
     ) -> Result<ProjectChat> {
+        forge::clone_jobs::ready(self, project)?;
         let slot = self.controller(id);
         let mut owner = slot.owner.lock().await;
         let mut p = self.project(project)?;

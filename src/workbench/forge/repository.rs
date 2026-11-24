@@ -10,9 +10,9 @@ struct Lookup {
     repository: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CloneUrls {
+pub(super) struct CloneUrls {
     provider: String,
     name_with_owner: String,
     url: String,
@@ -197,7 +197,7 @@ enum Protocol {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CloneInput {
+pub(super) struct CloneInput {
     directory: PathBuf,
     source: Option<String>,
     lookup: Option<Lookup>,
@@ -261,7 +261,13 @@ async fn lookup(State(app): State<Workbench>, Json(req): Json<Lookup>) -> Reply<
         .clone();
     resolve(&req.context(cwd).await?).await.map(Json)
 }
-async fn clone(State(app): State<Workbench>, Json(req): Json<CloneInput>) -> Reply<Value> {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct Prepared {
+    pub(super) dest: PathBuf,
+    pub(super) source: String,
+    pub(super) repo: Option<CloneUrls>,
+}
+pub(super) async fn prepare(app: &Workbench, req: CloneInput) -> Result<Prepared, ForgeError> {
     if std::fs::symlink_metadata(&req.directory).is_ok_and(|meta| meta.is_symlink()) {
         return Err(ForgeError::bad("clone destination is a symbolic link"));
     }
@@ -300,6 +306,11 @@ async fn clone(State(app): State<Workbench>, Json(req): Json<CloneInput>) -> Rep
         .ok_or_else(|| ForgeError::bad("missing repository or URL"))?;
     let selected = clone_source(&app, &source)?;
     let source = selected.to_string_lossy().into_owned();
+    Ok(Prepared { dest, source, repo })
+}
+async fn clone(State(app): State<Workbench>, Json(req): Json<CloneInput>) -> Reply<Value> {
+    let Prepared { dest, source, repo } = prepare(&app, req).await?;
+    let selected = std::ffi::OsString::from(&source);
     let installed = tokio::task::spawn_blocking(move || {
         Repository::clone_into(&selected, &dest).map(|r| r.root().to_owned())
     })

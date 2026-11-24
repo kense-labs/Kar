@@ -368,6 +368,8 @@ async fn scenario() {
 mod actions;
 #[path = "workbench_forge/actions_live.rs"]
 mod actions_live;
+#[path = "workbench_forge/clone_jobs.rs"]
+mod clone_jobs;
 #[path = "workbench_forge/hosted.rs"]
 mod hosted;
 #[path = "workbench_forge/providers.rs"]
@@ -384,12 +386,14 @@ fn main() {
         Some("hosted-github") => tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(hosted::run()),
+        Some("clone-filter") => clone_jobs::filter(),
         Some("app-server") => codex_chat_peer::agent(),
         Some("--version") => println!("codex 0.169.0"),
         _ => tokio::runtime::Runtime::new().unwrap().block_on(async {
             tokio::time::timeout(Duration::from_secs(120), async {
                 scenario().await;
                 providers::run().await;
+                clone_jobs::run().await;
             })
             .await
             .unwrap()

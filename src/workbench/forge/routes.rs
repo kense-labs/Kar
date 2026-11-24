@@ -487,6 +487,7 @@ pub(super) fn routes() -> Router<Workbench> {
     Router::new()
         .merge(routing::routes())
         .merge(repository::routes())
+        .merge(clone_jobs::routes())
         .route("/forge/drivers", get(drivers))
         .route(
             "/projects/{project}/forge/issue-tracker",

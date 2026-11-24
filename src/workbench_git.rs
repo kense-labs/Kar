@@ -40,7 +40,7 @@ pub struct StatusEntry {
     pub worktree: char,
 }
 
-fn command(cwd: &Path) -> Command {
+pub(crate) fn command(cwd: &Path) -> Command {
     let mut cmd = base_command(cwd);
     cmd.arg("--literal-pathspecs");
     cmd

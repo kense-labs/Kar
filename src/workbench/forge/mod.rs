@@ -1,5 +1,6 @@
 //! Repository-scoped change requests, issue bindings and revision-specific review state.
 mod actions;
+pub(super) mod clone_jobs;
 mod github;
 mod providers;
 mod repository;
@@ -188,6 +189,10 @@ type Reply<T> = Result<Json<T>, ForgeError>;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct ForgeState {
+    #[serde(default)]
+    clones: BTreeMap<Uuid, clone_jobs::Job>,
+    #[serde(default)]
+    clone_seq: u64,
     operations: BTreeMap<Uuid, Mutation>,
     bindings: BTreeMap<Uuid, Binding>,
     reviews: BTreeMap<String, Review>,
