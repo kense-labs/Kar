@@ -106,3 +106,50 @@ live_update_check!(devin);
 live_update_check!(factory);
 live_update_check!(grok);
 live_update_check!(kimi);
+
+#[test]
+fn account_batch_keeps_each_provider_identity_and_requires_a_target_for_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("absent-provider");
+    for subcommand in ["status", "usage"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_kar"));
+        command
+            .args(["account", subcommand, "--json", "--timeout-ms", "3000"])
+            .env("HOME", tmp.path())
+            .current_dir(tmp.path());
+        for rt in kar::runtimes()
+            .into_iter()
+            .chain([kar::runtime("morph").unwrap()])
+        {
+            command.env(format!("KAR_{}_BIN", rt.id.to_ascii_uppercase()), &missing);
+        }
+        let out = command.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let rows: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let ids: std::collections::BTreeSet<_> =
+            rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+        assert_eq!(ids.len(), rows.len());
+        for name in ["codex", "claude", "grok", "pi"] {
+            let row = rows.iter().find(|r| r["id"] == name).unwrap();
+            assert_eq!(row["installation"]["kind"], "missing");
+        }
+    }
+    for operation in ["login", "logout"] {
+        assert!(!kar(&["account", operation]).status.success());
+    }
+    for operation in ["login", "logout", "status"] {
+        assert!(
+            !kar(&["account", "codex", operation, "--timeout-ms", "0"])
+                .status
+                .success()
+        );
+    }
+}

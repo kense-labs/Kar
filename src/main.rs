@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod account_cli;
 mod chat_cli;
 mod git_cli;
 mod mcp;
@@ -105,8 +106,10 @@ enum Action {
         max_sessions: usize,
     },
     /// Use the provider's own interactive login, logout or status command.
+    #[command(subcommand_precedence_over_arg = true)]
     Account {
-        runtime: String,
+        /// Select one runtime. Status and usage may query every installation.
+        runtime: Option<String>,
         #[command(subcommand)]
         action: Account,
     },
@@ -214,16 +217,25 @@ enum Account {
         /// Stream native pairing events and the final result as JSON lines.
         #[arg(long)]
         json: bool,
+        /// Bound this provider's operation in milliseconds.
+        #[arg(long)]
+        timeout_ms: Option<std::num::NonZeroU64>,
     },
     Logout {
         /// Return the outcome after checking the selected native profile.
         #[arg(long)]
         json: bool,
+        /// Bound this provider's operation in milliseconds.
+        #[arg(long)]
+        timeout_ms: Option<std::num::NonZeroU64>,
     },
     Status {
         /// Return a structured account status suitable for a host application.
         #[arg(long)]
         json: bool,
+        /// Bound this provider's operation in milliseconds.
+        #[arg(long)]
+        timeout_ms: Option<std::num::NonZeroU64>,
     },
 }
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -583,6 +595,9 @@ async fn execute(command: Action) -> Result<()> {
             runtime: id,
             action,
         } => {
+            let Some(id) = id else {
+                return account_cli::batch(action).await;
+            };
             let action = match action {
                 Account::Usage {
                     json: _,
@@ -649,12 +664,15 @@ async fn execute(command: Action) -> Result<()> {
                         std::io::stdout(),
                     );
                 }
-                Account::Login { json }
-                    if json || matches!(id.as_str(), "factory" | "codebuddy") =>
+                Account::Login { json, timeout_ms }
+                    if json
+                        || timeout_ms.is_some()
+                        || matches!(id.as_str(), "factory" | "codebuddy") =>
                 {
                     let rt = runtime(&id)?;
                     let options = kar::account::LoginOptions {
                         open_browser: json.then_some(false),
+                        timeout: timeout_ms.map(|ms| Duration::from_millis(ms.get())),
                         ..Default::default()
                     };
                     let mut present = |event: kar::account::LoginEvent| {
@@ -677,16 +695,28 @@ async fn execute(command: Action) -> Result<()> {
                     };
                 }
                 Account::Login { .. } => kar::AccountAction::Login,
-                Account::Logout { json: true } => {
-                    let result = runtime(&id)?.logout(&Default::default()).await?;
-                    return json_line(&result, std::io::stdout());
+                Account::Logout { json, timeout_ms } if json || timeout_ms.is_some() => {
+                    let options = kar::account::LogoutOptions {
+                        timeout: timeout_ms.map(|ms| Duration::from_millis(ms.get())),
+                        ..Default::default()
+                    };
+                    let result = runtime(&id)?.logout(&options).await?;
+                    return if json {
+                        json_line(&result, std::io::stdout())
+                    } else {
+                        result.into_result()
+                    };
                 }
-                Account::Logout { json: false } => kar::AccountAction::Logout,
-                Account::Status { json: true } => {
-                    let status = runtime(&id)?.auth_status(&Default::default()).await?;
+                Account::Logout { .. } => kar::AccountAction::Logout,
+                Account::Status { json, timeout_ms } if json || timeout_ms.is_some() => {
+                    let options = kar::account::AuthStatusOptions {
+                        timeout: timeout_ms.map(|ms| Duration::from_millis(ms.get())),
+                        ..Default::default()
+                    };
+                    let status = runtime(&id)?.auth_status(&options).await?;
                     return json_line(&status, std::io::stdout());
                 }
-                Account::Status { json: false } => kar::AccountAction::Status,
+                Account::Status { .. } => kar::AccountAction::Status,
             };
             runtime(&id)?.account(action).await?;
         }

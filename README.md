@@ -24,6 +24,7 @@ cargo build --release --locked
 | `kar account codex login --json` | 逐行输出设备验证码、提示和最终登录结果，供当前登录界面消费 |
 | `kar account codex logout --json` | 退出所选原生账号并核对结果 |
 | `kar account codex status --json` | 查询结构化登录状态 |
+| `kar account status --timeout-ms 10000` | 并行查询各运行时的登录状态。可用 `kar account usage` 查询各运行时的额度 |
 | `kar account codex usage` | 在打开聊天前查询账号额度、重置时间和可用重置次数 |
 | `kar account claude inspect-limit-resets` | 用户主动查看 Claude 提供的重置种类和剩余次数 |
 | `kar credentials claude` | 列出凭据变量名、用途和存储位置 |

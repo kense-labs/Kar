@@ -39,6 +39,18 @@ pub enum LogoutResult {
 }
 
 impl LogoutResult {
+    pub fn into_result(self) -> Result<()> {
+        match self {
+            Self::LoggedOut => Ok(()),
+            Self::Unsupported { detail, .. } => Err(Error::Unsupported(detail)),
+            Self::Failed {
+                reason: LogoutFailure::TimedOut,
+                detail,
+            } => Err(Error::Timeout(detail)),
+            Self::Failed { detail, .. } => Err(Error::Refused(detail)),
+        }
+    }
+
     fn failed(reason: LogoutFailure, detail: &str) -> Self {
         Self::Failed {
             reason,

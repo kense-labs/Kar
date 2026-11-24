@@ -38,17 +38,7 @@ impl Runtime {
                 .into_result();
         }
         if action == Logout && self.supports_logout() {
-            return match self.logout(&Default::default()).await? {
-                crate::account::LogoutResult::LoggedOut => Ok(()),
-                crate::account::LogoutResult::Unsupported { detail, .. } => {
-                    Err(Error::Unsupported(detail))
-                }
-                crate::account::LogoutResult::Failed {
-                    reason: crate::account::LogoutFailure::TimedOut,
-                    detail,
-                } => Err(Error::Timeout(detail)),
-                crate::account::LogoutResult::Failed { detail, .. } => Err(Error::Refused(detail)),
-            };
+            return self.logout(&Default::default()).await?.into_result();
         }
         let args: &[&str] = match (self.id.as_str(), action) {
             ("codex", Login) | ("kimi" | "qoder" | "cursor", Login) => &["login"],
