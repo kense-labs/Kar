@@ -1,0 +1,338 @@
+use crate::{Error, Result, Session};
+use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, time::Duration};
+
+/// Native protocol spoken by the runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Protocol {
+    Codex,
+    Claude,
+    Qwen,
+    Qoder,
+    KimiKap,
+    Factory,
+    Dsh,
+    Acp,
+    Pi,
+    Cybion,
+    Morph,
+}
+
+impl Protocol {
+    pub(crate) fn supports_output_schema(self, runtime: &str) -> bool {
+        matches!(self, Self::Codex | Self::Claude) || (self == Self::Acp && runtime == "grok")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Runtime {
+    pub id: String,
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
+    pub protocol: Protocol,
+}
+
+/// How an already open model session reacts to an MCP tools/list_changed notification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpToolsListChanged {
+    Full,
+    Additions,
+    None,
+}
+
+impl Runtime {
+    /// Returns the runtime's declared refresh behavior, when known.
+    pub fn mcp_tools_list_changed(&self) -> Option<McpToolsListChanged> {
+        use McpToolsListChanged::*;
+        match self.id.as_str() {
+            "opencode" | "pi" => Some(Full),
+            "claude" => Some(Additions),
+            "codex" | "kimi" | "grok" | "antigravity" => Some(None),
+            _ => Option::None,
+        }
+    }
+    pub fn new(id: &str, program: impl Into<PathBuf>, args: &[&str], protocol: Protocol) -> Self {
+        Self {
+            id: id.into(),
+            program: program.into(),
+            args: args.iter().map(OsString::from).collect(),
+            protocol,
+        }
+    }
+    pub async fn open(&self, options: SessionOptions) -> Result<Session> {
+        let (rt, version) = self.selected_with_version(&options).await?;
+        rt.open_selected_with_version(options, version.as_deref())
+            .await
+    }
+    pub(crate) async fn open_selected(&self, options: SessionOptions) -> Result<Session> {
+        self.open_selected_with_version(options, None).await
+    }
+    pub(crate) async fn open_selected_with_version(
+        &self,
+        options: SessionOptions,
+        version: Option<&str>,
+    ) -> Result<Session> {
+        if self.protocol == Protocol::Dsh {
+            let release = crate::dsh::release(self, &options, version).await?;
+            let version = release.to_string();
+            if crate::dsh::uses_web(&release) {
+                return crate::dsh::open(self, options, None, None, Some(&version)).await;
+            }
+            let mut acp = self.clone();
+            acp.protocol = Protocol::Acp;
+            acp.args.splice(0..0, ["--profile".into(), "acp".into()]);
+            return Session::open_with_replay(&acp, options, None, None, false, Some(&version))
+                .await;
+        }
+        if self.protocol == Protocol::KimiKap {
+            return crate::kimi::open(self, options, true, None).await;
+        }
+        if self.protocol == Protocol::Morph {
+            return crate::community::Morph::from_env(&self.program)?
+                .open(options)
+                .await;
+        }
+        if self.protocol == Protocol::Cybion {
+            return crate::community::Cybion::from_env()?.open(options).await;
+        }
+        Session::open_with_replay(self, options, None, None, false, version).await
+    }
+    /// Open a new native session with the source history, optionally through a provider-issued anchor.
+    pub async fn fork(
+        &self,
+        source: &str,
+        through: Option<&str>,
+        options: SessionOptions,
+    ) -> Result<Session> {
+        self.fork_with_id(source, through, options, None).await
+    }
+    pub(crate) async fn fork_with_id(
+        &self,
+        source: &str,
+        through: Option<&str>,
+        options: SessionOptions,
+        child: Option<uuid::Uuid>,
+    ) -> Result<Session> {
+        self.selected(&options)
+            .await?
+            .fork_selected(source, through, options, child)
+            .await
+    }
+    pub(crate) async fn fork_selected(
+        &self,
+        source: &str,
+        through: Option<&str>,
+        options: SessionOptions,
+        child: Option<uuid::Uuid>,
+    ) -> Result<Session> {
+        if source.trim().is_empty()
+            || through.is_some_and(|s| s.trim().is_empty())
+            || options.resume.is_some()
+        {
+            return Err(Error::Protocol(
+                "fork needs a source, a nonempty optional anchor, and no separate resume id".into(),
+            ));
+        }
+        match self.protocol {
+            Protocol::Pi => return crate::pi_fork::fork(self, options, source, through).await,
+            Protocol::Dsh => {
+                return crate::dsh::open(self, options, Some((source, through)), None, None).await;
+            }
+            Protocol::Codex | Protocol::Claude if through.is_some() => {
+                let report = self.launch_version(&options).await?;
+                let version = report
+                    .split_whitespace()
+                    .find_map(|s| semver::Version::parse(s.trim_start_matches('v')).ok());
+                let min = if self.protocol == Protocol::Codex {
+                    semver::Version::new(0, 143, 0)
+                } else {
+                    semver::Version::new(2, 1, 323)
+                };
+                if version.is_none_or(|v| v < min) {
+                    let message =
+                        format!("forking through a turn requires {} {min} or later", self.id);
+                    if self.protocol == Protocol::Codex {
+                        return Err(crate::OpenError::RuntimeFailure {
+                            failure: crate::TurnFailure::new(
+                                crate::FailureClass::InvalidRequest,
+                                message,
+                            ),
+                            code: Some(crate::RuntimeFailureCode::RuntimeOutdated),
+                            cause: Some(crate::NativeCause {
+                                method: "--version".into(),
+                                native: serde_json::json!({"version":report.trim()}),
+                            }),
+                        }
+                        .redacted(&crate::options::session_secrets(&options)));
+                    }
+                    return Err(Error::Unsupported(message));
+                }
+            }
+            Protocol::Codex | Protocol::Claude => {}
+            Protocol::Acp if self.id == "opencode" => {
+                if let Some(id) = through {
+                    let target = crate::providers::opencode_fork::Target::Message(id);
+                    return crate::providers::opencode_fork::open(self, options, source, target)
+                        .await
+                        .map(|(session, _)| session);
+                }
+            }
+            Protocol::Acp if through.is_none() => {}
+            _ => {
+                return Err(Error::Unsupported(
+                    "native session fork with the requested scope".into(),
+                ));
+            }
+        }
+        Session::open(self, options, Some((source, through)), child).await
+    }
+    /// Read the version from the selected local installation.
+    pub async fn version(&self) -> Result<String> {
+        let options = SessionOptions::new(std::env::current_dir()?);
+        self.selected(&options)
+            .await?
+            .launch_version(&options)
+            .await
+    }
+    pub(crate) async fn launch_version(&self, options: &SessionOptions) -> Result<String> {
+        if self.protocol == Protocol::Cybion {
+            return Ok(format!("bundled adapter {}", env!("CARGO_PKG_VERSION")));
+        }
+        let output = tokio::time::timeout(
+            options.handshake_timeout,
+            options
+                .command(&self.program)?
+                .current_dir(&options.cwd)
+                .arg(if self.protocol == Protocol::Morph {
+                    "version"
+                } else {
+                    "--version"
+                })
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .map_err(|_| Error::Timeout("version".into()))??;
+        if !output.status.success() {
+            return Err(Error::Refused(format!(
+                "version probe returned {}",
+                output.status
+            )));
+        }
+        let output = if output.stdout.is_empty() {
+            output.stderr
+        } else {
+            output.stdout
+        };
+        Ok(String::from_utf8_lossy(&output).trim().to_owned())
+    }
+}
+
+type RuntimeSpec = (
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    Protocol,
+);
+fn builtins() -> &'static [RuntimeSpec] {
+    use Protocol::*;
+    &[
+        ("codex", "codex", &["app-server"], Codex),
+        ("claude", "claude", &[], Claude),
+        ("opencode", "opencode", &["acp"], Acp),
+        ("grok", "grok", &["agent", "--no-leader", "stdio"], Acp),
+        ("kimi", "kimi", &[], KimiKap),
+        ("devin", "devin", &["acp"], Acp),
+        ("codebuddy", "codebuddy", &["--acp"], Acp),
+        ("antigravity", "agy", &["acp", "--process-per-session"], Acp),
+        ("qwen", "qwen", &[], Qwen),
+        ("cursor", "agent", &["acp"], Acp),
+        ("qoder", "qodercli", &[], Qoder),
+        ("dsh", "dsh", &[], Dsh),
+        ("factory", "droid", crate::factory::EXEC_ARGS, Factory),
+        ("pi", "pi", &["--mode", "rpc"], Pi),
+    ]
+}
+pub(crate) fn registered_command(id: &str) -> Option<&'static str> {
+    if id == "morph" {
+        return Some("morph");
+    }
+    builtins().iter().find(|r| r.0 == id).map(|r| r.1)
+}
+pub fn runtimes() -> Vec<Runtime> {
+    builtins()
+        .iter()
+        .map(|(id, bin, args, protocol)| {
+            let key = format!("OAR_{}_BIN", id.to_ascii_uppercase());
+            Runtime::new(
+                id,
+                std::env::var_os(key)
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| bin.into()),
+                args,
+                *protocol,
+            )
+        })
+        .collect()
+}
+pub fn runtime(id: &str) -> Result<Runtime> {
+    if id == "morph" {
+        return Ok(Runtime::new(
+            id,
+            std::env::var_os("OAR_MORPH_BIN").unwrap_or_else(|| "morph".into()),
+            &[],
+            Protocol::Morph,
+        ));
+    }
+    if id == "cybion" {
+        return Ok(Runtime::new(id, "", &[], Protocol::Cybion));
+    }
+    runtimes()
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or_else(|| Error::Unsupported(format!("unknown runtime {id}")))
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    /// Respond with a native denial when the agent asks for a decision.
+    #[default]
+    Deny,
+    /// Publish requests for the application to answer with Session::respond.
+    Host,
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionOptions {
+    pub cwd: PathBuf,
+    pub resume: Option<String>,
+    pub model: Option<String>,
+    pub settings: crate::SessionSettings,
+    pub mcp_servers: BTreeMap<String, crate::McpServer>,
+    pub env: BTreeMap<OsString, OsString>,
+    /// Names removed from the inherited environment. Explicit `env` values take precedence.
+    pub unset_env: std::collections::BTreeSet<String>,
+    pub approvals: ApprovalMode,
+    /// Positive byte budget for retained native and tool payloads. Live subscribers and the newest frame stay complete.
+    pub retained_bytes: Option<usize>,
+    pub handshake_timeout: Duration,
+}
+impl SessionOptions {
+    pub fn new(cwd: impl Into<PathBuf>) -> Self {
+        Self {
+            cwd: cwd.into(),
+            resume: None,
+            model: None,
+            settings: Default::default(),
+            mcp_servers: BTreeMap::new(),
+            env: BTreeMap::new(),
+            unset_env: Default::default(),
+            approvals: ApprovalMode::Deny,
+            retained_bytes: None,
+            handshake_timeout: Duration::from_secs(20),
+        }
+    }
+}
