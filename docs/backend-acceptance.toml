@@ -63,8 +63,8 @@ environment = "明确缺失的程序、账号、平台或部署，列出已做�
 unfinished = "任何可实现、可修复或能在现有环境核验的缺口继续做。只有 Windows 实机验证排除，其他平台环境缺失须列出。"
 regression = ["cargo fmt --all -- --check", "cargo clippy --locked --all-targets -- -D warnings", "cargo test --locked"]
 closure = "核对所有适用条目及此后 Kar 已有进展，逐项报告已验收及证据、供应商不支持、缺环境待验证、Windows 实机排除；收尾时所有可做的实现与验证均须完成。"
-next_checklist_after_closure = "backend-workbench-acceptance.toml"
-handoff = "主线程先按本清单完成第一阶段并记录验收结果，再继续执行同目录的第二阶段清单。"
+parallel_checklist = "backend-workbench-acceptance.toml"
+handoff = "第一阶段按本清单持续验收。第二阶段可立即开发独立模块。涉及会话、队列或游标的联调在对应接口通过验收后执行。两份清单各自保留完整验收条件。"
 
 [[checks]]
 id = "realtime"
