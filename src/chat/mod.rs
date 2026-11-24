@@ -756,10 +756,11 @@ impl Sender {
         crate::input::check_text(&text, crate::input::text_limit(&self.info.runtime))?;
         let store = self.store.clone();
         let info = self.info.clone();
-        let (store, info, lease) = tokio::task::spawn_blocking(move || -> Result<_> {
-            let lease = store.workspace_lease(&info.workspace)?;
+        let (store, info, lease, scopes) = tokio::task::spawn_blocking(move || -> Result<_> {
+            let scopes = store.scope_baselines(&info)?;
+            let lease = store.turn_lease(&info, &scopes)?;
             store.require_no_pending_fork(info.id)?;
-            Ok((store, info, lease))
+            Ok((store, info, lease, scopes))
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;
@@ -780,18 +781,22 @@ impl Sender {
                                     before: false,
                                 })
                     })
-                    .and_then(|t| t.checkpoint.as_ref()?.after_tree.clone())
+                    .and_then(|t| t.checkpoint.clone())
             })
         };
         let (store, before) = tokio::task::spawn_blocking(move || -> Result<_> {
-            let before = store.capture(
+            let before = store.capture_with_scopes(
                 &info,
                 CheckpointPoint {
                     turn: id,
                     before: true,
                 },
-                expected.as_deref(),
+                expected.as_ref().and_then(|c| c.after_tree.as_deref()),
+                scopes,
             )?;
+            if let Some(cp) = &expected {
+                before.check_selected_repositories(&cp.repositories)?;
+            }
             Ok((store, before))
         })
         .await

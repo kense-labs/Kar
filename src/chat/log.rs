@@ -1320,7 +1320,12 @@ impl Log {
                             seq,
                             open_tools,
                         } => {
-                            let lease = store.workspace_lease(&self.state.info.workspace)?;
+                            let scopes = last
+                                .checkpoint
+                                .as_ref()
+                                .map(|c| c.repositories.as_slice())
+                                .unwrap_or_default();
+                            let lease = store.turn_lease(&self.state.info, scopes)?;
                             saved.watch(session).await?;
                             self.morph_watch = Some((lease, store.clone()));
                             self.dispatched = true;
@@ -1524,16 +1529,18 @@ impl Log {
             boundary.id = id;
             checkpoint = Some(boundary);
         } else if !historical && !(steering.is_some() && r.native["type"] == "result") {
-            let lease = store.workspace_lease(&self.state.info.workspace);
+            let scopes = store.scope_baselines(&self.state.info)?;
+            let lease = store.turn_lease(&self.state.info, &scopes);
             match lease {
                 Ok(lease) => {
-                    let before = store.capture(
+                    let before = store.capture_with_scopes(
                         &self.state.info,
                         CheckpointPoint {
                             turn: id,
                             before: true,
                         },
                         None,
+                        scopes,
                     )?;
                     checkpoint = Some(TurnCapture {
                         store: store.clone(),

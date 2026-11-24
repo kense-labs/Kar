@@ -29,7 +29,10 @@ impl ChatStore {
         self
     }
 
-    pub(super) fn scope_baselines(&self, info: &ChatInfo) -> Result<Vec<RepositoryCheckpoint>> {
+    pub(in crate::chat) fn scope_baselines(
+        &self,
+        info: &ChatInfo,
+    ) -> Result<Vec<RepositoryCheckpoint>> {
         let Some(lookup) = &self.repository_scopes else {
             return Ok(Vec::new());
         };
@@ -90,5 +93,29 @@ impl ChatStore {
                 Err(error) => scope.error = Some(error.to_string()),
             }
         }
+    }
+}
+
+impl super::Capture {
+    pub(in crate::chat) fn check_selected_repositories(
+        &self,
+        expected: &[RepositoryCheckpoint],
+    ) -> Result<()> {
+        for row in expected {
+            let tree = row
+                .after_tree
+                .as_deref()
+                .ok_or_else(|| err("incomplete selected repository checkpoint"))?;
+            if !self.repositories.iter().any(|current| {
+                current.scope.repository_path == row.scope.repository_path
+                    && current.before_tree.as_deref() == Some(tree)
+            }) {
+                return Err(err(format!(
+                    "repository changed since the selected fork checkpoint: {}",
+                    row.scope.repository_path.display()
+                )));
+            }
+        }
+        Ok(())
     }
 }

@@ -220,8 +220,26 @@ impl ChatStore {
                 )));
             }
         }
-        Ok(WorkspaceLease { _lock: f, marker })
+        Ok(WorkspaceLease {
+            _lock: f,
+            marker,
+            repositories: Vec::new(),
+        })
     }
+    pub(super) fn turn_lease(
+        &self,
+        chat: &ChatInfo,
+        scopes: &[RepositoryCheckpoint],
+    ) -> Result<WorkspaceLease> {
+        let mut lease = self.workspace_lease(&chat.workspace)?;
+        for row in scopes {
+            lease
+                .repositories
+                .push(self.workspace_lease(&row.scope.worktree_path)?);
+        }
+        Ok(lease)
+    }
+
     pub(super) fn capture(
         &self,
         chat: &ChatInfo,
@@ -306,11 +324,12 @@ impl ChatStore {
         &self,
         parent: &ChatInfo,
         child: Uuid,
+        suffix: &str,
         tree: &str,
     ) -> Result<()> {
         let repo = gix::open(self.odb_path(parent.checkpoint_store())).map_err(err)?;
         repo.reference(
-            format!("refs/kar/chats/{child}/fork-base"),
+            format!("refs/kar/chats/{child}/{suffix}"),
             ObjectId::from_hex(tree.as_bytes()).map_err(err)?,
             gix::refs::transaction::PreviousValue::Any,
             "Kar fork destination baseline",
@@ -462,6 +481,7 @@ impl ChatStore {
 /// A process lock serializes live writers. The reservation also survives a host crash,
 /// so a different chat sharing this checkout cannot send a turn on a half-restored tree.
 pub(crate) struct WorkspaceLease {
+    repositories: Vec<WorkspaceLease>,
     _lock: File,
     marker: PathBuf,
 }

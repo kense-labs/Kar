@@ -204,6 +204,10 @@ pub(crate) fn agent() {
                         fs::write("api/turn-change.txt", "api change\n").unwrap();
                         fs::write("wrapper/web/turn-change.txt", "web change\n").unwrap();
                     }
+                    "edit selected again" => {
+                        fs::write("api/turn-change.txt", "api second\n").unwrap();
+                        fs::write("wrapper/web/turn-change.txt", "web second\n").unwrap();
+                    }
                     "edit-one" => {
                         fs::write("staged.txt", b"first").unwrap();
                         fs::write("binary", [0, 255, 6]).unwrap();

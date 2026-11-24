@@ -213,6 +213,16 @@ async fn scenario() {
         assert!(row["diff"].as_str().unwrap().contains(marker));
         assert!(!path.join("turn-change.txt").exists());
     }
+    let say_again = json!({"id":Uuid::new_v4(),"text":"edit selected again"});
+    let second = json(
+        c.post(format!("{scope}/chats/{id}/messages"))
+            .json(&say_again),
+    )
+    .await;
+    assert_eq!(second["status"], "completed");
+    let api_file = cwd.join("api/turn-change.txt");
+    let web_file = cwd.join("wrapper/web/turn-change.txt");
+    std::fs::write(&web_file, "user edit\n").unwrap();
     server.kill().await.unwrap();
     server.wait().await.unwrap();
     let (mut restored, newbase) = serve(&state, &root, &native).await;
@@ -229,6 +239,47 @@ async fn scenario() {
     assert_eq!(found["root"], created["root"]);
     assert_eq!(found["repositories"], added["repositories"]);
     assert!(std::fs::read_to_string(cwd.join("api/readme")).unwrap() == "isolated");
+    let chat_url = format!("{newbase}{suffix}/chats/{id}");
+    let cut = json!({"turn":message["id"]});
+    let rejected = json(c.post(format!("{chat_url}/rollback")).json(&cut)).await;
+    assert_eq!(rejected["applied"], false);
+    assert_eq!(
+        rejected["conflicts"][0]["path"],
+        "wrapper/web/turn-change.txt"
+    );
+    assert_eq!(std::fs::read(&api_file).unwrap(), b"api second\n");
+    assert_eq!(std::fs::read(&web_file).unwrap(), b"user edit\n");
+    std::fs::write(&web_file, "web second\n").unwrap();
+    let preview = json(
+        c.post(format!("{chat_url}/rollback"))
+            .json(&json!({"turn":message["id"],"dry_run":true})),
+    )
+    .await;
+    assert_eq!(preview["files"].as_array().unwrap().len(), 2);
+    assert_eq!(preview["conflicts"], json!([]));
+    let fork = Uuid::new_v4();
+    let child = json(
+        c.post(format!("{chat_url}/forks"))
+            .json(&json!({"id":fork,"turn":message["id"]})),
+    )
+    .await;
+    assert_eq!(child["history"]["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(std::fs::read(&api_file).unwrap(), b"api change\n");
+    assert_eq!(std::fs::read(&web_file).unwrap(), b"web change\n");
+    let child_url = format!("{newbase}{suffix}/chats/{fork}");
+    let next = json(
+        c.post(format!("{child_url}/messages"))
+            .json(&json!({"id":Uuid::new_v4(),"text":"edit selected again"})),
+    )
+    .await;
+    assert_eq!(
+        next["checkpoint"]["repositories"].as_array().unwrap().len(),
+        2
+    );
+    let restored_files = json(c.post(format!("{child_url}/rollback")).json(&cut)).await;
+    assert_eq!(restored_files["applied"], true);
+    assert_eq!(std::fs::read(&api_file).unwrap(), b"api change\n");
+    assert_eq!(std::fs::read(&web_file).unwrap(), b"web change\n");
     restored.kill().await.unwrap();
     restored.wait().await.unwrap();
 }

@@ -31,7 +31,7 @@ pub struct RepositoryDiff {
     pub diff: String,
 }
 
-fn relative(from: &Path, to: &Path) -> PathBuf {
+pub(super) fn relative(from: &Path, to: &Path) -> PathBuf {
     let Some(base) = from.ancestors().find(|base| to.starts_with(base)) else {
         return to.to_owned();
     };

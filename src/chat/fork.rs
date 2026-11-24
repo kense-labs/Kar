@@ -30,11 +30,39 @@ pub struct ForkOrigin {
 /// Git checkout and immutable preimage used to resume a partially applied independent fork.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ForkWorktreeBase {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<ForkRepositoryBase>,
     pub tree: String,
     pub head: String,
     pub branch: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ForkRepositoryBase {
+    pub scope: super::checkpoint::RepositoryScope,
+    pub tree: String,
+    pub head: String,
+    pub branch: Option<String>,
+}
+
+impl ForkRepositoryBase {
+    pub(in crate::chat) fn verify(&self) -> Result<()> {
+        let work = &self.scope.worktree_path;
+        let repo = crate::workbench_git::Repository::open(work)?;
+        let status = repo.status()?;
+        if work != repo.root()
+            || work.canonicalize()? != *work
+            || status.head.as_ref() != Some(&self.head)
+            || status.branch != self.branch
+        {
+            return Err(Error::Refused(format!(
+                "fork repository checkout changed: {}",
+                work.display()
+            )));
+        }
+        Ok(())
+    }
+}
 impl ChatStore {
     pub(super) fn fork_claimed(&self, id: Uuid) -> Result<bool> {
         Ok(Request::path(self, id).try_exists()?)
@@ -433,6 +461,14 @@ impl ChatStore {
                 });
             }
         }
+        let mut recorded_repositories = std::collections::BTreeMap::new();
+        for row in prefix
+            .iter()
+            .filter_map(|t| t.checkpoint.as_ref())
+            .flat_map(|cp| &cp.repositories)
+        {
+            recorded_repositories.insert(row.scope.repository_path.clone(), row.scope.clone());
+        }
         let cut = prefix.last_mut().expect("selected turn is in prefix");
         let native_source = parent.native_id.clone();
         let saved = if let Some(info) = staged_info {
@@ -468,9 +504,11 @@ impl ChatStore {
             let worktree_base = if let Some(dest) = &destination {
                 let (dest, store, parent) = (dest.clone(), self.clone(), parent.clone());
                 Some(
-                    tokio::task::spawn_blocking(move || dest.baseline(&store, &parent))
-                        .await
-                        .map_err(|e| Error::Closed(e.to_string()))??,
+                    tokio::task::spawn_blocking(move || {
+                        dest.baseline(&store, &parent, child_id, recorded_repositories)
+                    })
+                    .await
+                    .map_err(|e| Error::Closed(e.to_string()))??,
                 )
             } else {
                 self.fork_restore(&source, target, true).await?;
@@ -523,7 +561,15 @@ impl ChatStore {
                 }
             };
             if let Some(base) = &worktree_base {
-                self.pin_fork_baseline(&parent, child_id, &base.tree)?;
+                self.pin_fork_baseline(&parent, child_id, "fork-base", &base.tree)?;
+                for (i, scope) in base.repositories.iter().enumerate() {
+                    self.pin_fork_baseline(
+                        &parent,
+                        child_id,
+                        &format!("fork-repositories/{i}"),
+                        &scope.tree,
+                    )?;
+                }
             }
             cut.fork_anchor = Some(anchor.clone());
             let origin = ForkOrigin {

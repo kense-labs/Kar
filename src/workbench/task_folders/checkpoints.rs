@@ -13,14 +13,33 @@ pub(in crate::workbench) fn repositories(
     chat: &ChatInfo,
 ) -> Result<Vec<RepositoryScope>> {
     let mut scopes = Vec::new();
-    if let Some(task) = app.0.task_folders.read(chat.id)?.map(|r| r.task)
-        && app
-            .0
-            .task_folders
-            .workspace(task.project_id, chat.id)?
-            .as_ref()
-            == Some(&chat.workspace)
-    {
+    // A same-directory conversation fork retains its parent's managed task folder.
+    let mut owner = chat.clone();
+    let mut seen_chats = BTreeSet::new();
+    let task = loop {
+        if !seen_chats.insert(owner.id) {
+            return Err(crate::Error::Protocol("cyclic chat lineage".into()));
+        }
+        if let Some(row) = app.0.task_folders.read(owner.id)?
+            && app
+                .0
+                .task_folders
+                .workspace(row.task.project_id, owner.id)?
+                .as_ref()
+                == Some(&chat.workspace)
+        {
+            break Some(row.task);
+        }
+        let Some(parent) = owner.forked_from.as_ref() else {
+            break None;
+        };
+        let prior = app.0.chats.saved_info(parent.chat)?;
+        if prior.workspace != chat.workspace {
+            break None;
+        }
+        owner = prior;
+    };
+    if let Some(task) = task {
         scopes.extend(
             task.repositories
                 .into_iter()
@@ -31,11 +50,20 @@ pub(in crate::workbench) fn repositories(
                     worktree_path: r.worktree_path,
                 }),
         );
-    } else if let Some(project) = app
-        .projects()
-        .into_iter()
-        .find(|p| p.root == chat.workspace)
-    {
+    } else if let Some(project) = {
+        let catalog = app.0.catalog.lock().unwrap();
+        let mut project = None;
+        for p in catalog.projects.values() {
+            if p.root == chat.workspace || app.owns_chat(&catalog, p, chat)? {
+                project = Some(super::super::Project {
+                    root: chat.workspace.clone(),
+                    ..p.clone()
+                });
+                break;
+            }
+        }
+        project
+    } {
         scopes.extend(
             folders::list(app, &project)?
                 .into_iter()
@@ -77,7 +105,22 @@ pub(in crate::workbench) fn repositories(
             }
         }
     }
-    scopes.retain(|s| s.worktree_path != chat.workspace);
+    scopes.retain(|s| !chat.workspace.starts_with(&s.worktree_path));
+    if let Some(base) = chat
+        .forked_from
+        .as_ref()
+        .and_then(|f| f.worktree_base.as_ref())
+    {
+        for scope in &mut scopes {
+            if let Some(saved) = base
+                .repositories
+                .iter()
+                .find(|r| r.scope.worktree_path == scope.worktree_path)
+            {
+                scope.repository_path = saved.scope.repository_path.clone();
+            }
+        }
+    }
     scopes.sort_by(|a, b| a.repository_path.cmp(&b.repository_path));
     Ok(scopes)
 }

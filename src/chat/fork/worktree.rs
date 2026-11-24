@@ -62,7 +62,76 @@ impl Destination {
         })
     }
 
-    pub fn baseline(&self, store: &ChatStore, parent: &ChatInfo) -> Result<ForkWorktreeBase> {
+    pub fn baseline(
+        &self,
+        store: &ChatStore,
+        parent: &ChatInfo,
+        child: Uuid,
+        recorded: std::collections::BTreeMap<PathBuf, super::super::checkpoint::RepositoryScope>,
+    ) -> Result<ForkWorktreeBase> {
+        let mut destination = parent.clone();
+        destination.workspace = self.workspace.clone();
+        destination.id = child;
+        let candidates = store.scope_baselines(&destination)?;
+        let mut repositories = Vec::new();
+        for (_, mut scope) in recorded {
+            let source = Repository::open(&scope.worktree_path)?;
+            let corresponding = scope
+                .worktree_path
+                .strip_prefix(&parent.workspace)
+                .ok()
+                .map(|rel| self.workspace.join(rel));
+            let cwd = candidates
+                .iter()
+                .find(|c| {
+                    c.scope.repository_path == scope.repository_path
+                        && c.scope.worktree_path != scope.worktree_path
+                })
+                .map(|c| c.scope.worktree_path.clone())
+                .or(corresponding)
+                .ok_or_else(|| {
+                    Error::Refused(format!(
+                        "no independent destination for {}",
+                        scope.repository_path.display()
+                    ))
+                })?;
+            let target = Repository::open(&cwd)?;
+            if target.root() != cwd
+                || target.root() == source.root()
+                || !source.same_repository(&target)
+                || cwd.canonicalize()? != cwd
+            {
+                return Err(Error::Refused(format!(
+                    "destination is not an independent checkout of {}",
+                    scope.repository_path.display()
+                )));
+            }
+            let _lease = store.workspace_lease(&cwd)?;
+            let status = target.status()?;
+            if !status.files.is_empty() {
+                return Err(Error::Refused(format!(
+                    "fork destination contains local changes: {}",
+                    cwd.display()
+                )));
+            }
+            let tree = store.fork_baseline(parent, &cwd)?;
+            scope.worktree_path = cwd;
+            let base = ForkRepositoryBase {
+                scope,
+                tree,
+                head: status
+                    .head
+                    .ok_or_else(|| Error::Refused("fork repository has no HEAD".into()))?,
+                branch: status.branch,
+            };
+            base.verify()?;
+            if !target.status()?.files.is_empty() {
+                return Err(Error::Refused(
+                    "fork repository changed while capturing its baseline".into(),
+                ));
+            }
+            repositories.push(base);
+        }
         let status = self.repo.status()?;
         if status
             .files
@@ -87,6 +156,7 @@ impl Destination {
             ));
         }
         Ok(ForkWorktreeBase {
+            repositories,
             tree,
             head: status
                 .head
