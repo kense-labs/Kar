@@ -280,7 +280,8 @@ phase = 2
 name = "原始请求、签名配置、过滤、过期及合并窗口"
 upstream = ["apps/server/src/scheduledTasks/ScheduledTaskService.ts", "apps/server/src/scheduledTasks/webhookDedupe.ts", "apps/server/src/scheduledTasks/webhookFilter.ts", "packages/contracts/src/scheduledTask.ts"]
 kar = ["src/workbench/workflows/mod.rs", "src/workbench/workflows/routes.rs"]
-status = "已从固定源码定位，待补齐"
+status = "原始字节验签、标量和数组过滤、模板、合并窗口和重放键已接入。中继离线持有时间、限流和保留策略需统一复验。"
+implementation_ref = "71b321c"
 test_target = "cargo test --locked --test workbench_workflows"
 accept = "对同一任务发送签名格式不同、符合筛选、被过滤、过期和重复的事件，重启后核对重放键、合并窗口、实际执行次数、限流及脱敏明细。"
 

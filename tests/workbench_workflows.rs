@@ -325,6 +325,37 @@ async fn http_scenarios() {
     .await;
     assert_eq!(after, detail);
     assert_eq!(fs::read(root.join("hooks")).unwrap(), b"H");
+    let view = format!("{base}/projects/{p}/workflow-state");
+    let listed = ok(host.get(&view)).await;
+    let counts = ok(host.get(format!("{view}/counts"))).await;
+    assert_eq!(listed["counts"], counts);
+    assert!(counts["total"].as_u64().unwrap() >= 1);
+    let mut feed = host
+        .get(format!("{view}/events?schedules_only=true"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let frame = feed.chunk().await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&frame).contains("event: snapshot"));
+    drop(feed);
+    let toggle = format!("{base}/projects/{p}/workflows/{other}/enabled");
+    let disabled = ok(host.put(&toggle).json(&json!({"enabled":false}))).await;
+    assert_eq!(disabled["enabled"], false);
+    assert!(disabled["next_ms"].is_null());
+    ok(host.put(&toggle).json(&json!({"enabled":true}))).await;
+    let removed = ok(host.delete(format!("{base}/projects/{p}/workflows/{other}"))).await;
+    assert_eq!(removed["id"], other.to_string());
+    assert_eq!(
+        host.put(&toggle)
+            .json(&json!({"enabled":true}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     let grouped=save(&host,&base,p,json!({"type":"webhook"}),json!([{"type":"agent","runtime":"codex","prompt":"Issue {{body.title}}; optional={{query.nope}}"}])).await;
     let manage = format!("/projects/{p}/workflows/{grouped}");
     let rules = json!({"signature":{"header":"x-issue-digest","encoding":"base64","prefix":"hMac "},
