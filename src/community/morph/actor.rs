@@ -141,11 +141,11 @@ impl Actor {
             match &answer {
                 Err(error) => self.journal.prompt_error(request, error, &[]),
                 Ok(native) if required_id(native).is_ok() => {
-                    self.journal.prompt_decision(request, None)
+                    self.journal.control_decision(request, None)
                 }
                 Ok(_) => self
                     .journal
-                    .prompt_decision(request, Some(("error", "Morph omitted the task identity"))),
+                    .control_decision(request, Some(("error", "Morph omitted the task identity"))),
             }
         }
         answer

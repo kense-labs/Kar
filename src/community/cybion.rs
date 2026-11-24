@@ -381,7 +381,7 @@ impl ThreadActor {
         self.control_result(&answer);
         if id.is_some() {
             match &answer {
-                Ok(_) => self.journal.prompt_decision(request, None),
+                Ok(_) => self.journal.control_decision(request, None),
                 Err(error) => self.journal.prompt_error(request, error, &[]),
             }
         }

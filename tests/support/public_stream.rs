@@ -114,10 +114,31 @@ async fn three_turns(session: &Session) -> kar::Result<()> {
     }
     assert!(task.await.unwrap_err().is_panic());
     if session.capabilities().steering {
+        let from = session.records().len();
         assert!(matches!(
             session.steer("too late").await,
             Err(Error::Refused(_))
         ));
+        let rows = session.records();
+        let request = rows[from..]
+            .iter()
+            .find(|r| {
+                r.kind == RecordKind::Request
+                    && r.native["type"] == "steer"
+                    && r.native["input"] == "too late"
+            })
+            .unwrap();
+        let decisions: Vec<_> = rows[from..]
+            .iter()
+            .filter(|r| {
+                r.kind == RecordKind::Response
+                    && r.native["requestId"] == request.native["id"]
+                    && r.native["type"] == "rejected"
+            })
+            .collect();
+        assert_eq!(decisions.len(), 1);
+        assert!(decisions[0].seq > request.seq);
+        assert_eq!(decisions[0].native["code"], "no_active_turn");
         println!("verified late-steer refusal on {:?}", session.protocol());
     }
     disposal::check(session, "exited").await?;

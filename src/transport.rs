@@ -356,6 +356,14 @@ impl Actor {
         tokio::spawn(actor.run(stdout, rx));
         tx
     }
+    fn idle_for_interrupt(&self) -> bool {
+        self.turn.is_none()
+            && !self.claude_notifications.active()
+            && !(self.claude_cancel_queued && self.claude_steering.waiting())
+            && self.observed_root_turn().is_none()
+            && self.grok_owner().is_none()
+            && self.manual_compaction.is_none()
+    }
     fn observed_root_turn(&self) -> Option<&str> {
         self.child_tasks.turn(&self.session()?)
     }
@@ -760,7 +768,7 @@ impl Actor {
             Protocol::Pi => self.rpc("prompt", prompt.pi(), None, true, true).await?,
         }
         if !matches!(self.protocol, Protocol::Pi | Protocol::Factory) {
-            self.journal.prompt_decision(request, None);
+            self.journal.control_decision(request, None);
         }
         Ok(())
     }
@@ -1026,15 +1034,21 @@ impl Actor {
             Command::Steer(_, tx) if self.manual_compaction.is_some() => {
                 let _ = tx.send(Err(Error::Busy));
             }
-            Command::Abort(tx) | Command::Steer(_, tx)
-                if self.turn.is_none()
-                    && !self.claude_notifications.active()
-                    && !(self.claude_cancel_queued && self.claude_steering.waiting())
-                    && self.observed_root_turn().is_none()
-                    && self.grok_owner().is_none()
-                    && self.manual_compaction.is_none() =>
-            {
-                let _ = tx.send(Err(Error::Refused("no active turn".into())));
+            Command::Abort(tx) if self.idle_for_interrupt() => {
+                let error = self.journal.reject_idle_control(
+                    json!({"type":"abort"}),
+                    "no active turn",
+                    &self.secrets,
+                );
+                let _ = tx.send(Err(error));
+            }
+            Command::Steer(input, tx) if self.idle_for_interrupt() => {
+                let error = self.journal.reject_idle_control(
+                    json!({"type":"steer","input":input.text,"imageCount":input.images.len()}),
+                    "no active turn",
+                    &self.secrets,
+                );
+                let _ = tx.send(Err(error));
             }
             Command::Abort(tx) => match self.protocol {
                 Protocol::Cybion | Protocol::Morph | Protocol::KimiKap | Protocol::Dsh => {
@@ -1975,6 +1989,13 @@ impl Actor {
                                     reason.clone(),
                                 ),
                             });
+                            // A queued input was already accepted by the host. Its later
+                            // native rejection drops it from the queue exactly once.
+                            if p.prompt_ack.is_none() {
+                                events.push(Event::InputDropped {
+                                    input_id: input_id.to_string(),
+                                });
+                            }
                             outcome_error = Some(Error::Refused(reason.clone()));
                         }
                         events.push(Event::NativeInput { input_id, receipt });
@@ -2372,7 +2393,7 @@ impl Actor {
         );
         if let Some((request, refusal)) = prompt_decision {
             self.journal
-                .prompt_decision(request, refusal.as_deref().map(|s| ("runtime_refused", s)));
+                .control_decision(request, refusal.as_deref().map(|s| ("runtime_refused", s)));
         }
         if current_turn
             && let Some(outcome) = &outcome

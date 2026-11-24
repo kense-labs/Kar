@@ -897,6 +897,141 @@ async fn explicit_native_refusal_and_handled_input_drain_in_order_after_restart(
 }
 
 #[tokio::test]
+#[ignore = "requires KAR_PI_BIN and KAR_OAR_PI_PREFLIGHT pointing to the fixed upstream support/pi-preflight.ts"]
+async fn admission_holds_while_a_second_input_queues_and_both_are_refused() {
+    use sha2::{Digest, Sha256};
+    use tokio::time::{Duration, sleep, timeout};
+
+    let mut f = fixture(true).await;
+    let agent = f.temp.path().join("agent");
+    let entered = agent.join("preflight-entered");
+    let release = agent.join("preflight-release");
+    let models = agent.join("models.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&models).unwrap()).unwrap();
+    let mut provider = config["providers"]
+        .as_object_mut()
+        .unwrap()
+        .remove("fixture")
+        .unwrap();
+    provider["models"][0]["id"] = "aimock-model".into();
+    config["providers"]["aimock"] = provider;
+    fs::write(&models, config.to_string()).unwrap();
+    f.options.model = Some("aimock/aimock-model".into());
+
+    // Instantiate the extension from the upstream test, changing only its temporary paths.
+    let original = fs::read_to_string(std::env::var_os("KAR_OAR_PI_PREFLIGHT").unwrap()).unwrap();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(original.as_bytes())),
+        "c8361424c55e6210a4993d941be4aea7ba06878ceb5f566b2a38773ec6d3b4ec"
+    );
+    let mut extension = original
+        .split_once("extensions, \"preflight.ts\"), `")
+        .unwrap()
+        .1
+        .split_once("`);")
+        .unwrap()
+        .0
+        .to_owned();
+    for (name, path) in [
+        ("entered", &entered),
+        ("release", &release),
+        ("models", &models),
+    ] {
+        extension = extension.replace(
+            &format!("${{JSON.stringify({name})}}"),
+            &serde_json::to_string(path).unwrap(),
+        );
+    }
+    let ext = agent.join("extensions");
+    fs::create_dir(&ext).unwrap();
+    fs::write(ext.join("preflight.ts"), extension).unwrap();
+
+    let mut rt = kar::runtime("pi").unwrap();
+    rt.program = std::env::var_os("KAR_PI_BIN").unwrap().into();
+    let s = rt.open(f.options.clone()).await.unwrap();
+    let first_id = Uuid::new_v4();
+    let first = s.prompt_with_id(first_id, "A");
+    tokio::pin!(first);
+    timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            _ = &mut first => panic!("prompt returned before native preflight released"),
+            () = async { while !entered.is_file() { sleep(Duration::from_millis(5)).await; } } => {}
+        }
+    })
+    .await
+    .unwrap();
+    let (queued_id, queued) = s.queue("B").await.unwrap();
+    fs::write(&release, "").unwrap();
+    let limit = Duration::from_secs(15);
+    assert!(
+        matches!(timeout(limit, first).await.unwrap(), Err(kar::Error::Refused(e)) if e.to_ascii_lowercase().contains("no api key"))
+    );
+    assert!(
+        matches!(timeout(limit, queued.wait()).await.unwrap(), Err(kar::Error::Refused(e)) if e.to_ascii_lowercase().contains("no api key"))
+    );
+    let rows = s.records();
+    let identity = rows
+        .iter()
+        .filter_map(|r| r.prompt.as_ref())
+        .find(|p| p.input_id == first_id.to_string())
+        .unwrap();
+    let attempt = identity.request_id.as_ref().unwrap();
+    assert!(rows.iter().any(|r| {
+        r.native["requestId"] == attempt.as_str()
+            && r.native["type"] == "rejected"
+            && r.native["code"] == "runtime_refused"
+            && r.native["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.to_ascii_lowercase().contains("no api key"))
+    }));
+    assert!(
+        !rows
+            .iter()
+            .flat_map(|r| &r.events)
+            .any(|e| matches!(e, Event::TurnStarted | Event::TurnEnded { .. }))
+    );
+    let dropped: Vec<_> = rows
+        .iter()
+        .filter(|r| {
+            r.events
+                .iter()
+                .any(|event| matches!(event, Event::InputDropped { .. }))
+        })
+        .collect();
+    assert_eq!(
+        dropped.len(),
+        1,
+        "only the already accepted queue entry was dropped"
+    );
+    assert!(dropped[0].events.iter().any(|event| matches!(event, Event::InputDropped { input_id } if *input_id == queued_id.to_string())));
+    assert!(
+        dropped[0].native["error"]
+            .as_str()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("no api key")
+    );
+    assert!(f.calls.lock().unwrap().is_empty());
+    assert!(matches!(s.abort().await, Err(kar::Error::Refused(e)) if e.contains("no active turn")));
+    let rows = s.records();
+    let abort = rows
+        .iter()
+        .find(|r| r.native["type"] == "abort" && r.kind == kar::RecordKind::Request)
+        .unwrap();
+    assert!(rows.iter().any(|r| r.seq > abort.seq
+        && r.native["requestId"] == abort.native["id"]
+        && r.native["type"] == "rejected"
+        && r.native["code"] == "no_active_turn"));
+    let recovered = timeout(limit, async { s.prompt("C").await?.wait().await })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered, kar::Outcome::Completed);
+    assert_eq!(f.calls.lock().unwrap().len(), 1);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "requires KAR_PI_BIN; raw public prompt identities and projection cursors"]
 async fn public_prompt_readbacks() {
     let fixture = fixture(true).await;

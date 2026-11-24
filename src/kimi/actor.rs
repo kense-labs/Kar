@@ -175,7 +175,7 @@ impl Actor {
             events,
         );
         if !steer {
-            self.journal.prompt_decision(request, None);
+            self.journal.control_decision(request, None);
         }
         let id = id.to_string();
         self.sent.insert(id.clone());

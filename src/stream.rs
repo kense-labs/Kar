@@ -528,7 +528,7 @@ impl Journal {
         secrets: &[String],
     ) -> Error {
         let request = self.attempted_prompt(id, input, native, secrets);
-        self.prompt_decision(request, Some(("busy", "busy")));
+        self.control_decision(request, Some(("busy", "busy")));
         Error::Busy
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -542,9 +542,9 @@ impl Journal {
             ),
         };
         crate::transport::redact_text(&mut reason, secrets);
-        self.prompt_decision(request, Some((code, &reason)));
+        self.control_decision(request, Some((code, &reason)));
     }
-    pub(crate) fn prompt_decision(&self, request: Uuid, rejection: Option<(&str, &str)>) {
+    pub(crate) fn control_decision(&self, request: Uuid, rejection: Option<(&str, &str)>) {
         let body = match rejection {
             Some((code, reason)) => {
                 serde_json::json!({"type":"rejected", "requestId":request, "code":code, "reason":reason})
@@ -561,14 +561,30 @@ impl Journal {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reject_idle_control(
+        &self,
+        mut body: Value,
+        reason: &str,
+        secrets: &[String],
+    ) -> Error {
+        crate::transport::redact(&mut body, secrets);
+        let id = self.control_request(body);
+        self.control_decision(id, Some(("no_active_turn", reason)));
+        Error::Refused(reason.to_owned())
+    }
     pub(crate) fn request_dispose(&self) -> Uuid {
+        self.control_request(serde_json::json!({"type":"dispose"}))
+    }
+    fn control_request(&self, mut body: Value) -> Uuid {
         let id = Uuid::new_v4();
+        body["id"] = id.to_string().into();
         self.push(
             Direction::ToRuntime,
             RecordKind::Request,
             None,
             vec![],
-            serde_json::json!({"type":"dispose", "id":id}),
+            body,
             vec![],
         );
         id

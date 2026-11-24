@@ -224,7 +224,7 @@ impl Actor {
             events,
         );
         if !steer {
-            self.journal.prompt_decision(request, None);
+            self.journal.control_decision(request, None);
         }
         self.sent.insert(id.to_string());
         if let Some(done) = done {
@@ -676,7 +676,11 @@ impl Actor {
                         .await
                         .map(|_| Value::Null)
                 } else {
-                    Err(Error::Refused("no active DSH turn".into()))
+                    Err(self.journal.reject_idle_control(
+                        json!({"type":"steer","input":input.text,"imageCount":input.images.len()}),
+                        "no active DSH turn",
+                        &self.secrets,
+                    ))
                 };
                 Self::ack(ack, r)?;
             }

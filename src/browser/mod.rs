@@ -368,7 +368,7 @@ impl Core {
                     return Err(error("no active turn"));
                 }
                 if mode == "reject" {
-                    self.journal.prompt_decision(control, None);
+                    self.journal.control_decision(control, None);
                 }
                 return Ok(existing);
             }
@@ -389,9 +389,9 @@ impl Core {
                     let evidence = native::summary(&err);
                     if evidence["name"] == "ConversationBusy" {
                         self.journal
-                            .prompt_decision(control, Some(("busy", "busy")));
+                            .control_decision(control, Some(("busy", "busy")));
                     } else {
-                        self.journal.prompt_decision(
+                        self.journal.control_decision(
                             control,
                             Some((
                                 "runtime_refused",
@@ -404,7 +404,7 @@ impl Core {
             }
         };
         if mode == "reject" {
-            self.journal.prompt_decision(control, None);
+            self.journal.control_decision(control, None);
         }
         let record = invoke(&handle, "status", &[ctx()]).await?;
         let receipt = json(&record)?;
