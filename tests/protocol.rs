@@ -11,6 +11,8 @@ mod account;
 mod acp_model_list;
 #[path = "protocol/acp_failures.rs"]
 mod acp_failures;
+#[path = "protocol/antigravity_model_list.rs"]
+mod antigravity_model_list;
 #[path = "protocol/antigravity_steering.rs"]
 mod antigravity_steering;
 #[path = "support/billing.rs"]
@@ -1468,6 +1470,7 @@ async fn main() {
         std::fs::write(path, serde_json::to_vec(&args[1..]).unwrap()).unwrap();
     }
     match args.get(1).map(String::as_str) {
+        Some("antigravity-picker") => return antigravity_model_list::run().await.unwrap(),
         Some("acp-picker") => return acp_model_list::run().await.unwrap(),
         Some("codex-catalog") => return codex_catalog::run().await.unwrap(),
         Some("opencode-model-listing") => return opencode_models::run().await.unwrap(),
@@ -1480,6 +1483,9 @@ async fn main() {
         Some("environment-sessions") => return environment::sessions().await,
         Some("peer") => environment::capture(),
         _ => {}
+    }
+    if let Ok(mode) = std::env::var("KAR_TEST_AGY_PICKER") {
+        return antigravity_model_list::peer(&mode, &args[1..]);
     }
     if let Ok(vendor) = std::env::var("KAR_TEST_MENU") {
         return acp_model_list::peer(&vendor, &args[1..]);
@@ -1559,6 +1565,7 @@ async fn main() {
         peer(&args[2]);
         return;
     }
+    antigravity_model_list::run().await.unwrap();
     acp_model_list::run().await.unwrap();
     codex_catalog::run().await.unwrap();
     environment::exercise(&std::env::current_exe().unwrap());

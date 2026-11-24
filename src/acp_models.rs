@@ -1,4 +1,6 @@
 //! Read a temporary ACP session's model menu without submitting a prompt.
+mod antigravity;
+
 use crate::{
     Error, FailureClass, OpenError, Protocol, Result, Runtime, SessionOptions, TurnFailure,
     account::{AccountWire, AuthStatus},
@@ -13,11 +15,13 @@ pub(crate) enum Menu {
     Devin,
     CodeBuddy,
     Kimi,
+    Antigravity,
 }
 
 impl Menu {
     pub(crate) fn for_runtime(runtime: &Runtime) -> Option<Self> {
         match (runtime.id.as_str(), runtime.protocol) {
+            ("antigravity", Protocol::Acp) => Some(Self::Antigravity),
             ("devin", Protocol::Acp) => Some(Self::Devin),
             ("codebuddy", Protocol::Acp) => Some(Self::CodeBuddy),
             ("kimi", Protocol::KimiKap | Protocol::Acp) => Some(Self::Kimi),
@@ -27,7 +31,7 @@ impl Menu {
 
     pub(crate) async fn list(self, rt: &Runtime, opts: &SessionOptions) -> Result<Vec<ModelEntry>> {
         let read = async {
-            let rt = rt.selected(opts).await?;
+            let (rt, version) = rt.selected_with_version(opts).await?;
             let probe = Probe::for_session(opts)?;
             let mut cmd = probe.command(&rt.program);
             // Kimi's conversation opener negotiates KAP, while its account model menu
@@ -35,7 +39,20 @@ impl Menu {
             if self == Self::Kimi && rt.protocol == Protocol::KimiKap {
                 cmd.arg("acp");
             }
-            cmd.args(&rt.args);
+            if self == Self::Antigravity {
+                antigravity::preflight(&probe, &rt.program, version).await?;
+                for arg in &rt.args {
+                    if arg == "--process-per-session" {
+                        cmd.arg("--dangerously-skip-permissions");
+                    }
+                    cmd.arg(arg);
+                }
+                if let Some(home) = crate::options::env_path(opts, "GEMINI_HOME") {
+                    cmd.arg("--gemini-dir").arg(home);
+                }
+            } else {
+                cmd.args(&rt.args);
+            }
             if self == Self::CodeBuddy {
                 cmd.args(["--permission-mode", "bypassPermissions"]);
             }
@@ -65,12 +82,17 @@ impl Menu {
             let opened = query
                 .request("session/new", json!({"cwd":probe.cwd,"mcpServers":[]}))
                 .await?;
-            let models = project(self, &opened);
+            let models = match project(self, &opened) {
+                Ok(entries) if self == Self::Antigravity => {
+                    antigravity::read(&mut query, &opened, entries).await
+                }
+                result => result,
+            };
             let capabilities = &hello["agentCapabilities"]["sessionCapabilities"];
             let offered = |name: &str| capabilities[name].is_object() || capabilities[name] == true;
             let cleanup = match self {
                 Self::Devin if offered("delete") => Some("session/delete"),
-                Self::Devin if offered("close") => Some("session/close"),
+                Self::Devin | Self::Antigravity if offered("close") => Some("session/close"),
                 Self::Kimi => Some("session/close"),
                 _ => None,
             };
@@ -212,7 +234,7 @@ fn project(menu: Menu, opened: &Value) -> Result<Vec<ModelEntry>> {
         }
         if default
             && let Some(effort) = &initial
-            && (menu != Menu::CodeBuddy || levels.contains(effort))
+            && (!matches!(menu, Menu::CodeBuddy | Menu::Antigravity) || levels.contains(effort))
         {
             metadata.insert("defaultEffort".into(), effort.clone().into());
         }
