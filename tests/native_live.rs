@@ -265,8 +265,12 @@ fn respond_observed(
         let spawn_probe =
             !summarizing && last.contains("KAR-SPAWN-BACKGROUND") && !last.contains("tool_result");
         let conversation = request["messages"].to_string();
-        let steer_probe =
-            workspace.is_some() && !last.is_empty() && conversation.contains("KAR-LIVE-STEER-TOOL");
+        let steer_probe = workspace.is_some()
+            && request["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty())
+            && !last.is_empty()
+            && conversation.contains("KAR-LIVE-STEER-TOOL");
         if let Some(work) = workspace
             && (last.contains("KAR-LIVE-STEER-") || last.contains("kar-queue-held-at-model"))
             && !last.contains("KAR-LIVE-FOLLOWUP")
@@ -1940,14 +1944,51 @@ async fn live_steering(provider: &str, tool: bool) {
     );
     if provider == "opencode" {
         let mut events = store.follow(chat, Some(initial.parse().unwrap())).unwrap();
+        let v1 = rec.iter().any(|r| {
+            r.native
+                .pointer("/result/agentInfo/version")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.trim_start_matches('v').starts_with("1."))
+        });
         let mut cut = None;
+        let mut tool_only = None;
         while events.cursor() != tip.cursor {
             let event = events.recv().await.unwrap();
+            if matches!(&event.update, kar::chat::ChatUpdate::Frame{frame,..} if frame.edits.iter().any(|edit|matches!(edit,kar::chat::ChatEdit::Activity{event:Event::ToolResult{..}})))
+            {
+                tool_only = Some(event.cursor);
+            }
             if matches!(&event.update, kar::chat::ChatUpdate::Frame {frame,..} if frame.edits.iter().any(|edit|
                 matches!(edit, kar::chat::ChatEdit::Text{role:Role::Assistant,..})))
             {
                 cut = Some(event.cursor);
             }
+        }
+        if v1 {
+            // The native archive already contains the final answer, but this
+            // journal has only witnessed the opening user's tool. An equal
+            // follow-up text alone cannot settle the separate concurrent prompt.
+            let early = interrupted_copy(
+                &dir.path().join("chats"),
+                &dir.path().join("steer-early"),
+                chat,
+                tool_only.unwrap(),
+            );
+            let resumed = early
+                .resume_with(chat, |o| o.env = env.clone())
+                .await
+                .unwrap();
+            let original = resumed.send(turn_id, "KAR-LIVE-STEER-TOOL").await.unwrap();
+            assert_eq!(original.status, TurnStatus::Interrupted);
+            assert_eq!(
+                original
+                    .steered_inputs
+                    .values()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                [kar::SteerStatus::Unconfirmed]
+            );
+            resumed.close().await.unwrap();
         }
         let recovered = interrupted_copy(
             &dir.path().join("chats"),

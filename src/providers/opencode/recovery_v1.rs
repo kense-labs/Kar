@@ -2,12 +2,15 @@
 use super::{Part, Turn, Witness};
 use crate::{FailureClass, Outcome, SessionOptions, TurnFailure, chat::Role};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+
 pub(super) fn settled(
     doc: &Value,
     root: &str,
     opts: &SessionOptions,
     witness: &Witness<'_>,
     prompt: &str,
+    accepted: &[&str],
 ) -> Option<(Turn, Outcome)> {
     let meta = &doc["info"];
     if meta["id"] != root || !crate::opening::same_directory(meta["directory"].as_str()?, &opts.cwd)
@@ -15,38 +18,76 @@ pub(super) fn settled(
         return None;
     }
     let rows = doc["messages"].as_array()?;
-    let (user, witness_index) = owner(rows, root, witness)?;
-    let mut inputs = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r["info"]["id"] == user);
-    let (index, entry) = inputs.next()?;
-    if inputs.next().is_some() || entry["info"]["role"] != "user" {
-        return None;
+    let witness_index = witness_index(rows, root, witness)?;
+    let mut ids = std::collections::HashSet::new();
+    let mut users = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        if !ids.insert(row["info"]["id"].as_str()?) {
+            return None;
+        }
+        if row["info"]["role"] == "user" {
+            users.push(i);
+        }
     }
-    let [text] = entry["parts"].as_array()?.as_slice() else {
-        return None;
-    };
-    if text["type"] != "text"
-        || text["text"] != prompt
-        || text["messageID"] != user
-        || text["sessionID"] != root
-    {
-        return None;
+    let witnessed_user = users
+        .partition_point(|&i| i < witness_index)
+        .checked_sub(1)?;
+    let mut resolved = None;
+    for start in witnessed_user.saturating_sub(accepted.len())..=witnessed_user {
+        let final_user = start + accepted.len();
+        if final_user >= users.len() {
+            continue;
+        }
+        let end = users.get(final_user + 1).copied().unwrap_or(rows.len());
+        if let Some(turn) = group(&rows[users[start]..end], root, prompt, accepted)
+            && resolved.replace(turn).is_some()
+        {
+            return None;
+        }
     }
+    resolved
+}
 
-    let next_user = rows[index + 1..]
-        .iter()
-        .position(|row| row["info"]["role"] == "user")
-        .map_or(rows.len(), |i| index + 1 + i);
-    let steps = index + 1..next_user;
-    if !steps.contains(&witness_index) {
+fn user_text<'a>(row: &'a Value, root: &str, attachments: bool) -> Option<&'a str> {
+    let info = &row["info"];
+    let mut text = None;
+    for part in row["parts"].as_array()? {
+        if part["sessionID"] != root || part["messageID"] != info["id"] {
+            return None;
+        }
+        match part["type"].as_str()? {
+            "text" if text.is_none() => text = Some(part["text"].as_str()?),
+            "file"
+                if attachments
+                    && part["mime"]
+                        .as_str()
+                        .is_some_and(|s| s.starts_with("image/")) => {}
+            _ => return None,
+        }
+    }
+    text
+}
+
+// An accepted concurrent prompt becomes another native user parent. Follow
+// that transition only while the preceding model step is still nonterminal.
+fn group(rows: &[Value], root: &str, prompt: &str, accepted: &[&str]) -> Option<(Turn, Outcome)> {
+    let (first, steps) = rows.split_first()?;
+    if user_text(first, root, false)? != prompt {
         return None;
     }
+    let mut user = first["info"]["id"].as_str()?;
     let mut turn = Turn::new(user);
     let mut outcome = None;
-    let mut message_ids = std::collections::HashSet::new();
-    for row in &rows[steps] {
+    for row in steps {
+        if row["info"]["role"] == "user" {
+            let expected = accepted.get(turn.steered_users.len())?;
+            if outcome.is_some() || user_text(row, root, true)? != *expected {
+                return None;
+            }
+            user = row["info"]["id"].as_str()?;
+            turn.steered_users.push(user.to_owned());
+            continue;
+        }
         let info = &row["info"];
         if outcome.is_some()
             || info["parentID"] != user
@@ -56,9 +97,6 @@ pub(super) fn settled(
             return None;
         }
         let id = info["id"].as_str()?;
-        if !message_ids.insert(id) {
-            return None;
-        }
         append_parts(&mut turn, &row["parts"], root, id)?;
         if !info["error"].is_null() {
             let (status, failure) = native_error(&info["error"])?;
@@ -72,10 +110,10 @@ pub(super) fn settled(
             }
         }
     }
-    Some((turn, outcome?))
+    (turn.steered_users.len() == accepted.len()).then_some((turn, outcome?))
 }
 
-fn owner<'a>(rows: &'a [Value], root: &str, witness: &Witness<'_>) -> Option<(&'a str, usize)> {
+fn witness_index(rows: &[Value], root: &str, witness: &Witness<'_>) -> Option<usize> {
     let mut owner = None;
     for (index, row) in rows.iter().enumerate() {
         let info = &row["info"];
@@ -85,27 +123,86 @@ fn owner<'a>(rows: &'a [Value], root: &str, witness: &Witness<'_>) -> Option<(&'
         if info["role"] != "assistant" {
             continue;
         }
-        let matches = match witness {
-            Witness::Message(id) => usize::from(info["id"].as_str() == Some(*id)),
-            Witness::ReasoningPart(id) => row["parts"]
-                .as_array()?
-                .iter()
-                .filter(|part| part["type"] == "reasoning" && part["id"].as_str() == Some(*id))
-                .count(),
-            Witness::Tool(id) => row["parts"]
-                .as_array()?
-                .iter()
-                .filter(|part| part["type"] == "tool" && part["callID"].as_str() == Some(*id))
-                .count(),
-        };
+        let matches = identities(row).filter(|key| key == witness).count();
         if matches > 1 {
             return None;
         }
-        if matches == 1 && owner.replace((info["parentID"].as_str()?, index)).is_some() {
+        if matches == 1 && owner.replace(index).is_some() {
             return None;
         }
     }
     owner
+}
+
+fn identities(row: &Value) -> impl Iterator<Item = Witness<'_>> {
+    let message = row["info"]["id"].as_str().map(Witness::Message);
+    message.into_iter().chain(
+        row["parts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|part| match part["type"].as_str()? {
+                "reasoning" => part["id"].as_str().map(Witness::ReasoningPart),
+                "tool" => part["callID"].as_str().map(Witness::Tool),
+                _ => None,
+            }),
+    )
+}
+
+// A v1 concurrent prompt acknowledgement may still be in flight after its
+// assistant output is observed. Establish each native user parent with a
+// distinct locally recorded native identity before settling its Kar receipt.
+pub(super) fn witnessed_parents<'a>(
+    doc: &'a Value,
+    local: &'a crate::chat::ChatTurn,
+    root: &str,
+    turn: &Turn,
+) -> bool {
+    use crate::chat::Item;
+    let mut witnesses = HashMap::new();
+    for entry in &local.items {
+        if entry.source.session_id.as_deref() != Some(root) || !entry.source.path.is_empty() {
+            continue;
+        }
+        let key = match &entry.item {
+            Item::Message {
+                role: Role::Assistant,
+                provider_id: Some(id),
+                ..
+            } => Witness::Message(id),
+            Item::Message {
+                role: Role::Reasoning,
+                provider_id: Some(id),
+                ..
+            } => Witness::ReasoningPart(id),
+            Item::Tool { id, .. } => Witness::Tool(id),
+            _ => continue,
+        };
+        witnesses.insert(key, (0usize, 0usize));
+    }
+    let Some(rows) = doc["messages"].as_array() else {
+        return false;
+    };
+    for (index, row) in rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r["info"]["role"] == "assistant")
+    {
+        for key in identities(row) {
+            if let Some((count, entry)) = witnesses.get_mut(&key) {
+                *count += 1;
+                *entry = index;
+            }
+        }
+    }
+    let proven: HashSet<_> = witnesses
+        .values()
+        .filter(|(count, _)| *count == 1)
+        .filter_map(|(_, index)| rows[*index]["info"]["parentID"].as_str())
+        .collect();
+    std::iter::once(&turn.user)
+        .chain(&turn.steered_users)
+        .all(|id| proven.contains(id.as_str()))
 }
 
 fn append_parts(turn: &mut Turn, parts: &Value, root: &str, id: &str) -> Option<()> {
@@ -189,10 +286,10 @@ mod tests {
             "time":{"completed":2},"finish":"stop"},"parts":[
             {"type":"reasoning","id":"r","messageID":"b","sessionID":"s","text":"thinking"}]});
         let doc = json!({"info":{"id":"s","directory":work.path()},"messages":[user,tool,end]});
-        let run = |doc: &Value| settled(doc, "s", &opts, &Witness::Tool("call"), "same");
+        let run = |doc: &Value| settled(doc, "s", &opts, &Witness::Tool("call"), "same", &[]);
         assert!(matches!(run(&doc), Some((_, Outcome::Completed))));
         assert!(matches!(
-            settled(&doc, "s", &opts, &Witness::ReasoningPart("r"), "same"),
+            settled(&doc, "s", &opts, &Witness::ReasoningPart("r"), "same", &[]),
             Some((_, Outcome::Completed))
         ));
         let mut cut = doc.clone();

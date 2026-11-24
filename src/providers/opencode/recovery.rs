@@ -340,6 +340,7 @@ pub(crate) async fn recover(
         return Ok(None);
     }
     let read = async {
+        let mut receipts = Vec::new();
         let accepted = local
             .items
             .iter()
@@ -357,20 +358,31 @@ pub(crate) async fn recover(
                     return None;
                 };
                 let key = uuid::Uuid::parse_str(id).ok()?;
-                (local.steered_inputs.get(&key) == Some(&crate::SteerStatus::Accepted))
-                    .then_some(text.as_str())
+                match local.steered_inputs.get(&key)? {
+                    crate::SteerStatus::Accepted => Some(text.as_str()),
+                    crate::SteerStatus::Unconfirmed if major == Some(1) => {
+                        receipts.push(ChatEdit::SteeringInput {
+                            id: key,
+                            request_id: None,
+                            text: text.clone(),
+                            status: crate::SteerStatus::Accepted,
+                        });
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                }
             })
             .collect::<Vec<_>>();
         if major == Some(1) {
             // OpenCode 1 stores assistant steps under their native user parent.
             // Its archive has no turn-position fork anchor.
             let export = crate::options::opencode::export(&rt.program, opts, root, false).await?;
-            let settled = if accepted.is_empty() {
-                v1::settled(&export, root, opts, &witness, prompt)
-            } else {
-                None
-            };
-            return Ok(settled.map(|(turn, outcome)| (turn, None, outcome)));
+            let settled = v1::settled(&export, root, opts, &witness, prompt, &accepted).filter(
+                |(turn, _)| {
+                    receipts.is_empty() || v1::witnessed_parents(&export, local, root, turn)
+                },
+            );
+            return Ok(settled.map(|(turn, outcome)| (turn, None, outcome, receipts)));
         }
         let (server, _) = history::open(&rt.program, opts, root).await?;
         let mut archive = Archive::new(witness, prompt, accepted);
@@ -379,13 +391,12 @@ pub(crate) async fn recover(
         Ok::<_, Error>(
             archive
                 .finish()
-                .map(|(turn, anchor, outcome)| (turn, Some(anchor), outcome)),
+                .map(|(turn, anchor, outcome)| (turn, Some(anchor), outcome, receipts)),
         )
     };
-    let Some((turn, idle, outcome)) =
-        tokio::time::timeout(opts.handshake_timeout, read)
-            .await
-            .map_err(|_| Error::Timeout("OpenCode transcript recovery".into()))??
+    let Some((turn, idle, outcome, mut edits)) = tokio::time::timeout(opts.handshake_timeout, read)
+        .await
+        .map_err(|_| Error::Timeout("OpenCode transcript recovery".into()))??
     else {
         return Ok(None);
     };
@@ -399,7 +410,6 @@ pub(crate) async fn recover(
     let Some(mut tools) = replayed_tools(&records, root, &turn) else {
         return Ok(None);
     };
-    let mut edits = Vec::new();
     for part in turn.parts {
         let edit = match part {
             Part::Text(role, key, text) => ChatEdit::Text {

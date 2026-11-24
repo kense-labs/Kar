@@ -1,7 +1,7 @@
 //! OpenCode 2's native message archive and authenticated per-workspace service.
 use super::server::Server;
 use crate::{
-    Error, InstallationOptions, Result, SessionOptions,
+    Error, Result, SessionOptions,
     chat::{ChatTurn, Item, Role},
     installation::Probe,
 };
@@ -9,6 +9,7 @@ use reqwest::{Method, StatusCode};
 use serde_json::Value;
 use std::{collections::HashSet, path::Path};
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Witness<'a> {
     Message(&'a str),
     Tool(&'a str),
@@ -131,14 +132,7 @@ pub(super) async fn open(
     source: &str,
 ) -> Result<(Server, Value)> {
     let cwd = opts.cwd.canonicalize()?;
-    let probe = Probe::new(&InstallationOptions {
-        cwd: Some(cwd.clone()),
-        env: opts
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), Some(v.clone())))
-            .collect(),
-    })?;
+    let probe = Probe::for_session(opts)?;
     let server = Server::launch(&probe, program, opts.handshake_timeout, Some(&cwd)).await?;
     let info = server
         .request(Method::GET, &["session", source], None)
