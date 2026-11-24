@@ -219,6 +219,7 @@ impl Transcript {
                 self.pending
                     .drain(..)
                     .map(|(id, text)| ChatEdit::SteeringInput {
+                        attachments: Vec::new(),
                         id,
                         text,
                         status: crate::SteerStatus::Accepted,

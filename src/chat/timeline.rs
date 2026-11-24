@@ -80,6 +80,8 @@ pub struct TimelineItem {
 pub struct ChatTurn {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<super::Attachment>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub steered_attachments: BTreeMap<Uuid, Vec<super::Attachment>>,
     /// Stable across restarts; also the caller's idempotency key.
     pub id: Uuid,
     pub started_ms: u64,
@@ -303,6 +305,7 @@ impl ChatTurn {
             started_ms,
             finished_ms: None,
             attachments: Vec::new(),
+            steered_attachments: BTreeMap::new(),
             status: TurnStatus::Running,
             native_input_receipt: None,
             process_cleanups: Vec::new(),
@@ -497,8 +500,15 @@ impl ChatTurn {
                     self.native_result_inputs.clone_from(inputs);
                 }
                 Edit::SteeringInput {
-                    id, text, status, ..
+                    id,
+                    text,
+                    status,
+                    attachments,
+                    ..
                 } => {
+                    if !attachments.is_empty() {
+                        self.steered_attachments.insert(*id, attachments.clone());
+                    }
                     self.steered_inputs.insert(*id, *status);
                     self.text(&frame.source, Role::User, Some(&id.to_string()), text, true);
                 }
@@ -968,6 +978,8 @@ pub enum Edit {
         inputs: Vec<Uuid>,
     },
     SteeringInput {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<super::Attachment>,
         id: Uuid,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
@@ -1224,6 +1236,7 @@ impl MessageIds {
                     ..
                 } => {
                     edits.push(Edit::SteeringInput {
+                        attachments: Vec::new(),
                         id: *input_id,
                         request_id: r.response_to.clone(),
                         text: text.clone(),

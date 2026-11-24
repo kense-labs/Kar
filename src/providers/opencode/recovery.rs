@@ -362,6 +362,7 @@ pub(crate) async fn recover(
                     crate::SteerStatus::Accepted => Some(text.as_str()),
                     crate::SteerStatus::Unconfirmed if major == Some(1) => {
                         receipts.push(ChatEdit::SteeringInput {
+                            attachments: Vec::new(),
                             id: key,
                             request_id: None,
                             text: text.clone(),

@@ -237,9 +237,17 @@ impl super::log::State {
             None => text.into(),
         }
     }
-    pub(super) fn recovery_turns(&self) -> std::borrow::Cow<'_, [ChatTurn]> {
+    pub(super) fn recovery_turns(
+        &self,
+        store: &super::ChatStore,
+    ) -> std::borrow::Cow<'_, [ChatTurn]> {
         use std::borrow::Cow;
-        if self.handoffs.is_empty() {
+        if self.handoffs.is_empty()
+            && self
+                .turns
+                .iter()
+                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty())
+        {
             return Cow::Borrowed(&self.turns);
         }
         let turns = self
@@ -264,6 +272,27 @@ impl super::log::State {
                     }) = turn.items.first_mut()
                 {
                     *text = h.native_input(text);
+                }
+                for (index, item) in turn.items.iter_mut().enumerate() {
+                    if let Item::Message {
+                        role: Role::User,
+                        text,
+                        provider_id,
+                        ..
+                    } = &mut item.item
+                    {
+                        let refs = if index == 0 {
+                            Some(&turn.attachments)
+                        } else {
+                            provider_id
+                                .as_deref()
+                                .and_then(|id| Uuid::parse_str(id).ok())
+                                .and_then(|id| turn.steered_attachments.get(&id))
+                        };
+                        if let Some(refs) = refs {
+                            text.push_str(&store.file_context(refs));
+                        }
+                    }
                 }
                 turn
             })

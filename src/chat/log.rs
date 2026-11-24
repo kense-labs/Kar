@@ -382,7 +382,11 @@ impl State {
                 .map(|n| &mut n.activity)
         }
     }
-    fn take_steering_message(&mut self, from: Uuid, id: Uuid) -> Result<super::TimelineItem> {
+    fn take_steering_message(
+        &mut self,
+        from: Uuid,
+        id: Uuid,
+    ) -> Result<(super::TimelineItem, Vec<super::Attachment>)> {
         let source = self
             .activity_mut(from)
             .ok_or_else(|| Error::Protocol("unknown steering origin".into()))?;
@@ -396,7 +400,10 @@ impl State {
         } if provider == &key)
             })
             .ok_or_else(|| Error::Protocol("missing submitted steering input".into()))?;
-        Ok(source.items.remove(index))
+        Ok((
+            source.items.remove(index),
+            source.steered_attachments.remove(&id).unwrap_or_default(),
+        ))
     }
     fn move_steering_messages(&mut self, target: Uuid, frame: &Frame) -> Result<()> {
         for edit in &frame.edits {
@@ -405,13 +412,16 @@ impl State {
             } = edit
                 && *to == target
             {
-                let message = self.take_steering_message(*from, *input_id)?;
+                let (message, attachments) = self.take_steering_message(*from, *input_id)?;
                 let activity = self
                     .activity_mut(target)
                     .ok_or_else(|| Error::Protocol("unknown steering destination".into()))?;
                 activity
                     .steered_inputs
                     .insert(*input_id, crate::SteerStatus::Accepted);
+                if !attachments.is_empty() {
+                    activity.steered_attachments.insert(*input_id, attachments);
+                }
                 activity.items.push(message);
             }
         }
@@ -679,11 +689,12 @@ impl State {
             } => {
                 self.begin_turn(id, at, None, Some(native_turn), before_tree, repositories)?;
                 if let Some(from) = steered_from {
-                    let input = self.take_steering_message(from, id)?;
+                    let (input, attachments) = self.take_steering_message(from, id)?;
                     let turn = self.turns.last_mut().expect("just began turn");
                     turn.native_continuation = false;
                     turn.input_sent = true;
                     turn.steered_from = Some(from);
+                    turn.attachments = attachments;
                     turn.items.push(input);
                 }
             }
@@ -1220,6 +1231,45 @@ impl Log {
     pub(super) fn commit(&mut self, mut row: ChatUpdate) -> Result<()> {
         self.healthy()?;
         if let ChatUpdate::Frame { id, frame } | ChatUpdate::Reconciled { id, frame } = &mut row {
+            if let Some(store) = &self.native_store
+                && frame.source.path.is_empty()
+                && frame.source.session_id.as_deref() == Some(&self.state.info.native_id)
+            {
+                let turn = self.state.find(*id);
+                let mut suffix = None;
+                for edit in &mut frame.edits {
+                    match edit {
+                        super::ChatEdit::SteeringInput {
+                            id: input,
+                            text,
+                            attachments,
+                            ..
+                        } => {
+                            if let Some((original, refs)) =
+                                store.promoted_message(&self.state.info, *id, *input)?
+                            {
+                                *text = original;
+                                *attachments = refs;
+                            }
+                        }
+                        super::ChatEdit::Text {
+                            role: super::Role::User,
+                            text,
+                            ..
+                        }
+                        | super::ChatEdit::UserInput { text, .. } => {
+                            if let Some(t) = turn.filter(|t| !t.attachments.is_empty()) {
+                                let tail = suffix
+                                    .get_or_insert_with(|| store.file_context(&t.attachments));
+                                if !tail.is_empty() && text.ends_with(tail.as_str()) {
+                                    text.truncate(text.len() - tail.len());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             self.state.clean_handoff_echo(*id, frame);
         }
         let result = append(&mut self.file, &row).and_then(|_| self.state.apply(row));
@@ -1253,7 +1303,7 @@ impl Log {
         store: &super::ChatStore,
     ) -> Result<()> {
         if session.protocol() == Protocol::Claude {
-            let turns = self.state.recovery_turns();
+            let turns = self.state.recovery_turns(store);
             let history = claude::history(&self.state.info, options, &turns).await?;
             for id in history.received {
                 self.input_sent(id)?;
@@ -1299,7 +1349,7 @@ impl Log {
                 }
             }
         }
-        let recovery = self.state.recovery_turns();
+        let recovery = self.state.recovery_turns(store);
         if let Some(last) = recovery
             .last()
             .filter(|t| matches!(t.status, TurnStatus::Running | TurnStatus::Interrupted))

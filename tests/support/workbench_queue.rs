@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 use std::{fs, time::Duration};
 use uuid::Uuid;
 
+const IMG:&[u8]=include_bytes!("../../crates/kar-documents/tests/pixel.png");
+
 #[tokio::main]
 pub(crate) async fn run() {
     tokio::time::timeout(Duration::from_secs(90), scenario())
@@ -116,7 +118,55 @@ async fn scenario() {
             "pending"
         );
     }
-    let edited = json!({"command_id":Uuid::new_v4(),"action":"edit","input":a,"text":"edited A"});
+    let ticket = ok(client
+        .post(format!("{url}/projects/{p}/attachments/uploads"))
+        .json(&json!({"name":"review.png","mime":"image/png","kind":"image","bytes":IMG.len()})))
+    .await;
+    let picture = ticket["id"].as_str().unwrap();
+    let public = reqwest::Client::new();
+    let upload = format!("{url}{}", ticket["upload_path"].as_str().unwrap());
+    assert!(
+        !public
+            .put(&upload)
+            .body("bad")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    ok(public.put(&upload).body(IMG)).await;
+    ok(public.put(&upload).body(IMG)).await;
+    let saved = ok(client
+        .post(format!("{url}{path}/attachments"))
+        .json(&json!({"attachment":picture})))
+    .await;
+    assert_eq!(saved["bytes"], IMG.len());
+    assert!(
+        !public
+            .put(&upload)
+            .body(IMG)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let read = ok(client.post(format!("{url}{path}/attachments/{picture}/url"))).await;
+    let read_path = read["read_path"].as_str().unwrap();
+    assert_eq!(
+        public
+            .get(format!("{url}{read_path}"))
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        IMG
+    );
+    let edited = json!({"command_id":Uuid::new_v4(),"action":"replace","input":a,"text":"edited A","attachments":[picture]});
     let moved = json!({"command_id":Uuid::new_v4(),"action":"reorder","input":c,"before":a});
     let receipt = ok(client.post(&commands).json(&edited)).await;
     ok(client.post(&commands).json(&moved)).await;
@@ -175,6 +225,26 @@ async fn scenario() {
         })
         .collect::<Vec<_>>();
     assert_eq!(&calls[3..], ["B", "C", "edited A"]);
+    let timeline = ok(client.get(format!("{url}{path}/snapshot"))).await;
+    let delivered = timeline["history"]["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == a.to_string())
+        .unwrap();
+    assert_eq!(delivered["attachments"], json!([saved]));
+    assert_eq!(
+        public
+            .get(format!("{url}{read_path}"))
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        IMG
+    );
     let target = Uuid::new_v4();
     let active = tokio::spawn(ok(client
         .post(format!("{url}{path}/messages"))
@@ -183,7 +253,7 @@ async fn scenario() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let follow = Uuid::new_v4();
-    let body = json!({"id":follow,"text":"apply inside this turn"});
+    let body = json!({"id":follow,"text":"apply inside this turn","attachments":[picture]});
     ok(client.post(&endpoint).json(&body)).await;
     let promote = format!("{endpoint}/{follow}/steer");
     let action = json!({"command_id":Uuid::new_v4(),"turn":target});
@@ -219,5 +289,16 @@ async fn scenario() {
     );
     let calls = fs::read_to_string(native.join("calls")).unwrap();
     assert!(!calls.contains("apply inside this turn"));
+    let timeline = ok(client.get(format!("{url}{path}/snapshot"))).await;
+    let turn = timeline["history"]["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == target.to_string())
+        .unwrap();
+    assert_eq!(
+        turn["steered_attachments"][follow.to_string()],
+        json!([saved])
+    );
     server.kill().await.unwrap();
 }

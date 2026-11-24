@@ -174,6 +174,23 @@ impl ChatStore {
         }
         Ok(out)
     }
+    pub(super) fn file_context(&self, attachments: &[Attachment]) -> String {
+        let files = attachments
+            .iter()
+            .filter(|a| a.kind == AttachmentKind::File)
+            .map(
+                |a| serde_json::json!({"name":a.name,"path":self.attachment_path(a),"mime":a.mime}),
+            )
+            .collect::<Vec<_>>();
+        if files.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nAttached files (JSON):\n{}",
+                serde_json::Value::Array(files)
+            )
+        }
+    }
     pub(crate) fn attached_input(
         &self,
         chat: Uuid,
@@ -181,7 +198,6 @@ impl ChatStore {
         attachments: &[Attachment],
     ) -> Result<crate::input::Input> {
         let mut images = Vec::new();
-        let mut files = Vec::new();
         for a in attachments {
             let saved = self.read_attachment(chat, a.id)?;
             if &saved != a {
@@ -192,21 +208,11 @@ impl ChatStore {
             if data.len() as u64 != a.bytes || format!("{:x}", Sha256::digest(&data)) != a.sha256 {
                 return Err(Error::Refused("attachment content changed".into()));
             }
-            match a.kind {
-                AttachmentKind::Image => images.push(InputImage::from_bytes(&data)?),
-                AttachmentKind::File => {
-                    files.push(serde_json::json!({"name":a.name,"path":path,"mime":a.mime}))
-                }
+            if a.kind == AttachmentKind::Image {
+                images.push(InputImage::from_bytes(&data)?);
             }
         }
-        let text = if files.is_empty() {
-            text
-        } else {
-            format!(
-                "{text}\n\nAttached files (JSON):\n{}",
-                serde_json::to_string(&files)?
-            )
-        };
+        let text = text + &self.file_context(attachments);
         Ok(crate::input::Input::new(text, images))
     }
 }

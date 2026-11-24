@@ -56,6 +56,24 @@ pub(crate) enum Claim {
 }
 
 impl ChatStore {
+    pub(in crate::chat) fn promoted_message(
+        &self,
+        info: &super::ChatInfo,
+        turn: Uuid,
+        input: Uuid,
+    ) -> Result<Option<(String, Vec<super::super::Attachment>)>> {
+        if !self.inbox_path(info.id).try_exists()? {
+            return Ok(None);
+        }
+        // read_inbox opens an immutable, atomically published snapshot. The actor already
+        // owns the chat journal mutex here; it must not wait for a producer's inbox lock.
+        Ok(self
+            .read_inbox(info)?
+            .entries
+            .into_iter()
+            .find(|e| e.id == input && e.promotion.as_ref().is_some_and(|p| p.target.turn == turn))
+            .map(|e| (e.text, e.attachments)))
+    }
     pub(crate) fn claim_queue_steer(
         &self,
         chat: Uuid,

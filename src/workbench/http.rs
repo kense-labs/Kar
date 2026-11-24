@@ -68,7 +68,9 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
     } else {
         Some(app.clone())
     };
-    let hooks = super::workflows::hooks().with_state(app.clone());
+    let hooks = super::workflows::hooks()
+        .merge(super::assets::tickets())
+        .with_state(app.clone());
     let auth = super::access::Auth::new(app.clone(), token);
     let access = super::access::routes(app.clone(), auth.clone());
     let router = Router::new()
@@ -87,6 +89,7 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::thread_find::routes())
         .merge(super::thread_state::routes())
         .merge(super::interactions::routes())
+        .merge(super::assets::routes())
         .merge(super::workflows::routes())
         .merge(super::devices::routes())
         .merge(super::documents::routes())

@@ -1,5 +1,6 @@
 //! A local workbench that shares Kar's saved chats, their native sessions and event cursors.
 mod access;
+mod assets;
 mod chat_controls;
 mod devices;
 mod documents;
@@ -47,6 +48,8 @@ pub struct Project {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
+    #[serde(default)]
+    assets: assets::Registry,
     #[serde(default)]
     thread_state: thread_state::Store,
     #[serde(default)]

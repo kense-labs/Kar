@@ -201,6 +201,12 @@ pub(crate) fn agent() {
             }
             Some("turn/start") => {
                 let text = v.pointer("/params/input/0/text").unwrap().as_str().unwrap();
+                if text == "edited A" {
+                    assert_eq!(
+                        v.pointer("/params/input/1/url").and_then(Value::as_str),
+                        Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwLIgHAAHWAQH4l8EzAAAAAElFTkSuQmCC")
+                    );
+                }
                 match text {
                     "shared-A" | "shared-B" => {
                         fs::write(database.join(text), []).unwrap();
@@ -293,6 +299,10 @@ pub(crate) fn agent() {
                     assert_eq!(
                         steer["params"]["input"][0]["text"],
                         "apply inside this turn"
+                    );
+                    assert_eq!(
+                        steer.pointer("/params/input/1/url").and_then(Value::as_str),
+                        Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwLIgHAAHWAQH4l8EzAAAAAElFTkSuQmCC")
                     );
                     fs::write(
                         database.join("steered-text"),

@@ -50,7 +50,7 @@ pub(super) struct AccessStore {
     changed: watch::Sender<()>,
 }
 
-fn now() -> u64 {
+pub(super) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
