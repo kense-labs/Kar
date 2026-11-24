@@ -197,6 +197,7 @@ mod tests {
                 span_id: None,
                 elided: false,
                 elided_input_echoes: vec![],
+                message_boundaries: Default::default(),
                 upstream: None,
             };
             let report = record.compactions().next().unwrap();

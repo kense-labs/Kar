@@ -75,6 +75,7 @@ impl Record {
             .collect();
         Self {
             stream_id: self.stream_id,
+            message_boundaries: self.message_boundaries.clone(),
             seq: self.seq,
             timestamp_ms: self.timestamp_ms,
             direction: self.direction,

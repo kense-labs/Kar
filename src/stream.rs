@@ -3,6 +3,10 @@ mod queue;
 #[cfg(not(target_arch = "wasm32"))]
 mod reachability;
 pub(crate) mod retention;
+mod text;
+pub use text::MessageBoundary;
+#[cfg(not(target_arch = "wasm32"))]
+pub use text::CoalescedEvents;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,6 +36,8 @@ pub struct ObservedEvent {
     pub span_id: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub elided: bool,
+    #[serde(default, flatten)]
+    pub message: MessageBoundary,
     pub event: Event,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -505,6 +511,8 @@ pub struct Record {
     /// Input identities preserved when the in-memory replay budget elides a native frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elided_input_echoes: Vec<crate::observe::InputEcho>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub message_boundaries: std::collections::BTreeMap<usize, MessageBoundary>,
     pub native: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<Value>,
@@ -653,6 +661,7 @@ impl Record {
 }
 
 struct State {
+    messages: text::MessageTracker,
     #[cfg(not(target_arch = "wasm32"))]
     chat: Option<crate::chat::Sink>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -725,6 +734,7 @@ impl Journal {
             delivery: Default::default(),
             id: Uuid::new_v4(),
             state: Arc::new(Mutex::new(State {
+                messages: Default::default(),
                 #[cfg(not(target_arch = "wasm32"))]
                 chat: None,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -1038,7 +1048,9 @@ impl Journal {
             s.reachability
                 .observe(kind, stamp.direction, &native, &events);
         }
+        let message_boundaries = s.messages.observe(stamp.direction, session_id.as_deref(), &agent_path, &native, &events);
         let record = Arc::new(Record {
+            message_boundaries,
             elided: false,
             elided_input_echoes: vec![],
             upstream: None,
@@ -1284,6 +1296,11 @@ pub struct EventSubscription {
     index: usize,
 }
 impl EventSubscription {
+    /// Merge consecutive text in each native message. Set a quiet interval to flush a paused stream.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn coalesce_text(self, max_hold: Option<std::time::Duration>) -> CoalescedEvents {
+        CoalescedEvents::new(self, max_hold)
+    }
     pub async fn next(&mut self) -> Option<ObservedEvent> {
         loop {
             if self.current.is_none() {
@@ -1304,6 +1321,7 @@ impl EventSubscription {
                     agent_path: r.agent_path.clone(),
                     span_id: r.span_id.clone(),
                     elided: r.elided,
+                    message: r.message_boundaries.get(&(self.index - 1)).cloned().unwrap_or_default(),
                     event: event.clone(),
                 });
             }

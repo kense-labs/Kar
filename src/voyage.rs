@@ -94,6 +94,7 @@ pub(crate) fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
         _ => Direction::Host,
     };
     let mut events = vec![];
+    let mut message_boundaries = std::collections::BTreeMap::new();
     for event in body["events"].as_array().into_iter().flatten() {
         if event["kind"] == "turn_ended"
             && event["outcome"]["kind"] == "completed"
@@ -111,6 +112,10 @@ pub(crate) fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
             });
         }
         if let Some(e) = project(event) {
+            if matches!(&e, Event::TextDelta {..} | Event::ReasoningDelta {..} | Event::Message{..})
+                && let Some(boundary) = crate::stream::MessageBoundary::from_recorded(event) {
+                message_boundaries.insert(events.len(), boundary);
+            }
             events.push(e)
         }
         if event["kind"] == "usage"
@@ -219,6 +224,7 @@ pub(crate) fn convert(v: &Value, stream_id: Uuid, seq: u64) -> Result<Record> {
         agent_path: serde_json::from_value(v["agentPath"].clone())?,
         elided: body["elided"] == true,
         elided_input_echoes: vec![],
+        message_boundaries,
         native: body.get("native").unwrap_or(body).clone(),
         upstream: Some(v.clone()),
         events,

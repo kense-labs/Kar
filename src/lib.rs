@@ -138,7 +138,10 @@ pub use session::{
     Capabilities, Delivery, DeliverWhen, DeliverOptions, DeliverReceipt, DeliverLanded, MergeInput, MergedInput, InputOptions, PromptDecision, PromptInterrupt, PromptRun,
     PromptRunOptions, Session, Turn, TurnReport,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use stream::CoalescedEvents;
 pub use stream::{
+    MessageBoundary,
     ControlReceipt, Cursor, Direction, Event, EventCursor, EventSubscription, ImageReference,
     ImageSubmission, InputOrigin, InputOriginKind, InputReceipt, McpStartupStatus, ObservedEvent,
     Outcome, ProcessCleanupResult, PromptIdentity, Record, RecordKind, SteerStatus, Subscription,
