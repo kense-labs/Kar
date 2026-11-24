@@ -126,8 +126,10 @@ pub(super) async fn controls(
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");
     fs::create_dir(&root).unwrap();
-    let (mut remote, remote_url) =
-        server::serve(&temp.path().join("state"), &root, temp.path()).await;
+    let remote_observer = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let observer_address = remote_observer.local_addr().unwrap().to_string();
+    let (mut remote, remote_url) = server::serve_with_env(&temp.path().join("state"), &root, temp.path(),
+        &[("KAR_TEST_MCP_OBSERVER", observer_address.as_ref())]).await;
     let destination = server::json(host.get(format!("{remote_url}/environment"))).await;
     let destination_id = &destination["environment_id"];
     let req = Uuid::new_v4();
