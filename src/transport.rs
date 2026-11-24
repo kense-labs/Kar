@@ -1,4 +1,5 @@
 mod codex_processes;
+mod interrupt_timeout;
 use crate::grok::turns::{INTERJECT, Turns as GrokTurns};
 use crate::interaction::sensitive_field;
 use crate::stream::RecordStamp;
@@ -258,6 +259,7 @@ pub(crate) struct Actor {
     grok_interjections: HashMap<uuid::Uuid, (SteeringReceipt, crate::SteerStatus)>,
     codex_quota: wire::failure::CodexQuota,
     codex_processes: Option<codex_processes::Guard>,
+    interrupt_timeout: interrupt_timeout::InterruptTimeout,
     factory: Option<crate::factory::Projection>,
     usage: wire::usage::Projection,
     opencode: Option<wire::opencode::Children>,
@@ -352,6 +354,7 @@ impl Actor {
                 .then(|| crate::grok::terminal::Terminals::new(options, child.id())),
             end_turn_processes: options.settings.end_turn_processes_on_abort,
             codex_quota: Default::default(),
+            interrupt_timeout: Default::default(),
             codex_processes: (runtime.protocol == Protocol::Codex
                 && options.settings.end_turn_processes_on_abort)
                 .then(|| codex_processes::Guard::new(child.id(), journal.clone())),
@@ -652,6 +655,11 @@ impl Actor {
         {
             self.grok_interjections
                 .insert(receipt.id, (receipt.clone(), crate::SteerStatus::Submitted));
+        }
+        if matches!(intent, RpcIntent::Abort(_))
+            && matches!(self.protocol, Protocol::Codex | Protocol::Claude)
+        {
+            self.interrupt_timeout.arm(id);
         }
         self.pending.insert(
             id,
@@ -2113,6 +2121,11 @@ impl Actor {
             } else {
                 open_error.map_or_else(|| wire::result(self.protocol, &v), Err)
             };
+            if result.is_err()
+                && let Some(id) = number
+            {
+                self.interrupt_timeout.refused(id);
+            }
             let supersedes = self.identity.lock().unwrap().acp_steering
                 == Some(Steering::SupersedingPrompt)
                 && (p.method == ANTIGRAVITY_STEER
@@ -2687,6 +2700,11 @@ impl Actor {
                 self.manual_compaction = None;
             }
         }
+        if (current_turn && (outcome.is_some() || dropped.is_some()))
+            || (is_root && self.protocol == Protocol::Claude && self.idle_for_interrupt())
+        {
+            self.interrupt_timeout.take();
+        }
         if current_turn && let Some(outcome) = outcome.or(dropped) {
             self.finish(outcome_error.map_or(Ok(outcome), Err));
             let mut started = Vec::new();
@@ -3050,7 +3068,20 @@ impl Actor {
                 .as_ref()
                 .is_some_and(codex_processes::Guard::reading);
             let deadline = self.pi_deadlines.values().map(|(at, _)| *at).min();
+            let interrupt = self.interrupt_timeout.deadline();
             tokio::select! {
+                () = async { if let Some(at)=interrupt { tokio::time::sleep_until(at).await; } else { std::future::pending::<()>().await; } } => {
+                    for id in self.interrupt_timeout.take() {
+                        if let Some(mut pending)=self.pending.remove(&id)
+                            && let (Some(request),Some(client))=(pending.control_request,pending.reply.take()) {
+                            AbortReply{request,client}.finish(&self.journal,Ok(Value::Null));
+                        }
+                    }
+                    self.record(Direction::Host, RecordKind::Frame,
+                        json!({"type":"interrupt_timeout"}),vec![Event::TurnEnded{outcome:Outcome::Aborted}],vec![]);
+                    self.finish(Ok(Outcome::Aborted));
+                    break "native turn did not end after interrupt".into();
+                }
                 () = async { if let Some(at)=deadline { tokio::time::sleep_until(at).await; } else { std::future::pending::<()>().await; } } => self.expire_pi_dialogs(),
                 prepared = async { self.codex_processes.as_mut().expect("enabled guard").prepared().await }, if preparing_abort => {
                     if let Some((turn, waiting)) = prepared {
