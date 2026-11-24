@@ -5,6 +5,48 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const EMPTY_INPUT: &str = "empty input: give text or images";
 
+/// Pi may resize or re-encode images and append resize hints before echoing and
+/// saving the user's message. Bind recovery to the ordered native content.
+pub(crate) fn pi_image_content_sha256(content: &Value) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let parts = content.as_array()?;
+    if !parts.iter().any(|b| b["type"] == "image") {
+        return None;
+    }
+    let mut digest = Sha256::new();
+    for part in parts {
+        let fields = match part["type"].as_str()? {
+            "text" => ["text", "", part["text"].as_str()?],
+            "image" => ["image", part["mimeType"].as_str()?, part["data"].as_str()?],
+            _ => return None,
+        };
+        for field in fields {
+            digest.update((field.len() as u64).to_be_bytes());
+            digest.update(field.as_bytes());
+        }
+    }
+    Some(format!("{:x}", digest.finalize()))
+}
+
+/// Remove raw image bytes from a Pi user echo after retaining its native identity.
+pub(crate) fn pi_user_echo(packet: &mut Value) {
+    if matches!(
+        packet["type"].as_str(),
+        Some("message_start" | "message_end")
+    ) && packet["message"]["role"] == "user"
+    {
+        let digest = pi_image_content_sha256(&packet["message"]["content"]);
+        packet
+            .as_object_mut()
+            .unwrap()
+            .remove("karPiImageContentSha256");
+        if let Some(digest) = digest {
+            packet["karPiImageContentSha256"] = digest.into();
+        }
+        omit_image_bytes(&mut packet["message"]["content"]);
+    }
+}
+
 /// Remove image bytes from a public copy of a native prompt, after dispatch.
 pub(crate) fn omit_image_bytes(packet: &mut Value) {
     match packet {

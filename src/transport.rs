@@ -1996,6 +1996,9 @@ impl Actor {
         if self.protocol == Protocol::Factory {
             crate::factory::redact_frame(&mut v);
         }
+        if self.protocol == Protocol::Pi {
+            crate::input::pi_user_echo(&mut v);
+        }
         let fragment = v.pointer_mut("/event/delta/partial_json").map(Value::take);
         redact(&mut v, &self.secrets);
         if let Some(fragment) = fragment {

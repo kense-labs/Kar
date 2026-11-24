@@ -124,6 +124,8 @@ pub enum ChatUpdate {
     PiInput {
         id: Uuid,
         timestamp_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image_content_sha256: Option<String>,
     },
     Captured {
         id: Uuid,
@@ -964,7 +966,7 @@ impl State {
                     .unwrap()
                     .finish(status, &self.info.native_id);
             }
-            ChatUpdate::PiInput { id, timestamp_ms } => {
+            ChatUpdate::PiInput { id, timestamp_ms, image_content_sha256 } => {
                 if self.info.protocol != Protocol::Pi || self.active() != Some(id) {
                     return Err(Error::Protocol(
                         "Pi input receipt outside its active turn".into(),
@@ -975,6 +977,7 @@ impl State {
                     return Err(Error::Protocol("duplicate Pi input receipt".into()));
                 }
                 turn.pi_input_timestamp_ms = Some(timestamp_ms);
+                turn.pi_image_content_sha256 = image_content_sha256;
                 turn.input_sent = true;
             }
             ChatUpdate::Reconciled { id, mut frame } => {
@@ -2057,7 +2060,13 @@ impl Log {
                 .find(id)
                 .is_some_and(|t| t.pi_input_timestamp_ms.is_none())
         {
-            self.commit(ChatUpdate::PiInput { id, timestamp_ms })?;
+            self.commit(ChatUpdate::PiInput {
+                id,
+                timestamp_ms,
+                image_content_sha256: r.native["karPiImageContentSha256"]
+                    .as_str()
+                    .map(str::to_owned),
+            })?;
         }
         if let Some(frame) = self
             .ids

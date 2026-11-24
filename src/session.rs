@@ -2101,8 +2101,12 @@ impl Session {
             return Ok(None);
         };
         let (root, cwd, prompt) = (self.id.clone(), self.cwd.clone(), prompt.to_owned());
+        let attachments = local.attachments.clone();
+        let echo = local.pi_image_content_sha256.clone();
         let snapshot = tokio::task::spawn_blocking(move || {
-            crate::chat::recover_pi(&path, &root, &cwd, timestamp, &prompt)
+            crate::chat::recover_pi(
+                &path, &root, &cwd, timestamp, &prompt, &attachments, echo.as_deref(),
+            )
         })
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;

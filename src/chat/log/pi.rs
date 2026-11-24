@@ -20,21 +20,68 @@ struct Entry {
     offset: u64,
 }
 
-fn matches_input(message: &Value, text: &str) -> bool {
-    match &message["content"] {
-        Value::String(s) => s == text,
-        Value::Array(parts) => {
-            parts
-                .iter()
-                .all(|b| b["type"] == "text" && b["text"].is_string())
-                && parts
-                    .iter()
-                    .filter_map(|b| b["text"].as_str())
-                    .collect::<String>()
-                    == text
-        }
-        _ => false,
+fn matches_input(
+    message: &Value,
+    text: &str,
+    attachments: &[crate::chat::Attachment],
+    echo: Option<&str>,
+) -> bool {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use sha2::{Digest, Sha256};
+
+    let mut images = attachments
+        .iter()
+        .filter(|a| a.kind == crate::chat::AttachmentKind::Image);
+    let content = &message["content"];
+    if let Some(echo) = echo {
+        return content.as_array().is_some_and(|parts| {
+            parts.iter().filter(|b| b["type"] == "image").count() == images.count()
+                && crate::input::pi_image_content_sha256(content).as_deref() == Some(echo)
+        });
     }
+    // Older journals have only the timestamp. Require the original attachment
+    // digests in order. A resized image without a witnessed echo is ambiguous.
+    if let Some(s) = content.as_str() {
+        return s == text && images.next().is_none();
+    }
+    let Some(parts) = content.as_array() else {
+        return false;
+    };
+    let mut remaining = text;
+    for part in parts {
+        match part["type"].as_str() {
+            Some("text") => {
+                let Some(suffix) = part["text"]
+                    .as_str()
+                    .and_then(|s| remaining.strip_prefix(s))
+                else {
+                    return false;
+                };
+                remaining = suffix;
+            }
+            Some("image") => {
+                let Some(a) = images.next() else { return false };
+                let Some(data) = part["data"].as_str() else {
+                    return false;
+                };
+                if part["mimeType"] != a.mime
+                    || base64::encoded_len(a.bytes as usize, true) != Some(data.len())
+                {
+                    return false;
+                }
+                let Ok(bytes) = STANDARD.decode(data) else {
+                    return false;
+                };
+                if bytes.len() as u64 != a.bytes
+                    || format!("{:x}", Sha256::digest(bytes)) != a.sha256
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    images.next().is_none() && remaining.is_empty()
 }
 
 pub(crate) fn recover(
@@ -43,6 +90,8 @@ pub(crate) fn recover(
     cwd: &Path,
     timestamp: u64,
     prompt: &str,
+    attachments: &[crate::chat::Attachment],
+    echo: Option<&str>,
 ) -> Result<Option<(String, Vec<ChatEdit>)>> {
     let file = match File::open(path) {
         Ok(f) => f,
@@ -111,7 +160,7 @@ pub(crate) fn recover(
             && message["timestamp"].as_u64() == Some(timestamp)
         {
             // Milliseconds alone are not a unique message identity.
-            if input.is_some() || !matches_input(message, prompt) {
+            if input.is_some() || !matches_input(message, prompt, attachments, echo) {
                 return Ok(None);
             }
             input = Some((index, id.to_owned()));
@@ -230,7 +279,16 @@ pub(crate) fn saved_anchor(
         return Ok(None);
     };
     let path = crate::options::pi_file(&options.cwd, options, root)?;
-    let Some((_, edits)) = recover(&path, root, &options.cwd, timestamp, prompt)? else {
+    let Some((_, edits)) = recover(
+        &path,
+        root,
+        &options.cwd,
+        timestamp,
+        prompt,
+        &local.attachments,
+        local.pi_image_content_sha256.as_deref(),
+    )?
+    else {
         return Ok(None);
     };
     let mut raw = serde_json::to_value(edits)?;
@@ -376,9 +434,46 @@ mod tests {
             writeln!(file, "{row}").unwrap();
         }
         file.write_all(tail).unwrap();
-        recover(&path, "root", &cwd, 1, "same prompt")
+        recover(&path, "root", &cwd, 1, "same prompt", &[], None)
             .unwrap()
             .map(|(_, edits)| edits)
+    }
+
+    #[test]
+    fn image_identity_requires_the_ordered_native_echo_or_exact_legacy_attachments() {
+        use crate::chat::{Attachment, AttachmentKind};
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use sha2::{Digest, Sha256};
+        let attachment = |data: &[u8]| Attachment {
+            id: uuid::Uuid::new_v4(),
+            name: "sample.png".into(),
+            kind: AttachmentKind::Image,
+            mime: "image/png".into(),
+            bytes: data.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(data)),
+            extracted_sha256: None,
+        };
+        let image = |data: &[u8]| json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(data)});
+        let a = [attachment(b"first"), attachment(b"second")];
+        let msg =
+            json!({"content":[{"type":"text","text":"look"},image(b"first"),image(b"second")]});
+        assert!(matches_input(&msg, "look", &a, None));
+        let normalized = json!({"content":[{"type":"text","text":"look (resized)"},image(b"resized"),image(b"second")]});
+        let fingerprint = crate::input::pi_image_content_sha256(&normalized["content"]).unwrap();
+        assert!(matches_input(&normalized, "look", &a, Some(&fingerprint)));
+        assert!(!matches_input(&normalized, "look", &a, None));
+        assert!(!matches_input(&msg, "look", &a, Some(&fingerprint)));
+        let swapped =
+            json!({"content":[{"type":"text","text":"look"},image(b"second"),image(b"first")]});
+        assert!(!matches_input(&swapped, "look", &a, None));
+        assert!(!matches_input(
+            &normalized,
+            "look",
+            &a[..1],
+            Some(&fingerprint)
+        ));
+        let only = json!({"content":[{"type":"text","text":""},image(b"first")]});
+        assert!(matches_input(&only, "", &a[..1], None));
     }
 
     #[test]

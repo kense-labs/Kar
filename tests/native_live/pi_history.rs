@@ -234,6 +234,97 @@ async fn fork_at_turn_restores_workspace_and_native_context() {
 }
 
 #[tokio::test]
+#[ignore = "requires native Pi, its v3 file and an image-capable loopback model"]
+async fn image_echo_restores_text_and_image_only_turns_without_resending() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let fixture = fixture(false).await;
+    let base = fixture.temp.path();
+    let config = base.join("agent/models.json");
+    let mut models: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    models["providers"]["fixture"]["models"][0]["input"] = json!(["text", "image"]);
+    fs::write(config, serde_json::to_vec(&models).unwrap()).unwrap();
+    let bytes = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR4nO3NsQ0AAAzCMP5/un0CNkuZ41wybXsHAAAAAAAAAAAAxR4yw/wuPL6QkAAAAABJRU5ErkJggg==").unwrap();
+    let bin = std::env::var_os("KAR_PI_BIN").unwrap();
+    for (name, prompt) in [("caption", "describe the image"), ("image-only", "")] {
+        let source = base.join(name);
+        let store = ChatStore::open(&source).unwrap();
+        let chat = store
+            .create("pi", Some(Path::new(&bin)), fixture.options.clone())
+            .await
+            .unwrap();
+        let id = chat.info().id;
+        let input = Uuid::new_v4();
+        let image = Uuid::new_v4();
+        store
+            .persist_attachment(
+                id,
+                image,
+                "sample.png",
+                "image/png",
+                kar::chat::AttachmentKind::Image,
+                &bytes,
+            )
+            .unwrap();
+        let mut feed = store
+            .follow(id, Some(store.feed_snapshot(id).unwrap().cursor))
+            .unwrap();
+        let expected = chat
+            .send_attached(input, prompt, vec![image])
+            .await
+            .unwrap();
+        assert_eq!(expected.status, TurnStatus::Completed);
+        assert!(expected.pi_image_content_sha256.is_some());
+        let cut = loop {
+            let event = feed.recv().await.unwrap();
+            if matches!(event.update, ChatUpdate::PiInput { id, .. } if id == input) {
+                break event.cursor;
+            }
+        };
+        chat.close().await.unwrap();
+        let calls = fixture.calls.lock().unwrap().len();
+        let store = interrupted_copy(&source, &base.join(format!("{name}-cut")), id, cut);
+        store
+            .persist_attachment(
+                id,
+                image,
+                "sample.png",
+                "image/png",
+                kar::chat::AttachmentKind::Image,
+                &bytes,
+            )
+            .unwrap();
+        for _ in 0..2 {
+            let resumed = store
+                .resume_with(id, |o| o.env.clone_from(&fixture.options.env))
+                .await
+                .unwrap();
+            let recovered = resumed
+                .send_attached(input, prompt, vec![image])
+                .await
+                .unwrap();
+            assert_eq!(recovered.status, TurnStatus::Completed);
+            assert_eq!(
+                recovered
+                    .items
+                    .iter()
+                    .filter(|i| matches!(
+                        &i.item,
+                        Item::Message {
+                            role: Role::User,
+                            ..
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            assert_eq!(recovered.items.iter().filter(|i| matches!(&i.item, Item::Message { role: Role::Assistant, text, .. } if text == "rust-wire-ok")).count(), 1);
+            resumed.close().await.unwrap();
+        }
+        assert_eq!(fixture.calls.lock().unwrap().len(), calls);
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires KAR_PI_BIN; real Pi v3 transcript, native read tool and two HTTP clients"]
 async fn restore_native_turn_and_reconnect_both_clients() {
     let fixture = fixture(false).await;

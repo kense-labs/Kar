@@ -158,6 +158,7 @@ pi	native_live	pi_history::public_prompt_readbacks	KAR_PI_BIN	requires KAR_PI_BI
 pi	native_live	pi_history::queue_waits_for_native_retry_to_settle	KAR_PI_BIN	requires KAR_PI_BIN with native retry and settlement signals; loopback model only
 pi	native_live	pi_history::queued_inputs_and_two_http_clients_survive_controller_kill	KAR_PI_BIN	requires KAR_PI_BIN; hard-kills a Kar CLI during a real Pi model request
 pi	native_live	pi_history::recover_after_a_native_retry_without_resending	KAR_PI_BIN	requires KAR_PI_BIN; restores a retried turn from its real Pi v3 transcript
+pi	native_live	pi_history::image_echo_restores_text_and_image_only_turns_without_resending	KAR_PI_BIN	requires Pi RPC, its native v3 session file and an image-capable loopback model
 pi	native_live	pi_history::restore_native_turn_and_reconnect_both_clients	KAR_PI_BIN	requires KAR_PI_BIN; real Pi v3 transcript, native read tool and two HTTP clients
 pi	native_live	pi_history::three_native_writes_fork_at_middle_and_reopen_both_contexts	KAR_PI_BIN	requires KAR_PI_BIN; native write tools in three turns and a mid-history fork
 pi	native_live	resume_prompts::pi_prompt_persistence	KAR_PI_BIN	requires Pi RPC with a loopback model

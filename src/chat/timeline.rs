@@ -129,6 +129,9 @@ pub struct ChatTurn {
     /// Timestamp from Pi's first native user echo in this admitted turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi_input_timestamp_ms: Option<u64>,
+    /// Ordered native input fingerprint after Pi normalized images and text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_image_content_sha256: Option<String>,
     /// The native transport reported a successful prompt write or submission.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub input_sent: bool,
@@ -340,6 +343,7 @@ impl ChatTurn {
             fork_anchor: None,
             native_turn_id: None,
             pi_input_timestamp_ms: None,
+            pi_image_content_sha256: None,
             input_sent: false,
             checkpoint: None,
         }
