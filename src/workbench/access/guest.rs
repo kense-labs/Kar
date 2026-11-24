@@ -2,6 +2,8 @@
 use super::*;
 use crate::chat::{ChatCursor, InputStatus, Item, Role};
 mod retention;
+mod delivery;
+mod files;
 use axum::{
     Extension,
     extract::{DefaultBodyLimit, Query},
@@ -58,6 +60,8 @@ struct Proposal {
 struct Attachment {
     id: Uuid,
     name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mime: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     base64: String,
     size: usize,
@@ -276,16 +280,23 @@ fn attachments(input: Vec<FileInput>) -> AccessResult<Vec<Attachment>> {
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        let valid = match mime.as_str() {
-            "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-            "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
-            "image/gif" => bytes.starts_with(b"GIF8"),
-            "image/webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
-            other => !other.starts_with("image/"),
-        };
-        if bytes.is_empty() || !valid {
+        if bytes.is_empty()
+            || (mime.starts_with("image/")
+                && !crate::InputImage::from_bytes(&bytes).is_ok_and(|image| image.mime_type() == mime))
+        {
             return Err(AccessError::Bad("empty file or unsupported image".into()));
         }
+        let mime = if mime.is_empty()
+            || mime.len() > 100
+            || !mime.is_ascii()
+            || mime.chars().any(char::is_control)
+        {
+            "application/octet-stream".to_owned()
+        } else {
+            mime
+        };
+        crate::chat::Attachment::validate(&f.name, &mime, delivery::kind(&mime), bytes.len() as u64)
+            .map_err(|e| AccessError::Bad(e.to_string()))?;
         size += bytes.len();
         if size > MESSAGE_BYTES {
             return Err(AccessError::Bad("attachments exceed 10 MiB".into()));
@@ -295,6 +306,7 @@ fn attachments(input: Vec<FileInput>) -> AccessResult<Vec<Attachment>> {
             name: f.name,
             size: bytes.len(),
             base64: STANDARD.encode(bytes),
+            mime: Some(mime),
         });
     }
     Ok(files)
@@ -317,13 +329,13 @@ async fn submit(
             .filter(|s| s.active(&host))
             .ok_or(AccessError::Invalid)?;
         let files = attachments(p.attachments)?;
-        let signature = retention::signature(&p.text, &files);
+
         if let Some(old) = s
             .proposals
             .values()
             .find(|v| v.author == who.guest && v.key == p.request_id)
         {
-            old.check_signature(&signature)?;
+            retention::check_signature(&old.signature, &p.text, &files)?;
             return Ok(old.view(s));
         }
         if let Some((id, old)) = s
@@ -331,7 +343,7 @@ async fn submit(
             .iter()
             .find(|(_, v)| v.author == who.guest && v.key == p.request_id)
         {
-            return old.replay(*id, s, &signature, &p.text, files);
+            return old.replay(*id, s, &p.text, files);
         }
         let pending: Vec<_> = s
             .proposals
@@ -349,6 +361,7 @@ async fn submit(
                 "share has reached its pending proposal or attachment limit".into(),
             ));
         }
+        let signature = retention::signature(&p.text, &files, true);
         let item = Proposal {
             author: who.guest,
             key: p.request_id,
@@ -374,14 +387,19 @@ async fn attached(
     Extension(who): Extension<Principal>,
     Path((_, id)): Path<(Uuid, Uuid)>,
 ) -> AccessResult<Response> {
-    let bytes = tokio::task::spawn_blocking(move || retention::read_attachment(&app, who, id))
+    let (bytes, mime) = tokio::task::spawn_blocking(move || files::read_attachment(&app, who, id))
         .await
         .map_err(|e| Error::Closed(e.to_string()))??;
+    let (mime, disposition) = match mime.as_deref() {
+        Some(m @ ("image/png" | "image/jpeg" | "image/webp" | "image/gif")) => (m, "inline"),
+        _ => ("application/octet-stream", "attachment"),
+    };
     Ok((
         [
-            (header::CONTENT_TYPE, "application/octet-stream"),
-            (header::CONTENT_DISPOSITION, "attachment"),
+            (header::CONTENT_TYPE, mime),
+            (header::CONTENT_DISPOSITION, disposition),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CACHE_CONTROL, "private, no-store"),
         ],
         bytes,
     )
@@ -389,7 +407,7 @@ async fn attached(
 }
 
 fn visible(app: &Workbench, who: Principal) -> AccessResult<Value> {
-    let (project, chat, revision, proposals, mut files) = {
+    let (project, chat, revision, proposals) = {
         let db = app.0.access.registry.lock().unwrap();
         let share = db
             .shares
@@ -406,11 +424,11 @@ fn visible(app: &Workbench, who: Principal) -> AccessResult<Value> {
                 .filter(|p| p.author == who.guest)
                 .map(|p| p.view(share))
                 .collect::<Vec<_>>(),
-            retention::chat_files(&db, share),
         )
     };
     app.binding(project, chat)?;
     let snap = app.0.chats.feed_snapshot(chat)?;
+    let mut files = files::chat_files(app, &snap.history);
     let turns: Vec<_> = snap
         .history
         .turns
@@ -430,7 +448,7 @@ fn visible(app: &Workbench, who: Principal) -> AccessResult<Value> {
                 .collect();
             let mut turn = json!({"id":t.id,"status":t.status,"messages":messages});
             if let Some(attached) = files.remove(&t.id) {
-                turn["attachments"] = json!(attached);
+                turn["attachments"] = json!(attached.iter().map(files::Visible::view).collect::<Vec<_>>());
             }
             turn
         })
@@ -572,7 +590,7 @@ async fn review(
     loop {
         let work = app.clone();
         let result: AccessResult<(Value, bool)> = tokio::task::spawn_blocking(move || {
-            reconcile(&work, id, msg)?;
+            delivery::reconcile(&work, id, msg)?;
             let db = work.0.access.registry.lock().unwrap();
             let s = db.shares.get(&id).ok_or(AccessError::Missing)?;
             if let Some(p) = s.proposals.get(&msg) {
@@ -603,79 +621,6 @@ fn attachment_path(msg: Uuid, f: &Attachment) -> PathBuf {
     PathBuf::from(".kar-attachments")
         .join(msg.to_string())
         .join(format!("{}-{}", f.id, f.name))
-}
-
-fn reconcile(app: &Workbench, id: Uuid, msg: Uuid) -> AccessResult<()> {
-    let (project, chat, text) = {
-        let db = app.0.access.registry.lock().unwrap();
-        let s = db.shares.get(&id).ok_or(AccessError::Missing)?;
-        let Some(p) = s
-            .proposals
-            .get(&msg)
-            .filter(|p| p.status == Decision::Sending)
-        else {
-            return Ok(());
-        };
-        let mut text = p.text.clone();
-        for f in &p.files {
-            text.push_str(&format!(
-                "\n\nAttachment: {}",
-                attachment_path(msg, f).display()
-            ));
-        }
-        (s.project, s.chat, text)
-    };
-    let info = app.binding(project, chat)?;
-    let receipt = if let Some(record) = app
-        .0
-        .chats
-        .queued_inputs(chat)?
-        .into_iter()
-        .find(|q| q.id == msg)
-    {
-        if record.text != text {
-            return Err(AccessError::Conflict(
-                "input ID belongs to another message".into(),
-            ));
-        }
-        record
-    } else {
-        if !app.0.chats.history(chat)?.turns.iter().any(|t| t.id == msg) {
-            if app.archived(chat) {
-                return Ok(());
-            }
-            match crate::input::check_text(&text, crate::input::text_limit(&info.runtime)) {
-                Err(Error::InputTooLarge { .. }) => {
-                    return record_delivery(app, id, msg, InputStatus::TooLarge);
-                }
-                other => other?,
-            }
-            let files = {
-                let db = app.0.access.registry.lock().unwrap();
-                let Some(item) = db
-                    .shares
-                    .get(&id)
-                    .and_then(|s| s.proposals.get(&msg))
-                    .filter(|p| p.status == Decision::Sending)
-                else {
-                    return Ok(());
-                };
-                item.files.clone()
-            };
-            let workspace = app.workspace_at(&info.workspace)?;
-            for f in files {
-                let bytes = STANDARD
-                    .decode(&f.base64)
-                    .map_err(|_| Error::Protocol("invalid saved guest attachment".into()))?;
-                workspace.publish_attachment(&attachment_path(msg, &f), &bytes)?;
-            }
-        }
-        // enqueue compares the original prompt for both an existing UUID and legacy direct-send turns.
-        let receipt = app.0.chats.enqueue(chat, msg, text)?;
-        app.wake_queue();
-        receipt
-    };
-    record_delivery(app, id, msg, receipt.status)
 }
 
 fn record_delivery(app: &Workbench, id: Uuid, msg: Uuid, status: InputStatus) -> AccessResult<()> {
@@ -732,7 +677,7 @@ pub(in crate::workbench) fn reconcile_guest_inputs(app: &Workbench) {
     }
     sending.sort_unstable();
     for (_, _, share, id) in sending {
-        if let Err(e) = reconcile(app, share, id) {
+        if let Err(e) = delivery::reconcile(app, share, id) {
             eprintln!("Kar guest delivery {id}: {e:?}");
         }
     }

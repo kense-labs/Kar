@@ -248,7 +248,7 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                 if let Some(stale) = late_sample.take() {
                     emit(stale);
                 }
-                let text = v.pointer("/params/input/0/text").unwrap().as_str().unwrap();
+                let text = v.pointer("/params/input/0/text").and_then(Value::as_str).unwrap_or("");
                 if text == "edited A" {
                     assert_eq!(
                         v.pointer("/params/input/1/url").and_then(Value::as_str),
@@ -325,7 +325,9 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                     .create(true)
                     .open(database.join("calls"))
                     .unwrap();
-                writeln!(calls, "{}", json!({"id":session,"cwd":cwd,"text":text,"input":v["params"]["clientUserMessageId"]})).unwrap();
+                let images: Vec<_> = v["params"]["input"].as_array().unwrap().iter()
+                    .filter(|part| part["type"] == "image").map(|part| &part["url"]).collect();
+                writeln!(calls, "{}", json!({"id":session,"cwd":cwd,"text":text,"input":v["params"]["clientUserMessageId"],"images":images})).unwrap();
                 if text == "hold without reply" {
                     continue;
                 }

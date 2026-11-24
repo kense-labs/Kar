@@ -133,9 +133,24 @@ async fn scenario() {
         b"review notes"
     );
     let cut = say(&a, &parent, "shared-child").await;
+    let after_cut = Uuid::new_v4();
+    store
+        .persist_attachment(
+            chat,
+            after_cut,
+            "later.png",
+            "image/png",
+            kar::chat::AttachmentKind::Image,
+            b"\x89PNG\r\n\x1a\nlater",
+        )
+        .unwrap();
     fs::write(native.join("hold-parent-turn"), []).unwrap();
     let (client, chat_url) = (b.clone(), parent.clone());
-    let third = tokio::spawn(async move { say(&client, &chat_url, "shared-next").await });
+    let third = tokio::spawn(async move {
+        ok(client.post(format!("{chat_url}/messages")).json(&json!({
+            "id": Uuid::new_v4(), "text": "shared-next", "attachments": [after_cut]
+        }))).await
+    });
     tokio::time::timeout(Duration::from_secs(10), async {
         while !native.join("parent-turn-running").exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -186,6 +201,74 @@ async fn scenario() {
             .status()
             .is_success()
     );
+    // The guest's attachment read belongs to this share and its copied timeline.
+    for (scope, expected) in [
+        (&child_path, target_project.as_str()),
+        (&parent_path, p.as_str()),
+    ] {
+        let share = ok(a.post(format!("{url}{scope}/shares")).json(&json!({}))).await;
+        assert_eq!(share["project"], expected);
+        let share_id = share["id"].as_str().unwrap();
+        let guest_root = format!("{url}/guest/{share_id}");
+        let public = Client::new();
+        let guest = ok(public
+            .post(format!("{guest_root}/redeem"))
+            .json(&json!({"credential":share["credential"],"name":"Reader"})))
+        .await;
+        let token = guest["token"].as_str().unwrap();
+        let view = ok(public
+            .get(format!("{guest_root}/snapshot"))
+            .bearer_auth(token))
+        .await;
+        assert_eq!(view["turns"][0]["attachments"][0]["id"], notes.to_string());
+        let read = format!("{guest_root}/attachments/{notes}");
+        let bytes = public
+            .get(&read)
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), b"review notes");
+        let unsent = public
+            .get(format!("{guest_root}/attachments/{private}"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unsent.status(), reqwest::StatusCode::NOT_FOUND);
+        let later = public
+            .get(format!("{guest_root}/attachments/{after_cut}"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        if *scope == parent_path {
+            assert!(later.status().is_success());
+            assert_eq!(later.headers()["content-type"], "image/png");
+            assert_eq!(
+                later.bytes().await.unwrap().as_ref(),
+                b"\x89PNG\r\n\x1a\nlater"
+            );
+        } else {
+            assert_eq!(later.status(), reqwest::StatusCode::NOT_FOUND);
+        }
+        ok(a.delete(format!("{url}/access/shares/{share_id}"))).await;
+        assert_eq!(
+            public
+                .get(&read)
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+    }
     assert_eq!(h["turns"][1]["id"], cut["id"]);
     assert_eq!(fs::read(target.join("shared")).unwrap(), b"shared-child");
     assert_eq!(fs::read(main.join("shared")).unwrap(), b"shared-next");

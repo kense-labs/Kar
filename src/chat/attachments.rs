@@ -255,7 +255,7 @@ impl ChatStore {
         }
         Ok(notes)
     }
-    fn verified_bytes(&self, file: &Attachment) -> Result<Vec<u8>> {
+    pub(crate) fn verified_bytes(&self, file: &Attachment) -> Result<Vec<u8>> {
         let bytes = fs::read(self.attachment_path(file))?;
         if bytes.len() as u64 != file.bytes
             || format!("{:x}", Sha256::digest(&bytes)) != file.sha256

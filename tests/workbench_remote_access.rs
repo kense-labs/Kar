@@ -211,6 +211,40 @@ async fn scenario() {
                 .unwrap()
                 .contains("approved public message")
     }));
+    // A picture-only proposal stays an image on the native wire across a repeated decision.
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let png = STANDARD.encode(include_bytes!("../crates/kar-documents/tests/pixel.png"));
+    let picture = json!({"request_id":Uuid::new_v4(),"text":"","attachments":[{"name":"screen.png","content_type":"image/png","base64":png}]});
+    let add = format!("{base}/guest/{id}/proposals");
+    let proposal = ok(remote.post(&add).bearer_auth(&who).json(&picture)).await;
+    let mut as_file = picture.clone();
+    as_file["attachments"][0]["content_type"] = json!("application/octet-stream");
+    assert_eq!(
+        code(remote.post(&add).bearer_auth(&who).json(&as_file)).await,
+        StatusCode::CONFLICT
+    );
+    let decide = format!(
+        "{base}/access/shares/{id}/proposals/{}",
+        proposal["id"].as_str().unwrap()
+    );
+    let accepted = ok(host.put(&decide).json(&json!({"accept":true}))).await;
+    assert_eq!(accepted["status"], "accepted");
+    assert_eq!(
+        ok(host.put(&decide).json(&json!({"accept":true}))).await,
+        accepted
+    );
+    let native_inputs: Vec<Value> = fs::read_to_string(native.join("calls"))
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str::<Value>(s).unwrap())
+        .filter(|row| row["input"] == proposal["id"])
+        .collect();
+    assert_eq!(native_inputs.len(), 1);
+    assert_eq!(native_inputs[0]["text"], "");
+    assert_eq!(
+        native_inputs[0]["images"],
+        json!([format!("data:image/png;base64,{png}")])
+    );
     let mut live = remote
         .get(format!("{base}/guest/{id}/events"))
         .bearer_auth(&who)

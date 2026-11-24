@@ -69,8 +69,10 @@ fn calls(native: &Path, text: &str) -> usize {
         .filter(|v| {
             v["text"].as_str().is_some_and(|s| {
                 s == text
-                    || s.strip_prefix(text)
-                        .is_some_and(|v| v.starts_with("\n\nAttachment: "))
+                    || s.strip_prefix(text).is_some_and(|v| {
+                        v.starts_with("\n\nAttachment: ")
+                            || v.starts_with("\n\nAttached files (JSON):")
+                    })
             })
         })
         .count()
@@ -458,26 +460,41 @@ pub async fn legacy_registry() {
     let s = info["id"].as_str().unwrap();
     let who = guest(&public, &base, &info, "Visitor").await;
     let mut items = vec![];
-    for text in ["previously accepted", "received before guest ack"] {
+    let path = format!("/projects/{p}/chats/{chat}/queue");
+    for text in [
+        "previously accepted",
+        "received before guest ack",
+        "queued before upgrade",
+    ] {
         let draft = proposal(text, Some("old bytes"));
         let p = post(&public, &base, s, &who, &draft).await;
         let msg = p["id"].as_str().unwrap();
         let file = p["attachments"][0]["id"].as_str().unwrap();
         // Prior Kar accepted through /messages and retained base64 inline in access.json.
         let wire = format!("{text}\n\nAttachment: .kar-attachments/{msg}/{file}-file.txt");
-        ok(host
-            .post(format!(
-                "{base}/projects/{}/chats/{chat}/messages",
-                info["project"].as_str().unwrap()
-            ))
-            .json(&json!({"id":msg,"text":wire})))
-        .await;
+        if text == "queued before upgrade" {
+            ok(host
+                .post(format!("{base}{path}/commands"))
+                .json(&json!({"command_id":Uuid::new_v4(),"action":"hold"})))
+            .await;
+            let receipt = ok(host
+                .post(format!("{base}{path}"))
+                .json(&json!({"id":msg,"text":wire})))
+            .await;
+            assert_eq!(receipt["status"], "pending");
+        } else {
+            ok(host
+                .post(format!(
+                    "{base}/projects/{}/chats/{chat}/messages",
+                    info["project"].as_str().unwrap()
+                ))
+                .json(&json!({"id":msg,"text":wire})))
+            .await;
+        }
         items.push((p, draft));
     }
-    assert_eq!(
-        ok(host.get(format!("{base}/projects/{p}/chats/{chat}/queue"))).await["inputs"],
-        json!([])
-    );
+    let queue = ok(host.get(format!("{base}{path}"))).await;
+    assert_eq!(queue["inputs"].as_array().unwrap().len(), 1);
     process.kill().await.unwrap();
     let file = state.join("workbench/access.json");
     let mut db: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
@@ -492,6 +509,9 @@ pub async fn legacy_registry() {
         for field in ["sequence", "signature", "delivery"] {
             row.remove(field);
         }
+        for f in row["files"].as_array_mut().unwrap() {
+            f.as_object_mut().unwrap().remove("mime");
+        }
         row.insert(
             "status".into(),
             json!(if i == 0 { "accepted" } else { "sending" }),
@@ -500,6 +520,21 @@ pub async fn legacy_registry() {
     fs::write(&file, serde_json::to_vec(&db).unwrap()).unwrap();
     let (mut process, base) = server::serve(&state, &root, &native).await;
     eventually(async || decided(&host, &base, s, &items[1].0, "accepted", "sent").await).await;
+    let before = ok(host.get(format!("{base}{path}"))).await;
+    assert_eq!(
+        before["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|q| q["id"] == items[2].0["id"] && q["status"] == "pending")
+            .count(),
+        1
+    );
+    ok(host
+        .post(format!("{base}{path}/commands"))
+        .json(&json!({"command_id":Uuid::new_v4(),"action":"resume"})))
+    .await;
+    eventually(async || decided(&host, &base, s, &items[2].0, "accepted", "sent").await).await;
     for (msg, draft) in items {
         let id = msg["attachments"][0]["id"].as_str().unwrap();
         let bytes = public

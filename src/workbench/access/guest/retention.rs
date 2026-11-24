@@ -4,7 +4,7 @@ use std::io::Write;
 
 const RESOLVED_LIMIT: usize = 20;
 
-pub(super) fn signature(text: &str, files: &[Attachment]) -> String {
+pub(super) fn signature(text: &str, files: &[Attachment], typed: bool) -> String {
     let mut hash = Sha256::new();
     let mut field = |data: &[u8]| {
         hash.update((data.len() as u64).to_be_bytes());
@@ -12,14 +12,27 @@ pub(super) fn signature(text: &str, files: &[Attachment]) -> String {
     };
     field(text.as_bytes());
     for f in files {
+        if typed {
+            field(
+                f.mime
+                    .as_deref()
+                    .unwrap_or("application/octet-stream")
+                    .as_bytes(),
+            );
+        }
         field(f.name.as_bytes());
         field(f.base64.as_bytes());
     }
-    format!("{:x}", hash.finalize())
+    let prefix = if typed { "2:" } else { "" };
+    format!("{prefix}{:x}", hash.finalize())
 }
 
-fn check(expected: &str, got: &str) -> AccessResult<()> {
-    if expected == got {
+pub(super) fn check_signature(
+    expected: &str,
+    text: &str,
+    files: &[Attachment],
+) -> AccessResult<()> {
+    if expected == signature(text, files, expected.starts_with("2:")) {
         Ok(())
     } else {
         Err(AccessError::Conflict(
@@ -29,9 +42,6 @@ fn check(expected: &str, got: &str) -> AccessResult<()> {
 }
 
 impl Proposal {
-    pub(super) fn check_signature(&self, got: &str) -> AccessResult<()> {
-        check(&self.signature, got)
-    }
     fn resolved(&self) -> bool {
         matches!(self.status, Decision::Accepted | Decision::Dismissed)
     }
@@ -52,11 +62,10 @@ impl Retired {
         &self,
         id: Uuid,
         share: &Share,
-        got: &str,
         text: &str,
         mut files: Vec<Attachment>,
     ) -> AccessResult<Value> {
-        check(&self.signature, got)?;
+        check_signature(&self.signature, text, &files)?;
         for (file, stored_id) in files.iter_mut().zip(&self.files) {
             file.id = *stored_id;
         }
@@ -95,33 +104,10 @@ pub(in crate::workbench::access) fn needs_maintenance(s: &Share) -> bool {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(super) struct Published {
-    turn: Uuid,
-    name: String,
-    size: usize,
-    position: usize,
-}
-
-pub(super) fn chat_files(db: &Registry, share: &Share) -> HashMap<Uuid, Vec<Value>> {
-    let mut by_turn: HashMap<Uuid, Vec<_>> = HashMap::new();
-    for s in db
-        .shares
-        .values()
-        .filter(|s| s.chat == share.chat && s.project == share.project)
-    {
-        for (id, f) in &s.published {
-            by_turn
-                .entry(f.turn)
-                .or_default()
-                .push((f.position, json!({"id":id,"name":f.name,"bytes":f.size})));
-        }
-    }
-    by_turn
-        .into_iter()
-        .map(|(turn, mut files)| {
-            files.sort_unstable_by_key(|f| f.0);
-            (turn, files.into_iter().map(|(_, v)| v).collect())
-        })
-        .collect()
+    pub(super) turn: Uuid,
+    pub(super) name: String,
+    pub(super) size: usize,
+    pub(super) position: usize,
 }
 
 fn blob_path(state: &FsPath, id: Uuid) -> PathBuf {
@@ -167,7 +153,7 @@ pub(in crate::workbench::access) fn maintain(
         let mut resolved = Vec::new();
         for p in s.proposals.values_mut() {
             if p.signature.is_empty() {
-                p.signature = signature(&p.text, &p.files);
+                p.signature = signature(&p.text, &p.files, false);
             }
             if p.status == Decision::Pending && closed {
                 p.status = Decision::Dismissed;
@@ -223,51 +209,6 @@ pub(in crate::workbench::access) fn maintain(
     Ok(())
 }
 
-pub(super) fn read_attachment(app: &Workbench, who: Principal, id: Uuid) -> AccessResult<Vec<u8>> {
-    let (chat, turn) = {
-        let db = app.0.access.registry.lock().unwrap();
-        let s = db
-            .shares
-            .get(&who.share)
-            .filter(|s| s.active(app))
-            .ok_or(AccessError::Invalid)?;
-        if let Some(f) = s
-            .proposals
-            .values()
-            .filter(|p| {
-                p.author == who.guest && matches!(p.status, Decision::Pending | Decision::Sending)
-            })
-            .flat_map(|p| &p.files)
-            .find(|f| f.id == id)
-        {
-            return STANDARD
-                .decode(&f.base64)
-                .map_err(|_| Error::Protocol("invalid saved guest attachment".into()).into());
-        }
-        let turn = db
-            .shares
-            .values()
-            .filter(|v| v.chat == s.chat && v.project == s.project)
-            .find_map(|v| v.published.get(&id))
-            .ok_or(AccessError::Missing)?;
-        (s.chat, turn.turn)
-    };
-    // A rolled-back or removed turn no longer grants access to its file.
-    if !app
-        .0
-        .chats
-        .history(chat)?
-        .turns
-        .iter()
-        .any(|t| t.id == turn)
-    {
-        return Err(AccessError::Missing);
-    }
-    let state = app
-        .0
-        .access
-        .file
-        .parent()
-        .expect("workbench state directory");
-    Ok(std::fs::read(blob_path(state, id)).map_err(Error::Io)?)
+pub(super) fn published_path(app: &Workbench, id: Uuid) -> PathBuf {
+    blob_path(&app.0.state, id)
 }
