@@ -79,7 +79,15 @@ async fn scheduling() {
         (once, Schedule::Once { at_ms: t + 60_000 }, t + 60_000),
         (every, Schedule::Interval { every_ms: 60_000 }, t + 60_000),
         (daily, fixed("09:00"), t + 60_000),
-        (within, fixed("09:01"), t + 120_000),
+        (
+            within,
+            Schedule::FixedTime {
+                time: "9:01".into(),
+                weekdays: vec![3, 1],
+                zone: Some("UTC".into()),
+            },
+            t + 120_000,
+        ),
     ] {
         assert_eq!(
             app.save_workflow(project, id, definition(schedule), None)
@@ -107,6 +115,18 @@ async fn scheduling() {
     drop(app);
     clock.0.store(t + 12 * 60_000, Ordering::SeqCst);
     let app = open();
+    // An equivalent edit after restart still owes the one occurrence inside the grace period.
+    let equivalent = Schedule::FixedTime {
+        time: "09:01".into(),
+        weekdays: vec![1, 3, 1],
+        zone: Some("UTC".into()),
+    };
+    assert_eq!(
+        app.save_workflow(project, within, definition(equivalent), None)
+            .unwrap()
+            .next_ms,
+        Some(t + 120_000)
+    );
     let barrier = Arc::new(Barrier::new(2));
     let mut workers = Vec::new();
     for _ in 0..2 {

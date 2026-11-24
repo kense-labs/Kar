@@ -22,7 +22,49 @@ pub enum Schedule {
     Webhook,
 }
 
+fn fixed_time(time: &str, weekdays: &[i8]) -> Result<Time> {
+    let bad = || Error::Refused("invalid fixed time or weekday".into());
+    let (h, m) = time.trim().split_once(':').ok_or_else(bad)?;
+    if h.is_empty()
+        || h.len() > 2
+        || m.len() != 2
+        || !h.bytes().chain(m.bytes()).all(|b| b.is_ascii_digit())
+        || weekdays.iter().any(|d| !(0..=6).contains(d))
+    {
+        return Err(bad());
+    }
+    Time::new(
+        h.parse().map_err(|_| bad())?,
+        m.parse().map_err(|_| bad())?,
+        0,
+        0,
+    )
+    .map_err(|error| Error::Refused(error.to_string()))
+}
+
 impl Schedule {
+    pub(super) fn same_timing(&self, other: &Self) -> bool {
+        let (
+            Self::FixedTime {
+                time,
+                weekdays,
+                zone,
+            },
+            Self::FixedTime {
+                time: other_time,
+                weekdays: other_days,
+                zone: other_zone,
+            },
+        ) = (self, other)
+        else {
+            return self == other;
+        };
+        let days = |set: &[i8], day| set.is_empty() || set.contains(&day);
+        zone == other_zone
+            && fixed_time(time, weekdays).ok() == fixed_time(other_time, other_days).ok()
+            && (0..=6).all(|d| days(weekdays, d) == days(other_days, d))
+    }
+
     pub fn next_after(&self, from_ms: i64) -> Result<Option<i64>> {
         let invalid = |e: jiff::Error| Error::Refused(e.to_string());
         match self {
@@ -39,23 +81,7 @@ impl Schedule {
                 weekdays,
                 zone,
             } => {
-                let bad = || Error::Refused("invalid fixed time or weekday".into());
-                let (h, m) = time.trim().split_once(':').ok_or_else(bad)?;
-                if h.is_empty()
-                    || h.len() > 2
-                    || m.len() != 2
-                    || !h.bytes().chain(m.bytes()).all(|b| b.is_ascii_digit())
-                    || weekdays.iter().any(|d| !(0..=6).contains(d))
-                {
-                    return Err(bad());
-                }
-                let at = Time::new(
-                    h.parse().map_err(|_| bad())?,
-                    m.parse().map_err(|_| bad())?,
-                    0,
-                    0,
-                )
-                .map_err(invalid)?;
+                let at = fixed_time(time, weekdays)?;
                 let zone = match zone {
                     Some(name) => TimeZone::get(name).map_err(invalid)?,
                     None => TimeZone::system(),

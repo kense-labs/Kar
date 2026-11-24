@@ -389,7 +389,7 @@ fn install_definition(
         return Err(missing());
     }
     let preserved =
-        old.filter(|old| old.definition.enabled && old.definition.schedule == definition.schedule);
+        old.filter(|old| old.definition.enabled && old.definition.schedule.same_timing(&definition.schedule));
     let next_ms = if !definition.enabled {
         None
     } else if let Some(old) = preserved {
