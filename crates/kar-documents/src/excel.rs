@@ -30,6 +30,19 @@ impl Cell {
         })
     }
 
+    pub(crate) fn missing(&self, edit: &CellEdit, reason: &str) -> crate::Conflict {
+        let target = format!(
+            "{}!{} (sheetId {})",
+            self.sheet_name,
+            cell_name(self.row, self.column),
+            self.sheet_id
+        );
+        match edit {
+            CellEdit::Input(change) => change.conflict(None, &target, "input", reason),
+            CellEdit::Fill(change) => change.conflict(None, &target, "fill", reason),
+        }
+    }
+
     pub fn apply(&self, book: &mut Workbook, edit: &CellEdit) -> Result<Outcome> {
         self.apply_at(book, edit, Comparison::Current)
     }
@@ -45,10 +58,7 @@ impl Cell {
             "cell outside worksheet"
         );
         let sheets = book.sheet_names();
-        let sheet = unique_index(
-            (0..sheets.len()).filter(|&index| book.sheet_id(index as u32) == self.sheet_id),
-        )
-        .map(|i| i as u32);
+        let sheet = sheet_index(book, self.sheet_id);
         let name = sheet
             .map(|i| &sheets[i as usize])
             .unwrap_or(&self.sheet_name);
@@ -91,4 +101,9 @@ impl Cell {
 pub enum CellEdit {
     Input(Change<String>),
     Fill(Change<Option<u32>>),
+}
+
+pub(crate) fn sheet_index(book: &Workbook, id: u32) -> Option<u32> {
+    unique_index((0..book.sheet_names().len()).filter(|&i| book.sheet_id(i as u32) == id))
+        .map(|i| i as u32)
 }

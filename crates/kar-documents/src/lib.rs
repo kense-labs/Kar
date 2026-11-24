@@ -1,6 +1,8 @@
 //! Headless document operations used after Kar resolves an edit target.
 mod candidate;
-pub use candidate::{OfficeEdits, prepare};
+mod grid_history;
+pub use candidate::{OfficeEdits, prepare, prepare_with_grid_history};
+pub use grid_history::{GridAction, GridChange};
 pub mod excel;
 mod merge;
 pub mod slides;

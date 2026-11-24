@@ -24,6 +24,32 @@ pub enum OfficeEdits {
 /// On success, None is a no-op. On conflict the caller can downcast the
 /// error to Conflict. Neither snapshot nor the working file is modified.
 pub fn prepare(base: &[u8], current: &[u8], edits: &OfficeEdits) -> Result<Option<Vec<u8>>> {
+    // A changed worksheet package cannot prove that an address still names
+    // the same logical cell. Internal property-only histories use the
+    // explicit entry point below with an empty structural journal.
+    if let OfficeEdits::Excel(ops) = edits
+        && base != current
+        && let Some((cell, edit)) = ops.first()
+    {
+        return Err(cell
+            .missing(edit, "worksheet structure history unavailable")
+            .into());
+    }
+    prepare_with_grid_history(base, current, edits, &[])
+}
+
+/// Apply a proposal using the service's committed row/column history.
+/// An empty history asserts that the logical cell coordinates did not shift.
+pub fn prepare_with_grid_history(
+    base: &[u8],
+    current: &[u8],
+    edits: &OfficeEdits,
+    history: &[crate::GridChange],
+) -> Result<Option<Vec<u8>>> {
+    ensure!(
+        matches!(edits, OfficeEdits::Excel(_)) || history.is_empty(),
+        "grid history supplied for a non-spreadsheet edit"
+    );
     let dir = tempdir()?;
     let ext = match edits {
         OfficeEdits::Word(_) => "docx",
@@ -47,12 +73,8 @@ pub fn prepare(base: &[u8], current: &[u8], edits: &OfficeEdits) -> Result<Optio
             }
         }
         OfficeEdits::Excel(ops) => {
-            let mut base = Workbook::open(&before)?;
             let mut model = Workbook::open(&candidate)?;
-            for (target, op) in ops {
-                target.apply_at(&mut base, op, Comparison::Base)?;
-                changed |= target.apply(&mut model, op)? == Outcome::Applied;
-            }
+            changed = crate::grid_history::merge_excel(&before, &mut model, ops, history)?;
             if changed {
                 ensure!(
                     !model.has_macros(),

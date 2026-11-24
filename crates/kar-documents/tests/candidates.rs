@@ -65,9 +65,9 @@ fn excel_and_slides_use_immutable_base_and_current_snapshots() -> Result<()> {
     let change = OfficeEdits::Excel(vec![(cell.clone(), CellEdit::Input(text("7", "=7*2")))]);
     let base = fs::read(&file)?;
     let current = prepare(&base, &base, &change)?.unwrap();
-    assert!(prepare(&base, &current, &change)?.is_none());
+    assert!(kar_documents::prepare_with_grid_history(&base, &current, &change, &[])?.is_none());
     let forged = OfficeEdits::Excel(vec![(cell, CellEdit::Input(text("=7*2", "99")))]);
-    assert!(prepare(&base, &current, &forged).is_err());
+    assert!(kar_documents::prepare_with_grid_history(&base, &current, &forged, &[]).is_err());
     fs::write(&file, current)?;
     assert_eq!(Workbook::open(&file)?.display_value(0, 0, 0), "14");
 
