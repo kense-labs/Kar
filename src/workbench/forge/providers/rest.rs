@@ -1,6 +1,6 @@
 use super::*;
 
-fn project(c: &Context) -> Result<Url, ForgeError> {
+pub(super) fn project(c: &Context) -> Result<Url, ForgeError> {
     if c.kind == "gitlab" {
         return path(c, &["projects", &c.repository]);
     }
@@ -190,6 +190,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         ));
     }
     match op {
+        op @ (Operation::CreateIssue { .. }
+        | Operation::CommentIssue { .. }
+        | Operation::IssueComments { .. }) => super::issue::execute(c, op).await,
         Operation::Identity => {
             let v = get(c, project(c)?).await?;
             let full = v[if gitlab {

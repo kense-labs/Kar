@@ -230,6 +230,9 @@ impl<'a> Location<'a> {
 pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeError> {
     let l = Location::from(c)?;
     match op {
+        op @ (Operation::CreateIssue { .. }
+        | Operation::CommentIssue { .. }
+        | Operation::IssueComments { .. }) => issue_actions::execute(c, op).await,
         Operation::Identity => {
             let r = get(c, l.git(c, &[])?).await?;
             l.check_repo(&r)?;
@@ -341,3 +344,5 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         }
     }
 }
+
+mod issue_actions;

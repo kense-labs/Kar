@@ -41,6 +41,24 @@ pub(crate) enum Operation {
     Issue {
         number: u64,
     },
+    CreateIssue {
+        title: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        labels: Vec<String>,
+        #[serde(default)]
+        assignees: Vec<String>,
+    },
+    IssueComments {
+        number: u64,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    CommentIssue {
+        number: u64,
+        body: String,
+    },
     SetIssueState {
         number: u64,
         state: String,
@@ -48,7 +66,13 @@ pub(crate) enum Operation {
 }
 impl Operation {
     fn mutates(&self) -> bool {
-        matches!(self, Self::CreatePull { .. } | Self::SetIssueState { .. })
+        matches!(
+            self,
+            Self::CreatePull { .. }
+                | Self::SetIssueState { .. }
+                | Self::CreateIssue { .. }
+                | Self::CommentIssue { .. }
+        )
     }
 }
 #[derive(Clone)]
@@ -364,7 +388,12 @@ impl Context {
     ) -> Result<Self, ForgeError> {
         if matches!(
             op,
-            Operation::Issues | Operation::Issue { .. } | Operation::SetIssueState { .. }
+            Operation::Issues
+                | Operation::Issue { .. }
+                | Operation::SetIssueState { .. }
+                | Operation::CreateIssue { .. }
+                | Operation::CommentIssue { .. }
+                | Operation::IssueComments { .. }
         ) {
             providers::linear::tracker(app, project).await
         } else {

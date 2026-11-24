@@ -28,6 +28,8 @@ struct Forge {
     head: String,
     base: String,
     mutations: usize,
+    comments: Vec<Value>,
+    created_issue: Option<Value>,
 }
 type Mock = Arc<Mutex<Forge>>;
 async fn identity() -> Json<Value> {
@@ -76,6 +78,13 @@ async fn issues(State(mock): State<Mock>) -> Json<Value> {
 async fn get_issue(State(mock): State<Mock>, Param(n): Param<u64>) -> Response {
     match n {
         7 => Json(mock.lock().unwrap().issue.clone()).into_response(),
+        8 => mock
+            .lock()
+            .unwrap()
+            .created_issue
+            .clone()
+            .map(|v| Json(v).into_response())
+            .unwrap_or_else(|| StatusCode::NOT_FOUND.into_response()),
         9 => (
             StatusCode::FORBIDDEN,
             [("x-ratelimit-remaining", "0")],
@@ -148,6 +157,8 @@ async fn scenario() {
         head: String::new(),
         pulls: vec![],
         mutations: 0,
+        comments: vec![],
+        created_issue: None,
         issue: json!({"number":7,"title":"Fix notes","state":"open","html_url":"https://review.example/team/repo/issues/7"}),
     }));
     let api = Router::new()
@@ -155,10 +166,17 @@ async fn scenario() {
         .route("/repos/team/repo", get(identity))
         .route("/repos/team/repo/pulls", get(pulls).post(create_pull))
         .route("/repos/team/repo/pulls/{n}", get(get_pull))
-        .route("/repos/team/repo/issues", get(issues))
+        .route(
+            "/repos/team/repo/issues",
+            get(issues).post(actions::create_issue),
+        )
         .route(
             "/repos/team/repo/issues/{n}",
             get(get_issue).patch(patch_issue),
+        )
+        .route(
+            "/repos/team/repo/issues/8/comments",
+            get(actions::comments).post(actions::post_comment),
         )
         .with_state(mock.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -315,6 +333,7 @@ async fn scenario() {
     assert_eq!(stale["state"], "closed");
     let links = ok(a.get(format!("{forge}/links"))).await;
     assert_eq!(links.as_array().unwrap().len(), 4);
+    actions::issue(&a, &forge, id).await;
     assert!(
         !fs::read_to_string(state.join("workbench/projects.json"))
             .unwrap()
@@ -324,6 +343,8 @@ async fn scenario() {
     peer.abort();
 }
 
+#[path = "workbench_forge/actions.rs"]
+mod actions;
 #[path = "workbench_forge/hosted.rs"]
 mod hosted;
 #[path = "workbench_forge/providers.rs"]

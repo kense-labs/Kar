@@ -2,6 +2,7 @@
 mod azure;
 mod credentials;
 mod hosted;
+pub(super) mod issue;
 pub(super) mod linear;
 mod rest;
 use super::{Context, ForgeError, Operation};
@@ -40,7 +41,9 @@ async fn send(
     body: Option<Value>,
     mutation: bool,
 ) -> Result<Value, ForgeError> {
-    let azure_patch = c.kind == "azure-devops" && method == Method::PATCH;
+    let azure_patch = c.kind == "azure-devops"
+        && (method == Method::PATCH
+            || method == Method::POST && body.as_ref().is_some_and(Value::is_array));
     let mut req = c.client.request(method, url);
     if azure_patch {
         req = req.header("Content-Type", "application/json-patch+json");
@@ -73,6 +76,16 @@ async fn send(
         .map_err(|_| classify("forge did not return a response"))?;
     let status = res.status();
     if !status.is_success() {
+        if c.kind == "github"
+            && status.as_u16() == 403
+            && (res.headers().contains_key("retry-after")
+                || res
+                    .headers()
+                    .get("x-ratelimit-remaining")
+                    .is_some_and(|v| v == "0"))
+        {
+            return Err(ForgeError::remote(429, "GitHub rate limit reached"));
+        }
         if mutation && status.is_server_error() {
             return Err(ForgeError::uncertain(format!(
                 "{} returned {status} after submission",

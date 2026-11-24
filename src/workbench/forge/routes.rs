@@ -30,6 +30,7 @@ async fn read(
             "use /operations and a stable request ID for writes",
         ));
     }
+    providers::issue::validate(&op)?;
     let c = Context::for_operation(app.clone(), project, &op).await?;
     if let Operation::Pull { number } = op {
         return review::refresh(&app, project, &c, number).await.map(Json);
@@ -49,7 +50,9 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
         if let Ok(v) = &result {
             let (number, kind) = match m.operation {
                 Operation::CreatePull { .. } => (v["number"].as_u64(), "pull"),
-                Operation::SetIssueState { number, .. } => (Some(number), "issue"),
+                Operation::CreateIssue { .. } => (v["number"].as_u64(), "issue"),
+                Operation::SetIssueState { number, .. }
+                | Operation::CommentIssue { number, .. } => (Some(number), "issue"),
                 _ => unreachable!(),
             };
             let number = number.ok_or_else(|| {
@@ -75,6 +78,7 @@ async fn execute(app: Workbench, project: Uuid, input: Input) -> Reply<Value> {
     if !input.operation.mutates() {
         return Err(ForgeError::bad("use /query for reads"));
     }
+    providers::issue::validate(&input.operation)?;
     let c = Context::for_operation(app.clone(), project, &input.operation).await?;
     let identity = c.identity();
     let id = input.id;
@@ -196,6 +200,11 @@ async fn reconcile(
                 ));
             }
             v
+        }
+        Operation::CreateIssue { .. } | Operation::CommentIssue { .. } => {
+            return Err(ForgeError::uncertain(
+                "remote issue writes without an authoritative receipt require manual inspection",
+            ));
         }
         _ => return Err(ForgeError::bad("operation and object number disagree")),
     };

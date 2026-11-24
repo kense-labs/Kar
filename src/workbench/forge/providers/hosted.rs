@@ -11,7 +11,11 @@ fn repository(c: &Context) -> Result<(&str, &str), ForgeError> {
         .filter(|(o, r)| !o.is_empty() && !r.is_empty() && !r.contains('/'))
         .ok_or_else(|| ForgeError::bad("expected owner/repository"))
 }
-fn resource(c: &Context, collection: Option<&str>, n: Option<u64>) -> Result<Url, ForgeError> {
+pub(super) fn resource(
+    c: &Context,
+    collection: Option<&str>,
+    n: Option<u64>,
+) -> Result<Url, ForgeError> {
     let (owner, repo) = repository(c)?;
     let mut url = path(c, &["repos", owner, repo])?;
     if let Some(collection) = collection {
@@ -173,6 +177,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         )));
     }
     match op {
+        op @ (Operation::CreateIssue { .. }
+        | Operation::CommentIssue { .. }
+        | Operation::IssueComments { .. }) => super::issue::execute(c, op).await,
         Operation::Identity => {
             let repo = get(c, resource(c, None, None)?).await?;
             let (owner, name) = repository(c)?;

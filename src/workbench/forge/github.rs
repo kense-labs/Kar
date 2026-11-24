@@ -91,6 +91,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
     };
     let mut parts = vec!["repos", *owner, *repo];
     match op {
+        op @ (Operation::CreateIssue { .. }
+        | Operation::CommentIssue { .. }
+        | Operation::IssueComments { .. }) => providers::issue::execute(c, op).await,
         Operation::Identity => {
             let v = request(c, Method::GET, &parts, &[], None).await?;
             let full = v["full_name"]
