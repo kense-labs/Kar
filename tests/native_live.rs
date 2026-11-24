@@ -267,7 +267,7 @@ fn respond_observed(
         let steer_probe =
             workspace.is_some() && !last.is_empty() && conversation.contains("KAR-LIVE-STEER-TOOL");
         if let Some(work) = workspace
-            && last.contains("KAR-LIVE-STEER-")
+            && (last.contains("KAR-LIVE-STEER-") || last.contains("kar-queue-held-at-model"))
             && !last.contains("KAR-LIVE-FOLLOWUP")
         {
             std::fs::write(work.join("requested"), "")?;

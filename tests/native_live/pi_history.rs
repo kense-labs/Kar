@@ -528,11 +528,14 @@ pub(super) fn checkpoint_response(request: &Value) -> Option<Vec<Value>> {
     let messages = request["messages"].as_array()?;
     let mut stages = Vec::new();
     let mut finished = false;
+    let mut active = false;
     for msg in messages.iter().filter(|msg| msg["role"] == "user") {
         let mut visit = |text: &str| {
+            active = false;
             if let Some(stage) = text.strip_prefix("kar-fork-stage ")
                 && ["first", "middle", "late", "child", "inspect"].contains(&stage)
             {
+                active = true;
                 stages.push(stage.to_owned());
                 finished = false;
             }
@@ -547,6 +550,9 @@ pub(super) fn checkpoint_response(request: &Value) -> Option<Vec<Value>> {
                 finished = true;
             }
         }
+    }
+    if !active {
+        return None;
     }
     let stage = stages.last()?;
     let (block, delta, stop) = if finished || stage == "inspect" {
@@ -684,4 +690,221 @@ async fn public_prompt_readbacks() {
         .await
         .unwrap();
     session.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires KAR_PI_BIN; hard-kills a Kar CLI during a real Pi model request"]
+async fn queued_inputs_and_two_http_clients_survive_controller_kill() {
+    use kar::chat::{ChatCursor, InputStatus};
+
+    async fn serve(store: &ChatStore, id: Uuid) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let router = kar::chat::event_router(store.clone(), id);
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        (url, server)
+    }
+    async fn receive(
+        sub: &mut SseClient,
+        replica: &mut ChatReplica,
+        observed: &mut Vec<Value>,
+        through: ChatCursor,
+    ) {
+        while replica.cursor() != through {
+            let event = sub.next().await;
+            observed.push(serde_json::to_value(&event).unwrap());
+            assert!(replica.apply(event.clone()).unwrap());
+            assert!(!replica.apply(event).unwrap());
+        }
+    }
+
+    let f = fixture(true).await;
+    let path = f.temp.path().join("chats");
+    let store = ChatStore::open(&path).unwrap();
+    let program = std::env::var_os("KAR_PI_BIN").unwrap();
+    let session = store
+        .create("pi", Some(Path::new(&program)), f.options.clone())
+        .await
+        .unwrap();
+    let id = session.info().id;
+    let root = session.info().native_id.clone();
+    let mut a = ChatReplica::from_snapshot(store.feed_snapshot(id).unwrap());
+    let mut b = ChatReplica::from_snapshot(store.feed_snapshot(id).unwrap());
+    let start = a.cursor();
+    let (url, http) = serve(&store, id).await;
+    let mut left = SseClient::open(&url, &start.to_string(), None).await;
+    let mut right = SseClient::open(&url, &start.to_string(), None).await;
+    let (mut left_seen, mut right_seen) = (vec![], vec![]);
+    let first = session
+        .send(Uuid::new_v4(), "kar-fork-stage first")
+        .await
+        .unwrap();
+    assert!(
+        first
+            .items
+            .iter()
+            .any(|i| matches!(i.item, Item::Tool { .. }))
+    );
+    assert_eq!(first.status, TurnStatus::Completed);
+    let first_tip = store.feed_snapshot(id).unwrap().cursor;
+    receive(&mut left, &mut a, &mut left_seen, first_tip).await;
+    drop(left);
+    let second = session
+        .send(Uuid::new_v4(), "kar-queue-seed-two")
+        .await
+        .unwrap();
+    assert_eq!(second.status, TurnStatus::Completed);
+    session.close().await.unwrap();
+
+    let held = (Uuid::new_v4(), "kar-queue-held-at-model");
+    let queued = [
+        (Uuid::new_v4(), "kar-queue-after-one"),
+        (Uuid::new_v4(), "kar-queue-after-two"),
+    ];
+    store.enqueue(id, held.0, held.1).unwrap();
+    let mut controller = tokio::process::Command::new(env!("CARGO_BIN_EXE_kar"))
+        .current_dir(f.temp.path())
+        .envs(&f.options.env)
+        .env("KAR_CHAT_DIR", &path)
+        .env("KAR_PI_BIN", &program)
+        .args(["chat", "--json", "resume", "--chat", &id.to_string()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if f.options.cwd.join("requested").exists()
+                && store.queued_inputs(id).unwrap()[0].status == InputStatus::Sent
+            {
+                break;
+            }
+            if let Some(status) = controller.try_wait().unwrap() {
+                panic!("queue controller exited before reaching the held model call: {status}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out at native model gate: requested={}, queue={:?}, turns={:?}, model call count={}",
+        f.options.cwd.join("requested").exists(), store.queued_inputs(id).unwrap(),
+        store.history(id).unwrap().turns.iter().map(|t| (t.id,t.status)).collect::<Vec<_>>(),
+        f.calls.lock().unwrap().len()));
+    for (uuid, text) in queued {
+        assert_eq!(
+            store.enqueue(id, uuid, text).unwrap().status,
+            InputStatus::Pending
+        );
+    }
+    let held_tip = store.feed_snapshot(id).unwrap().cursor;
+    receive(&mut right, &mut b, &mut right_seen, held_tip).await;
+    drop(right);
+    http.abort();
+    controller.kill().await.unwrap();
+    assert!(!controller.wait().await.unwrap().success());
+    fs::write(f.options.cwd.join("release"), "").unwrap();
+
+    let reopened = ChatStore::open(&path).unwrap();
+    let resume = reopened
+        .resume_with(id, |opts| opts.env = f.options.env.clone())
+        .await
+        .unwrap();
+    assert_eq!(resume.info().native_id, root);
+    assert_eq!(resume.info().workspace, f.options.cwd);
+    resume.drain_queue().await.unwrap();
+    for (uuid, text) in queued {
+        assert_eq!(
+            resume.send(uuid, text).await.unwrap().status,
+            TurnStatus::Completed
+        );
+        assert_eq!(
+            reopened.enqueue(id, uuid, text).unwrap().status,
+            InputStatus::Sent
+        );
+    }
+    assert_eq!(
+        reopened.enqueue(id, held.0, held.1).unwrap().status,
+        InputStatus::Sent
+    );
+    resume.drain_queue().await.unwrap();
+    resume.close().await.unwrap();
+    let history = reopened.history(id).unwrap();
+    assert_eq!(
+        history.turns.iter().map(|t| t.id).collect::<Vec<_>>(),
+        [first.id, second.id, held.0, queued[0].0, queued[1].0]
+    );
+    let mut runtime = kar::runtime("pi").unwrap();
+    runtime.program = program.into();
+    let mut options = f.options.clone();
+    options.resume = Some(root.clone());
+    let native = runtime.open(options).await.unwrap();
+    let transcript = native.native_session_file().await.unwrap().unwrap();
+    native.close().await.unwrap();
+    let mut in_held_turn = false;
+    let mut stop = None;
+    for line in fs::read_to_string(transcript).unwrap().lines() {
+        let row: Value = serde_json::from_str(line).unwrap();
+        let message = &row["message"];
+        if message["role"] == "user" {
+            in_held_turn = message["content"].to_string().contains(held.1);
+        } else if in_held_turn && message["role"] == "assistant" {
+            stop = message["stopReason"].as_str().map(str::to_owned);
+        }
+    }
+    let expected = match stop.as_deref() {
+        Some("stop" | "length") => TurnStatus::Completed,
+        Some("aborted") => TurnStatus::Aborted,
+        Some("error") => TurnStatus::Failed,
+        None => TurnStatus::Interrupted,
+        other => panic!("unrecognized Pi terminal {other:?}"),
+    };
+    assert_eq!(
+        history.turns[2].status, expected,
+        "saved Pi stopReason={stop:?}"
+    );
+    assert_eq!(history.turns[0], first);
+    assert_eq!(history.turns[1], second);
+    let tip = reopened.feed_snapshot(id).unwrap().cursor;
+    let (url, http) = serve(&reopened, id).await;
+    let mut canonical = vec![];
+    let mut feed = reopened.follow(id, Some(start)).unwrap();
+    while feed.cursor() != tip {
+        canonical.push(serde_json::to_value(feed.recv().await.unwrap()).unwrap());
+    }
+    assert_ne!(a.cursor(), b.cursor());
+    for (replica, observed) in [(&mut a, &mut left_seen), (&mut b, &mut right_seen)] {
+        let mut sub = SseClient::open(
+            &url,
+            &start.to_string(),
+            Some(&replica.cursor().to_string()),
+        )
+        .await;
+        receive(&mut sub, replica, observed, tip).await;
+        assert_eq!(*observed, canonical);
+        assert_eq!(replica.turns(), history.turns);
+    }
+    http.abort();
+    let calls = f.calls.lock().unwrap();
+    let markers: Vec<_> = calls
+        .iter()
+        .filter_map(|messages| {
+            let msg = messages.as_array()?.last()?;
+            if msg["role"] != "user" {
+                return None;
+            }
+            let content = &msg["content"];
+            let text = content
+                .as_str()
+                .or_else(|| content.as_array()?.iter().find_map(|p| p["text"].as_str()))?;
+            [held.1, queued[0].1, queued[1].1]
+                .into_iter()
+                .find(|s| text.trim() == *s)
+        })
+        .collect();
+    assert_eq!(markers, [held.1, queued[0].1, queued[1].1]);
+    println!(
+        "Pi model received {markers:?} once each; both HTTP clients matched all {} durable events",
+        canonical.len()
+    );
 }
