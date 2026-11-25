@@ -154,7 +154,10 @@ fn observed_line(rt: &Runtime, snapshot: &InstallationSnapshot) -> Option<String
         return None;
     };
     let line = format!("v{}", update::release(version)?.major);
-    rt.install_lines().contains(&line.as_str()).then_some(line)
+    rt.install_lines()
+        .iter()
+        .any(|entry| entry.line == line)
+        .then_some(line)
 }
 
 fn deadline(timeout: Duration) -> Result<Instant> {

@@ -80,6 +80,54 @@ impl Repository {
             independent,
         })
     }
+    pub(crate) fn remote_names(&self) -> Result<Vec<String>> {
+        let remotes = git(self.root(), &["remote"])?;
+        Ok(utf8(&remotes)?
+            .lines()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+    pub(crate) fn remote_fetch_url(&self, remote: &str) -> Result<String> {
+        let fetch = git(self.root(), &["remote", "get-url", "--", remote])?;
+        Ok(utf8(line(&fetch))?.to_owned())
+    }
+    pub(crate) fn comparison_remote(
+        &self,
+        local: &str,
+        target: &PublishTarget,
+    ) -> Result<Option<String>> {
+        if let Some(reference) = self.config(&format!("branch.{local}.kar-merge-base-ref"))?
+            && self.resolve(&reference).is_ok()
+        {
+            if let Some(base_branch) = reference.strip_prefix("refs/heads/") {
+                return Ok(self
+                    .config(&format!("branch.{base_branch}.remote"))?
+                    .filter(|r| r != "."));
+            }
+            if let Some(remote_ref) = reference.strip_prefix("refs/remotes/") {
+                let remotes = self.remote_names()?;
+                let found = remotes
+                    .into_iter()
+                    .filter(|r| remote_ref.starts_with(&format!("{r}/")))
+                    .max_by_key(|r| r.len());
+                if found.is_some() {
+                    return Ok(found);
+                }
+            }
+        }
+        if let Some((r, base_branch)) = &target.comparison {
+            if r == "." {
+                return Ok(self
+                    .config(&format!("branch.{base_branch}.remote"))?
+                    .filter(|u| u != "."));
+            }
+            return Ok(Some(r.clone()));
+        }
+        Ok(self
+            .config(&format!("branch.{local}.remote"))?
+            .filter(|r| r != "."))
+    }
     pub(crate) fn comparison_branch(&self, local: &str, target: &PublishTarget) -> Result<Option<String>> {
         if let Some(reference) = self.config(&format!("branch.{local}.kar-merge-base-ref"))?
             && self.resolve(&reference).is_ok()

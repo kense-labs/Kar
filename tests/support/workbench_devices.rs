@@ -15,7 +15,8 @@ pub(super) fn peer(args: &[String]) {
         .append(true)
         .open(temp.join("device-args"))
         .unwrap();
-    writeln!(file, "{}", json!(args)).unwrap();
+    let line = format!("{}\n", json!(args));
+    file.write_all(line.as_bytes()).unwrap();
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["simctl", "list", "devices", "available", "--json"] => println!(

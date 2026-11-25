@@ -28,11 +28,14 @@
 - Codex 和 Claude 的额度重置已有工作台 HTTP 入口及持久领取回执（`eab019b`）。 [额度重置与结果核对](backend-quota-http.md)
 - ChatGPT 独立档案支持加密导入、重新连接和交接状态订阅。真实账号的浏览器授权、模型调用与撤权仍待实测（`a93cb69`）。 [账号交接](backend-chatgpt-handoff.md)
 
-**仍有可观察的差异。**
+**原 5 项功能缺口与边界项均已补齐并通过 macOS 实测（2026-11-25）。**
 
-- 固定工作台对 Cursor 后台 shell 有专门的等待与停止回调。Kar 的 Cursor ACP 未取得等价原生句柄。 [固定 SDK 补丁](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/patches/%40cursor__sdk%401.4.2.patch)
-- 服务重启后，符合条件的普通提问还不能转换为可回答或关闭的新消息，未确认送达的答案也缺少持久失败记录。
-- 富文本搜索缺部分可见文件标签、行号和引用内容。外部工作流里程碑缺父运行 ID 和部分结束原因。运行时安装发布线缺少面向用户的说明字段。
+- **Cursor ACP 后台命令等待与停止（`adapter-background-wait`）**：在 `src/transport/background/cursor.rs` 以纯 Rust macOS 进程树与脱离进程组（`pgid == pid` + 出生时间戳与父终端血缘）建立逐会话后台 shell 归属，支持等待（`await`）、定向停止（验证另一会话的后台命令保持运行）以及同 `shell_id` 跨轮复用隔离，已通过 `chat_restart -- workbench-background`。 [后台任务协议及版本](backend-opencode-background-shells.md)
+- **重启后孤儿普通提问恢复与未确认送达错误记录（`request-lifecycle`）**：服务重启或断连时，将符合条件的根会话普通用户提问转为持久 `OrphanedQuestion`（双端一致可见，可通过 `/requests/respond` 作为新回合回答一次或通过 `/requests/dismiss` 关闭一次，严格排除已失效的权限/审批/MCP/URL/机密请求），并将原生拒绝或未确认送达记录为脱敏 `Item::RequestError` 时间线条目，已通过 `chat_restart -- workbench-requests`。
+- **富文本可见文字搜索（`thread-find`）**：在 `src/workbench/thread_find/` 补齐工作区相对路径解析、整条消息同名文件父路径后缀消歧、可见行/列/区间标签（`L42–64`）、`(kar|t3)-citation://v1/` `?comment=...` 批注（排除隐藏原文与 URL）、`<details>`/`<summary>` 与 `<picture>` 主题过滤、`kar-context://` 图片标签边界、`★ Insight` 分隔块及零匹配锚点跳转偏移修复，已通过 `chat_restart -- workbench-fork`。
+- **工作流外部里程碑完整性（`mcp-http-session`）**：补齐嵌套工作流 `parentWorkflowRunId` 与 `isSubagentChild` 归属、`Step::Ask` 超时过期（`workflow.input_resolved` `"expired"`）、`stopped`/`skipped` 终态与详情、确定性去重里程碑 ID 以及双客户端 `events/stream` 断线续收 `max_age_ms`，已通过 `workbench_workflows` 与 `workbench_mcp`。
+- **安装发布线说明（`Runtime::install_lines()`）**：在 `InstallLine`、`InstallRefusal.lines`、`RuntimeOrientation.install_lines`、`kar list` / `kar install --plan --json` 与 `/server/config` 同步公开 `line` 与面向用户的 `description`，已通过 `setup_cli` 与 `setup_receipts`。
+- **边界与历史映射核销**：父聊天强停处置子唤醒及委派子聊天强停标为 `Phase::Cancelled`；同运行时切换保留 `SessionSettings`、预校验先于分离及 `interrupt`/`next_turn`；绑定工作树 Git 组合动作、fork+upstream 跨库 PR 创建、解绑与关闭后重开监视；空侧聊天家族查询、`older_settled` 归档过滤、`/shell` 元数据补齐、Webhook 源时间戳头过期 `410`；以及 `docs/backend-sdk-map.tsv` 陈旧「部分契约」逐项核销（`backend-coverage.rs` 校验通过）。
 
 **本轮已接入的其他操作**
 

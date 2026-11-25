@@ -92,6 +92,8 @@ pub struct RuntimeOrientation {
     pub upstream_verified_platforms: Option<&'static [RuntimePlatform]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credentials: Option<&'static RuntimeCredentials>,
+    #[serde(skip_serializing_if = "<[crate::InstallLine]>::is_empty")]
+    pub install_lines: &'static [crate::InstallLine],
     pub installation: Probe<InstallationSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_capabilities: Option<SessionCapabilityDeclaration>,
@@ -232,6 +234,7 @@ async fn read_runtime(
         id: rt.id.clone(),
         brand: rt.brand(),
         credentials: rt.credentials(),
+        install_lines: rt.install_lines(),
         upstream_verified_platforms: upstream_verified_platforms(&rt.id),
         session_capabilities: None,
         auth: install.blocked(rt.has_auth_status()),

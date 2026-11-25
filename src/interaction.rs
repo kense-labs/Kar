@@ -23,6 +23,34 @@ pub enum PermissionDecision {
     Cancel,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestDeliveryStatus {
+    Failed,
+    Unconfirmed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestDeliveryError {
+    pub cursor: Cursor,
+    pub request_id: Value,
+    pub method: String,
+    pub request_kind: RequestKind,
+    pub status: RequestDeliveryStatus,
+    pub reason: String,
+    pub recorded_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OrphanedQuestion {
+    pub cursor: Cursor,
+    pub id: Value,
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<uuid::Uuid>,
+    pub form: crate::QuestionForm,
+}
+
 /// An outstanding request on this stream. The cursor identifies this occurrence even if the native id is reused.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PendingRequest {
@@ -109,7 +137,287 @@ impl PendingRequest {
         .filter(|d| decision_payload(&self.method, &self.body, *d).is_some())
         .collect()
     }
+
+    /// Converts an ordinary root-agent user question into a restart-recoverable record.
+    ///
+    /// Permissions, subagent prompts, MCP/URL/secret elicitations, and Pi UI widgets are excluded.
+    pub fn recoverable_question(
+        &self,
+        root_session: Option<&str>,
+        turn_id: Option<uuid::Uuid>,
+    ) -> Option<OrphanedQuestion> {
+        if self.kind != RequestKind::Question || !self.agent_path.is_empty() {
+            return None;
+        }
+        if let (Some(req_session), Some(root)) = (self.session_id.as_deref(), root_session)
+            && req_session != root
+        {
+            return None;
+        }
+        let allowed = match self.method.as_str() {
+            "item/tool/requestUserInput"
+            | "cursor/ask_question"
+            | "droid.ask_user"
+            | "droid.pick_options"
+            | "kimi/question" => true,
+            "can_use_tool" => {
+                request_body(&self.method, &self.body)["tool_name"].as_str()
+                    == Some("AskUserQuestion")
+                    || self.body["tool_name"].as_str() == Some("AskUserQuestion")
+            }
+            "userInput/requested" => self.body["subagentOrigin"].is_null(),
+            "dsh/question" => self.body["questions"].as_array().is_some_and(|qs| {
+                !qs.iter()
+                    .any(|q| q["intent"]["kind"].as_str() == Some("approval"))
+            }),
+            _ => false,
+        };
+        if !allowed {
+            return None;
+        }
+        let form = self.question_form()?;
+        if form.url.is_some() || form.fields.is_empty() || form.fields.iter().any(|f| f.secret) {
+            return None;
+        }
+        Some(OrphanedQuestion {
+            cursor: self.cursor.clone(),
+            id: self.id.clone(),
+            method: self.method.clone(),
+            turn_id,
+            form,
+        })
+    }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn valid_question_field(field: &crate::QuestionField, v: &Value) -> bool {
+    use crate::FieldKind;
+    use std::collections::HashSet;
+
+    let schema = field.schema.as_ref().unwrap_or(&Value::Null);
+    let choice = |v: &Value| {
+        v.as_str()
+            .is_some_and(|s| field.allow_other || field.options.iter().any(|o| o.value == s))
+    };
+    let between = |n: u64, min: &str, max: &str| {
+        schema[min].as_u64().is_none_or(|m| n >= m) && schema[max].as_u64().is_none_or(|m| n <= m)
+    };
+    match field.kind {
+        FieldKind::Select => choice(v),
+        FieldKind::Text | FieldKind::Editor => v
+            .as_str()
+            .is_some_and(|s| between(s.chars().count() as u64, "minLength", "maxLength")),
+        FieldKind::MultiSelect => v.as_array().is_some_and(|a| {
+            between(a.len() as u64, "minItems", "maxItems")
+                && (schema["uniqueItems"] != true || {
+                    let mut seen = HashSet::new();
+                    a.iter().all(|v| seen.insert(v.as_str()))
+                })
+                && a.iter()
+                    .all(|v| (field.options.is_empty() && v.is_string()) || choice(v))
+        }),
+        FieldKind::Boolean => v.is_boolean(),
+        FieldKind::Integer | FieldKind::Number => v.as_f64().is_some_and(|n| {
+            (field.kind != FieldKind::Integer || n.fract() == 0.0)
+                && schema["minimum"].as_f64().is_none_or(|m| n >= m)
+                && schema["maximum"].as_f64().is_none_or(|m| n <= m)
+        }),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl OrphanedQuestion {
+    pub(crate) fn validate_and_format(
+        &self,
+        values: &serde_json::Map<String, Value>,
+        files: &std::collections::BTreeMap<String, String>,
+    ) -> crate::Result<String> {
+        use crate::{Error, FieldKind};
+
+        let mut values = values.clone();
+        let mut choice_notes = std::collections::BTreeMap::new();
+        for (id, note) in files {
+            let field = self
+                .form
+                .fields
+                .iter()
+                .find(|f| f.id == *id)
+                .ok_or_else(|| Error::Refused("unknown attachment question".into()))?;
+            if field.secret {
+                return Err(Error::Refused(
+                    "attachments cannot be added to a secret answer".into(),
+                ));
+            }
+            match field.kind {
+                FieldKind::Text | FieldKind::Editor => {
+                    let value = values
+                        .entry(id.clone())
+                        .or_insert_with(|| Value::String(String::new()));
+                    let Value::String(s) = value else {
+                        return Err(Error::Refused("attachments require a text answer".into()));
+                    };
+                    if !s.is_empty() {
+                        s.push_str("\n\n");
+                    }
+                    s.push_str(note);
+                }
+                FieldKind::Select | FieldKind::MultiSelect
+                    if matches!(
+                        self.method.as_str(),
+                        "item/tool/requestUserInput" | "can_use_tool"
+                    ) =>
+                {
+                    if values.get(id).is_none() && field.allow_other {
+                        values.insert(
+                            id.clone(),
+                            if field.kind == FieldKind::MultiSelect {
+                                serde_json::json!([note])
+                            } else {
+                                Value::String(note.clone())
+                            },
+                        );
+                    } else {
+                        choice_notes.insert(id.clone(), note.clone());
+                    }
+                }
+                _ => {
+                    return Err(Error::Refused(
+                        "this question cannot carry file references".into(),
+                    ));
+                }
+            }
+        }
+        if values
+            .keys()
+            .any(|key| !self.form.fields.iter().any(|f| f.id == *key))
+        {
+            return Err(Error::Refused("answer contains an unknown field".into()));
+        }
+        for f in &self.form.fields {
+            if !values
+                .get(&f.id)
+                .map_or(!f.required, |v| valid_question_field(f, v))
+            {
+                return Err(Error::Refused(format!(
+                    "missing or invalid answer for field {}",
+                    f.id
+                )));
+            }
+        }
+        match self.method.as_str() {
+            "userInput/requested" => {
+                for field in &self.form.fields {
+                    let Some(inputs) = values.get(&field.id) else {
+                        continue;
+                    };
+                    let inputs = inputs
+                        .as_array()
+                        .map_or_else(|| std::slice::from_ref(inputs), Vec::as_slice);
+                    let (selected, other): (Vec<_>, Vec<_>) = inputs
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .partition(|s| field.options.iter().any(|o| o.value == *s));
+                    let custom = other.join("\n");
+                    if custom.encode_utf16().count() > 500
+                        || (selected.is_empty() && custom.is_empty())
+                    {
+                        return Err(Error::Refused(
+                            "invalid Muse question selection or custom answer length".into(),
+                        ));
+                    }
+                }
+            }
+            "dsh/question" => {
+                for field in &self.form.fields {
+                    let Some(value) = values.get(&field.id) else {
+                        continue;
+                    };
+                    let choices: Vec<_> = match value.as_array() {
+                        Some(items) => items.iter().filter_map(Value::as_str).collect(),
+                        None => value.as_str().into_iter().collect(),
+                    };
+                    let other: Vec<_> = choices
+                        .into_iter()
+                        .filter(|s| !field.options.iter().any(|o| o.value == *s))
+                        .collect();
+                    match other.as_slice() {
+                        [] => {}
+                        [text] if !text.trim().is_empty() => {}
+                        _ => {
+                            return Err(Error::Refused(
+                                "DSH accepts one nonempty custom answer per question".into(),
+                            ));
+                        }
+                    }
+                }
+            }
+            "kimi/question" => {
+                for field in &self.form.fields {
+                    let choices: Vec<_> = values
+                        .get(&field.id)
+                        .into_iter()
+                        .flat_map(|v| match v.as_array() {
+                            Some(a) => a.iter().collect::<Vec<_>>(),
+                            None => vec![v],
+                        })
+                        .filter_map(Value::as_str)
+                        .collect();
+                    let other: Vec<_> = choices
+                        .into_iter()
+                        .filter(|v| !field.options.iter().any(|o| &o.value == v))
+                        .collect();
+                    if other.len() > 1 {
+                        return Err(Error::Refused(
+                            "Kimi accepts one free-text alternative per question".into(),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let mut sections = Vec::new();
+        if let Some(msg) = self.form.message.as_deref().filter(|s| !s.trim().is_empty()) {
+            sections.push(msg.trim().to_owned());
+        }
+        for field in &self.form.fields {
+            let rendered = match values.get(&field.id) {
+                Some(v) => format_field_answer(field, v),
+                None => "(skipped)".to_owned(),
+            };
+            let mut answer = if rendered.trim().is_empty() {
+                "(empty)".to_owned()
+            } else {
+                rendered
+            };
+            if let Some(note) = choice_notes.get(&field.id) {
+                answer.push_str("\n\n");
+                answer.push_str(note);
+            }
+            sections.push(format!("Question: {}\nAnswer: {answer}", field.label));
+        }
+        Ok(sections.join("\n\n"))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn format_field_answer(field: &crate::QuestionField, value: &Value) -> String {
+    let render_one = |v: &Value| match v {
+        Value::String(s) => match field.options.iter().find(|o| o.value == *s) {
+            Some(opt) if opt.label != opt.value => format!("{} ({})", opt.label, opt.value),
+            Some(opt) => opt.label.clone(),
+            None => s.clone(),
+        },
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        other => other.to_string(),
+    };
+    match value {
+        Value::Array(items) => items.iter().map(render_one).collect::<Vec<_>>().join(", "),
+        other => render_one(other),
+    }
+}
+
 pub(crate) fn update_pending(pending: &mut Vec<PendingRequest>, r: &Record, root: bool) -> bool {
     let mut changed = false;
     for e in &r.events {
@@ -128,6 +436,11 @@ pub(crate) fn update_pending(pending: &mut Vec<PendingRequest>, r: &Record, root
             crate::Event::RequestResolved { id } => {
                 let old = pending.len();
                 pending.retain(|p| &p.id != id);
+                changed |= old != pending.len();
+            }
+            crate::Event::RequestDeliveryFailed { cursor, id, .. } => {
+                let old = pending.len();
+                pending.retain(|p| !(&p.id == id && &p.cursor == cursor));
                 changed |= old != pending.len();
             }
             crate::Event::Released | crate::Event::Exited { .. } if root && !pending.is_empty() => {
@@ -427,5 +740,93 @@ mod tests {
         assert!(
             decision_payload("can_use_tool", &question, PermissionDecision::AllowOnce).is_none()
         );
+    }
+
+    #[test]
+    fn recoverable_question_strictly_filters_ordinary_root_questions() {
+        let cursor = Cursor {
+            stream_id: uuid::Uuid::nil(),
+            after_seq: 7,
+        };
+        let turn = uuid::Uuid::from_u128(42);
+        let make = |method: &str, body: Value| PendingRequest {
+            cursor: cursor.clone(),
+            id: json!(1),
+            method: method.into(),
+            kind: classify(method, &body),
+            session_id: Some("root-s".into()),
+            agent_path: vec![],
+            body,
+        };
+
+        let codex = make(
+            "item/tool/requestUserInput",
+            json!({"questions":[{"id":"q1","question":"Database?","options":[{"label":"SQLite"},{"label":"Postgres"}]}]}),
+        );
+        let recovered = codex
+            .recoverable_question(Some("root-s"), Some(turn))
+            .expect("codex root question is recoverable");
+        assert_eq!(recovered.turn_id, Some(turn));
+        assert_eq!(recovered.form.fields[0].id, "q1");
+
+        // Mismatched root session or non-empty agent_path is excluded.
+        assert!(codex.recoverable_question(Some("other"), Some(turn)).is_none());
+        let mut subagent = codex.clone();
+        subagent.agent_path = vec!["child".into()];
+        assert!(subagent.recoverable_question(Some("root-s"), Some(turn)).is_none());
+
+        // Claude AskUserQuestion allowed, Claude permission excluded.
+        let claude_q = make(
+            "can_use_tool",
+            json!({"tool_name":"AskUserQuestion","input":{"questions":[{"question":"Target?","options":[{"label":"dev"}]}]}}),
+        );
+        assert!(claude_q.recoverable_question(Some("root-s"), Some(turn)).is_some());
+        let claude_perm = make("can_use_tool", json!({"tool_name":"Bash","input":{}}));
+        assert!(claude_perm.recoverable_question(Some("root-s"), Some(turn)).is_none());
+
+        // Cursor, Factory, Kimi, Copilot (only without subagentOrigin), DSH (only without approval intent).
+        assert!(
+            make(
+                "cursor/ask_question",
+                json!({"questions":[{"id":"q","prompt":"Pick","options":[{"id":"a","label":"Alpha"}]}]}),
+            )
+            .recoverable_question(Some("root-s"), Some(turn))
+            .is_some()
+        );
+        assert!(
+            make(
+                "userInput/requested",
+                json!({"questions":[{"id":"q","question":"Pick","options":["A"]}],"subagentOrigin":{"id":"sub"}}),
+            )
+            .recoverable_question(Some("root-s"), Some(turn))
+            .is_none()
+        );
+        assert!(
+            make(
+                "dsh/question",
+                json!({"questions":[{"id":"q","question":"Approve?","intent":{"kind":"approval"},"options":["yes"]}]}),
+            )
+            .recoverable_question(Some("root-s"), Some(turn))
+            .is_none()
+        );
+
+        // Permissions, MCP elicitations, Pi prompts, and secret questions are excluded.
+        for (method, body) in [
+            ("droid.request_permission", json!({"specContent":"plan","options":[{"value":"proceed_edit"}]})),
+            ("elicitation/create", json!({"message":"Name?","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}})),
+            ("mcpServer/elicitation/request", json!({"mode":"url","url":"https://example.com"})),
+            ("select", json!({"title":"Pick","options":["a"]})),
+            ("confirm", json!({"title":"Proceed?"})),
+            ("input", json!({"title":"Enter text"})),
+            ("editor", json!({"title":"Edit"})),
+            ("item/tool/requestUserInput", json!({"questions":[{"id":"tok","question":"API token?","isSecret":true}]})),
+        ] {
+            assert!(
+                make(method, body)
+                    .recoverable_question(Some("root-s"), Some(turn))
+                    .is_none(),
+                "{method} must not be recoverable"
+            );
+        }
     }
 }

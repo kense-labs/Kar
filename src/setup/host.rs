@@ -1,5 +1,5 @@
 //! Read-only, current-user validation of the installer's tools and actual destinations.
-use super::{InstallPlan, InstallPreview, update};
+use super::{InstallLine, InstallPlan, InstallPreview, update};
 use crate::{InstallationSnapshot, Runtime, installation::Probe};
 use serde::Serialize;
 use std::{
@@ -28,6 +28,8 @@ pub struct InstallRefusal {
     pub reason: InstallReason,
     pub detail: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<InstallLine>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<InstallStep>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -37,9 +39,14 @@ impl InstallRefusal {
         Self {
             reason,
             detail: detail.into(),
+            lines: vec![],
             steps: vec![],
             source: None,
         }
+    }
+    fn with_lines(mut self, lines: &'static [InstallLine]) -> Self {
+        self.lines = lines.to_vec();
+        self
     }
     fn steps(mut self, p: &InstallPreview) -> Self {
         self.steps = steps(p);
@@ -277,7 +284,8 @@ pub(super) async fn inspect(
     existing: Option<&InstallationSnapshot>,
 ) -> Result<(InstallPreview, Vec<PathBuf>), InstallRefusal> {
     let method = rt.install_plan_for(line).map_err(|e| {
-        let reason = if line.is_some_and(|l| !rt.install_lines().contains(&l)) {
+        let reason = if line.is_some_and(|l| !rt.install_lines().iter().any(|entry| entry.line == l))
+        {
             InstallReason::UnknownLine
         } else if line.is_none() && !rt.install_lines().is_empty() {
             InstallReason::LineRequired
@@ -301,7 +309,12 @@ pub(super) async fn inspect(
         } else {
             InstallReason::NoInstaller
         };
-        InstallRefusal::new(reason, e.to_string())
+        let refusal = InstallRefusal::new(reason, e.to_string());
+        if matches!(reason, InstallReason::LineRequired | InstallReason::UnknownLine) {
+            refusal.with_lines(rt.install_lines())
+        } else {
+            refusal
+        }
     })?;
     let mut preview = method.preview();
     preview.source = documentation(&rt.id, &method);

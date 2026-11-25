@@ -14,7 +14,26 @@ fn stamp(sec: u64, usec: u64) -> Option<u64> {
 }
 pub(super) fn birth(pid: u32) -> Option<u64> {
     let info = pidinfo::<TaskAllInfo>(pid.try_into().ok()?, 0).ok()?;
+    if info.pbsd.pbi_status == nix::libc::SZOMB {
+        return None;
+    }
     stamp(info.pbsd.pbi_start_tvsec, info.pbsd.pbi_start_tvusec)
+}
+#[allow(dead_code)]
+pub(crate) fn pgid_of(pid: u32) -> Option<u32> {
+    let raw: i32 = pid.try_into().ok()?;
+    if let Ok(info) = pidinfo::<TaskAllInfo>(raw, 0) {
+        return (info.pbsd.pbi_status != nix::libc::SZOMB).then_some(info.pbsd.pbi_pgid);
+    }
+    if let Ok(info) = kproc_info_raw(raw) {
+        let zombie = u32::try_from(info.kp_proc.p_stat).ok()? == nix::libc::SZOMB;
+        return (!zombie)
+            .then(|| info.kp_eproc.e_pgid.try_into().ok())
+            .flatten();
+    }
+    getpgid(Some(Pid::from_raw(raw)))
+        .ok()
+        .and_then(|p| u32::try_from(p.as_raw()).ok())
 }
 pub(super) fn table() -> Option<Table> {
     let mut rows = Table::new();

@@ -2,6 +2,10 @@ use super::*;
 use kar::forms::{ListingReason, ModelListing};
 
 pub(super) fn peer(mode: &str) {
+    if std::env::args().any(|arg| arg == "--help") {
+        println!("Usage: codex app-server [OPTIONS]");
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("--version") {
         println!("codex-cli 0.171.0");
         return;

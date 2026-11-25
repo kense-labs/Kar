@@ -49,6 +49,9 @@ pub(crate) fn client() -> Client {
 }
 
 pub(crate) async fn json(req: reqwest::RequestBuilder) -> Value {
-    let r = req.send().await.unwrap().error_for_status().unwrap();
-    r.json().await.unwrap()
+    let r = req.send().await.unwrap();
+    let status = r.status();
+    let text = r.text().await.unwrap();
+    assert!(status.is_success(), "HTTP {status}: {text}");
+    serde_json::from_str(&text).unwrap()
 }

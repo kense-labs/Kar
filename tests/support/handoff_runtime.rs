@@ -98,18 +98,30 @@ fn fixture(runtime: &str) {
         println!(
             "{}",
             if runtime == "claude" {
-                "2.1.134"
+                "2.1.134 (Claude Code)"
             } else if runtime == "qwen" {
                 "0.27.4"
             } else {
-                "0.143.0"
+                "codex-cli 0.143.0"
             }
         );
         return;
     }
     if args.iter().any(|a| a == "--help") {
-        println!("{runtime}");
+        println!(
+            "{}",
+            if runtime == "codex" {
+                "Usage: codex app-server"
+            } else if runtime == "qwen" {
+                "Usage: qwen"
+            } else {
+                "claude"
+            }
+        );
         return;
+    }
+    if let Some(config) = args.windows(2).find(|a| a[0] == "--mcp-config") {
+        let _ = fs::read(&config[1]);
     }
     let mut sid = args
         .windows(2)
@@ -142,12 +154,34 @@ fn fixture(runtime: &str) {
                         );
                     }
                     let mut info = json!({"thread":{"id":sid,"cwd":cwd,"turns":[]}});
+                    if let Some(effort) = v
+                        .pointer("/params/config/model_reasoning_effort")
+                        .and_then(Value::as_str)
+                    {
+                        info["reasoningEffort"] = json!(effort);
+                    }
+                    if let Some(roots) = v
+                        .pointer("/params/runtimeWorkspaceRoots")
+                        .filter(|r| r.is_array())
+                    {
+                        info["runtimeWorkspaceRoots"] = roots.clone();
+                    }
                     if args.iter().any(|a| a == "sandbox_mode=\"workspace-write\"") {
                         info["cwd"] = json!(cwd);
                         info["approvalPolicy"] = json!("never");
                         info["sandbox"] = json!({"type":"workspaceWrite","writableRoots":[],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true,"networkAccess":false});
                     }
                     reply(info);
+                }
+                Some("thread/settings/update") => {
+                    emit(json!({
+                        "method": "thread/settings/updated",
+                        "params": {
+                            "threadId": sid,
+                            "threadSettings": { "effort": v["params"]["effort"] }
+                        }
+                    }));
+                    reply(json!({}));
                 }
                 Some("thread/fork") => {
                     let source = v["params"]["threadId"].as_str().unwrap();
@@ -199,11 +233,16 @@ fn fixture(runtime: &str) {
                     );
                     gate(&dir, "turn");
                     if text.contains("kar-acceptance-edit-notes") {
-                        let original = fs::read_to_string("notes.md").unwrap();
+                        let target = if Path::new("document.md").exists() {
+                            "document.md"
+                        } else {
+                            "notes.md"
+                        };
+                        let original = fs::read_to_string(target).unwrap();
                         assert!(original.contains("author=original"));
                         gate(&dir, "document");
                         fs::write(
-                            "notes.md",
+                            target,
                             original.replace("author=original", "author=assistant"),
                         )
                         .unwrap();

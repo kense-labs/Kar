@@ -43,9 +43,10 @@ impl Request {
         rules: &Rules,
         now: i64,
     ) -> Result<Decision> {
+        let origin_ms = self.origin_ms(now);
         if rules
             .max_delivery_age_minutes
-            .is_some_and(|min| now.saturating_sub(self.received_ms) > i64::from(min) * 60_000)
+            .is_some_and(|min| now.saturating_sub(origin_ms) > i64::from(min) * 60_000)
         {
             return Ok(Decision::new("expired", None));
         }

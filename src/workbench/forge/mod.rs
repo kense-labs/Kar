@@ -15,16 +15,6 @@ pub(in crate::workbench) use publish::PullTarget;
 mod routes;
 pub(super) use providers::issue_listing::model_issue_read;
 pub(super) use routes::{model_issue_write, stacked_pull};
-pub(super) async fn default_branch(app: Workbench, project: Uuid) -> Result<String, ForgeError> {
-    Context::open(app, project)
-        .await?
-        .execute(&Operation::Identity)
-        .await?["default_branch"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| ForgeError::bad("forge returned no default branch"))
-}
 pub(in crate::workbench) mod watches;
 pub(in crate::workbench) mod guides;
 mod routing;
@@ -256,6 +246,34 @@ pub(super) struct ForgeState {
     #[serde(default)]
     link_activity: BTreeMap<Uuid, u64>,
     reviews: BTreeMap<String, Review>,
+}
+impl ForgeState {
+    pub(in crate::workbench) fn chat_links(&self) -> BTreeMap<Uuid, Vec<Value>> {
+        let mut out: BTreeMap<Uuid, Vec<Value>> = BTreeMap::new();
+        let mut seen: BTreeMap<Uuid, BTreeSet<(String, String, u64)>> = BTreeMap::new();
+        for b in self.bindings.values() {
+            if seen
+                .entry(b.chat)
+                .or_default()
+                .insert((b.repository.clone(), b.kind.clone(), b.number))
+            {
+                out.entry(b.chat).or_default().push(json!({
+                    "project": b.project,
+                    "chat": b.chat,
+                    "repository": b.repository,
+                    "kind": b.kind,
+                    "number": b.number,
+                }));
+            }
+        }
+        for links in out.values_mut() {
+            links.sort_by(|a, b| {
+                (a["repository"].as_str(), a["kind"].as_str(), a["number"].as_u64())
+                    .cmp(&(b["repository"].as_str(), b["kind"].as_str(), b["number"].as_u64()))
+            });
+        }
+        out
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Mutation {
@@ -556,6 +574,71 @@ impl Context {
         .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))??;
         signin::attach(&service, &mut c).await?;
         Ok(c)
+    }
+    pub(super) async fn open_checkout(
+        app: Workbench,
+        project: Uuid,
+        cwd: PathBuf,
+        preferred_remote: Option<String>,
+    ) -> Result<Self, ForgeError> {
+        let service = app.clone();
+        let mut c = tokio::task::spawn_blocking(move || -> Result<Self, ForgeError> {
+            app.project(project)?;
+            app.workspace_at(&cwd)?;
+            let repo = Repository::open(&cwd)?;
+            if let Some(name) = preferred_remote
+                && let Ok(url) = repo.remote_fetch_url(&name)
+                && let Ok((host, repository)) = remote_identity(url.trim())
+            {
+                return Self::located(host, repository, repo.root().into());
+            }
+            let (_, host, repository) = primary_remote(repo.root())?;
+            Self::located(host, repository, repo.root().into())
+        })
+        .await
+        .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))??;
+        signin::attach(&service, &mut c).await?;
+        Ok(c)
+    }
+    pub(super) async fn open_for_repository(
+        app: Workbench,
+        project: Uuid,
+        expected_identity: &str,
+    ) -> Result<Self, ForgeError> {
+        let primary = Self::open(app.clone(), project).await?;
+        if primary.identity() == expected_identity {
+            return Ok(primary);
+        }
+        let target = expected_identity.to_owned();
+        let state = app.clone();
+        let matched = tokio::task::spawn_blocking(move || -> Result<Option<Self>, ForgeError> {
+            let repo = state.repository(project)?;
+            for name in repo.remote_names()? {
+                if let Ok(url) = repo.remote_fetch_url(&name)
+                    && let Ok((host, repository)) = remote_identity(url.trim())
+                    && let Ok(ctx) = Self::located(host, repository, repo.root().into())
+                    && ctx.identity() == target
+                {
+                    return Ok(Some(ctx));
+                }
+            }
+            Ok(None)
+        })
+        .await
+        .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))??;
+        if let Some(mut ctx) = matched {
+            signin::attach(&app, &mut ctx).await?;
+            return Ok(ctx);
+        }
+        Ok(primary)
+    }
+    pub(super) async fn default_branch(&self) -> Result<String, ForgeError> {
+        self.execute(&Operation::Identity)
+            .await?["default_branch"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ForgeError::bad("forge returned no default branch"))
     }
     fn located(host: String, repository: String, cwd: PathBuf) -> Result<Self, ForgeError> {
         let config = Config::load()?;

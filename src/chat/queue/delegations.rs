@@ -1,7 +1,7 @@
 //! Completion membership and its pending prompt share the same locked inbox replacement.
 //! The native admission path takes this lock before recording Begin and rechecks the text.
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WakePolicy {
@@ -54,6 +54,10 @@ struct Saved {
 }
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Ledger {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    stopped_runs: BTreeSet<Uuid>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    stopped_tasks: BTreeSet<Uuid>,
     tasks: BTreeMap<Uuid, Saved>,
     commands: BTreeMap<Uuid, (Uuid, CompletionCommand, Completion)>,
 }
@@ -269,6 +273,10 @@ impl ChatStore {
             let parent = src
                 .parent_run
                 .and_then(|id| state.turns.iter().find(|t| t.id == id));
+            let parent_stopped = inbox.delegations.stopped_tasks.contains(&src.task)
+                || src
+                    .parent_run
+                    .is_some_and(|id| inbox.delegations.stopped_runs.contains(&id));
             let dispose = src.dispose.or_else(|| {
                 if !src.terminal {
                     None
@@ -278,7 +286,9 @@ impl ChatStore {
                     Some("no spawning parent turn")
                 } else if src.parent_run.is_some() && parent.is_none() {
                     Some("spawning turn no longer in this context")
-                } else if parent.is_some_and(|t| t.status == TurnStatus::Aborted) {
+                } else if parent_stopped
+                    || parent.is_some_and(|t| t.status == TurnStatus::Aborted)
+                {
                     Some("spawning parent stopped")
                 } else {
                     None
@@ -383,5 +393,59 @@ impl ChatStore {
             self.save_inbox(&inbox)?;
         }
         Ok(result)
+    }
+
+    pub(crate) fn record_parent_force_stop(
+        &self,
+        chat: Uuid,
+        parent_run: Option<Uuid>,
+        tasks: &[Uuid],
+    ) -> Result<BTreeMap<Uuid, Completion>> {
+        let _lock = self.inbox_lock(chat)?;
+        let state = self.read_state(File::open(self.path(chat))?, chat)?;
+        let mut inbox = self.read_inbox(&state.info)?;
+        let mut dirty = false;
+        if let Some(run) = parent_run {
+            dirty |= inbox.delegations.stopped_runs.insert(run);
+        }
+        for &task in tasks {
+            dirty |= inbox.delegations.stopped_tasks.insert(task);
+        }
+        let mut affected_messages = BTreeSet::new();
+        let mut disposed = BTreeMap::new();
+        for (&task_id, row) in &mut inbox.delegations.tasks {
+            let matches_stop = inbox.delegations.stopped_tasks.contains(&task_id)
+                || row
+                    .parent_run
+                    .is_some_and(|id| inbox.delegations.stopped_runs.contains(&id));
+            if !matches_stop || row.completion.settled() || row.completion.native_received {
+                continue;
+            }
+            if let Some(id) = row.completion.message_id {
+                if let Some(e) = inbox.entries.iter().find(|e| e.id == id) {
+                    let status = e.status(&state);
+                    row.completion.queue_status = Some(status);
+                    if status != InputStatus::Pending {
+                        continue;
+                    }
+                }
+                affected_messages.insert(id);
+                row.completion.previous_messages.push(id);
+                row.completion.message_id = None;
+                row.completion.queue_status = Some(InputStatus::Withdrawn);
+            }
+            row.completion.state = Disposition::Disposed;
+            row.completion.reason = Some("spawning parent stopped".into());
+            disposed.insert(task_id, row.completion.clone());
+            dirty = true;
+        }
+        for id in affected_messages {
+            inbox.refresh_completion_prompt(&state, id)?;
+            dirty = true;
+        }
+        if dirty {
+            self.save_inbox(&inbox)?;
+        }
+        Ok(disposed)
     }
 }

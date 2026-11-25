@@ -49,6 +49,8 @@ enum Operation {
         command_id: Uuid,
         #[serde(default)]
         input: Value,
+        #[serde(default)]
+        parent_run_id: Option<Uuid>,
     },
     Resume {
         run_id: Uuid,
@@ -74,6 +76,20 @@ enum Operation {
     Cancel {
         run_id: Uuid,
         command_id: Uuid,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    Stop {
+        run_id: Uuid,
+        command_id: Uuid,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    Skip {
+        run_id: Uuid,
+        command_id: Uuid,
+        #[serde(default)]
+        reason: Option<String>,
     },
 }
 
@@ -121,9 +137,39 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
             workflow_id,
             command_id,
             input,
-        } => Ok(
-            json!({"run":app.trigger_workflow_checked(project,workflow_id,command_id,input,||authorize(true))?}),
-        ),
+            parent_run_id,
+        } => {
+            let parent = if parent_run_id.is_some() {
+                parent_run_id
+            } else {
+                let mut cur = Some(chat);
+                let mut seen = std::collections::BTreeSet::new();
+                let mut found = None;
+                while let Some(c) = cur {
+                    if !seen.insert(c) {
+                        break;
+                    }
+                    if let Some(run_id) = app.0.workflows.active_run_for_chat(c)
+                        && app.workflow_run(project, run_id).is_ok()
+                    {
+                        found = Some(run_id);
+                        break;
+                    }
+                    cur = super::orchestrator::milestone_parent(&app.0.catalog.lock().unwrap(), c);
+                }
+                found
+            };
+            Ok(json!({
+                "run": app.trigger_workflow_checked(
+                    project,
+                    workflow_id,
+                    command_id,
+                    input,
+                    parent,
+                    || authorize(true),
+                )?
+            }))
+        }
         Operation::Resume {
             run_id,
             command_id,
@@ -135,7 +181,21 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
                 attempt: attempt_id,
             },
         ),
-        Operation::Cancel { run_id, command_id } => mutate(run_id, command_id, Action::Cancel),
+        Operation::Cancel {
+            run_id,
+            command_id,
+            reason,
+        } => mutate(run_id, command_id, Action::Cancel { reason }),
+        Operation::Stop {
+            run_id,
+            command_id,
+            reason,
+        } => mutate(run_id, command_id, Action::Stop { reason }),
+        Operation::Skip {
+            run_id,
+            command_id,
+            reason,
+        } => mutate(run_id, command_id, Action::Skip { reason }),
         Operation::Store { key, cursor, limit } => toolkit::page(
             app.stored_workflow_values(project, key.as_deref().unwrap_or(""))?,
             "entries",

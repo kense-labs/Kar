@@ -42,7 +42,9 @@ impl PullTarget {
         target: &PublishTarget,
         requested_base: Option<&str>,
     ) -> Result<Self, ForgeError> {
-        let c = Context::open(app.clone(), project).await?;
+        let base_remote = checkout.comparison_remote(local, target)?;
+        let c = Context::open_checkout(app, project, checkout.root().to_owned(), base_remote)
+            .await?;
         let (fetch, pushes) = checkout.publish_urls(target)?;
         let mut destination = None;
         for url in pushes {
@@ -75,7 +77,7 @@ impl PullTarget {
             .or(checkout.comparison_branch(local, target)?)
         {
             Some(b) => b,
-            None => super::default_branch(app, project).await?,
+            None => c.default_branch().await?,
         };
         if repository.is_none() && target.branch == base {
             return Err(ForgeError::bad("pull request head and base are the same"));

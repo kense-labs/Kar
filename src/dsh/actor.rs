@@ -352,10 +352,45 @@ impl Actor {
         Ok(())
     }
     async fn answer(&mut self, id: &str, outcome: Value) -> Result<()> {
-        self.interaction_result(id, outcome).await?;
+        self.answer_host(id, outcome, None, &[]).await
+    }
+    async fn answer_host(
+        &mut self,
+        id: &str,
+        outcome: Value,
+        pending_req: Option<crate::PendingRequest>,
+        extra_secrets: &[String],
+    ) -> Result<()> {
+        if let Err(err) = self.interaction_result(id, outcome).await {
+            self.requests.remove(id);
+            if let Some(req) = pending_req {
+                let mut reason = err.to_string();
+                crate::transport::redact_text(&mut reason, &self.secrets);
+                crate::transport::redact_text(&mut reason, extra_secrets);
+                self.journal.host_event(Event::RequestDeliveryFailed {
+                    cursor: req.cursor,
+                    id: req.id,
+                    method: req.method,
+                    kind: req.kind,
+                    status: crate::RequestDeliveryStatus::Failed,
+                    reason,
+                });
+            }
+            return Err(err);
+        }
         self.requests.remove(id);
         self.journal
             .host_event(Event::RequestResolved { id: id.into() });
+        if let Some(req) = pending_req {
+            self.journal
+                .host_event(Event::RequestAnswerDispatched {
+                    cursor: req.cursor,
+                    id: req.id,
+                    method: req.method,
+                    kind: req.kind,
+                    confirmed: true,
+                });
+        }
         Ok(())
     }
     async fn frame(&mut self, v: Value) -> Result<()> {
@@ -809,6 +844,11 @@ impl Actor {
                 }
             }
             Command::Respond(id, reply, ack) => {
+                let pending_req = self.journal.pending_request(&id, reply.cursor());
+                let extra_secrets = pending_req
+                    .as_ref()
+                    .map(|req| reply.submitted_secrets(req))
+                    .unwrap_or_default();
                 let r = if let Some((m, v)) = id.as_str().and_then(|k| self.requests.get(k)) {
                     match reply.payload(&self.journal, &id, m, v) {
                         Ok(value) => {
@@ -817,7 +857,8 @@ impl Actor {
                             } else {
                                 json!({"kind":"result","value":value})
                             };
-                            self.answer(id.as_str().unwrap(), outcome).await
+                            self.answer_host(id.as_str().unwrap(), outcome, pending_req, &extra_secrets)
+                                .await
                         }
                         Err(e) => Err(e),
                     }

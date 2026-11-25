@@ -78,6 +78,17 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
             }),
         )
         .route(
+            "/repos/kar/demo/issues/19/comments",
+            get(|| async {
+                Json(json!([{
+                    "id": 99,
+                    "body": "looks good",
+                    "user": { "login": "reviewer" },
+                    "created_at": "2026-01-01T00:00:00Z"
+                }]))
+            }),
+        )
+        .route(
             "/repos/kar/demo/issues/7/comments",
             post(
                 |State(c): State<Calls>, Json(input): Json<Value>| async move {
@@ -220,7 +231,7 @@ pub(super) async fn exercise(
     assert!(denied(&server::json(make("kar_pull_request",json!({"action":"list","query":"Second","cursor":page["next_cursor"]}))).await));
     let sections=server::json(make("kar_pull_request",json!({"action":"read","number":19,"include":["comments"],"limit":1}))).await;
     assert!(sections["result"]["structuredContent"]["comments"]["items"].is_array());
-    let bare=root.join(".git/workbench-publication-fixture.git");
+    let bare = root.parent().unwrap().join("workbench-publication-fixture.git");
     git(root,&["init","--bare",bare.to_str().unwrap()]);
     git(root,&["remote","set-url","--push","origin",bare.to_str().unwrap()]);
     let publication=json!({"command_id":Uuid::new_v4(),"action":"create","title":"Current checkout","draft":true,"base":"release"});

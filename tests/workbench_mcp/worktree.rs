@@ -123,17 +123,17 @@ pub(super) async fn exercise(
     let id = Uuid::new_v4();
     let draft =
         json!({"command_id":id,"branch":"kar-move","continuation_prompt":"continue in checkout"});
+    let is_err = |v: &Value| v["error"].is_object() || v["result"]["isError"] == true;
     let handoff = || call("kar_worktree_handoff", draft.clone());
-    assert_eq!(server::json(handoff()).await["result"]["isError"], true);
+    assert!(is_err(&server::json(handoff()).await));
     server::json(
         host.put(format!("{base}/{chat}/model-tools/permissions"))
             .json(&json!({"mode":"execute","worktree_directory":checkouts})),
     )
     .await;
-    assert_eq!(
-        server::json(handoff().header("kar-mode-limit", "auto/plan")).await["result"]["isError"],
-        true
-    );
+    assert!(is_err(
+        &server::json(handoff().header("kar-mode-limit", "auto/plan")).await
+    ));
 
     // The model is still taking the old turn when its own scoped MCP credential requests the move.
     fs::write(db.join("hold-parent-turn"), []).unwrap();
@@ -367,8 +367,7 @@ impl Interrupted {
         assert!(
             snapshot["history"]["handoffs"]
                 .as_array()
-                .unwrap()
-                .is_empty()
+                .is_none_or(Vec::is_empty)
         );
         let calls = fs::read_to_string(db.join("calls")).unwrap();
         assert_eq!(

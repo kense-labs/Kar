@@ -61,20 +61,21 @@ fn main() {
             return;
         }
         Some("app-server") => {
-            let target: SocketAddr = std::env::var("KAR_TEST_MCP_OBSERVER")
-                .unwrap()
-                .parse()
-                .unwrap();
-            assert!(target.ip().is_loopback());
-            let observer = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-            peer::agent_with_observer(|v| {
-                if matches!(v["method"].as_str(), Some("thread/start" | "thread/resume")) {
-                    assert!(std::env::var_os("KAR_WORKBENCH_TOKEN").is_none());
-                    let config = &v["params"]["config"]["mcp_servers"]["kar_workbench"];
-                    let token = config["http_headers"]["Authorization"].as_str().unwrap();
-                    observer.send_to(token.as_bytes(), target).unwrap();
-                }
-            });
+            if let Ok(raw) = std::env::var("KAR_TEST_MCP_OBSERVER") {
+                let target: SocketAddr = raw.parse().unwrap();
+                assert!(target.ip().is_loopback());
+                let observer = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+                peer::agent_with_observer(|v| {
+                    if matches!(v["method"].as_str(), Some("thread/start" | "thread/resume")) {
+                        assert!(std::env::var_os("KAR_WORKBENCH_TOKEN").is_none());
+                        let config = &v["params"]["config"]["mcp_servers"]["kar_workbench"];
+                        let token = config["http_headers"]["Authorization"].as_str().unwrap();
+                        observer.send_to(token.as_bytes(), target).unwrap();
+                    }
+                });
+            } else {
+                peer::agent();
+            }
             return;
         }
         _ => {}
@@ -228,7 +229,7 @@ async fn scenario() {
     .await;
     assert_eq!(foreign["result"]["isError"], true);
     let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
-    projects::exercise(&url, &a, p, chat, &root, call).await;
+    projects::exercise(&url, &a, p, chat, &root, &observer, call).await;
     collaboration::run(&url,&a,p,chat,&db,call).await;
     preview_tools::controls(&url, &a, p, chat, call).await;
     preview_tools::devices(&url,&a,p,chat,call).await;

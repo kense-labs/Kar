@@ -34,7 +34,11 @@ pub(in crate::workbench) fn repositories(
         let Some(parent) = owner.forked_from.as_ref() else {
             break None;
         };
-        let prior = app.0.chats.saved_info(parent.chat)?;
+        let prior = match app.0.chats.ancestry_info(parent.chat) {
+            Ok(prior) => prior,
+            Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => break None,
+            Err(e) => return Err(e),
+        };
         if prior.workspace != chat.workspace {
             break None;
         }

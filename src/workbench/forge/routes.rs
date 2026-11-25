@@ -3,7 +3,7 @@ use crate::workbench_git::ManagedWorktree;
 use axum::{
     Router,
     extract::{Path, Query, State},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 
 async fn drivers() -> Json<Value> {
@@ -85,7 +85,8 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
                 kind: kind.into(),
                 number,
             };
-            if !db.forge.bindings.values().any(|v| v == &binding) {
+            let existed = db.forge.bindings.values().any(|v| v == &binding);
+            if !existed {
                 db.forge.links_changed()?;
             }
             if kind == "pull" {
@@ -94,7 +95,9 @@ fn complete(app: &Workbench, id: Uuid, result: Result<Value, ForgeError>) -> Rep
             db.forge
                 .link_activity
                 .insert(binding.chat, jiff::Timestamp::now().as_millisecond() as u64);
-            db.forge.bindings.insert(id, binding);
+            if !existed {
+                db.forge.bindings.insert(id, binding);
+            }
         }
         db.forge.operations.get_mut(&id).unwrap().result = Some(result.clone());
         Ok(result)
@@ -125,8 +128,14 @@ pub(super) async fn model_forge_write(
     app:Workbench,project:Uuid,chat:Uuid,id:Uuid,issue_scope:Option<String>,operation:Operation,
     authorize:impl FnOnce(&crate::workbench::Catalog,&str)->crate::Result<()>
 )->Result<Value,ForgeError>{
+    model_forge_write_in(app,project,chat,id,issue_scope,operation,None,authorize).await
+}
+pub(super) async fn model_forge_write_in(
+    app:Workbench,project:Uuid,chat:Uuid,id:Uuid,issue_scope:Option<String>,operation:Operation,context:Option<Context>,
+    authorize:impl FnOnce(&crate::workbench::Catalog,&str)->crate::Result<()>
+)->Result<Value,ForgeError>{
     let input = Input {id,chat,issue_scope,operation,routing:None};
-    Ok(execute_checked(app, project, input, authorize).await?.0)
+    Ok(execute_with_context(app, project, input, context, authorize).await?.0)
 }
 
 async fn execute_checked(
@@ -135,19 +144,37 @@ async fn execute_checked(
     input: Input,
     authorize: impl FnOnce(&crate::workbench::Catalog, &str) -> crate::Result<()>,
 ) -> Reply<Value> {
+    execute_with_context(app, project, input, None, authorize).await
+}
+
+async fn execute_with_context(
+    app: Workbench,
+    project: Uuid,
+    input: Input,
+    context: Option<Context>,
+    authorize: impl FnOnce(&crate::workbench::Catalog, &str) -> crate::Result<()>,
+) -> Reply<Value> {
     app.binding(project, input.chat)?;
+    if app.archived(input.chat) {
+        return Err(Error::Refused("chat is archived".into()).into());
+    }
     if !input.operation.mutates() {
         return Err(ForgeError::bad("use /query for reads"));
     }
     providers::issue::validate(&input.operation)?;
     actions::validate(&input.operation)?;
-    let mut c = Context::for_operation(
-        app.clone(),
-        project,
-        &input.operation,
-        input.issue_scope.as_deref(),
-    )
-    .await?;
+    let mut c = match context {
+        Some(c) => c,
+        None => {
+            Context::for_operation(
+                app.clone(),
+                project,
+                &input.operation,
+                input.issue_scope.as_deref(),
+            )
+            .await?
+        }
+    };
     routing::verify(&c, input.routing.as_ref()).await?;
     let identity = c.identity();
     let id = input.id;
@@ -242,6 +269,24 @@ pub(in crate::workbench) async fn stacked_pull(
         .filter(|r| r["head_ref"] == head && r["base_ref"] == base && r["state"] == "open")
     {
         if publish::matches_repository(&c, expected, r).await? {
+            if let Some(chat) = chat {
+                app.binding(project, chat)?;
+                if app.archived(chat) {
+                    return Err(Error::Refused("chat is archived".into()).into());
+                }
+                let number = checked_number(r)?;
+                let _ = save_binding(
+                    &app,
+                    id,
+                    Binding {
+                        project,
+                        chat,
+                        repository: c.identity(),
+                        kind: "pull".into(),
+                        number,
+                    },
+                )?;
+            }
             return Ok(json!({"status":"opened_existing","pull":r}));
         }
     }
@@ -254,7 +299,7 @@ pub(in crate::workbench) async fn stacked_pull(
         body,
     };
     let pull = if let Some(chat) = chat {
-        execute(
+        execute_with_context(
             app,
             project,
             Input {
@@ -264,6 +309,8 @@ pub(in crate::workbench) async fn stacked_pull(
                 issue_scope: None,
                 operation,
             },
+            Some(c),
+            |_, _| Ok(()),
         )
         .await?
         .0
@@ -309,9 +356,11 @@ async fn reconcile(
     Json(input): Json<Reconcile>,
 ) -> Reply<Value> {
     let Json(m) = operation(State(app.clone()), Path((project, id))).await?;
-    let mut c =
-        Context::for_operation(app.clone(), project, &m.operation, m.issue_scope.as_deref())
-            .await?;
+    let mut c = if m.issue_scope.is_some() {
+        Context::for_operation(app.clone(), project, &m.operation, m.issue_scope.as_deref()).await?
+    } else {
+        Context::open_for_repository(app.clone(), project, &m.repository).await?
+    };
     routing::verify(&c, m.routing.as_ref()).await?;
     if c.identity() != m.repository {
         return Err(ForgeError::bad(
@@ -412,6 +461,9 @@ async fn link(
     Json(input): Json<Link>,
 ) -> Reply<Binding> {
     app.binding(project, input.chat)?;
+    if app.archived(input.chat) {
+        return Err(Error::Refused("chat is archived".into()).into());
+    }
     let op = match input.kind.as_str() {
         "pull" => Operation::Pull {
             number: input.number,
@@ -450,15 +502,141 @@ fn save_binding(app: &Workbench, id: Uuid, binding: Binding) -> Reply<Binding> {
                 "binding ID already belongs to an operation".into(),
             ));
         }
-        if !db.forge.bindings.values().any(|b| b == &binding) {
-            db.forge.links_changed()?;
-            db.forge
-                .link_activity
-                .insert(binding.chat, jiff::Timestamp::now().as_millisecond() as u64);
+        if let Some(existing) = db.forge.bindings.values().find(|b| *b == &binding).cloned() {
+            return Ok(existing);
         }
+        db.forge.links_changed()?;
+        db.forge
+            .link_activity
+            .insert(binding.chat, jiff::Timestamp::now().as_millisecond() as u64);
         db.forge.bindings.insert(id, binding.clone());
         Ok(binding)
     })?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Unlink {
+    #[serde(default)]
+    id: Option<Uuid>,
+    #[serde(default)]
+    command_id: Option<Uuid>,
+    chat: Uuid,
+    kind: model::Kind,
+    #[serde(default)]
+    issue_scope: Option<String>,
+    #[serde(default)]
+    number: Option<u64>,
+    #[serde(default)]
+    numbers: Option<Vec<u64>>,
+}
+async fn unlink(
+    State(app): State<Workbench>,
+    Path(project): Path<Uuid>,
+    Json(input): Json<Unlink>,
+) -> Reply<Value> {
+    app.binding(project, input.chat)?;
+    if app.archived(input.chat) {
+        return Err(Error::Refused("chat is archived".into()).into());
+    }
+    let numbers = match (input.number, input.numbers) {
+        (Some(n), None) => vec![n],
+        (None, Some(ns)) => ns,
+        _ => return Err(ForgeError::bad("expected either number or numbers")),
+    };
+    let cmd = input.command_id.or(input.id).unwrap_or_else(Uuid::new_v4);
+    model::links(
+        app,
+        project,
+        input.chat,
+        input.kind,
+        input.issue_scope.as_deref(),
+        Some((model::Change::Unlink, cmd, numbers)),
+        |_, _| Ok(()),
+    )
+    .await
+    .map(Json)
+}
+
+async fn delete_link(
+    State(app): State<Workbench>,
+    Path((project, id)): Path<(Uuid, Uuid)>,
+) -> Reply<Value> {
+    app.project(project)?;
+    Ok(Json(app.update(|db| {
+        let Some(existing) = db
+            .forge
+            .bindings
+            .get(&id)
+            .filter(|b| b.project == project)
+            .cloned()
+        else {
+            return Ok(Err(ForgeError::remote(404, "unknown binding")));
+        };
+        if db.archived.contains(&existing.chat) {
+            return Err(Error::Refused("chat is archived".into()));
+        }
+        db.forge.bindings.retain(|_, b| b != &existing);
+        db.forge.links_changed()?;
+        db.forge
+            .link_activity
+            .insert(existing.chat, jiff::Timestamp::now().as_millisecond() as u64);
+        Ok(Ok(json!({"id": id, "removed": true, "binding": existing})))
+    })??))
+}
+
+fn default_watch_action() -> String {
+    "watch".into()
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WatchRequest {
+    #[serde(default)]
+    id: Option<Uuid>,
+    #[serde(default)]
+    command_id: Option<Uuid>,
+    chat: Uuid,
+    number: u64,
+    #[serde(default = "default_watch_action")]
+    action: String,
+    #[serde(default)]
+    until: Option<watches::Until>,
+}
+async fn watch(
+    State(app): State<Workbench>,
+    Path(project): Path<Uuid>,
+    Json(input): Json<WatchRequest>,
+) -> Reply<Value> {
+    if !matches!(input.action.as_str(), "watch" | "unwatch" | "watch_status") {
+        return Err(ForgeError::bad(
+            "action must be watch, unwatch or watch_status",
+        ));
+    }
+    let cmd = input.command_id.or(input.id);
+    if input.action != "watch" && input.until.is_some()
+        || input.action == "watch_status" && cmd.is_some()
+    {
+        return Err(ForgeError::bad("invalid watch arguments"));
+    }
+    if input.action != "watch_status" && app.archived(input.chat) {
+        return Err(Error::Refused("chat is archived".into()).into());
+    }
+    let cmd = if input.action == "watch_status" {
+        None
+    } else {
+        Some(cmd.unwrap_or_else(Uuid::new_v4))
+    };
+    watches::http_command(
+        app,
+        project,
+        input.chat,
+        input.number,
+        cmd,
+        &input.action,
+        input.until,
+    )
+    .await
+    .map(Json)
 }
 
 #[derive(Deserialize)]
@@ -639,7 +817,14 @@ pub(super) fn routes() -> Router<Workbench> {
             "/projects/{project}/forge/operations/{id}/reconcile",
             post(reconcile),
         )
-        .route("/projects/{project}/forge/links", get(links).post(link))
+        .route(
+            "/projects/{project}/forge/links",
+            get(links).post(link).delete(unlink),
+        )
+        .route("/projects/{project}/forge/links/unlink", post(unlink))
+        .route("/projects/{project}/forge/links/watch", post(watch))
+        .route("/projects/{project}/forge/links/{id}", delete(delete_link))
+        .route("/projects/{project}/forge/watches", post(watch))
         .route(
             "/projects/{project}/forge/pulls/{n}/change-breakdown",
             get(providers::file_stats::breakdown),

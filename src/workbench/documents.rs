@@ -119,11 +119,38 @@ impl Workbench {
         let app = self.clone();
         tokio::task::spawn_blocking(move || {
             let project = app.project(project)?;
+            let resolved_abs;
             let (workspace, requested) = if matches!(mode, FileMode::Read) && path.is_absolute() {
-                let root = &app.allowed(&path)?.path;
+                if path
+                    .components()
+                    .any(|p| p.as_os_str().eq_ignore_ascii_case(".git"))
+                {
+                    return Err(super::denied().into());
+                }
+                let candidate: &FsPath = if app.allowed(&path).is_ok() {
+                    &path
+                } else {
+                    let mut existing = path.parent().ok_or_else(super::denied)?;
+                    resolved_abs = loop {
+                        match std::fs::symlink_metadata(existing) {
+                            Ok(_) => {
+                                break existing
+                                    .canonicalize()
+                                    .map_err(Error::Io)?
+                                    .join(path.strip_prefix(existing).expect("ancestor"));
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                existing = existing.parent().ok_or_else(super::denied)?;
+                            }
+                            Err(e) => return Err(Error::Io(e).into()),
+                        }
+                    };
+                    &resolved_abs
+                };
+                let root = &app.allowed(candidate)?.path;
                 (
                     app.workspace_at(root)?,
-                    path.strip_prefix(root).expect("authorized root"),
+                    candidate.strip_prefix(root).expect("authorized root"),
                 )
             } else {
                 (app.workspace(&project)?, path.as_path())

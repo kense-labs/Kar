@@ -647,6 +647,125 @@ async fn named_instances() {
     f.stop().await;
 }
 
+async fn settings_and_interrupt() {
+    let mut f = Fixture::new(false).await;
+    let extra = f.dir.join("work/extra");
+    fs::create_dir_all(&extra).unwrap();
+    f.chat = Uuid::new_v4();
+    let created = body(
+        f.client
+            .post(format!("{}/projects/{}/chats", f.base, f.project))
+            .json(&json!({
+                "id": f.chat,
+                "runtime": "codex",
+                "model": "gpt-5",
+                "settings": {
+                    "effort": "high",
+                    "system_prompt": "keep concise",
+                    "additional_directories": [&extra]
+                }
+            })),
+    )
+    .await;
+    let initial_native = created["info"]["native_id"].clone();
+    assert_eq!(created["info"]["settings"]["effort"], "high");
+
+    // Pre-validation rejects invalid budget and no-op active session without closing the live controller.
+    let bad_budget = f
+        .post(
+            "handoffs",
+            &json!({"id": Uuid::new_v4(), "runtime": "qwen", "budget_bytes": 100}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_budget.status(), StatusCode::BAD_REQUEST);
+    let noop = f
+        .post(
+            "handoffs",
+            &json!({"id": Uuid::new_v4(), "runtime": "codex", "model": "gpt-5"}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(noop.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(f.history().await["chat"]["native_id"], initial_native);
+
+    // Same-runtime model switch preserves SessionSettings when settings are not overridden.
+    f.send(Uuid::new_v4(), "before model switch").await;
+    let switched = f
+        .handoff(&json!({"id": Uuid::new_v4(), "runtime": "codex", "model": "o3"}))
+        .await;
+    assert_eq!(switched["status"], "ready");
+    assert_eq!(switched["target"]["model"], "o3");
+    assert_eq!(switched["target"]["settings"]["effort"], "high");
+    assert_eq!(
+        switched["target"]["settings"]["system_prompt"],
+        "keep concise"
+    );
+    assert_eq!(
+        switched["target"]["settings"]["additional_directories"],
+        json!([&extra])
+    );
+    let after_switch = f.history().await;
+    assert_eq!(after_switch["chat"]["model"], "o3");
+    assert_eq!(after_switch["chat"]["settings"]["effort"], "high");
+
+    // Explicit settings override replaces the preserved settings.
+    let overridden = f
+        .handoff(&json!({
+            "id": Uuid::new_v4(),
+            "runtime": "codex",
+            "model": "o3",
+            "settings": {
+                "effort": "low",
+                "system_prompt": "updated prompt",
+                "additional_directories": [&extra]
+            }
+        }))
+        .await;
+    assert_eq!(overridden["status"], "ready");
+    assert_eq!(overridden["target"]["settings"]["effort"], "low");
+    assert_eq!(
+        overridden["target"]["settings"]["system_prompt"],
+        "updated prompt"
+    );
+
+    // Mid-turn handoff with interrupt: true stops the running turn and switches immediately.
+    let _ = fs::remove_file(f.dir.join("entered-turn"));
+    fs::write(f.dir.join("hold-turn"), []).unwrap();
+    let interrupted_turn = Uuid::new_v4();
+    let active = tokio::spawn(
+        f.post("messages", &json!({"id": interrupted_turn, "text": "hold turn"}))
+            .send(),
+    );
+    f.entered("turn").await;
+    let interrupted = f
+        .handoff(&json!({
+            "id": Uuid::new_v4(),
+            "runtime": "qwen",
+            "interrupt": true
+        }))
+        .await;
+    assert_eq!(interrupted["status"], "ready");
+    assert_eq!(interrupted["target"]["runtime"], "qwen");
+    fs::remove_file(f.dir.join("hold-turn")).unwrap();
+    let _ = active.await;
+    let history = f.history().await;
+    assert_eq!(history["chat"]["runtime"], "qwen");
+    assert_eq!(
+        history["turns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == interrupted_turn.to_string())
+            .unwrap()["status"],
+        "interrupted"
+    );
+    f.send(Uuid::new_v4(), "continue after interrupt").await;
+    f.stop().await;
+}
+
 async fn live() {
     let mut f = Fixture::new(true).await;
     let secret = Uuid::new_v4().to_string();
@@ -765,7 +884,8 @@ fn main() {
                     portable_fork().await;
                     same_chat_rewind().await;
                     combined_rewind().await;
-                    named_instances().await
+                    named_instances().await;
+                    settings_and_interrupt().await
                 }
             },
         )

@@ -162,7 +162,7 @@ fn git(cwd: &Path, args: &[&str]) -> String {
 }
 async fn scenario() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("root");
+    let root = temp.path().canonicalize().unwrap().join("root");
     let repo = root.join("repo");
     let bare = root.join("origin.git");
     fs::create_dir_all(&repo).unwrap();
@@ -437,7 +437,12 @@ async fn scenario() {
     assert_eq!(result.status(), StatusCode::CONFLICT);
     let second = actions::link_second_project(&a, &url, &root).await;
     let linked = actions::linked(&a, &url, second, p).await;
-    actions::issue_pages(&a, &url, [p, &second.0.to_string()]).await;
+    actions::issue_pages(
+        &a,
+        &url,
+        &[p, fresh_project["id"].as_str().unwrap(), &second.0.to_string()],
+    )
+    .await;
     let later = publication::first(&a, &url, &root, &mock).await;
     process.kill().await.unwrap();
     let (mut process, url) = server::serve_with_env(&state, &root, &native, &env).await;

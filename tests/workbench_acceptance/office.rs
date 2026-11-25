@@ -62,8 +62,9 @@ fn edit(tree: &Path, file: &str, lane: usize, old: &str, new: &str) -> OfficeEdi
         }
         _ => {
             let deck = Presentation::open(&path(tree, file)).unwrap();
+            let offset = deck.slide(0).shapes.len() - 2;
             OfficeEdits::Slides(vec![(
-                Object::at(&deck, 0, lane).unwrap(),
+                Object::at(&deck, 0, offset + lane).unwrap(),
                 ObjectEdit::Text(change),
             )])
         }
@@ -82,13 +83,14 @@ pub fn verify(tree: &Path, file: &str, left: &str, right: &str) {
             let b = Workbook::open(&path).unwrap();
             vec![b.input(0, 0, 0), b.input(0, 0, 1)]
         }
-        _ => Presentation::open(&path)
-            .unwrap()
-            .slide(0)
-            .shapes
-            .iter()
-            .map(|s| s.text.as_ref().unwrap().plain_text())
-            .collect(),
+        _ => {
+            let deck = Presentation::open(&path).unwrap();
+            let shapes = &deck.slide(0).shapes;
+            shapes[shapes.len() - 2..]
+                .iter()
+                .map(|s| s.text.as_ref().unwrap().plain_text())
+                .collect()
+        }
     };
     assert_eq!(values, [left, right], "{file}: re-opened from disk");
 }

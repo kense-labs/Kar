@@ -7,6 +7,7 @@ use crate::{
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::StatusCode,
     routing::post,
 };
 use serde::Deserialize;
@@ -163,6 +164,7 @@ async fn attach(
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum Answer {
+    #[serde(alias = "permission")]
     Decide {
         decision: PermissionDecision,
     },
@@ -191,54 +193,325 @@ struct Respond {
     answer: Answer,
 }
 
+#[derive(Deserialize)]
+struct DismissRequest {
+    cursor: Cursor,
+    id: Value,
+}
+
+fn read_orphaned_sync(
+    app: &Workbench,
+    project: Uuid,
+    chat: Uuid,
+    cursor: &Cursor,
+    id: &Value,
+) -> Result<Option<(crate::chat::ChatInfo, crate::OrphanedQuestion)>> {
+    let info = app.binding(project, chat)?;
+    if app.archived(chat) {
+        return Err(Error::Refused("chat is archived".into()));
+    }
+    if let Some(session) = app.active_control(project, chat)?
+        && let Some(questions) = session.orphaned_questions()
+    {
+        return Ok(questions
+            .into_iter()
+            .find(|q| &q.cursor == cursor && &q.id == id)
+            .map(|q| (info, q)));
+    }
+    let snapshot = app.0.chats.feed_snapshot(chat)?;
+    Ok(snapshot
+        .history
+        .orphaned_questions
+        .into_iter()
+        .find(|q| &q.cursor == cursor && &q.id == id)
+        .map(|q| (snapshot.history.chat, q)))
+}
+
+fn take_orphaned_sync(
+    app: &Workbench,
+    project: Uuid,
+    chat: Uuid,
+    cursor: &Cursor,
+    id: &Value,
+) -> Result<Option<crate::OrphanedQuestion>> {
+    app.binding(project, chat)?;
+    if app.archived(chat) {
+        return Err(Error::Refused("chat is archived".into()));
+    }
+    if let Some(session) = app.active_control(project, chat)?
+        && let Some(res) = session.take_orphaned_question(cursor, id)
+    {
+        return res;
+    }
+    match app.0.chats.take_orphaned_question(chat, cursor, id) {
+        Err(Error::Busy) => {
+            if let Some(session) = app.active_control(project, chat)?
+                && let Some(res) = session.take_orphaned_question(cursor, id)
+            {
+                return res;
+            }
+            Err(Error::Busy)
+        }
+        other => other,
+    }
+}
+
+pub(in crate::workbench) async fn answer_orphaned_question(
+    app: &Workbench,
+    project: Uuid,
+    chat: Uuid,
+    cursor: Cursor,
+    id: Value,
+    reply: QuestionReply,
+    attachments_by_question_id: std::collections::BTreeMap<String, Vec<Uuid>>,
+) -> Result<()> {
+    let state = app.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let (_, orphaned) = read_orphaned_sync(&state, project, chat, &cursor, &id)?
+            .ok_or_else(|| Error::Refused("request occurrence is no longer pending".into()))?;
+        match reply {
+            QuestionReply::Cancel | QuestionReply::Decline => {
+                if !attachments_by_question_id.is_empty() {
+                    return Err(Error::Refused(
+                        "attachments require a submitted answer".into(),
+                    ));
+                }
+                take_orphaned_sync(&state, project, chat, &cursor, &id)?
+                    .ok_or_else(|| Error::Refused("request occurrence is no longer pending".into()))?;
+                Ok(())
+            }
+            QuestionReply::Submit { values } => {
+                let notes = if attachments_by_question_id.is_empty() {
+                    std::collections::BTreeMap::new()
+                } else {
+                    state
+                        .0
+                        .chats
+                        .question_attachment_notes(chat, attachments_by_question_id)?
+                };
+                let formatted = orphaned.validate_and_format(&values, &notes)?;
+                let info = state.binding(project, chat)?;
+                crate::input::check_text(&formatted, crate::input::text_limit(&info.runtime))?;
+                state.workspace(&state.project(project)?)?;
+                take_orphaned_sync(&state, project, chat, &cursor, &id)?
+                    .ok_or_else(|| Error::Refused("request occurrence is no longer pending".into()))?;
+                let id_json = serde_json::to_string(&id).unwrap_or_default();
+                let turn_id = crate::chat::stable_id([
+                    b"orphaned-question-answer".as_slice(),
+                    chat.as_bytes().as_slice(),
+                    cursor.stream_id.as_bytes().as_slice(),
+                    &cursor.after_seq.to_le_bytes(),
+                    id_json.as_bytes(),
+                ]);
+                state
+                    .0
+                    .chats
+                    .enqueue_attached(chat, turn_id, formatted, &[])?;
+                state.wake_queue();
+                Ok(())
+            }
+        }
+    })
+    .await
+    .map_err(|e| Error::Closed(e.to_string()))?
+}
+
+pub(in crate::workbench) async fn dismiss_request(
+    app: &Workbench,
+    project: Uuid,
+    chat: Uuid,
+    cursor: Cursor,
+    id: Value,
+) -> Result<()> {
+    if let Some(session) = app.active_control(project, chat)?
+        && let Some(request) = session
+            .snapshot()
+            .pending_requests
+            .into_iter()
+            .find(|r| r.cursor == cursor && r.id == id)
+    {
+        return tokio::spawn(async move {
+            match request.kind {
+                crate::RequestKind::Question => {
+                    session.answer_question(&request, QuestionReply::Cancel).await
+                }
+                crate::RequestKind::Permission => {
+                    session.decide(&request, PermissionDecision::Cancel).await
+                }
+                _ => Err(Error::Unsupported("this request cannot be dismissed".into())),
+            }
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))?;
+    }
+    let state = app.clone();
+    tokio::task::spawn_blocking(move || {
+        take_orphaned_sync(&state, project, chat, &cursor, &id)?
+            .map(drop)
+            .ok_or_else(|| Error::Refused("request occurrence is no longer pending".into()))
+    })
+    .await
+    .map_err(|e| Error::Closed(e.to_string()))?
+}
+
+pub(in crate::workbench) async fn respond_question_mcp(
+    app: &Workbench,
+    project: Uuid,
+    chat: Uuid,
+    cursor: Cursor,
+    id: Value,
+    reply: QuestionReply,
+) -> Result<()> {
+    if let Some(session) = app.active_control(project, chat)?
+        && let Some(request) = session
+            .snapshot()
+            .pending_requests
+            .into_iter()
+            .find(|r| {
+                r.kind == crate::RequestKind::Question && r.cursor == cursor && r.id == id
+            })
+    {
+        crate::questions::answer(&request.method, &request.body, reply.clone())?;
+        return tokio::spawn(async move { session.answer_question(&request, reply).await })
+            .await
+            .map_err(|e| Error::Closed(e.to_string()))?;
+    }
+    answer_orphaned_question(
+        app,
+        project,
+        chat,
+        cursor,
+        id,
+        reply,
+        std::collections::BTreeMap::new(),
+    )
+    .await
+}
+
+async fn dismiss(
+    State(app): State<Workbench>,
+    Path((p, c)): Path<(Uuid, Uuid)>,
+    Json(input): Json<DismissRequest>,
+) -> std::result::Result<StatusCode, ApiError> {
+    dismiss_request(&app, p, c, input.cursor, input.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn respond(
     State(app): State<Workbench>,
     Path((p, c)): Path<(Uuid, Uuid)>,
     Json(input): Json<Respond>,
 ) -> std::result::Result<Json<()>, ApiError> {
-    let session = app.active_control(p, c)?.ok_or_else(|| {
-        Error::Refused("request occurrence is offline; attach to see current requests".into())
-    })?;
-    let request = session
-        .snapshot()
-        .pending_requests
-        .into_iter()
-        .find(|r| r.cursor == input.cursor && r.id == input.id)
-        .ok_or_else(|| Error::Refused("request occurrence is no longer pending".into()))?;
-    // The native actor rechecks the cursor before writing. Concurrent decisions cannot
-    // answer a later prompt even when the provider reuses the same numeric request ID.
+    if let Some(session) = app.active_control(p, c)?
+        && let Some(request) = session
+            .snapshot()
+            .pending_requests
+            .into_iter()
+            .find(|r| r.cursor == input.cursor && r.id == input.id)
+    {
+        // Validate payload and attachments synchronously before spawning so invalid input
+        // returns 400 immediately without consuming the request.
+        let mut notes = std::collections::BTreeMap::new();
+        match &input.answer {
+            Answer::Decide { decision } => {
+                crate::interaction::decision_payload(&request.method, &request.body, *decision)
+                    .ok_or_else(|| {
+                        Error::Unsupported(
+                            "this request does not offer that permission decision".into(),
+                        )
+                    })?;
+            }
+            Answer::Question {
+                reply,
+                attachments_by_question_id,
+            } => {
+                if !attachments_by_question_id.is_empty() {
+                    let store = app.0.chats.clone();
+                    let ids = attachments_by_question_id.clone();
+                    notes = tokio::task::spawn_blocking(move || {
+                        store.question_attachment_notes(c, ids)
+                    })
+                    .await
+                    .map_err(|e| Error::Closed(e.to_string()))??;
+                }
+                crate::questions::answer_with_files(
+                    &request.method,
+                    &request.body,
+                    reply.clone(),
+                    notes.clone(),
+                )?;
+            }
+            Answer::Policy { choice } => {
+                crate::permissions::select(&request.method, &request.body, choice.clone())
+                    .ok_or_else(|| {
+                        Error::Refused("policy option is not offered on this request".into())
+                    })?;
+            }
+            Answer::Resources {
+                decision,
+                resources,
+            } => {
+                crate::permissions::grant(&request.method, &request.body, *decision, resources)
+                    .ok_or_else(|| {
+                        Error::Refused("invalid permission scope or resource selection".into())
+                    })?;
+            }
+            Answer::Native { .. } => {}
+        }
+        let answer = input.answer;
+        tokio::spawn(async move {
+            match answer {
+                Answer::Decide { decision } => session.decide(&request, decision).await,
+                Answer::Question { reply, .. } => {
+                    session
+                        .answer_question_with_files(&request, reply, notes)
+                        .await
+                }
+                Answer::Policy { choice } => session.select_policy(&request, choice).await,
+                Answer::Resources {
+                    decision,
+                    resources,
+                } => {
+                    session
+                        .grant_resources(&request, decision, resources)
+                        .await
+                }
+                Answer::Native { payload } => session.answer_request(&request, payload).await,
+            }
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
+        return Ok(Json(()));
+    }
+
     match input.answer {
-        Answer::Decide { decision } => session.decide(&request, decision).await?,
         Answer::Question {
             reply,
             attachments_by_question_id,
         } => {
-            if attachments_by_question_id.is_empty() {
-                session.answer_question(&request, reply).await?;
-            } else {
-                let store = app.0.chats.clone();
-                let notes = tokio::task::spawn_blocking(move || {
-                    store.question_attachment_notes(c, attachments_by_question_id)
-                })
-                .await
-                .map_err(|e| Error::Closed(e.to_string()))??;
-                session
-                    .answer_question_with_files(&request, reply, notes)
-                    .await?;
+            answer_orphaned_question(
+                &app,
+                p,
+                c,
+                input.cursor,
+                input.id,
+                reply,
+                attachments_by_question_id,
+            )
+            .await?;
+            Ok(Json(()))
+        }
+        Answer::Decide { .. }
+        | Answer::Policy { .. }
+        | Answer::Resources { .. }
+        | Answer::Native { .. } => {
+            app.binding(p, c)?;
+            if app.archived(c) {
+                return Err(Error::Refused("chat is archived".into()).into());
             }
+            Err(Error::Refused("request occurrence is no longer pending".into()).into())
         }
-        Answer::Policy { choice } => session.select_policy(&request, choice).await?,
-        Answer::Resources {
-            decision,
-            resources,
-        } => {
-            session
-                .grant_resources(&request, decision, resources)
-                .await?
-        }
-        Answer::Native { payload } => session.answer_request(&request, payload).await?,
     }
-    Ok(Json(()))
 }
 
 pub(super) fn routes() -> Router<Workbench> {
@@ -259,5 +532,9 @@ pub(super) fn routes() -> Router<Workbench> {
         .route(
             "/projects/{project}/chats/{chat}/requests/respond",
             post(respond),
+        )
+        .route(
+            "/projects/{project}/chats/{chat}/requests/dismiss",
+            post(dismiss),
         )
 }

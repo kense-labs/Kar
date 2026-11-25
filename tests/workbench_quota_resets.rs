@@ -94,9 +94,11 @@ fn main() {
         println!("codex-cli 0.143.0");
     } else if a == ["login", "status"] {
         println!("Logged in using ChatGPT");
+    } else if a == ["app-server", "--help"] {
+        println!("Usage: codex app-server [OPTIONS]");
     } else if a.first().map(String::as_str) == Some("app-server") {
         peer();
-    } else if a.is_empty() {
+    } else if a.is_empty() || a == ["--nocapture"] {
         tokio::runtime::Runtime::new().unwrap().block_on(exercise());
     } else {
         panic!("unexpected arguments: {a:?}");

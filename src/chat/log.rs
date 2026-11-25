@@ -68,6 +68,23 @@ pub enum ChatUpdate {
     RequestsChanged {
         requests: Vec<crate::PendingRequest>,
     },
+    RequestAnswerPending {
+        turn: Uuid,
+        cursor: crate::Cursor,
+        request_id: serde_json::Value,
+        method: String,
+        request_kind: crate::RequestKind,
+    },
+    RequestAnswerConfirmed {
+        cursor: crate::Cursor,
+    },
+    RequestDeliveryFailed {
+        turn: Uuid,
+        error: crate::RequestDeliveryError,
+    },
+    OrphanedQuestionsChanged {
+        questions: Vec<crate::OrphanedQuestion>,
+    },
     UsageChanged {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at: Option<u64>,
@@ -191,6 +208,15 @@ pub enum ChatUpdate {
         status: TurnStatus,
     },
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct UnconfirmedAnswer {
+    pub turn: Uuid,
+    pub cursor: crate::Cursor,
+    pub request_id: serde_json::Value,
+    pub method: String,
+    pub request_kind: crate::RequestKind,
+}
+
 pub(super) struct State {
     pub rewinds: Vec<super::ContextRewind>,
     pub pending_rewind: Option<super::PreparedRewind>,
@@ -203,6 +229,8 @@ pub(super) struct State {
     pub goal: Option<Option<crate::GoalSnapshot>>,
     pub tasks: Vec<crate::NativeTask>,
     pub pending_requests: Vec<crate::PendingRequest>,
+    pub orphaned_questions: Vec<crate::OrphanedQuestion>,
+    pub(super) unconfirmed_answers: Vec<UnconfirmedAnswer>,
     pub manual_compaction: Option<crate::ManualCompactionReport>,
     pub last_compaction: Option<crate::CompactionReport>,
     pub usage: Vec<crate::UsageSnapshot>,
@@ -239,6 +267,8 @@ impl State {
             goal: None,
             tasks: vec![],
             pending_requests: vec![],
+            orphaned_questions: vec![],
+            unconfirmed_answers: vec![],
             manual_compaction: None,
             last_compaction: None,
             usage: vec![],
@@ -276,6 +306,8 @@ impl State {
             goal: history.goal,
             tasks: history.tasks,
             pending_requests: history.pending_requests,
+            orphaned_questions: history.orphaned_questions,
+            unconfirmed_answers: vec![],
             manual_compaction: history.manual_compaction,
             last_compaction: history.last_compaction,
             usage: history.usage,
@@ -308,10 +340,44 @@ impl State {
     pub fn needs_controller(&self) -> bool {
         self.active().is_some()
             || !self.pending_requests.is_empty()
+            || !self.unconfirmed_answers.is_empty()
             || self.tasks.iter().any(crate::NativeTask::pending_background)
             || self.compacting()
             || self.observing_notifications()
             || self.waiting_steering()
+    }
+    pub(super) fn recoverable_orphans(&self) -> Vec<crate::OrphanedQuestion> {
+        let Some(turn_id) = self.unfinished_turn().map(|t| t.id) else {
+            return Vec::new();
+        };
+        let root = Some(self.info.native_id.as_str());
+        self.pending_requests
+            .iter()
+            .filter(|req| !self.unconfirmed_answers.iter().any(|u| u.cursor == req.cursor))
+            .filter_map(|req| req.recoverable_question(root, Some(turn_id)))
+            .collect()
+    }
+    pub(super) fn unconfirmed_delivery_failures(
+        &self,
+        recorded_ms: u64,
+    ) -> Vec<(Uuid, crate::RequestDeliveryError)> {
+        self.unconfirmed_answers
+            .iter()
+            .map(|u| {
+                (
+                    u.turn,
+                    crate::RequestDeliveryError {
+                        cursor: u.cursor.clone(),
+                        request_id: u.request_id.clone(),
+                        method: u.method.clone(),
+                        request_kind: u.request_kind.clone(),
+                        status: crate::RequestDeliveryStatus::Unconfirmed,
+                        reason: "runtime disconnected before confirming request response".into(),
+                        recorded_ms,
+                    },
+                )
+            })
+            .collect()
     }
     pub(super) fn check_new_prompt_id(&self, id: Uuid) -> Result<()> {
         if self.rewinds.iter().any(|r| r.removed_inputs.contains(&id)) {
@@ -503,6 +569,8 @@ impl State {
             ChatUpdate::ContextRewound { rewind, binding } => {
                 self.apply_rewind(*rewind, binding.map(|h| *h))?;
                 self.ids.retain(|_, index| *index < self.turns.len());
+                self.orphaned_questions.clear();
+                self.unconfirmed_answers.clear();
             }
             ChatUpdate::WorkspaceHandoff { workspace, worktree_id, handoff, target } => {
                 if handoff.source_workspace.as_ref() != Some(&self.info.workspace) {
@@ -528,6 +596,8 @@ impl State {
                 h.target = Some(*target);
                 h.status = super::HandoffStatus::Ready;
                 self.pending_requests.clear();
+                self.orphaned_questions.clear();
+                self.unconfirmed_answers.clear();
                 self.context_usage = None;
                 self.tasks.clear();
                 self.goal = None;
@@ -660,6 +730,63 @@ impl State {
                 }
                 self.pending_requests = requests;
             }
+            ChatUpdate::RequestAnswerPending {
+                turn,
+                cursor,
+                request_id,
+                method,
+                request_kind,
+            } => {
+                if self.activity_mut(turn).is_none() {
+                    return Err(Error::Protocol(
+                        "unknown turn for pending request answer".into(),
+                    ));
+                }
+                if !self
+                    .unconfirmed_answers
+                    .iter()
+                    .any(|u| u.cursor == cursor)
+                {
+                    self.unconfirmed_answers.push(UnconfirmedAnswer {
+                        turn,
+                        cursor,
+                        request_id,
+                        method,
+                        request_kind,
+                    });
+                }
+            }
+            ChatUpdate::RequestAnswerConfirmed { cursor } => {
+                self.unconfirmed_answers.retain(|u| u.cursor != cursor);
+            }
+            ChatUpdate::RequestDeliveryFailed { turn, error } => {
+                self.unconfirmed_answers
+                    .retain(|u| u.cursor != error.cursor);
+                self.pending_requests
+                    .retain(|p| !(p.id == error.request_id && p.cursor == error.cursor));
+                let root_session = self.info.native_id.clone();
+                let target = self.activity_mut(turn).ok_or_else(|| {
+                    Error::Protocol("unknown turn for request delivery failure".into())
+                })?;
+                if !target.items.iter().any(|it| {
+                    matches!(
+                        &it.item,
+                        super::Item::RequestError { error: existing }
+                            if existing.cursor == error.cursor
+                    )
+                }) {
+                    target.items.push(super::TimelineItem {
+                        source: crate::observe::Agent {
+                            session_id: Some(root_session),
+                            path: Vec::new(),
+                        },
+                        item: super::Item::RequestError { error },
+                    });
+                }
+            }
+            ChatUpdate::OrphanedQuestionsChanged { questions } => {
+                self.orphaned_questions = questions;
+            }
             ChatUpdate::ManualCompaction { report } => {
                 if self.stream != Some(report.request.stream_id) {
                     return Err(Error::InvalidCursor);
@@ -734,6 +861,7 @@ impl State {
                     }
                 }
                 self.pending_requests.clear();
+                self.unconfirmed_answers.clear();
                 self.stream = Some(stream);
             }
             ChatUpdate::Opened {
@@ -747,6 +875,7 @@ impl State {
                     ));
                 }
                 self.pending_requests.clear();
+                self.unconfirmed_answers.clear();
                 self.stream = Some(stream);
             }
             ChatUpdate::ClaudeFollowUp {
@@ -783,6 +912,8 @@ impl State {
                 repositories,
             } => {
                 self.begin_turn(id, at, Some(text), None, before_tree, repositories)?;
+                self.orphaned_questions.clear();
+                self.unconfirmed_answers.clear();
                 let turn = self.turns.last_mut().unwrap();
                 turn.attachments = attachments;
                 turn.background_note = background_note;
@@ -939,6 +1070,10 @@ impl State {
                     super::timeline::ToolEvents::Live
                 };
                 self.turns[index].apply_edits(&frame, &self.info.native_id, mode);
+                if self.turns[index].status == TurnStatus::Aborted {
+                    self.orphaned_questions.clear();
+                    self.unconfirmed_answers.clear();
+                }
                 if self.info.protocol == Protocol::Morph {
                     crate::community::morph::recovery::Saved::record(&mut self.morph, id, &frame);
                 }
@@ -1036,6 +1171,11 @@ impl State {
             ChatUpdate::End { id, status } => {
                 if self.active() != Some(id) || status == TurnStatus::Running {
                     return Err(Error::Protocol("invalid stored turn ending".into()));
+                }
+                if status == TurnStatus::Aborted {
+                    self.orphaned_questions.clear();
+                    self.unconfirmed_answers.clear();
+                    self.pending_requests.retain(|r| !r.agent_path.is_empty());
                 }
                 self.turns
                     .last_mut()
@@ -1358,7 +1498,9 @@ pub(super) struct Log {
     graph: crate::observe::SessionGraph,
     dispatched: bool,
     morph_watch: Option<(super::checkpoint::WorkspaceLease, super::ChatStore)>,
+    pub(super) attachment_store: Option<super::ChatStore>,
     pub(super) native_store: Option<super::ChatStore>,
+    pub(super) stop_lock: Option<std::path::PathBuf>,
     pub(super) checkpoint: Option<TurnCapture>,
     // A queued native steer can start before its started frame reaches the host.
     // Keep the observed boundary and its workspace lease across that transition.
@@ -1401,7 +1543,9 @@ impl Log {
             graph: Default::default(),
             dispatched: false,
             morph_watch: None,
+            attachment_store: None,
             native_store: None,
+            stop_lock: None,
             checkpoint: None,
             steering_boundary: None,
         }
@@ -1421,7 +1565,7 @@ impl Log {
     fn commit_transition(&mut self, mut row: ChatUpdate, expired:bool) -> Result<()> {
         self.healthy()?;
         if let ChatUpdate::Frame { id, frame } | ChatUpdate::Reconciled { id, frame } = &mut row {
-            if let Some(store) = &self.native_store
+            if let Some(store) = self.attachment_store.as_ref().or(self.native_store.as_ref())
                 && frame.source.path.is_empty()
                 && frame.source.session_id.as_deref() == Some(&self.state.info.native_id)
             {
@@ -1468,6 +1612,47 @@ impl Log {
         }
         result
     }
+    fn is_force_stopping(&self) -> bool {
+        let Some(path) = &self.stop_lock else {
+            return false;
+        };
+        let Ok(file) = File::open(path) else {
+            return false;
+        };
+        match file.try_lock_shared() {
+            Ok(()) => {
+                let _ = file.unlock();
+                false
+            }
+            Err(std::fs::TryLockError::WouldBlock) => true,
+            Err(std::fs::TryLockError::Error(_)) => false,
+        }
+    }
+    fn target_turn_for_request(&self) -> Option<Uuid> {
+        self.state
+            .active()
+            .or_else(|| self.state.unfinished_turn().map(|t| t.id))
+            .or_else(|| self.state.turns.last().map(|t| t.id))
+    }
+    pub(super) fn take_orphaned_question(
+        &mut self,
+        cursor: &crate::Cursor,
+        id: &serde_json::Value,
+    ) -> Result<Option<crate::OrphanedQuestion>> {
+        self.healthy()?;
+        let Some(pos) = self
+            .state
+            .orphaned_questions
+            .iter()
+            .position(|q| &q.cursor == cursor && &q.id == id)
+        else {
+            return Ok(None);
+        };
+        let mut questions = self.state.orphaned_questions.clone();
+        let taken = questions.remove(pos);
+        self.commit(ChatUpdate::OrphanedQuestionsChanged { questions })?;
+        Ok(Some(taken))
+    }
     pub fn settle_abandoned_controls(&mut self) -> Result<()> {
         let tasks = crate::tasks::background::controller_lost(&self.state.tasks);
         if !tasks.is_empty() {
@@ -1481,6 +1666,29 @@ impl Log {
         }
         if self.state.observing_notifications() {
             self.commit(ChatUpdate::NotificationsInterrupted)?;
+        }
+        for (turn, error) in self.state.unconfirmed_delivery_failures(super::now()) {
+            self.commit_transition(ChatUpdate::RequestDeliveryFailed { turn, error }, true)?;
+        }
+        if self.is_force_stopping() {
+            if !self.state.orphaned_questions.is_empty() {
+                self.commit(ChatUpdate::OrphanedQuestionsChanged {
+                    questions: Vec::new(),
+                })?;
+            }
+        } else {
+            let orphans = self.state.recoverable_orphans();
+            if !orphans.is_empty() && self.state.orphaned_questions != orphans {
+                self.commit(ChatUpdate::OrphanedQuestionsChanged { questions: orphans })?;
+            }
+        }
+        if !self.state.pending_requests.is_empty() {
+            self.commit_transition(
+                ChatUpdate::RequestsChanged {
+                    requests: Vec::new(),
+                },
+                true,
+            )?;
         }
         Ok(())
     }
@@ -2016,18 +2224,152 @@ impl Log {
                 reading,
             })?;
         }
+        if root
+            && !historical
+            && r.direction == Direction::FromRuntime
+            && !self.state.unconfirmed_answers.is_empty()
+            && !r.events.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::Exited { .. }
+                        | Event::Released
+                        | Event::RequestDeliveryFailed { .. }
+                )
+            })
+        {
+            let cursors: Vec<_> = self
+                .state
+                .unconfirmed_answers
+                .iter()
+                .map(|u| u.cursor.clone())
+                .collect();
+            for cursor in cursors {
+                self.commit(ChatUpdate::RequestAnswerConfirmed { cursor })?;
+            }
+        }
+        if root
+            && r.events
+                .iter()
+                .any(|e| matches!(e, Event::Exited { .. } | Event::Released))
+        {
+            let force_stopping = self.is_force_stopping();
+            let deliberate = force_stopping
+                || (r.direction == Direction::Host && r.native["requestId"].is_string())
+                || r.native["release"]["reason"] == "dispose"
+                || r.events.iter().any(|e| match e {
+                    Event::Exited { reason } => matches!(
+                        reason.as_str(),
+                        "closed by host"
+                            | "last session handle dropped"
+                            | "session closed"
+                            | "session dropped"
+                            | "closed"
+                            | "controller closed"
+                            | "native turn did not end after interrupt"
+                    ),
+                    _ => false,
+                });
+            if !deliberate {
+                for (turn, error) in self.state.unconfirmed_delivery_failures(r.timestamp_ms) {
+                    self.commit_transition(
+                        ChatUpdate::RequestDeliveryFailed { turn, error },
+                        true,
+                    )?;
+                }
+                let orphans = self.state.recoverable_orphans();
+                if !orphans.is_empty() && self.state.orphaned_questions != orphans {
+                    self.commit(ChatUpdate::OrphanedQuestionsChanged { questions: orphans })?;
+                }
+            } else {
+                self.state.unconfirmed_answers.clear();
+                if force_stopping && !self.state.orphaned_questions.is_empty() {
+                    self.commit(ChatUpdate::OrphanedQuestionsChanged {
+                        questions: Vec::new(),
+                    })?;
+                }
+            }
+        }
         if r.events.iter().any(|e| {
             matches!(
                 e,
                 Event::ApprovalRequested { .. }
                     | Event::RequestResolved { .. }
+                    | Event::RequestDeliveryFailed { .. }
                     | Event::Exited { .. }
                     | Event::Released
             )
         }) {
             let mut requests = self.state.pending_requests.clone();
             if crate::interaction::update_pending(&mut requests, r, root) {
-                self.commit_transition(ChatUpdate::RequestsChanged { requests },r.events.iter().any(|e|matches!(e,Event::Exited{..}|Event::Released)))?;
+                self.commit_transition(ChatUpdate::RequestsChanged { requests },r.events.iter().any(|e|matches!(e,Event::Exited{..}|Event::Released|Event::RequestDeliveryFailed{..})))?;
+            }
+        }
+        for e in &r.events {
+            match e {
+                Event::RequestAnswerDispatched {
+                    cursor,
+                    id,
+                    method,
+                    kind,
+                    confirmed,
+                } => {
+                    if *confirmed {
+                        if self
+                            .state
+                            .unconfirmed_answers
+                            .iter()
+                            .any(|u| &u.cursor == cursor)
+                        {
+                            self.commit(ChatUpdate::RequestAnswerConfirmed {
+                                cursor: cursor.clone(),
+                            })?;
+                        }
+                    } else if root
+                        && let Some(turn) = self.target_turn_for_request()
+                    {
+                        self.commit(ChatUpdate::RequestAnswerPending {
+                            turn,
+                            cursor: cursor.clone(),
+                            request_id: id.clone(),
+                            method: method.clone(),
+                            request_kind: kind.clone(),
+                        })?;
+                    }
+                }
+                Event::RequestDeliveryFailed {
+                    cursor,
+                    id,
+                    method,
+                    kind,
+                    status,
+                    reason,
+                } if root => {
+                    let turn = self
+                        .state
+                        .unconfirmed_answers
+                        .iter()
+                        .find(|u| &u.cursor == cursor)
+                        .map(|u| u.turn)
+                        .or_else(|| self.target_turn_for_request());
+                    if let Some(turn) = turn {
+                        self.commit_transition(
+                            ChatUpdate::RequestDeliveryFailed {
+                                turn,
+                                error: crate::RequestDeliveryError {
+                                    cursor: cursor.clone(),
+                                    request_id: id.clone(),
+                                    method: method.clone(),
+                                    request_kind: kind.clone(),
+                                    status: *status,
+                                    reason: reason.clone(),
+                                    recorded_ms: r.timestamp_ms,
+                                },
+                            },
+                            true,
+                        )?;
+                    }
+                }
+                _ => {}
             }
         }
         if root {
@@ -2262,7 +2604,27 @@ impl Log {
 }
 #[derive(Clone)]
 pub(crate) struct Sink(pub(super) Arc<Mutex<Log>>);
+#[derive(Clone)]
+pub(crate) struct WeakSink(std::sync::Weak<Mutex<Log>>);
+impl WeakSink {
+    pub(crate) fn upgrade(&self) -> Option<Sink> {
+        self.0.upgrade().map(Sink)
+    }
+}
 impl Sink {
+    pub(crate) fn downgrade(&self) -> WeakSink {
+        WeakSink(Arc::downgrade(&self.0))
+    }
+    pub(crate) fn orphaned_questions(&self) -> Vec<crate::OrphanedQuestion> {
+        self.0.lock().unwrap().state.orphaned_questions.clone()
+    }
+    pub(crate) fn take_orphaned_question(
+        &self,
+        cursor: &crate::Cursor,
+        id: &serde_json::Value,
+    ) -> Result<Option<crate::OrphanedQuestion>> {
+        self.0.lock().unwrap().take_orphaned_question(cursor, id)
+    }
     pub(crate) fn claude_result_ids(&self) -> std::collections::HashSet<Uuid> {
         let log = self.0.lock().unwrap();
         if log.state.info.protocol != Protocol::Claude {

@@ -554,5 +554,437 @@ async fn scenario() {
         ok(b.get(format!("{url}{child_path}/snapshot"))).await["history"]["turns"][1]["id"],
         cut["id"]
     );
+    verify_rich_thread_find(&b, &url, &p, &state, &store, chat).await;
     next.kill().await.unwrap();
+}
+
+async fn verify_rich_thread_find(
+    client: &Client,
+    url: &str,
+    project: &str,
+    state: &Path,
+    store: &kar::chat::ChatStore,
+    template_chat: Uuid,
+) {
+    let store_dir = state.canonicalize().unwrap();
+    let first_line = fs::read_to_string(store_dir.join(format!("{template_chat}.karchat")))
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_owned();
+    let mut header: Value = serde_json::from_str(&first_line).unwrap();
+    let rich_chat = Uuid::new_v4();
+    header["chat"]["id"] = json!(rich_chat);
+    header["chat"]["native_id"] = json!("rich-find-native");
+    header["chat"]["worktree_id"] = Value::Null;
+    header["chat"]["forked_from"] = Value::Null;
+    header["chat"]["imported"] = json!({
+        "project": Uuid::parse_str(project).unwrap(),
+        "runtime": "codex",
+        "native_id": "rich-find-native",
+        "transcript": store_dir.join("rich-transcript.jsonl"),
+        "stamp": "1",
+        "title": "Rich thread find",
+        "omitted_messages": 0,
+    });
+
+    let source = json!({"session_id": "rich-find-native", "path": []});
+    let turn_1 = Uuid::new_v4();
+    let turn_2 = Uuid::new_v4();
+    let turn_3 = Uuid::new_v4();
+    let turn_4 = Uuid::new_v4();
+    let turn_5 = Uuid::new_v4();
+
+    let assistant_rich = concat!(
+        "Compare [src/notes.ts](src/notes.ts#L42-L64) with [test/notes.ts](test/notes.ts#L10), ",
+        "read [important description](/tmp/actual.ts) and [public docs](https://hidden.example/secret), ",
+        "inspect `/tmp/inline_chip.ts:25:4` and /Users/alice/work/Makefile:9.\n\n",
+        "<details><summary>折叠标题</summary><p>折叠正文</p></details>\n\n",
+        "`★ Insight ─────────────────────────────────────`\n",
+        "Insight_visible_body\n",
+        "`─────────────────────────────────────────────────`\n\n",
+        "<picture>",
+        "<source media=\"(prefers-color-scheme: dark)\" srcset=\"/tmp/theme_dark_only.ts\">",
+        "<source media=\"(prefers-color-scheme: light)\" srcset=\"/tmp/theme_light_only.ts\">",
+        "<img src=\"/tmp/theme_fallback.ts\">",
+        "</picture>",
+    );
+
+    let turns: Vec<kar::chat::ChatTurn> = serde_json::from_value(json!([
+        {
+            "id": turn_1,
+            "started_ms": 1000,
+            "finished_ms": 1001,
+            "status": "completed",
+            "fork_anchor": null,
+            "items": [
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "user",
+                    "text": "Review [Assistant quote](kar-citation://v1/env/chat/msg?text=quoted_hidden&comment=visible_annotation) and before![img](kar-context://v1/image/1)after plus Install as ~/a/x, then read (~/a/guide.md) and anchor_token",
+                    "provider_id": "u1",
+                    "complete": true
+                },
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "assistant",
+                    "text": assistant_rich,
+                    "provider_id": "a1",
+                    "complete": true
+                }
+            ]
+        },
+        {
+            "id": turn_2,
+            "started_ms": 2000,
+            "finished_ms": 2001,
+            "status": "completed",
+            "fork_anchor": null,
+            "items": [
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "user",
+                    "text": "between message without anchor",
+                    "provider_id": "u2",
+                    "complete": true
+                },
+                {
+                    "source": source,
+                    "kind": "tool",
+                    "id": "mcp-app-1",
+                    "activity": {
+                        "name": "launch",
+                        "mcp_app_uri": "ui://weather/main",
+                        "finished": true,
+                        "result": {
+                            "status": "succeeded",
+                            "exit_code": null,
+                            "content": []
+                        }
+                    }
+                },
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "assistant",
+                    "text": "",
+                    "provider_id": "a2",
+                    "complete": true
+                }
+            ]
+        },
+        {
+            "id": turn_3,
+            "started_ms": 3000,
+            "finished_ms": 3001,
+            "status": "completed",
+            "fork_anchor": null,
+            "items": [
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "user",
+                    "text": "follow up",
+                    "provider_id": "u3",
+                    "complete": true
+                },
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "assistant",
+                    "text": "second anchor_token at end with [pkg/notes.ts](pkg/notes.ts#L99)",
+                    "provider_id": "a3",
+                    "complete": true
+                },
+                {
+                    "source": source,
+                    "kind": "request_error",
+                    "error": {
+                        "cursor": {"stream_id": Uuid::new_v4(), "after_seq": 1},
+                        "request_id": "req-err-1",
+                        "method": "item/tool/requestUserInput",
+                        "request_kind": "question",
+                        "status": "failed",
+                        "reason": "delivery_failure_visible_reason",
+                        "recorded_ms": 3002
+                    }
+                }
+            ]
+        },
+        {
+            "id": turn_4,
+            "started_ms": 4000,
+            "finished_ms": 4001,
+            "status": "completed",
+            "fork_anchor": null,
+            "items": [
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "user",
+                    "text": "render html card",
+                    "provider_id": "u4",
+                    "complete": true
+                },
+                {
+                    "source": source,
+                    "kind": "tool",
+                    "id": "html-render-1",
+                    "activity": {
+                        "name": "kar_html_render",
+                        "finished": true,
+                        "result": {
+                            "status": "succeeded",
+                            "exit_code": null,
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "{\"htmlRender\":{\"title\":\"Preview\"}}"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "assistant",
+                    "text": "",
+                    "provider_id": "a4",
+                    "complete": true
+                }
+            ]
+        },
+        {
+            "id": turn_5,
+            "started_ms": 5000,
+            "finished_ms": 5001,
+            "status": "completed",
+            "fork_anchor": null,
+            "items": [
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "user",
+                    "text": "plain empty reply",
+                    "provider_id": "u5",
+                    "complete": true
+                },
+                {
+                    "source": source,
+                    "kind": "message",
+                    "role": "assistant",
+                    "text": "",
+                    "provider_id": "a5",
+                    "complete": true
+                }
+            ]
+        }
+    ]))
+    .unwrap();
+
+    let imported_row = kar::chat::ChatUpdate::Imported { turns };
+    fs::write(store_dir.join(format!("{rich_chat}.lock")), []).unwrap();
+    fs::write(
+        store_dir.join(format!("{rich_chat}.karchat")),
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&header).unwrap(),
+            serde_json::to_string(&imported_row).unwrap()
+        ),
+    )
+    .unwrap();
+    assert_eq!(store.history(rich_chat).unwrap().turns.len(), 5);
+
+    let rich_base = format!("{url}/projects/{project}/chats/{rich_chat}");
+    let find_url = format!("{rich_base}/find");
+    let query_find = |body: Value| ok(client.post(&find_url).json(&body));
+
+    // 1. Duplicate basename file chips (within turn_1 and across turn_3), visible line ranges, custom prose labels, hidden URLs/prefixes.
+    let notes = query_find(json!({"query": "notes.ts", "index": 0})).await;
+    assert_eq!(notes["total_matches"], 3);
+    assert_eq!(notes["match"]["turn"], turn_1.to_string());
+    assert_eq!(notes["match"]["occurrence"], 0);
+    let notes_second = query_find(json!({
+        "query": "notes.ts",
+        "start": notes["match"],
+        "offset": 1
+    }))
+    .await;
+    assert_eq!(notes_second["active_index"], 1);
+    assert_eq!(notes_second["match"]["turn"], turn_1.to_string());
+    assert_eq!(notes_second["match"]["occurrence"], 1);
+    let notes_third = query_find(json!({
+        "query": "notes.ts",
+        "start": notes["match"],
+        "offset": 2
+    }))
+    .await;
+    assert_eq!(notes_third["active_index"], 2);
+    assert_eq!(notes_third["match"]["turn"], turn_3.to_string());
+    assert_eq!(notes_third["match"]["occurrence"], 0);
+
+    for present in [
+        "repo/src",
+        "repo/test",
+        "L42–64",
+        "L10",
+        "important description",
+        "actual.ts",
+        "public docs",
+        "inline_chip.ts · L25:C4",
+        "Makefile · L9",
+    ] {
+        let hit = query_find(json!({"query": present})).await;
+        assert_eq!(hit["total_matches"], 1, "expected 1 match for {present:?}");
+        assert_eq!(hit["match"]["turn"], turn_1.to_string());
+    }
+    let cross_turn_line = query_find(json!({"query": "notes.ts · L99"})).await;
+    assert_eq!(cross_turn_line["total_matches"], 1);
+    assert_eq!(cross_turn_line["match"]["turn"], turn_3.to_string());
+    for hidden in [
+        "L42-64",
+        "src/notes.ts",
+        "test/notes.ts",
+        "pkg/notes.ts",
+        "repo/pkg",
+        "https://hidden.example/secret",
+        "hidden.example",
+        "secret",
+        "/tmp/actual.ts",
+        "/tmp/inline_chip.ts",
+        "/Users/alice",
+    ] {
+        let miss = query_find(json!({"query": hidden})).await;
+        assert_eq!(miss["total_matches"], 0, "expected 0 matches for {hidden:?}");
+    }
+
+    // 2. Quote / citation annotation & kar-context:// image boundary & user single-tilde preservation.
+    assert_eq!(
+        query_find(json!({"query": "visible_annotation"})).await["total_matches"],
+        1
+    );
+    assert_eq!(
+        query_find(json!({"query": "quoted_hidden"})).await["total_matches"],
+        0
+    );
+    assert_eq!(
+        query_find(json!({"query": "Assistant quote"})).await["total_matches"],
+        0
+    );
+    assert_eq!(
+        query_find(json!({"query": "beforeafter"})).await["total_matches"],
+        0
+    );
+    assert_eq!(
+        query_find(json!({"query": "~/a/x"})).await["total_matches"],
+        1
+    );
+    assert_eq!(
+        query_find(json!({"query": "~/a/guide.md"})).await["total_matches"],
+        1
+    );
+
+    // 3. Folded <details>/<summary>, Insight dividers, and <picture> theme filtering.
+    assert_eq!(
+        query_find(json!({"query": "折叠标题"})).await["total_matches"],
+        1
+    );
+    assert_eq!(
+        query_find(json!({"query": "折叠正文"})).await["total_matches"],
+        1
+    );
+    assert_eq!(
+        query_find(json!({"query": "折叠标题折叠正文"})).await["total_matches"],
+        0
+    );
+    assert_eq!(
+        query_find(json!({"query": "Insight_visible_body"})).await["total_matches"],
+        1
+    );
+    assert_eq!(
+        query_find(json!({"query": "★ Insight"})).await["total_matches"],
+        0
+    );
+    assert_eq!(
+        query_find(json!({"query": "theme_dark_only.ts", "theme": "dark"})).await["total_matches"],
+        1
+    );
+    assert_eq!(
+        query_find(json!({"query": "theme_dark_only.ts", "theme": "light"})).await["total_matches"],
+        0
+    );
+    assert_eq!(
+        query_find(json!({"query": "theme_light_only.ts", "theme": "light"})).await["total_matches"],
+        1
+    );
+    assert_eq!(
+        query_find(json!({"query": "theme_light_only.ts", "theme": "dark"})).await["total_matches"],
+        0
+    );
+
+    // 4. RequestError indexing & suppressed "(empty response)" for MCP App and kar_html_render.
+    let err_hit = query_find(json!({"query": "delivery_failure_visible_reason"})).await;
+    assert_eq!(err_hit["total_matches"], 1);
+    assert_eq!(err_hit["match"]["turn"], turn_3.to_string());
+
+    let empty_hit = query_find(json!({"query": "empty response"})).await;
+    assert_eq!(empty_hit["total_matches"], 1);
+    assert_eq!(empty_hit["match"]["turn"], turn_5.to_string());
+
+    // 5. Reading-position jump from a 0-match middle message advances to next match (and agrees with SSE).
+    let turn_2_items: Vec<Value> = ok(client.get(format!("{rich_base}/turns/{turn_2}/items")))
+        .await
+        .as_array()
+        .unwrap()
+        .clone();
+    let between_entry = turn_2_items[0]["entry_id"].as_str().unwrap();
+    let from_middle = query_find(json!({
+        "query": "anchor_token",
+        "start": {"entry_id": between_entry, "occurrence": 0}
+    }))
+    .await;
+    assert_eq!(from_middle["total_matches"], 2);
+    assert_eq!(from_middle["active_index"], 1);
+    assert_eq!(from_middle["match"]["turn"], turn_3.to_string());
+    assert_eq!(from_middle["match"]["occurrence"], 0);
+
+    let prev_from_middle = query_find(json!({
+        "query": "anchor_token",
+        "start": {"entry_id": between_entry, "occurrence": 0},
+        "offset": -1
+    }))
+    .await;
+    assert_eq!(prev_from_middle["active_index"], 0);
+    assert_eq!(prev_from_middle["match"]["turn"], turn_1.to_string());
+
+    let sse_raw = client
+        .post(format!("{find_url}/events"))
+        .json(&json!({
+            "query": "anchor_token",
+            "start": {"entry_id": between_entry, "occurrence": 0}
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let sse_frames: Vec<Value> = sse_raw
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|text| serde_json::from_str(text).unwrap())
+        .collect();
+    assert_eq!(sse_frames.len(), 2);
+    assert_eq!(sse_frames[0]["complete"], false);
+    assert_eq!(sse_frames[1]["complete"], true);
+    assert_eq!(sse_frames[0]["match"], from_middle["match"]);
+    assert_eq!(sse_frames[1]["match"], from_middle["match"]);
+    assert_eq!(sse_frames[1]["active_index"], 1);
 }

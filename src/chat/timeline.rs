@@ -57,6 +57,9 @@ pub enum Item {
         turn_id: String,
         diff: String,
     },
+    RequestError {
+        error: crate::interaction::RequestDeliveryError,
+    },
 }
 /// A provider retry as observed at the time of its native notification.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -130,6 +130,8 @@ fn peer(protocol: &str) {
     let mut prompt = Value::Null;
     let mut name = String::new();
     let mut compactions = 0;
+    let mut codex_in_turn = false;
+    let mut codex_queued: Vec<(String, Value)> = Vec::new();
     let arg: Vec<_> = std::env::args().collect();
     let id = arg
         .windows(2)
@@ -299,10 +301,12 @@ fn peer(protocol: &str) {
                             emit(
                                 json!({"method":"turn/started","params":{"threadId":"session-1","turn":{"id":"t"}}}),
                             );
+                            codex_in_turn = true;
                         }
                         if name == "child-selections" {
                             child_models::rpc_frames(protocol);
                             if protocol == "codex" {
+                                codex_in_turn = false;
                                 emit(
                                     json!({"method":"turn/completed","params":{"threadId":"session-1","turn":{"id":"t","status":"completed"}}}),
                                 );
@@ -410,6 +414,7 @@ fn peer(protocol: &str) {
                         );
                     }
                     Some("turn/interrupt") => {
+                        codex_in_turn = false;
                         rpc(json!({}));
                         emit(
                             json!({"method":"turn/completed","params":{"threadId":"session-1","turn":{"id":"t","status":"interrupted"}}}),
@@ -420,10 +425,57 @@ fn peer(protocol: &str) {
                             json!({"id":req,"error":{"code":-32602,"message":"native queue refusal"}}),
                         );
                     }
+                    Some("thread/queue/add") => {
+                        let cid = v["params"]["clientUserMessageId"]
+                            .as_str()
+                            .unwrap()
+                            .to_owned();
+                        let content = v["params"]["input"].clone();
+                        rpc(json!({"queuedSubmission":{"clientUserMessageId":cid}}));
+                        if codex_in_turn {
+                            codex_queued.push((cid, content));
+                        } else {
+                            let qturn = format!("qt-{cid}");
+                            emit(
+                                json!({"method":"turn/started","params":{"threadId":"session-1","turn":{"id":qturn}}}),
+                            );
+                            emit(
+                                json!({"method":"item/started","params":{"threadId":"session-1","turnId":qturn,"item":{"type":"userMessage","clientId":cid,"content":content}}}),
+                            );
+                            emit(
+                                json!({"method":"item/agentMessage/delta","params":{"threadId":"session-1","delta":"hello"}}),
+                            );
+                            emit(
+                                json!({"method":"turn/completed","params":{"threadId":"session-1","turn":{"id":qturn,"status":"completed"}}}),
+                            );
+                        }
+                    }
                     Some("turn/steer") if v["params"]["input"][0]["text"] == "fallback" => {
                         emit(
                             json!({"id":req,"error":{"code":-32602,"message":"native control refused"}}),
                         );
+                    }
+                    Some("turn/steer") if v["params"]["input"][0]["text"] == "finish-wait" => {
+                        codex_in_turn = false;
+                        rpc(json!({"turnId":"t"}));
+                        emit(
+                            json!({"method":"turn/completed","params":{"threadId":"session-1","turn":{"id":"t","status":"completed"}}}),
+                        );
+                        for (cid, content) in codex_queued.drain(..) {
+                            let qturn = format!("qt-{cid}");
+                            emit(
+                                json!({"method":"turn/started","params":{"threadId":"session-1","turn":{"id":qturn}}}),
+                            );
+                            emit(
+                                json!({"method":"item/started","params":{"threadId":"session-1","turnId":qturn,"item":{"type":"userMessage","clientId":cid,"content":content}}}),
+                            );
+                            emit(
+                                json!({"method":"item/agentMessage/delta","params":{"threadId":"session-1","delta":"hello"}}),
+                            );
+                            emit(
+                                json!({"method":"turn/completed","params":{"threadId":"session-1","turn":{"id":qturn,"status":"completed"}}}),
+                            );
+                        }
                     }
                     Some("turn/steer") => rpc(json!({"turnId":"t"})),
                     None if v["id"] == 93 => {
@@ -436,6 +488,7 @@ fn peer(protocol: &str) {
                         );
                     }
                     None if v["id"] == 94 => {
+                        codex_in_turn = false;
                         assert_eq!(
                             v["result"],
                             json!({"decision":{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["cargo","test"]}}})
@@ -445,6 +498,7 @@ fn peer(protocol: &str) {
                         );
                     }
                     None if v["id"] == 92 => {
+                        codex_in_turn = false;
                         assert_eq!(
                             v.pointer("/result/answers/q/answers/0"),
                             Some(&json!("answer"))
@@ -466,6 +520,7 @@ fn peer(protocol: &str) {
                             );
                             emit(json!({"id":prompt,"result":{"stopReason":"end_turn"}}));
                         } else {
+                            codex_in_turn = false;
                             emit(
                                 json!({"method":"item/agentMessage/delta","params":{"threadId":"session-1","delta":"hello"}}),
                             );
@@ -567,7 +622,7 @@ fn peer(protocol: &str) {
                         assert!(uuid::Uuid::parse_str(v["uuid"].as_str().unwrap()).is_ok());
                     }
                     emit(
-                        json!({"type":"stream_event","session_id":id,"event":{"type":"content_block_delta","delta":{"text":"hello"}}}),
+                        json!({"type":"stream_event","session_id":id,"event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}}),
                     );
                     emit(
                         json!({"type":"result","session_id":id,"subtype":"success","is_error":false,"usage":{"input_tokens":2}}),

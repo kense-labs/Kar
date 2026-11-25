@@ -167,11 +167,7 @@ fn apply(db: &mut Data, p: Uuid, name: &str, source: Option<&str>, now: i64) -> 
             continue;
         }
         if db.runs.values().any(|r| {
-            r.workflow == id
-                && !matches!(
-                    r.status,
-                    Status::Completed | Status::Failed | Status::Cancelled
-                )
+            r.workflow == id && !r.status.is_terminal() && r.status != Status::Failed
         }) {
             return Err(Error::Refused(format!(
                 "unfinished runs still use {} version {}",

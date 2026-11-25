@@ -350,12 +350,18 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, from_origin: Opt
     if dir.starts_with(&project.root) || project.root.starts_with(&dir) {
         return Err(denied());
     }
+    let rel = project.root.strip_prefix(anchor).unwrap();
+    let project_path = if rel.as_os_str().is_empty() {
+        dir.clone()
+    } else {
+        dir.join(rel)
+    };
     let mut task = Task {
         root: dir.clone(),
         project_id: project.id,
         project_root: project.root.clone(),
         anchor: anchor.into(),
-        project_path: dir.join(project.root.strip_prefix(anchor).unwrap()),
+        project_path,
         project_is_worktree: project.root.join(".git").exists(),
         repositories: vec![],
     };

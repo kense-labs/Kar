@@ -209,6 +209,15 @@ pub async fn recovery() {
     server.kill().await.unwrap();
     let (mut server, base) = server::serve(&state, &root, &native).await;
     eventually(async || decided(&host, &base, s, &held, "sending", "uncertain").await).await;
+    assert_eq!(calls(&native, "queued while held"), 0);
+    ok(host
+        .post(format!("{base}/projects/{project}/chats/{chat}/queue/commands"))
+        .json(&json!({
+            "command_id": Uuid::new_v4(),
+            "action": "acknowledge_uncertain",
+            "input": held["id"]
+        })))
+    .await;
     eventually(async || decided(&host, &base, s, &waiting, "accepted", "sent").await).await;
     let ambiguous = ok(decide(&host, &base, s, &held, true)).await;
     assert_eq!(ambiguous["delivery"], "uncertain");

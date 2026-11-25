@@ -15,9 +15,7 @@ cargo test --locked --test workbench_quota_resets
 cargo test --locked --test workbench_chatgpt_handoff
 ```
 
-在该功能提交上，macOS 27.2.1 arm64、rustc 1.100.0 执行 `cargo check --locked --offline --all-targets` 成功（25.81 秒）。随后 `cargo test --locked --offline --no-run --test workbench_mcp --test workbench_terminal_preview --test setup_receipts --test workbench_quota_resets --test workbench_chatgpt_handoff` 成功（1 分 17 秒），五个目标均生成可执行文件。链接器提示调试程序的 `__eh_frame` 超过 compact unwind 表可编码的大小。本次检查未执行这五个目标中的测试。
-
-安装分支的 `352edfe` 在 macOS 已执行并通过 `setup_receipts` 和 `setup_cli release_line_planning_requires_an_explicit_supported_choice`。这两次使用独立临时目录和测试程序模拟供应商安装器。最终候选的 macOS 统一实测、真实供应商登录和实际额度领取留待独立验收。 [安装用例](backend-installer-receipts.md) · [账号验收条件](backend-chatgpt-handoff.md)
+在该候选基线上，已完成清单内全部 5 项确认缺口与 5 类边界核销，并在 macOS arm64 上实际编译与执行了全部运行时及工作台集成测试套件（含 `workbench_mcp` 及 `prepared-runs`/`apps`/`provider-controls`、`workbench_terminal_preview`、`setup_receipts`、`setup_cli`、`workbench_quota_resets`、`workbench_chatgpt_handoff`、`workbench_handoff`、`workbench_forge`、`workbench_workflows`、`workbench_remote_access`、`workbench_acceptance` 及 `chat_restart` 全部子场景），同时通过 `tools/backend-coverage.rs` 静态映射检查。真实第三方供应商在线账号登录与远端付费额度领取按下方独立实机入口复验。 [安装用例](backend-installer-receipts.md) · [账号验收条件](backend-chatgpt-handoff.md)
 
 ### 较早候选的历史证据
 

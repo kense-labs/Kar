@@ -128,6 +128,9 @@ impl ChatReplica {
     pub fn pending_requests(&self) -> &[crate::PendingRequest] {
         &self.state.pending_requests
     }
+    pub fn orphaned_questions(&self) -> &[crate::OrphanedQuestion] {
+        &self.state.orphaned_questions
+    }
     pub fn manual_compaction(&self) -> Option<&crate::ManualCompactionReport> {
         self.state.manual_compaction.as_ref()
     }
@@ -242,7 +245,7 @@ impl ChatStore {
     }
     // Return true while a real controller still owns the session. Publish one durable
     // interruption even when several readers notice a killed process at the same time.
-    fn settle_abandoned(&self, chat: Uuid) -> Result<bool> {
+    pub(super) fn settle_abandoned(&self, chat: Uuid) -> Result<bool> {
         let lease = File::open(self.dir.join(format!("{chat}.lock")))?;
         let has_controller = || -> Result<bool> {
             match lease.try_lock_shared() {
@@ -296,6 +299,31 @@ impl ChatStore {
             if state.observing_notifications() {
                 log::append_locked(file, &ChatUpdate::NotificationsInterrupted)?;
             }
+            for (turn, error) in state.unconfirmed_delivery_failures(super::now()) {
+                log::milestones::orphan(
+                    file,
+                    &mut state,
+                    ChatUpdate::RequestDeliveryFailed { turn, error },
+                )?;
+            }
+            if matches!(self.stop_fence(chat, false), Err(Error::Busy)) {
+                if !state.orphaned_questions.is_empty() {
+                    log::milestones::orphan(
+                        file,
+                        &mut state,
+                        ChatUpdate::OrphanedQuestionsChanged { questions: vec![] },
+                    )?;
+                }
+            } else {
+                let orphans = state.recoverable_orphans();
+                if !orphans.is_empty() && state.orphaned_questions != orphans {
+                    log::milestones::orphan(
+                        file,
+                        &mut state,
+                        ChatUpdate::OrphanedQuestionsChanged { questions: orphans },
+                    )?;
+                }
+            }
             if !state.pending_requests.is_empty() {
                 log::milestones::orphan(file,&mut state,ChatUpdate::RequestsChanged { requests: vec![] })?;
             }
@@ -348,6 +376,9 @@ impl ChatFeed {
                     }
                     ChatUpdate::RequestsChanged { requests } => {
                         self.may_have_requests = !requests.is_empty()
+                    }
+                    ChatUpdate::RequestAnswerPending { .. } => {
+                        self.may_have_requests = true;
                     }
                     ChatUpdate::TasksChanged { tasks } => {
                         self.may_have_background |= tasks.iter().any(crate::NativeTask::pending_background);

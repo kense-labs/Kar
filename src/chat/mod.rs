@@ -36,7 +36,8 @@ pub(crate) use queue::Admission;
 pub(crate) use queue::Claim as SteerClaim;
 pub use queue::{InputStatus, QueueAction, QueuePromotion, QueueReceipt, QueuedInput, SteerTarget};
 mod timeline;
-pub(crate) use log::Sink;
+pub(crate) use log::{Sink, WeakSink};
+pub use crate::OrphanedQuestion;
 pub use timeline::{ChatTurn, Item, RetryStatus, Role, TimelineItem, TurnStatus};
 
 use crate::{
@@ -223,6 +224,8 @@ pub struct ChatHistory {
     pub usage: Vec<crate::UsageSnapshot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_requests: Vec<PendingRequest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphaned_questions: Vec<crate::OrphanedQuestion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_compaction: Option<crate::CompactionReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,8 +260,12 @@ pub struct ChatStore {
     dir: PathBuf,
     repository_scopes: Option<checkpoint::scopes::Lookup>,
     turn_checkpointed: Option<Arc<dyn Fn(Uuid) + Send + Sync>>,
+    shared_delegation: Arc<checkpoint::SharedDelegation>,
 }
 impl ChatStore {
+    pub(crate) fn register_shared_delegate(&self, child: Uuid, parent: Uuid) {
+        self.shared_delegation.register(child, parent);
+    }
     pub(crate) fn with_turn_checkpointed(mut self, observer: Arc<dyn Fn(Uuid) + Send + Sync>) -> Self {
         self.turn_checkpointed = Some(observer);
         self
@@ -277,6 +284,7 @@ impl ChatStore {
             accounts: Default::default(),
             repository_scopes: None,
             turn_checkpointed: None,
+            shared_delegation: Default::default(),
         })
     }
     pub fn local() -> Result<Self> {
@@ -352,6 +360,9 @@ impl ChatStore {
     }
     pub(crate) fn saved_info(&self, id: Uuid) -> Result<ChatInfo> {
         log::info(File::open(self.path(id))?, id)
+    }
+    pub(crate) fn ancestry_info(&self, id: Uuid) -> Result<ChatInfo> {
+        log::info(self.ancestry_file(id)?, id)
     }
     fn path(&self, id: Uuid) -> PathBuf {
         self.dir.join(format!("{id}.karchat"))
@@ -451,7 +462,74 @@ impl ChatStore {
             std::fs::TryLockError::WouldBlock => Error::Busy,
             std::fs::TryLockError::Error(e) => e.into(),
         })?;
+        if matches!(self.stop_fence(id, false), Err(Error::Busy))
+            && let Ok(mut file) = OpenOptions::new().read(true).write(true).open(self.path(id))
+        {
+            let _ = log::with_lock(&mut file, true, |file| {
+                let (mut state, valid) = log::read_locked(file, id)?;
+                if state.needs_controller() || !state.orphaned_questions.is_empty() {
+                    file.set_len(valid)?;
+                    file.seek(SeekFrom::Start(valid))?;
+                }
+                if !state.orphaned_questions.is_empty() {
+                    log::milestones::orphan(
+                        file,
+                        &mut state,
+                        ChatUpdate::OrphanedQuestionsChanged { questions: vec![] },
+                    )?;
+                }
+                if !state.pending_requests.is_empty() {
+                    log::milestones::orphan(
+                        file,
+                        &mut state,
+                        ChatUpdate::RequestsChanged { requests: vec![] },
+                    )?;
+                }
+                Ok(())
+            });
+        }
         Ok(lease)
+    }
+    pub fn take_orphaned_question(
+        &self,
+        id: Uuid,
+        cursor: &crate::Cursor,
+        request_id: &serde_json::Value,
+    ) -> Result<Option<crate::OrphanedQuestion>> {
+        let _ = self.settle_abandoned(id)?;
+        let lease = self.lease(id, false)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.path(id))?;
+        log::with_lock(&mut file, true, |file| {
+            match lease.try_lock_shared() {
+                Ok(()) => lease.unlock()?,
+                Err(std::fs::TryLockError::WouldBlock) => return Err(Error::Busy),
+                Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+            }
+            let (mut state, valid) = log::read_locked(file, id)?;
+            if valid != file.metadata()?.len() {
+                file.set_len(valid)?;
+                file.sync_data()?;
+            }
+            file.seek(SeekFrom::Start(valid))?;
+            let Some(pos) = state
+                .orphaned_questions
+                .iter()
+                .position(|q| &q.cursor == cursor && &q.id == request_id)
+            else {
+                return Ok(None);
+            };
+            let mut questions = state.orphaned_questions.clone();
+            let taken = questions.remove(pos);
+            log::milestones::orphan(
+                file,
+                &mut state,
+                ChatUpdate::OrphanedQuestionsChanged { questions },
+            )?;
+            Ok(Some(taken))
+        })
     }
     fn read_state(&self, mut file: File, id: Uuid) -> Result<log::State> {
         // A controller takes the journal exclusively when claiming its lease. Hold
@@ -465,6 +543,17 @@ impl ChatStore {
                         lease.unlock()?;
                         let tasks = crate::tasks::background::controller_lost(&state.tasks);
                         crate::tasks::merge(&mut state.tasks, tasks);
+                        for (turn, error) in state.unconfirmed_delivery_failures(now()) {
+                            let _ = state.apply(ChatUpdate::RequestDeliveryFailed { turn, error });
+                        }
+                        if matches!(self.stop_fence(id, false), Err(Error::Busy)) {
+                            state.orphaned_questions.clear();
+                        } else {
+                            let orphans = state.recoverable_orphans();
+                            if !orphans.is_empty() {
+                                state.orphaned_questions = orphans;
+                            }
+                        }
                         state.pending_requests.clear();
                         state.interrupt_notifications();
                         state.unconfirm_steering();
@@ -508,6 +597,7 @@ impl ChatStore {
             context_usage: state.context_usage,
             usage: state.usage,
             pending_requests: state.pending_requests,
+            orphaned_questions: state.orphaned_questions,
             last_compaction: state.last_compaction,
             manual_compaction: state.manual_compaction,
         })
@@ -691,6 +781,7 @@ impl ChatStore {
             Ok(state)
         })?;
         let mut log = log::Log::loaded(file, lease, state);
+        log.stop_lock = Some(path.with_extension("stop.lock"));
         log.settle_abandoned_controls()?;
         Ok(log)
     }
@@ -715,6 +806,7 @@ impl ChatSession {
         launch: SessionOptions,
     ) -> Result<Self> {
         let session = Arc::new(session);
+        log.stop_lock = Some(store.dir.join(format!("{}.stop.lock", log.state.info.id)));
         if let Some(ticket) = &launch.account_admission {
             store.accounts.bind(ticket, &session)?;
         }
@@ -722,6 +814,7 @@ impl ChatSession {
             let profile = AntigravityProfile::at_launch(&log.state.info.runtime, &launch);
             log.attach(session.stream_id(), profile)?;
         }
+        log.attachment_store = Some(store.clone());
         if session.capabilities().goals
             || matches!(session.protocol(), Protocol::Claude | Protocol::Muse)
             || log.state.info.runtime == "grok"
@@ -784,6 +877,7 @@ impl ChatSession {
             context_usage: log.state.context_usage.clone(),
             usage: log.state.usage.clone(),
             pending_requests: log.state.pending_requests.clone(),
+            orphaned_questions: log.state.orphaned_questions.clone(),
             last_compaction: log.state.last_compaction.clone(),
             manual_compaction: log.state.manual_compaction.clone(),
         })

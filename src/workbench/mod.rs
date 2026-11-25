@@ -405,12 +405,12 @@ impl Workbench {
             .into_iter()
             .map(|path| {
                 let actual = path.canonicalize()?;
+                self.allowed(&actual)?;
                 if actual != path || !actual.is_dir() {
                     return Err(Error::Refused(
                         "an additional workspace directory changed or is not a directory".into(),
                     ));
                 }
-                self.allowed(&actual)?;
                 Ok(actual)
             })
             .collect()

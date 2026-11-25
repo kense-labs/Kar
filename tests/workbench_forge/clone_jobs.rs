@@ -14,7 +14,7 @@ pub(super) fn filter() {
 }
 pub(super) async fn run() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("roots");
+    let root = temp.path().canonicalize().unwrap().join("roots");
     let src = root.join("source");
     let gate = temp.path().join("gate");
     let native = temp.path().join("native");

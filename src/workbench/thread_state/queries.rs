@@ -122,7 +122,14 @@ fn project(app: Workbench, request: Request) -> Result<Value> {
         Request::Family { chat } => {
             let parents = rows
                 .iter()
-                .filter_map(|r| r.info.forked_from.as_ref().map(|f| (r.info.id, f.chat)))
+                .filter_map(|r| {
+                    r.info
+                        .forked_from
+                        .as_ref()
+                        .map(|f| f.chat)
+                        .or(r.metadata.side_chat_parent)
+                        .map(|parent| (r.info.id, parent))
+                })
                 .collect();
             let wanted = root_of(chat, &parents)?;
             if rows.iter().any(|r| r.info.id == chat) {
@@ -174,8 +181,22 @@ fn project(app: Workbench, request: Request) -> Result<Value> {
             if limit > 50 {
                 return Err(bad("settled chat page limit exceeds 50"));
             }
+            let (archived_projects, delegated_chats): (BTreeSet<Uuid>, BTreeSet<Uuid>) = {
+                let db = app.0.catalog.lock().unwrap();
+                (
+                    db.projects
+                        .values()
+                        .filter(|p| p.metadata.archived)
+                        .map(|p| p.id)
+                        .collect(),
+                    db.model_tasks.keys().copied().collect(),
+                )
+            };
             rows.retain(|r| {
                 !r.archived
+                    && !archived_projects.contains(&r.project)
+                    && r.metadata.side_chat_parent.is_none()
+                    && !delegated_chats.contains(&r.info.id)
                     && project_ids
                         .as_ref()
                         .is_none_or(|ids| ids.contains(&r.project))

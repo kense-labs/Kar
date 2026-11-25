@@ -49,23 +49,38 @@ pub(super) async fn call(app: &Workbench, c: &Caller, id: Uuid, row: &Record) ->
                 action: String,
                 cursor: crate::Cursor,
                 id: Value,
-                reply: crate::QuestionReply,
+                reply: Option<crate::QuestionReply>,
             }
             let v: Input = parse(req)?;
-            if v.action != "respond" {
-                return Err(denied());
+            match v.action.as_str() {
+                "dismiss" => {
+                    crate::workbench::interactions::dismiss_request(
+                        app,
+                        p,
+                        t,
+                        v.cursor.clone(),
+                        v.id.clone(),
+                    )
+                    .await?;
+                    Ok(json!({"dismissed":v.id,"cursor":v.cursor}))
+                }
+                "respond" => {
+                    let reply = v
+                        .reply
+                        .ok_or_else(|| Error::Refused("missing question reply".into()))?;
+                    crate::workbench::interactions::respond_question_mcp(
+                        app,
+                        p,
+                        t,
+                        v.cursor.clone(),
+                        v.id.clone(),
+                        reply,
+                    )
+                    .await?;
+                    Ok(json!({"answered":v.id,"cursor":v.cursor}))
+                }
+                _ => Err(denied()),
             }
-            let s = app.active_control(p, t)?.ok_or_else(denied)?;
-            let r = s
-                .snapshot()
-                .pending_requests
-                .into_iter()
-                .find(|r| {
-                    r.kind == crate::RequestKind::Question && r.cursor == v.cursor && r.id == v.id
-                })
-                .ok_or_else(|| Error::Refused("question occurrence is no longer pending".into()))?;
-            s.answer_question(&r, v.reply).await?;
-            Ok(json!({"answered":r.id,"cursor":r.cursor}))
         }
         "kar_thread_send" => send(app, id, row, parse(req)?).await,
         "kar_thread_configure" => {

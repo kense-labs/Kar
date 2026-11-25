@@ -123,7 +123,7 @@ impl Sources {
         self.entries.retain(|k, _| files.contains_key(k));
         // Capture the catalog before reading journal state. No journal or inbox lock is taken
         // while holding the live catalog lock (metadata commands can take them in that order).
-        let (projects, ownership, metadata, archived_chats, watched_pulls) = {
+        let (projects, ownership, metadata, archived_chats, watched_pulls, forge_links) = {
             let catalog = app.0.catalog.lock().unwrap();
             (
                 catalog
@@ -136,6 +136,7 @@ impl Sources {
                 catalog.thread_state.rows.clone(),
                 catalog.archived.clone(),
                 super::super::forge::watches::waiting(&catalog),
+                catalog.forge.chat_links(),
             )
         };
         for p in &projects {
@@ -215,7 +216,8 @@ impl Sources {
                     .pending_questions
                     .iter()
                     .all(|c| meta.acknowledges_question(c));
-            rows.insert(key,json!({"project":project,"workspace":entry.info.workspace,"runtime":entry.info.runtime,"model":entry.info.model,"native_id":entry.info.native_id,"created_ms":entry.info.created_ms,"forked_from":entry.info.forked_from,"title":meta.title.as_ref().unwrap_or(&entry.first_text),"archived":archived,"metadata":meta,"snoozed":effective,"pending_guest_messages":guest_count,"waiting_for_pull":watched_pulls.contains(&id),"activity":entry.activity}));
+            let links = forge_links.get(&id).cloned().unwrap_or_default();
+            rows.insert(key,json!({"project":project,"workspace":entry.info.workspace,"runtime":entry.info.runtime,"model":entry.info.model,"approvals":entry.info.approvals,"provider_instance":entry.info.provider_instance,"forge_links":links,"native_id":entry.info.native_id,"created_ms":entry.info.created_ms,"forked_from":entry.info.forked_from,"title":meta.title.as_ref().unwrap_or(&entry.first_text),"archived":archived,"metadata":meta,"snoozed":effective,"pending_guest_messages":guest_count,"waiting_for_pull":watched_pulls.contains(&id),"activity":entry.activity}));
         }
         Ok(rows)
     }

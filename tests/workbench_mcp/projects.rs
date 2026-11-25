@@ -7,6 +7,7 @@ pub(super) async fn exercise(
     project: &str,
     chat: Uuid,
     root: &Path,
+    observer: &tokio::net::UdpSocket,
     rpc: impl Fn(&str, Value) -> RequestBuilder,
 ) {
     let policy = format!("{url}/projects/{project}/chats/{chat}/model-tools/permissions");
@@ -46,7 +47,8 @@ pub(super) async fn exercise(
     );
     let hijack =
         json!({"command_id":chat,"project_id":project,"title":"Existing chat","workspace":"root"});
-    assert!(server::json(call("kar_thread_launch", hijack)).await["error"].is_object());
+    let hijacked = server::json(call("kar_thread_launch", hijack)).await;
+    assert_eq!(hijacked["result"]["isError"], true, "{hijacked}");
     let clone_id = Uuid::new_v4();
     let clone_dir = directory.join("cloned");
     let cmd = json!({"command_id":clone_id,"title":"Local clone","directory":clone_dir,"source":saved["root"]});
@@ -75,6 +77,10 @@ pub(super) async fn exercise(
         server::json(call("kar_thread_launch", launch)).await["result"]["structuredContent"],
         launched["result"]["structuredContent"]
     );
+    tokio::time::timeout(Duration::from_secs(10), observer.recv(&mut [0u8; 192]))
+        .await
+        .unwrap()
+        .unwrap();
     let del = json!({"command_id":Uuid::new_v4(),"project_id":create,"force":true});
     assert!(server::json(call("kar_project_delete",del)).await["result"]["structuredContent"]["deleted"].as_bool().unwrap_or(false));
     assert!(

@@ -4,7 +4,7 @@ mod folders;
 mod setup;
 mod task;
 use super::{
-    Workbench,
+    Workbench, denied,
     http::{ApiError, blocking},
 };
 use axum::{
@@ -105,7 +105,26 @@ async fn containing(
 ) -> Result<Json<Option<task::Task>>, ApiError> {
     blocking(move || {
         app.project(p)?;
-        app.allowed(&q.path)?;
+        if !q.path.is_absolute()
+            || q.path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(denied());
+        }
+        let mut ancestor = q.path.as_path();
+        let real = loop {
+            match ancestor.canonicalize() {
+                Ok(existing) => {
+                    break existing.join(q.path.strip_prefix(ancestor).map_err(|_| denied())?);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    ancestor = ancestor.parent().ok_or_else(denied)?;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+        app.allowed(&real)?;
         app.0.task_folders.find(p, &q.path)
     })
     .await

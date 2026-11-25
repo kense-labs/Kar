@@ -120,6 +120,7 @@ pub(super) async fn run(
     );
     assert_eq!(git(bare, &["rev-parse", "stacked-topic"]), ahead);
     fork_and_base(client, &endpoint, repo, bare, mock).await;
+    worktree_links_and_archive_boundaries(client, project, &endpoint, repo, bare, mock).await;
 }
 
 async fn fork_and_base(client: &Client, endpoint: &str, repo: &Path, origin: &Path, mock: &Mock) {
@@ -233,4 +234,277 @@ async fn fork_and_base(client: &Client, endpoint: &str, repo: &Path, origin: &Pa
         "refs/heads/publication/main"
     );
     assert_eq!(git(origin, &["rev-parse", "main"]), origin_main);
+}
+
+async fn worktree_links_and_archive_boundaries(
+    client: &Client,
+    project: &str,
+    endpoint: &str,
+    repo: &Path,
+    bare: &Path,
+    mock: &Mock,
+) {
+    let root = repo.parent().unwrap();
+    git(repo, &["remote", "remove", "publication"]);
+    git(repo, &["config", "remote.pushDefault", "origin"]);
+    let _ = Command::new("git")
+        .current_dir(repo)
+        .args(["config", "--unset", "branch.main.pushRemote"])
+        .status();
+    git(
+        repo,
+        &["remote", "set-url", "--push", "origin", bare.to_str().unwrap()],
+    );
+    git(
+        repo,
+        &[
+            "fetch",
+            bare.to_str().unwrap(),
+            "stacked-topic:refs/remotes/origin/stacked-topic",
+        ],
+    );
+    git(repo, &["checkout", "-f", "stacked-topic"]);
+    git(repo, &["reset", "--hard", "refs/remotes/origin/stacked-topic"]);
+
+    // 1. Chat bound to its own worktree executes git_actions in that worktree, not project root.
+    let wt_chat = Uuid::new_v4();
+    let wt_run = Uuid::new_v4();
+    let wt_dir = root.join("wt-git-action");
+    let prep_url = format!("{project}/chats/{wt_chat}/prepared-runs/{wt_run}");
+    ok(client
+        .put(&prep_url)
+        .json(&json!({
+            "launch": { "runtime": "codex" },
+            "title": "wt-chat",
+            "message": "seed worktree",
+            "workspace": {
+                "type": "worktree",
+                "directory": wt_dir,
+                "branch": "wt-stacked-branch",
+                "base": "main"
+            }
+        })))
+    .await;
+    for _ in 0..200 {
+        let state = ok(client.get(&prep_url)).await;
+        if state["stage"] == "dispatched" {
+            break;
+        }
+        assert_ne!(state["stage"], "failed", "{state}");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let mut wt_path = std::path::PathBuf::new();
+    for _ in 0..200 {
+        let snap = ok(client.get(format!("{project}/chats/{wt_chat}/snapshot"))).await;
+        if snap["history"]["turns"]
+            .as_array()
+            .is_some_and(|t| t.first().is_some_and(|r| r["status"] == "completed"))
+        {
+            wt_path = std::path::PathBuf::from(
+                snap["history"]["chat"]["workspace"].as_str().unwrap(),
+            );
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert_eq!(wt_path, wt_dir);
+    assert_ne!(wt_path, repo);
+
+    fs::write(wt_path.join("wt_only.txt"), "from-worktree").unwrap();
+    let wt_op = json!({
+        "id": Uuid::new_v4(),
+        "chat": wt_chat,
+        "action": "commit_push_pr",
+        "files": ["wt_only.txt"],
+        "commit_message": "worktree stacked change",
+        "base": "main",
+        "title": "Worktree PR"
+    });
+    let wt_done = execute(client, endpoint, &wt_op).await;
+    let wt_res = result(&wt_done);
+    assert_eq!(wt_res["commit"]["status"], "created");
+    assert_eq!(wt_res["push"]["status"], "pushed");
+    assert_eq!(wt_res["pr"]["status"], "created");
+    let wt_pr_num = wt_res["pr"]["pull"]["number"].as_u64().unwrap();
+    assert!(!repo.join("wt_only.txt").exists());
+    assert_eq!(
+        git(bare, &["show", "wt-stacked-branch:wt_only.txt"]),
+        "from-worktree"
+    );
+
+    // 2. opened_existing PR links the requesting chat when not previously linked.
+    let second_chat = Uuid::new_v4();
+    ok(client
+        .post(format!("{project}/chats"))
+        .json(&json!({"id": second_chat, "runtime": "codex"})))
+    .await;
+    let reopen_existing = execute(
+        client,
+        endpoint,
+        &json!({
+            "id": Uuid::new_v4(),
+            "chat": second_chat,
+            "action": "create_pr"
+        }),
+    )
+    .await;
+    let existing_res = result(&reopen_existing);
+    assert_eq!(existing_res["pr"]["status"], "opened_existing");
+    let existing_pr_num = existing_res["pr"]["pull"]["number"].as_u64().unwrap();
+    let links_url = format!("{project}/forge/links");
+    let all_links = ok(client.get(&links_url)).await;
+    assert!(all_links.as_array().unwrap().iter().any(|row| {
+        row["binding"]["chat"] == second_chat.to_string()
+            && row["binding"]["kind"] == "pull"
+            && row["binding"]["number"] == existing_pr_num
+    }));
+    assert!(all_links.as_array().unwrap().iter().any(|row| {
+        row["binding"]["chat"] == wt_chat.to_string()
+            && row["binding"]["kind"] == "pull"
+            && row["binding"]["number"] == wt_pr_num
+    }));
+
+    // 3. Duplicate link deduplication and HTTP unlink.
+    for _ in 0..2 {
+        ok(client.post(&links_url).json(&json!({
+            "id": Uuid::new_v4(),
+            "chat": second_chat,
+            "kind": "issue",
+            "number": 7
+        })))
+        .await;
+    }
+    let after_dup = ok(client.get(&links_url)).await;
+    assert_eq!(
+        after_dup
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                row["binding"]["chat"] == second_chat.to_string()
+                    && row["binding"]["kind"] == "issue"
+                    && row["binding"]["number"] == 7
+            })
+            .count(),
+        1
+    );
+    let unlinked = ok(client.delete(&links_url).json(&json!({
+        "chat": second_chat,
+        "kind": "issue",
+        "number": 7
+    })))
+    .await;
+    assert_eq!(unlinked["changes"][0]["previously_linked"], true);
+    assert_eq!(unlinked["changes"][0]["linked"], false);
+    let after_unlink = ok(client.get(&links_url)).await;
+    assert!(
+        !after_unlink.as_array().unwrap().iter().any(|row| {
+            row["binding"]["chat"] == second_chat.to_string()
+                && row["binding"]["kind"] == "issue"
+                && row["binding"]["number"] == 7
+        })
+    );
+
+    // 4. Cross-remote fork origin + upstream base PR resolution.
+    let base_url = project.rsplit_once("/projects/").unwrap().0;
+    let fork_bare = tempfile::tempdir().unwrap();
+    git(fork_bare.path(), &["init", "--bare"]);
+    let fork_checkout = root.join("fork-upstream-repo");
+    fs::create_dir(&fork_checkout).unwrap();
+    git(&fork_checkout, &["init", "-b", "main"]);
+    git(&fork_checkout, &["fetch", bare.to_str().unwrap(), "main:refs/remotes/upstream/main"]);
+    git(&fork_checkout, &["reset", "--hard", "refs/remotes/upstream/main"]);
+    git(
+        &fork_checkout,
+        &["remote", "add", "origin", "https://review.example/contributor/forked.git"],
+    );
+    git(
+        &fork_checkout,
+        &["remote", "set-url", "--push", "origin", fork_bare.path().to_str().unwrap()],
+    );
+    git(
+        &fork_checkout,
+        &["remote", "add", "upstream", "https://review.example/team/repo.git"],
+    );
+    git(
+        &fork_checkout,
+        &["switch", "--track", "-c", "fork-topic", "refs/remotes/upstream/main"],
+    );
+    git(&fork_checkout, &["config", "remote.pushDefault", "origin"]);
+    fs::write(fork_checkout.join("upstream_pr.txt"), "cross-owner").unwrap();
+    git(&fork_checkout, &["add", "upstream_pr.txt"]);
+    git(&fork_checkout, &["commit", "-m", "cross-owner change"]);
+    mock.lock().unwrap().head = git(&fork_checkout, &["rev-parse", "HEAD"]);
+    let fork_proj = ok(client
+        .post(format!("{base_url}/projects"))
+        .json(&json!({"name": "fork-upstream", "root": fork_checkout})))
+    .await;
+    let fork_pid = fork_proj["id"].as_str().unwrap();
+    let fork_action = execute(
+        client,
+        &format!("{base_url}/projects/{fork_pid}/git/actions"),
+        &json!({"id": Uuid::new_v4(), "action": "create_pr", "title": "Upstream from fork"}),
+    )
+    .await;
+    let fork_res = result(&fork_action);
+    assert_eq!(fork_res["pr"]["status"], "created");
+    assert_eq!(fork_res["pr"]["pull"]["head_repository"], "contributor/forked");
+    assert_eq!(fork_res["pr"]["pull"]["head_ref"], "fork-topic");
+    assert_eq!(fork_res["pr"]["pull"]["base_ref"], "main");
+    ok(client
+        .post(format!("{base_url}/projects/mutate"))
+        .json(&json!({
+            "type": "project.delete",
+            "commandId": Uuid::new_v4().to_string(),
+            "projectId": fork_pid,
+            "force": true
+        })))
+    .await;
+
+    // 5. Archived chats refuse git actions, forge operations, and forge link mutations.
+    ok(client
+        .put(format!("{project}/chats/{second_chat}/archive"))
+        .json(&json!({"archived": true})))
+    .await;
+    assert_eq!(
+        client
+            .post(endpoint)
+            .json(&json!({"id": Uuid::new_v4(), "chat": second_chat, "action": "push"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        client
+            .post(format!("{project}/forge/operations"))
+            .json(&json!({
+                "id": Uuid::new_v4(),
+                "chat": second_chat,
+                "op": "comment_issue",
+                "number": 8,
+                "body": "should fail"
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        client
+            .post(&links_url)
+            .json(&json!({
+                "id": Uuid::new_v4(),
+                "chat": second_chat,
+                "kind": "issue",
+                "number": 7
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
 }

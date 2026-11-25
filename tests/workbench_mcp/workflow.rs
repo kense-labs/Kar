@@ -206,4 +206,93 @@ pub(super) async fn exercise(
         final_run["result"]["structuredContent"]["run"]["receipts"][1]["result"],
         "late"
     );
+
+    // Exercise MCP parent_run_id attribution plus stop and skip terminal actions with reasons.
+    let hold_wf = Uuid::new_v4();
+    server::json(
+        host.put(format!("{url}/projects/{project}/workflows/{hold_wf}"))
+            .json(&json!({
+                "name": "MCP stop-skip",
+                "enabled": true,
+                "schedule": {"type": "manual"},
+                "steps": [{"type": "ask", "question": "Hold?"}]
+            })),
+    )
+    .await;
+    let child_started = server::json(request(
+        "start",
+        json!({
+            "workflow_id": hold_wf,
+            "command_id": Uuid::new_v4(),
+            "parent_run_id": run,
+            "input": {"child": true}
+        }),
+    ))
+    .await;
+    let child_run = child_started["result"]["structuredContent"]["run"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        child_started["result"]["structuredContent"]["run"]["parent_run_id"],
+        run
+    );
+    let stop_cmd = json!({
+        "run_id": child_run,
+        "command_id": Uuid::new_v4(),
+        "reason": "stopped via mcp"
+    });
+    for _ in 0..2 {
+        let stopped = server::json(request("stop", stop_cmd.clone())).await;
+        assert_eq!(
+            stopped["result"]["structuredContent"]["run"]["status"],
+            "stopped"
+        );
+        assert_eq!(
+            stopped["result"]["structuredContent"]["run"]["detail"],
+            "stopped via mcp"
+        );
+    }
+    let stopped_list = server::json(request("list", json!({"status": "stopped"}))).await;
+    let stopped_row = stopped_list["result"]["structuredContent"]["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == child_run)
+        .unwrap();
+    assert_eq!(stopped_row["parent_run_id"], run);
+
+    let skip_started = server::json(request(
+        "start",
+        json!({"workflow_id": hold_wf, "command_id": Uuid::new_v4()}),
+    ))
+    .await;
+    let skip_run = skip_started["result"]["structuredContent"]["run"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let skip_cmd = json!({
+        "run_id": skip_run,
+        "command_id": Uuid::new_v4(),
+        "reason": "skipped via mcp"
+    });
+    for _ in 0..2 {
+        let skipped = server::json(request("skip", skip_cmd.clone())).await;
+        assert_eq!(
+            skipped["result"]["structuredContent"]["run"]["status"],
+            "skipped"
+        );
+        assert_eq!(
+            skipped["result"]["structuredContent"]["run"]["detail"],
+            "skipped via mcp"
+        );
+    }
+    let skipped_list = server::json(request("list", json!({"status": "skipped"}))).await;
+    assert!(
+        skipped_list["result"]["structuredContent"]["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == skip_run)
+    );
 }

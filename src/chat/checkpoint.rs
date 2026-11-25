@@ -175,6 +175,13 @@ impl ChatStore {
         work: &Path,
         recovering: Option<&Path>,
     ) -> Result<WorkspaceLease> {
+        Self::workspace_lease_inner(work, recovering, None)
+    }
+    fn workspace_lease_inner(
+        work: &Path,
+        recovering: Option<&Path>,
+        turn_owner: Option<(&SharedDelegation, Uuid)>,
+    ) -> Result<WorkspaceLease> {
         checked_root(work)?;
         let source = source_repo(work)?;
         let key = source
@@ -188,22 +195,36 @@ impl ChatStore {
             &gix::path::into_bstr(&key),
         )
         .map_err(err)?;
+        let digest_key = digest.to_string();
         // One lease per checkout across chat stores. Linked worktrees have independent working files.
+        // Shared-isolation delegated children share their active parent family's open file lock in-process.
         let locks = std::env::home_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join(".local/state/kar/workspace-locks");
         let dir = ChatStore::open(locks)?;
-        let f = File::options()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(dir.dir.join(digest.to_string()))?;
-        match f.try_lock() {
-            Ok(()) => {}
-            Err(fs::TryLockError::WouldBlock) => return Err(Error::Busy),
-            Err(fs::TryLockError::Error(e)) => return Err(e.into()),
-        }
+        let lock = if let Some((shared, chat)) = turn_owner
+            && let Some(existing) = shared.try_share(&digest_key, chat)
+        {
+            shared.record(digest_key, chat, &existing);
+            existing
+        } else {
+            let f = File::options()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(dir.dir.join(&digest_key))?;
+            match f.try_lock() {
+                Ok(()) => {}
+                Err(fs::TryLockError::WouldBlock) => return Err(Error::Busy),
+                Err(fs::TryLockError::Error(e)) => return Err(e.into()),
+            }
+            let arc = std::sync::Arc::new(f);
+            if let Some((shared, chat)) = turn_owner {
+                shared.record(digest_key, chat, &arc);
+            }
+            arc
+        };
         let marker = dir.dir.join(format!("{digest}.pending-fork"));
         if marker.try_exists()? {
             let stage: PathBuf = serde_json::from_reader(File::open(&marker)?)?;
@@ -233,7 +254,7 @@ impl ChatStore {
             }
         }
         Ok(WorkspaceLease {
-            _lock: f,
+            _lock: lock,
             marker,
             repositories: Vec::new(),
         })
@@ -243,11 +264,14 @@ impl ChatStore {
         chat: &ChatInfo,
         scopes: &[RepositoryCheckpoint],
     ) -> Result<WorkspaceLease> {
-        let mut lease = self.workspace_lease(&chat.workspace)?;
+        let owner = Some((&*self.shared_delegation, chat.id));
+        let mut lease = Self::workspace_lease_inner(&chat.workspace, None, owner)?;
         for row in scopes {
-            lease
-                .repositories
-                .push(self.workspace_lease(&row.scope.worktree_path)?);
+            lease.repositories.push(Self::workspace_lease_inner(
+                &row.scope.worktree_path,
+                None,
+                owner,
+            )?);
         }
         Ok(lease)
     }
@@ -477,11 +501,67 @@ impl ChatStore {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct SharedDelegation {
+    parents: std::sync::Mutex<std::collections::HashMap<Uuid, Uuid>>,
+    active: std::sync::Mutex<
+        std::collections::HashMap<String, Vec<(Uuid, std::sync::Weak<File>)>>,
+    >,
+}
+impl SharedDelegation {
+    pub fn register(&self, child: Uuid, parent: Uuid) {
+        if child != parent {
+            self.parents.lock().unwrap().insert(child, parent);
+        }
+    }
+    fn root_in(parents: &std::collections::HashMap<Uuid, Uuid>, mut id: Uuid) -> Uuid {
+        for _ in 0..32 {
+            let Some(&next) = parents.get(&id) else {
+                break;
+            };
+            if next == id {
+                break;
+            }
+            id = next;
+        }
+        id
+    }
+    fn try_share(&self, digest: &str, chat: Uuid) -> Option<std::sync::Arc<File>> {
+        let parents = self.parents.lock().unwrap().clone();
+        if parents.is_empty() {
+            return None;
+        }
+        let in_family = parents.contains_key(&chat) || parents.values().any(|&p| p == chat);
+        if !in_family {
+            return None;
+        }
+        let root = Self::root_in(&parents, chat);
+        let mut active = self.active.lock().unwrap();
+        let list = active.get_mut(digest)?;
+        list.retain(|(_, w)| w.strong_count() > 0);
+        for (holder, weak) in list.iter() {
+            if *holder != chat
+                && Self::root_in(&parents, *holder) == root
+                && let Some(arc) = weak.upgrade()
+            {
+                return Some(arc);
+            }
+        }
+        None
+    }
+    fn record(&self, digest: String, chat: Uuid, file: &std::sync::Arc<File>) {
+        let mut active = self.active.lock().unwrap();
+        let list = active.entry(digest).or_default();
+        list.retain(|(_, w)| w.strong_count() > 0);
+        list.push((chat, std::sync::Arc::downgrade(file)));
+    }
+}
+
 /// A process lock serializes live writers. The reservation also survives a host crash,
 /// so a different chat sharing this checkout cannot send a turn on a half-restored tree.
 pub(crate) struct WorkspaceLease {
     repositories: Vec<WorkspaceLease>,
-    _lock: File,
+    _lock: std::sync::Arc<File>,
     marker: PathBuf,
 }
 impl WorkspaceLease {

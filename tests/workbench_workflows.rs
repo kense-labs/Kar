@@ -10,7 +10,7 @@ use kar::{
     chat::ChatStore,
     workbench::{
         Workbench,
-        workflows::{Clock, Definition, Schedule, Status, Step},
+        workflows::{Action, Clock, Definition, Schedule, Status, Step, Trigger},
     },
 };
 use reqwest::{Client, StatusCode};
@@ -39,6 +39,7 @@ fn definition(schedule: Schedule) -> Definition {
         schedule,
         steps: vec![Step::Ask {
             question: "Proceed?".into(),
+            timeout_ms: None,
         }],
     }
 }
@@ -187,6 +188,8 @@ async fn wait(host: &Client, base: &str, p: &str, id: &str, status: &str) -> Val
             if run["status"] == "failed"
                 || run["status"] == "reconcile"
                 || run["status"] == "cancelled"
+                || run["status"] == "stopped"
+                || run["status"] == "skipped"
                 || run["status"] == "completed"
             {
                 panic!("unexpected workflow result while waiting for {status}: {run}");
@@ -662,6 +665,282 @@ async fn source_scenarios() {
     child.kill().await.unwrap();
 }
 
+async fn nested_and_webhook_backlog_scenarios() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let db = temp.path().join("store");
+    let t0 = ms("2026-02-10T12:00:00Z");
+    let clock = Arc::new(ManualClock(AtomicI64::new(t0)));
+    let app = Workbench::open_with_workflow_clock(
+        ChatStore::open(&db).unwrap(),
+        std::slice::from_ref(&root),
+        clock.clone(),
+    )
+    .unwrap();
+    let project = app.register(&root, "nested").unwrap().id;
+
+    // Self-recursive Step::Workflow must be rejected at definition validation time.
+    let self_wf = Uuid::new_v4();
+    assert!(
+        app.save_workflow(
+            project,
+            self_wf,
+            Definition {
+                name: "self-loop".into(),
+                enabled: true,
+                schedule: Schedule::Manual,
+                steps: vec![Step::Workflow {
+                    workflow: self_wf,
+                    input: None,
+                }],
+            },
+            None,
+        )
+        .is_err()
+    );
+
+    // Parent invoking child workflow + child question timeout + parent completion.
+    let child_wf = Uuid::new_v4();
+    let parent_wf = Uuid::new_v4();
+    app.save_workflow(
+        project,
+        child_wf,
+        Definition {
+            name: "child-flow".into(),
+            enabled: true,
+            schedule: Schedule::Manual,
+            steps: vec![Step::Ask {
+                question: "Approve child?".into(),
+                timeout_ms: Some(5_000),
+            }],
+        },
+        None,
+    )
+    .unwrap();
+    app.save_workflow(
+        project,
+        parent_wf,
+        Definition {
+            name: "parent-flow".into(),
+            enabled: true,
+            schedule: Schedule::Manual,
+            steps: vec![Step::Workflow {
+                workflow: child_wf,
+                input: Some(json!({"stage": "sub"})),
+            }],
+        },
+        None,
+    )
+    .unwrap();
+
+    let parent_run = app
+        .trigger_workflow(project, parent_wf, Uuid::new_v4(), json!({"top": 1}))
+        .unwrap();
+    assert_eq!(parent_run.parent_run_id, None);
+    app.tick_workflows().unwrap();
+    let waiting_parent = app.workflow_run(project, parent_run.id).unwrap();
+    assert_eq!(waiting_parent.status, Status::Waiting);
+    let parent_attempt = waiting_parent.attempt.as_ref().unwrap().id;
+    let child_runs = app.workflow_runs(project, child_wf).unwrap();
+    assert_eq!(child_runs.len(), 1);
+    let child_id = child_runs[0].id;
+    assert_eq!(child_runs[0].parent_run_id, Some(parent_run.id));
+    assert_eq!(child_runs[0].parent_attempt_id, Some(parent_attempt));
+    assert_eq!(
+        child_runs[0].trigger,
+        Trigger::Child {
+            parent_run: parent_run.id,
+            attempt: parent_attempt,
+        }
+    );
+    assert_eq!(child_runs[0].input, json!({"stage": "sub"}));
+
+    // Tick child into Asking, then advance clock past timeout_ms (5_000ms) so it expires and completes both.
+    app.tick_workflows().unwrap();
+    assert_eq!(
+        app.workflow_run(project, child_id).unwrap().status,
+        Status::Asking
+    );
+    clock.0.store(t0 + 5_000, Ordering::SeqCst);
+    app.tick_workflows().unwrap();
+    let done_child = app.workflow_run(project, child_id).unwrap();
+    assert_eq!(done_child.status, Status::Completed);
+    assert_eq!(done_child.receipts[0].result["expired"], true);
+    let done_parent = app.workflow_run(project, parent_run.id).unwrap();
+    assert_eq!(done_parent.status, Status::Completed);
+    assert_eq!(done_parent.receipts[0].result["run_id"], json!(child_id));
+    assert_eq!(done_parent.receipts[0].result["outcome"], "completed");
+
+    // Stopping a waiting parent recursively stops its active child and preserves the reason.
+    let p2 = app
+        .trigger_workflow(project, parent_wf, Uuid::new_v4(), Value::Null)
+        .unwrap();
+    app.tick_workflows().unwrap();
+    app.tick_workflows().unwrap();
+    let c2 = app
+        .workflow_runs(project, child_wf)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.parent_run_id == Some(p2.id))
+        .unwrap();
+    assert_eq!(c2.status, Status::Asking);
+    let stopped_parent = app
+        .workflow_action(
+            project,
+            p2.id,
+            Uuid::new_v4(),
+            Action::Stop {
+                reason: Some("maintenance window".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(stopped_parent.status, Status::Stopped);
+    assert_eq!(
+        stopped_parent.detail.as_deref(),
+        Some("maintenance window")
+    );
+    let stopped_child = app.workflow_run(project, c2.id).unwrap();
+    assert_eq!(stopped_child.status, Status::Stopped);
+    assert_eq!(stopped_child.detail.as_deref(), Some("maintenance window"));
+
+    // Webhook max_delivery_age_minutes, 429 rate-limit, and Bucket 0/1/2 receipt retention.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = app.router("kar-workbench-fixture".into()).unwrap();
+    let srv = tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    let base = format!("http://{addr}");
+    let host = server::client();
+    let remote = Client::new();
+
+    let hook = save(
+        &host,
+        &base,
+        &project.to_string(),
+        json!({"type": "webhook"}),
+        json!([{"type": "skip", "reason": "fast"}]),
+    )
+    .await;
+    let manage = format!("{base}/projects/{project}/workflows/{hook}");
+    ok(host.put(format!("{manage}/webhook/rules")).json(&json!({
+        "max_delivery_age_minutes": 5,
+        "filters": [{"path": "body.kind", "op": "equals", "value": "push"}]
+    })))
+    .await;
+    let hook_url = format!("{base}/hooks/workflows/{project}/{hook}");
+    let signed_post = |id: String, kind: &str, extra_hdr: Option<(&str, String)>| {
+        let payload = serde_json::to_vec(&json!({"id": id, "input": {}, "kind": kind})).unwrap();
+        let sig = tag(&payload);
+        let mut req = remote
+            .post(&hook_url)
+            .header("content-type", "application/json")
+            .header("x-kar-signature", sig);
+        if let Some((k, v)) = extra_hdr {
+            req = req.header(k, v);
+        }
+        req.body(payload)
+    };
+
+    let now_ms = clock.0.load(Ordering::SeqCst);
+    // 1) Stale relay-queued & upstream webhook headers -> 410 Gone + "expired" receipt in Bucket 0.
+    for (idx, (hdr_name, hdr_val)) in [
+        ("x-kar-relay-queued-at", (now_ms - 6 * 60_000).to_string()),
+        ("svix-timestamp", ((now_ms - 10 * 60_000) / 1000).to_string()),
+        (
+            "x-webhook-timestamp",
+            jiff::Timestamp::from_millisecond(now_ms - 7 * 60_000)
+                .unwrap()
+                .to_string(),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let resp = signed_post(format!("stale-{idx}"), "push", Some((hdr_name, hdr_val)))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::GONE);
+        let body: Value = resp.json().await.unwrap();
+        assert_eq!(body["outcome"], "expired");
+    }
+    let visible_expired = ok(host.get(format!("{manage}/deliveries"))).await;
+    let exp_rows = visible_expired["deliveries"].as_array().unwrap();
+    assert_eq!(exp_rows.len(), 3);
+    assert!(exp_rows.iter().all(|r| r["outcome"] == "expired"));
+    let relay_rec_id = exp_rows[2]["id"].as_str().unwrap();
+    let relay_detail = ok(host.get(format!("{manage}/deliveries/{relay_rec_id}"))).await;
+    assert_eq!(
+        relay_detail["delivery"]["headers"]["x-kar-relay-queued-at"],
+        "[redacted]"
+    );
+
+    // 2) Bucket 2 ("filtered"): 15 misses in one minute -> capped at 10 receipts in that minute.
+    for i in 0..15 {
+        let res = ok(signed_post(format!("filt-m1-{i}"), "ignore", None)).await;
+        assert_eq!(res["outcome"], "filtered");
+    }
+
+    // 3) Fresh & future-skewed timestamps succeed, up to 60 accepted in a minute; 60 + 3 = 63 Bucket 0 -> capped at 50!
+    for i in 0..60 {
+        let stamp = if i == 0 {
+            Some(("x-kar-relay-queued-at", (now_ms - 60_000).to_string()))
+        } else if i == 1 {
+            Some(("x-webhook-timestamp", (now_ms + 30_000).to_string()))
+        } else {
+            None
+        };
+        let res = ok(signed_post(format!("acc-{i}"), "push", stamp)).await;
+        assert!(res["run_id"].is_string());
+    }
+
+    // 4) 61st..72nd valid deliveries in the same minute hit 429 rate_limited; Bucket 1 caps at 10/min!
+    for i in 0..12 {
+        let resp = signed_post(format!("rl-{i}"), "push", None)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body: Value = resp.json().await.unwrap();
+        assert_eq!(body["outcome"], "rate_limited");
+    }
+
+    let all_m1 = ok(host.get(format!("{manage}/deliveries?accept_any_outcome=true"))).await;
+    let rows_m1 = all_m1["deliveries"].as_array().unwrap();
+    let count_kind = |rows: &[Value], pred: fn(&str) -> bool| {
+        rows.iter()
+            .filter(|r| pred(r["outcome"].as_str().unwrap()))
+            .count()
+    };
+    assert_eq!(
+        count_kind(rows_m1, |o| matches!(o, "accepted" | "expired")),
+        50
+    );
+    assert_eq!(count_kind(rows_m1, |o| o == "rate_limited"), 10);
+    assert_eq!(count_kind(rows_m1, |o| o == "filtered"), 10);
+
+    // 5) Advance past 60s twice and verify Bucket 2 retention caps at 20 without evicting Bucket 0 or Bucket 1.
+    for (minute, offset) in [(2, 70_000), (3, 140_000)] {
+        clock.0.store(now_ms + offset, Ordering::SeqCst);
+        for i in 0..12 {
+            let res = ok(signed_post(format!("filt-m{minute}-{i}"), "ignore", None)).await;
+            assert_eq!(res["outcome"], "filtered");
+        }
+    }
+    let all_m3 = ok(host.get(format!("{manage}/deliveries?accept_any_outcome=true"))).await;
+    let rows_m3 = all_m3["deliveries"].as_array().unwrap();
+    assert_eq!(
+        count_kind(rows_m3, |o| matches!(o, "accepted" | "expired")),
+        50
+    );
+    assert_eq!(count_kind(rows_m3, |o| o == "rate_limited"), 10);
+    assert_eq!(count_kind(rows_m3, |o| o == "filtered"), 20);
+
+    srv.abort();
+}
+
 fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("app-server") => codex_chat_peer::agent(),
@@ -669,6 +948,7 @@ fn main() {
         _ => tokio::runtime::Runtime::new().unwrap().block_on(async {
             tokio::time::timeout(Duration::from_secs(120), async {
                 scheduling().await;
+                nested_and_webhook_backlog_scenarios().await;
                 http_scenarios().await;
                 source_scenarios().await;
             })

@@ -1,3 +1,5 @@
+mod files;
+mod html;
 mod output;
 mod render;
 use super::{
@@ -42,6 +44,8 @@ struct Find {
     start: Option<Start>,
     #[serde(default)]
     skills: Vec<Skill>,
+    #[serde(default)]
+    theme: Option<String>,
 }
 impl Find {
     fn prepare(&mut self) -> Result<()> {
@@ -90,6 +94,7 @@ pub(super) fn items(turn: &ChatTurn) -> impl Iterator<Item = Row<'_>> {
             Item::Diff { turn_id, .. } => ("diff", Some(turn_id.as_str())),
             Item::Retry { .. } => ("retry", None),
             Item::Compaction { .. } => ("compaction", None),
+            Item::RequestError { error } => ("request_error", error.request_id.as_str()),
         };
         // Independent native agents may reuse the same item ID, even in a single turn.
         let identity = serde_json::to_vec(&(turn.id, &item.source, kind, native))
@@ -106,6 +111,47 @@ pub(super) fn items(turn: &ChatTurn) -> impl Iterator<Item = Row<'_>> {
         }
     })
 }
+
+fn has_html_render_json(v: &Value) -> bool {
+    v.get("htmlRender").is_some_and(|h| !h.is_null())
+        || v.pointer("/structuredContent/htmlRender")
+            .is_some_and(|h| !h.is_null())
+}
+
+fn has_html_render_part(part: &crate::OutputPart) -> bool {
+    match part {
+        crate::OutputPart::Text { text } => {
+            text.contains("htmlRender")
+                && serde_json::from_str::<Value>(text).is_ok_and(|v| has_html_render_json(&v))
+        }
+        crate::OutputPart::Other { value } => has_html_render_json(value),
+        crate::OutputPart::Image { .. } => false,
+    }
+}
+
+fn turn_suppresses_empty_response(turn: &ChatTurn) -> bool {
+    turn.items.iter().any(|ti| match &ti.item {
+        Item::Tool { activity, .. } => {
+            let succeeded = activity.finished
+                && activity
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.status.as_ref())
+                    .is_none_or(|s| *s == crate::ToolStatus::Succeeded);
+            if !succeeded {
+                return false;
+            }
+            activity.mcp_app_uri.is_some()
+                || activity
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.content.as_ref())
+                    .is_some_and(|parts| parts.iter().any(has_html_render_part))
+        }
+        _ => false,
+    })
+}
+
 #[derive(Clone, Serialize)]
 struct Matches {
     entry_id: String,
@@ -114,22 +160,19 @@ struct Matches {
     count: usize,
 }
 
-fn result(cursor: ChatCursor, rows: &[Matches], q: &Find) -> Value {
+fn result(
+    cursor: ChatCursor,
+    rows: &[Matches],
+    q: &Find,
+    resolved_start: Option<usize>,
+) -> Value {
     let total = rows.last().map_or(0, |r| r.start_index + r.count);
     let mut index = 0;
     if total > 0 {
         index = if let Some(i) = q.index {
             i.min(total - 1)
         } else {
-            let base = q
-                .start
-                .as_ref()
-                .and_then(|s| {
-                    rows.iter()
-                        .find(|r| r.entry_id == s.entry_id)
-                        .map(|r| (r.start_index + s.occurrence.min(r.count)) % total)
-                })
-                .unwrap_or(0);
+            let base = resolved_start.map_or(0, |n| n % total);
             ((base as i128 + i128::from(q.offset)).rem_euclid(total as i128)) as usize
         };
     }
@@ -147,75 +190,133 @@ fn result(cursor: ChatCursor, rows: &[Matches], q: &Find) -> Value {
     json!({"cursor":cursor,"complete":true,"total_matches":total,"active_index":index,"match":selected,"navigation":navigation})
 }
 
+#[derive(Clone, Copy)]
+enum DocKind<'a> {
+    Message {
+        user: bool,
+        text: &'a str,
+        complete: bool,
+        suppress_empty: bool,
+    },
+    RequestError {
+        reason: &'a str,
+    },
+    Other,
+}
+
+struct Doc<'a> {
+    entry_id: String,
+    turn: Uuid,
+    kind: DocKind<'a>,
+}
+
 fn scan(
     snapshot: &ChatFeedSnapshot,
     q: &Find,
     early: Option<&tokio::sync::mpsc::Sender<Result<Value>>>,
 ) -> Result<Value> {
-    let docs: Vec<_> = snapshot
-        .history
-        .turns
-        .iter()
-        .flat_map(items)
-        .filter_map(|row| match &row.item.item {
-            Item::Message {
-                role: role @ (Role::User | Role::Assistant),
-                text,
-                complete,
-                ..
-            } => Some((row.entry_id, row.turn, *role == Role::User, text, *complete)),
-            _ => None,
-        })
-        .collect();
+    let cwd = (!snapshot.history.chat.workspace.as_os_str().is_empty())
+        .then_some(snapshot.history.chat.workspace.as_path());
+    let theme = q.theme.as_deref();
+    let mut docs = Vec::new();
+    for turn in &snapshot.history.turns {
+        let suppress_empty = turn_suppresses_empty_response(turn);
+        for row in items(turn) {
+            let kind = match &row.item.item {
+                Item::Message {
+                    role: role @ (Role::User | Role::Assistant),
+                    text,
+                    complete,
+                    ..
+                } => DocKind::Message {
+                    user: *role == Role::User,
+                    text,
+                    complete: *complete,
+                    suppress_empty,
+                },
+                Item::RequestError { error } if !error.reason.is_empty() => DocKind::RequestError {
+                    reason: &error.reason,
+                },
+                _ => DocKind::Other,
+            };
+            docs.push(Doc {
+                entry_id: row.entry_id,
+                turn: row.turn,
+                kind,
+            });
+        }
+    }
+    let eval = |doc: &Doc<'_>| match doc.kind {
+        DocKind::Message {
+            user,
+            text,
+            complete,
+            suppress_empty,
+        } => render::occurrences(
+            text,
+            user,
+            complete,
+            suppress_empty,
+            &q.query,
+            &q.skills,
+            cwd,
+            theme,
+        ),
+        DocKind::RequestError { reason } => render::plain_occurrences(reason, &q.query),
+        DocKind::Other => 0,
+    };
     let mut counts = vec![None; docs.len()];
     if let Some(tx) = early.filter(|_| q.index.is_none() && q.offset == 0) {
         let start = q
             .start
             .as_ref()
-            .and_then(|s| docs.iter().position(|r| r.0 == s.entry_id))
+            .and_then(|s| docs.iter().position(|d| d.entry_id == s.entry_id))
             .unwrap_or(0);
         for offset in 0..docs.len().saturating_add(1) {
             if docs.is_empty() {
                 break;
             }
             let i = (start + offset) % docs.len();
-            let (id, turn, user, text, done) = &docs[i];
-            let count = *counts[i].get_or_insert_with(|| {
-                render::occurrences(text, *user, *done, &q.query, &q.skills)
-            });
+            let doc = &docs[i];
+            let count = *counts[i].get_or_insert_with(|| eval(doc));
             let occurrence = if offset == 0 {
                 q.start
                     .as_ref()
-                    .filter(|s| s.entry_id == *id)
+                    .filter(|s| s.entry_id == doc.entry_id)
                     .map_or(0, |s| s.occurrence)
             } else {
                 0
             };
             if occurrence < count {
-                tx.blocking_send(Ok(json!({"cursor":snapshot.cursor,"complete":false,"total_matches":1,"active_index":0,"match":{"entry_id":id,"turn":turn,"occurrence":occurrence}}))).map_err(|_|Error::Closed("search client disconnected".into()))?;
+                tx.blocking_send(Ok(json!({"cursor":snapshot.cursor,"complete":false,"total_matches":1,"active_index":0,"match":{"entry_id":doc.entry_id,"turn":doc.turn,"occurrence":occurrence}}))).map_err(|_|Error::Closed("search client disconnected".into()))?;
                 break;
             }
         }
     }
     let mut rows = Vec::new();
     let mut start_index = 0;
-    for ((entry_id, turn, user, text, done), cached) in docs.into_iter().zip(counts) {
+    let mut resolved_start = None;
+    for (doc, cached) in docs.into_iter().zip(counts) {
         if early.is_some_and(|tx| tx.is_closed()) {
             return Err(Error::Closed("search client disconnected".into()));
         }
-        let count =
-            cached.unwrap_or_else(|| render::occurrences(text, user, done, &q.query, &q.skills));
+        let count = cached.unwrap_or_else(|| eval(&doc));
+        if resolved_start.is_none()
+            && let Some(s) = q.start.as_ref().filter(|s| s.entry_id == doc.entry_id)
+        {
+            resolved_start = Some(start_index + s.occurrence.min(count));
+        }
         if count > 0 {
             rows.push(Matches {
-                entry_id,
-                turn,
+                entry_id: doc.entry_id,
+                turn: doc.turn,
                 start_index,
                 count,
             });
             start_index += count;
         }
     }
-    Ok(result(snapshot.cursor, &rows, q))
+    Ok(result(snapshot.cursor, &rows, q, resolved_start))
 }
 
 async fn find(

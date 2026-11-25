@@ -16,14 +16,15 @@ Select an occurrence using `GET /projects/{project}/chats/{chat}/background-task
 
 ## Cursor
 
-The fixed workbench's Cursor SDK 1.4.2 patch installs a per-conversation callback at `Symbol.for("@cursor/sdk.backgroundShell")`. The handle provides its shell ID, optional PID, native abort method and completion. Kar starts Cursor's `agent acp`; the investigated ACP adapter has no corresponding shell handle, owned PID or stop callback. Child chat IDs and displayed terminal text cannot establish shell ownership. Cursor ACP continues to offer its supported chat controls. Adding parity for these shell controls needs an equivalent official ACP extension or an adapter that owns the SDK shell handles. [fixed patch](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/patches/%40cursor__sdk%401.4.2.patch) · [SDK hook](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-cursor/src/server/CursorAgentSdk.ts#L555) · [wait and stop](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-cursor/src/server/adapter.ts#L3400)
+The fixed workbench's Cursor SDK 1.4.2 patch installs a per-conversation callback at `Symbol.for("@cursor/sdk.backgroundShell")`. The handle provides its shell ID, optional PID, native abort method and completion. Kar starts Cursor's `agent acp` and pairs ACP terminal/tool telemetry (`terminal-N`, `shell_id`) with pure-Rust macOS process-tree inspection (`src/transport/background/cursor.rs`). Before writing `session/prompt`, Kar snapshots existing detached group leaders so a newly spawned detached shell (`pgid == pid`, verified birth timestamp and parent/terminal lineage) is bound to the exact root session and occurrence cursor without cross-session interference. Waiting (`Session::await_background_tasks`, `POST .../background-tasks/await`, `kar_background_wait`), targeted `stop` (`POST .../background-tasks/{id}/stop` rechecking `pgid == pid` and process birth identity before `SIGTERM` + 3s `SIGKILL` escalation), and repeated `shell_id` reuse across turns are all supported and verified on macOS. [fixed patch](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/patches/%40cursor__sdk%401.4.2.patch) · [SDK hook](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-cursor/src/server/CursorAgentSdk.ts#L555) · [wait and stop](https://github.com/pingdotgg/t3code/blob/2808e878de91aacc7fb82887f18414976be7ae34/packages/provider-cursor/src/server/adapter.ts#L3400)
 
 ## Verification
 
-Development scope is macOS compilation. These commands are queued for the designated acceptance run. The first uses constructed ACP frames and SQLite rows. The next two run the actual OpenCode CLI with a loopback model, disposable data directories and a shell owned by the real provider. A missing launch, native PID, or completion fails the corresponding case.
+macOS unit and multi-process OS detached-shell integration tests cover both OpenCode and Cursor ACP background shells (`workbench-background`). Additional ignored cases exercise installed OpenCode 2.2.7 and 2.3.2 binaries against a loopback model.
 
 ```sh
-cargo test --locked --lib transport::background::shells::tests
+cargo test --locked --lib transport::background
+cargo test --locked --test chat_restart -- workbench-background
 KAR_OPENCODE_BIN=/absolute/path/to/opencode-2.2.7 cargo test --locked --test native_live native_background_shell_receipt_wait_and_terminal -- --ignored --nocapture
 KAR_OPENCODE_BIN=/absolute/path/to/opencode-2.3.2 KAR_OPENCODE_SHELL_STOP=1 cargo test --locked --test native_live native_background_shell_receipt_wait_and_terminal -- --ignored --nocapture
 ```

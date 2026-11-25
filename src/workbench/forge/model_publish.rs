@@ -20,6 +20,8 @@ pub(super) struct Receipt {
     chat: Uuid,
     request: Request,
     repository: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    head_repository: Option<String>,
     workspace: PathBuf,
     branch: String,
     commit: String,
@@ -53,7 +55,8 @@ fn previous(
 }
 fn verify_push_destination(
     app: &Workbench,
-    c: &Context,
+    expected_host: &str,
+    expected_repo: &str,
     push: &str,
     fetch: &str,
 ) -> Result<(), ForgeError> {
@@ -89,7 +92,8 @@ fn verify_push_destination(
         }
         remote_identity(push)?
     };
-    if !identity.0.eq_ignore_ascii_case(&c.host) || !identity.1.eq_ignore_ascii_case(&c.repository)
+    if !identity.0.eq_ignore_ascii_case(expected_host)
+        || !identity.1.eq_ignore_ascii_case(expected_repo)
     {
         return Err(ForgeError::bad(
             "push destination is outside the granted repository",
@@ -170,9 +174,29 @@ pub(in crate::workbench) async fn run(
     )
     .await?;
     if pull.repository.is_some() {
-        return Err(ForgeError::bad(
-            "the push target requires a separate repository write grant",
+        let remotes = repo.remote_names()?;
+        let base_in_remotes = remotes.iter().any(|r| {
+            repo.remote_fetch_url(r)
+                .ok()
+                .and_then(|u| remote_identity(u.trim()).ok())
+                .is_some_and(|(h, name)| {
+                    h.eq_ignore_ascii_case(&pull.context.host)
+                        && name.eq_ignore_ascii_case(&pull.context.repository)
+                })
+        });
+        if !remotes.iter().any(|r| r == &target.remote) || !base_in_remotes {
+            return Err(ForgeError::bad(
+                "the push target requires a separate repository write grant",
+            ));
+        }
+    }
+    if req.draft && matches!(pull.context.kind.as_str(), "bitbucket" | "forgejo") {
+        return Err(ForgeError::unsupported(
+            "this driver does not expose draft creation",
         ));
+    }
+    if req.private && pull.context.identity() != c.identity() {
+        verify_private(&pull.context).await?;
     }
     let (fetch, urls) = repo.publish_urls(&target)?;
     if urls.len() != 1 {
@@ -181,13 +205,19 @@ pub(in crate::workbench) async fn run(
         ));
     }
     let push = urls[0].clone();
-    verify_push_destination(&app, &c, &push, &fetch)?;
+    let expected_push_repo = pull
+        .repository
+        .as_deref()
+        .unwrap_or(&pull.context.repository);
+    verify_push_destination(&app, &pull.context.host, expected_push_repo, &push, &fetch)?;
+    let pull_ctx = pull.context;
     let proposal = Receipt {
         project,
         chat,
         workspace: info.workspace.clone(),
         branch: branch.clone(),
         repository: identity.clone(),
+        head_repository: pull.repository,
         head: pull.head,
         base: pull.base,
         commit,
@@ -202,6 +232,7 @@ pub(in crate::workbench) async fn run(
                 || r.chat != chat
                 || r.request != req
                 || r.repository != identity
+                || r.head_repository != proposal.head_repository
                 || r.workspace != proposal.workspace
                 || r.branch != branch
                 || r.head != proposal.head
@@ -236,7 +267,11 @@ pub(in crate::workbench) async fn run(
         })?;
     }
     authorize(&app.0.catalog.lock().unwrap(), &identity)?;
-    let list = c.execute(&Operation::Pulls).await?;
+    let expected_source = record
+        .head_repository
+        .as_deref()
+        .unwrap_or(&pull_ctx.repository);
+    let list = pull_ctx.execute(&Operation::Pulls).await?;
     let mut existing = None;
     for row in list
         .as_array()
@@ -246,7 +281,7 @@ pub(in crate::workbench) async fn run(
             r["head_ref"] == record.head && r["base_ref"] == record.base && r["state"] == "open"
         })
     {
-        if publish::matches_repository(&c, &c.repository, row).await? {
+        if publish::matches_repository(&pull_ctx, expected_source, row).await? {
             existing = Some(row.clone());
             break;
         }
@@ -263,21 +298,22 @@ pub(in crate::workbench) async fn run(
         None => {
             let op = Operation::CreatePull {
                 head: record.head.clone(),
-                head_repository: None,
+                head_repository: record.head_repository.clone(),
                 base: record.base.clone(),
                 title: req.title,
                 body: req.body,
                 draft: req.draft,
             };
             (
-                routes::model_forge_write(
+                routes::model_forge_write_in(
                     app.clone(),
                     project,
                     chat,
                     create_id,
                     None,
                     op,
-                    &authorize,
+                    Some(pull_ctx.clone()),
+                    |db, _| authorize(db, &identity),
                 )
                 .await?,
                 true,
@@ -285,6 +321,7 @@ pub(in crate::workbench) async fn run(
         }
     };
     let number = checked_number(&value)?;
+    let target_repository = pull_ctx.identity();
     let result = json!({"status":if created{"created"}else{"opened_existing"},"created":created,"pull":value,"head_sha":record.commit,"linked":true});
     app.update(|db| {
         authorize(db, &identity)?;
@@ -292,7 +329,7 @@ pub(in crate::workbench) async fn run(
             project,
             chat,
             kind: "pull".into(),
-            repository: identity.clone(),
+            repository: target_repository,
             number,
         };
         if !db.forge.bindings.values().any(|b| b == &binding) {

@@ -75,6 +75,43 @@ pub(crate) enum HostAnswer {
     ),
 }
 impl HostAnswer {
+    pub(crate) fn cursor(&self) -> Option<&crate::Cursor> {
+        match self {
+            Self::Native(_) => None,
+            Self::Checked(cursor, _)
+            | Self::Permission(cursor, _)
+            | Self::Question(cursor, _, _)
+            | Self::Policy(cursor, _)
+            | Self::Resources(cursor, _, _) => Some(cursor),
+        }
+    }
+
+    pub(crate) fn submitted_secrets(&self, req: &crate::PendingRequest) -> Vec<String> {
+        let Self::Question(_, crate::QuestionReply::Submit { values }, _) = self else {
+            return Vec::new();
+        };
+        let Some(form) = req.question_form() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for field in form.fields.into_iter().filter(|f| f.secret) {
+            if let Some(val) = values.get(&field.id) {
+                match val {
+                    Value::String(s) if !s.is_empty() => out.push(s.clone()),
+                    Value::Array(items) => {
+                        for item in items.iter().filter_map(Value::as_str) {
+                            if !item.is_empty() {
+                                out.push(item.to_owned());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
     pub(crate) fn payload(
         self,
         journal: &Journal,
@@ -307,7 +344,7 @@ struct Pending {
     reply: Option<Reply<Value>>,
     prompt_ack: Option<Reply<()>>,
     muse_turn: Option<String>,
-    muse_decision: Option<(String, Value)>,
+    muse_decision: Option<(String, Value, Option<crate::PendingRequest>)>,
     prompt_request: Option<uuid::Uuid>,
     codex_prompt_input: Option<uuid::Uuid>,
     control_request: Option<uuid::Uuid>,
@@ -685,6 +722,26 @@ impl Actor {
         let claude_steer = (self.protocol == Protocol::Claude && packet["type"] == "user")
             .then(|| self.claude_steering.submitted(&packet))
             .flatten();
+        let response_id = (kind == RecordKind::Response)
+            .then(|| {
+                packet
+                    .pointer("/response/request_id")
+                    .or_else(|| packet.get("id"))
+                    .cloned()
+            })
+            .flatten();
+        if let Some(ref id) = response_id
+            && let Some((method, body)) = self.requests.get(&id.to_string())
+        {
+            let payload = if packet["type"] == "control_response" {
+                packet.pointer_mut("/response/response")
+            } else {
+                packet.get_mut("result")
+            };
+            if let Some(payload) = payload {
+                crate::questions::redact_answer(method, body, payload);
+            }
+        }
         let events = if let Some(events) = explicit_events {
             events
         } else if let Some(event) = claude_steer {
@@ -704,22 +761,7 @@ impl Actor {
                         .is_some_and(|id| packet["params"]["messageId"] == id)))
         {
             vec![Event::PromptDispatched]
-        } else if kind == RecordKind::Response
-            && let Some(id) = packet
-                .pointer("/response/request_id")
-                .or_else(|| packet.get("id"))
-        {
-            let id = id.clone();
-            if let Some((method, body)) = self.requests.get(&id.to_string()) {
-                let payload = if packet["type"] == "control_response" {
-                    packet.pointer_mut("/response/response")
-                } else {
-                    packet.get_mut("result")
-                };
-                if let Some(payload) = payload {
-                    crate::questions::redact_answer(method, body, payload);
-                }
-            }
+        } else if let Some(id) = response_id {
             vec![Event::RequestResolved { id }]
         } else {
             vec![]
@@ -997,6 +1039,7 @@ impl Actor {
             }
             Protocol::Acp => {
                 self.acp_failures.start();
+                self.background.before_prompt(id.as_deref());
                 let mut args = json!({"sessionId":id,"prompt":prompt.blocks(self.protocol)});
                 if let Some(grok) = &mut self.grok {
                     args["_meta"]["promptId"] = grok.name(Some(input_id)).into();
@@ -1176,7 +1219,7 @@ impl Actor {
                     let _ = tx.send(Err(Error::Refused("workflow occurrence is no longer running".into())));
                 }
                 _ if tx.is_closed() => {},
-                Protocol::Acp if self.has_opencode_shells() => {let _=tx.send(self.stop_shell(&task, expected.as_ref()).map(|_|Value::Null));}
+                Protocol::Acp if self.has_background_shells() => {let _=tx.send(self.stop_shell(&task, expected.as_ref()).map(|_|Value::Null));}
                 Protocol::Codex => match id
                     .as_deref()
                     .ok_or_else(|| Error::Closed("session identity unavailable".into()))
@@ -1224,6 +1267,11 @@ impl Actor {
                     )));
                     return Ok(true);
                 };
+                let pending_req = self.journal.pending_request(&id, answer.cursor());
+                let extra_secrets = pending_req
+                    .as_ref()
+                    .map(|req| answer.submitted_secrets(req))
+                    .unwrap_or_default();
                 let answer = match answer.payload(&self.journal, &id, method, body) {
                     Ok(value) => value,
                     Err(err) => {
@@ -1234,7 +1282,10 @@ impl Actor {
                 if self.protocol == Protocol::Muse {
                     let (command, params) = match muse::answer_command(method, body, &answer) {
                         Ok(cmd) => cmd,
-                        Err(err) => { let _ = tx.send(Err(err)); return Ok(true); }
+                        Err(err) => {
+                            let _ = tx.send(Err(err));
+                            return Ok(true);
+                        }
                     };
                     let muse = self.muse.as_mut().expect("Muse projection");
                     let revision = match muse.reserve_decision(&key, body) {
@@ -1244,17 +1295,77 @@ impl Actor {
                             return Ok(true);
                         }
                     };
-                    self.rpc(command, params, None, RpcIntent::Control).await?;
+                    if let Err(err) = self.rpc(command, params, None, RpcIntent::Control).await {
+                        self.requests.remove(&key);
+                        let mut reason = err.to_string();
+                        redact_text(&mut reason, &self.secrets);
+                        redact_text(&mut reason, &extra_secrets);
+                        if let Some(req) = pending_req {
+                            self.record(
+                                Direction::Host,
+                                RecordKind::Frame,
+                                Value::Null,
+                                vec![Event::RequestDeliveryFailed {
+                                    cursor: req.cursor,
+                                    id: req.id,
+                                    method: req.method,
+                                    kind: req.kind,
+                                    status: crate::RequestDeliveryStatus::Failed,
+                                    reason: reason.clone(),
+                                }],
+                                vec![],
+                            );
+                        }
+                        let _ = tx.send(Err(Error::Closed(reason)));
+                        return Err(err);
+                    }
                     let pending = self
                         .pending
                         .get_mut(&self.next)
                         .expect("pending Muse decision");
-                    pending.muse_decision = Some((key, revision));
+                    pending.muse_decision = Some((key, revision, pending_req));
                     pending.prompt_ack = Some(tx);
                     return Ok(true);
                 }
                 let packet = wire::answer(self.protocol, &id, method, Some(answer));
-                self.write(packet, RecordKind::Response).await?;
+                let mut events = vec![Event::RequestResolved { id: id.clone() }];
+                if let Some(ref req) = pending_req {
+                    events.push(Event::RequestAnswerDispatched {
+                        cursor: req.cursor.clone(),
+                        id: req.id.clone(),
+                        method: req.method.clone(),
+                        kind: req.kind.clone(),
+                        confirmed: false,
+                    });
+                }
+                if let Err(err) = self
+                    .write_packet(packet, RecordKind::Response, Some(events))
+                    .await
+                {
+                    self.requests.remove(&key);
+                    self.pi_deadlines.remove(&key);
+                    let mut reason = err.to_string();
+                    redact_text(&mut reason, &self.secrets);
+                    redact_text(&mut reason, &extra_secrets);
+                    if let Some(req) = pending_req {
+                        self.record(
+                            Direction::Host,
+                            RecordKind::Frame,
+                            Value::Null,
+                            vec![Event::RequestDeliveryFailed {
+                                cursor: req.cursor,
+                                id: req.id,
+                                method: req.method,
+                                kind: req.kind,
+                                status: crate::RequestDeliveryStatus::Failed,
+                                reason: reason.clone(),
+                            }],
+                            vec![],
+                        );
+                    }
+                    let _ = tx.send(Err(Error::Closed(reason)));
+                    return Err(err);
+                }
                 self.requests.remove(&key);
                 self.pi_deadlines.remove(&key);
                 let _ = tx.send(Ok(()));
@@ -2561,11 +2672,41 @@ impl Actor {
             {
                 muse.refused_prompt(id);
             }
-            if result.is_err()
-                && let Some((key, revision)) = &p.muse_decision
-                && let Some(muse) = &mut self.muse
-            {
-                muse.refused_decision(key, revision);
+            if let Some((key, revision, host_req)) = &p.muse_decision {
+                match &result {
+                    Ok(_) => {
+                        if let Some(req) = host_req {
+                            events.push(Event::RequestAnswerDispatched {
+                                cursor: req.cursor.clone(),
+                                id: req.id.clone(),
+                                method: req.method.clone(),
+                                kind: req.kind.clone(),
+                                confirmed: true,
+                            });
+                        }
+                    }
+                    Err(err) => {
+                        if let Some(muse) = &mut self.muse {
+                            muse.refused_decision(key, revision);
+                        }
+                        if let Some(req) = host_req {
+                            let mut reason = v["error"]
+                                .as_str()
+                                .or_else(|| v.pointer("/error/message").and_then(Value::as_str))
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| err.to_string());
+                            redact_text(&mut reason, &self.secrets);
+                            events.push(Event::RequestDeliveryFailed {
+                                cursor: req.cursor.clone(),
+                                id: req.id.clone(),
+                                method: req.method.clone(),
+                                kind: req.kind.clone(),
+                                status: crate::RequestDeliveryStatus::Failed,
+                                reason,
+                            });
+                        }
+                    }
+                }
             }
             if result.is_err()
                 && let Some(id) = number
@@ -3369,7 +3510,7 @@ impl Actor {
                             self.pending
                                 .get_mut(&self.next)
                                 .expect("pending Muse decision")
-                                .muse_decision = Some((key, revision));
+                                .muse_decision = Some((key, revision, None));
                         }
                     }
                 }
@@ -3648,7 +3789,12 @@ impl Actor {
     ) {
         let mut lines = BufReader::new(stdout).lines();
         let mut buffered = BufferedLines::new();
-        let mut shell_refresh=tokio::time::interval(Duration::from_secs(1));
+        let refresh_period = if self.has_cursor_shells() {
+            Duration::from_millis(250)
+        } else {
+            Duration::from_secs(1)
+        };
+        let mut shell_refresh = tokio::time::interval(refresh_period);
         shell_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let reason = loop {
             if self.turn.is_none()
@@ -3692,7 +3838,7 @@ impl Actor {
             let deadline = self.pi_deadlines.values().map(|(at, _)| *at).min();
             let interrupt = self.interrupt_timeout.deadline();
             tokio::select! {
-                _ = shell_refresh.tick(), if self.has_opencode_shells() => self.refresh_shells(),
+                _ = shell_refresh.tick(), if self.has_background_shells() => self.refresh_shells(),
                 () = self.journal.delivery.resume.notified() => continue,
                 () = crate::prompt_suggestions::Native::changed(&mut self.suggestions) => {
                     if let Err(e) = self.configure_prompt_suggestions().await { break e.to_string() }
@@ -3843,6 +3989,27 @@ impl Actor {
             .iter()
             .fold(reason, |msg, key| msg.replace(key, "[redacted]"));
         let closed = Error::Closed(reason.clone());
+        let unconfirmed_decisions: Vec<_> = self
+            .pending
+            .values()
+            .filter_map(|p| p.muse_decision.as_ref()?.2.clone())
+            .collect();
+        for req in unconfirmed_decisions {
+            self.record(
+                Direction::Host,
+                RecordKind::Frame,
+                Value::Null,
+                vec![Event::RequestDeliveryFailed {
+                    cursor: req.cursor,
+                    id: req.id,
+                    method: req.method,
+                    kind: req.kind,
+                    status: crate::RequestDeliveryStatus::Unconfirmed,
+                    reason: reason.clone(),
+                }],
+                vec![],
+            );
+        }
         for p in self.pending.values() {
             if matches!(p.method.as_str(), codex_queue::ADD | "turn/steer")
                 || p.codex_prompt_input.is_some()

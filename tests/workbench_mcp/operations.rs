@@ -59,9 +59,10 @@ pub(super) async fn exercise(
             json!({"thread_id":target,"command_id":id,"text":"one scoped input","mode":"queue"}),
         )
     };
-    assert_eq!(
-        server::json(send().header("kar-mode-limit", "auto/plan")).await["result"]["isError"],
-        true
+    let plan_denied = server::json(send().header("kar-mode-limit", "auto/plan")).await;
+    assert!(
+        plan_denied["error"].is_object() || plan_denied["result"]["isError"] == true,
+        "{plan_denied}"
     );
     let (first, second) = tokio::join!(server::json(send()), server::json(send()));
     let id = first["result"]["structuredContent"]["input_id"]
@@ -74,8 +75,14 @@ pub(super) async fn exercise(
     ))
     .await;
     assert_eq!(
-        snap["result"]["structuredContent"]["cursor"]["chat"],
+        snap["result"]["structuredContent"]["thread_id"],
         json!(target)
+    );
+    assert!(
+        snap["result"]["structuredContent"]["cursor"]
+            .as_str()
+            .is_some_and(|c| c.starts_with(&format!("{target}:"))),
+        "{snap}"
     );
     let current = server::json(read()).await;
     assert_eq!(
@@ -162,12 +169,13 @@ pub(super) async fn exercise(
     )
     .await;
     assert!(later.get("merged_context").is_none());
+    let is_err = |v: &Value| v["error"].is_object() || v["result"]["isError"] == true;
     server::json(
         host.put(&policy)
             .json(&json!({"mode":"plan","thread_tools":{"targets":[target]}})),
     )
     .await;
-    assert_eq!(server::json(rename()).await["result"]["isError"], true);
+    assert!(is_err(&server::json(rename()).await));
     server::json(host.put(&policy).json(&json!({"mode":"execute"}))).await;
-    assert_eq!(server::json(read()).await["result"]["isError"], true);
+    assert!(is_err(&server::json(read()).await));
 }

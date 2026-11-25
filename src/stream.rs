@@ -443,6 +443,23 @@ pub enum Event {
     RequestResolved {
         id: Value,
     },
+    RequestAnswerDispatched {
+        cursor: Cursor,
+        id: Value,
+        method: String,
+        #[serde(rename = "request_kind")]
+        kind: crate::RequestKind,
+        confirmed: bool,
+    },
+    RequestDeliveryFailed {
+        cursor: Cursor,
+        id: Value,
+        method: String,
+        #[serde(rename = "request_kind")]
+        kind: crate::RequestKind,
+        status: crate::RequestDeliveryStatus,
+        reason: String,
+    },
     Exited {
         reason: String,
     },
@@ -667,6 +684,8 @@ struct State {
     #[cfg(not(target_arch = "wasm32"))]
     chat: Option<crate::chat::Sink>,
     #[cfg(not(target_arch = "wasm32"))]
+    chat_weak: Option<crate::chat::WeakSink>,
+    #[cfg(not(target_arch = "wasm32"))]
     claude_results: std::collections::HashSet<Uuid>,
     root: Option<String>,
     queries: Option<crate::observe::SessionReducer>,
@@ -739,6 +758,8 @@ impl Journal {
                 messages: Default::default(),
                 #[cfg(not(target_arch = "wasm32"))]
                 chat: None,
+                #[cfg(not(target_arch = "wasm32"))]
+                chat_weak: None,
                 #[cfg(not(target_arch = "wasm32"))]
                 claude_results: Default::default(),
                 root: None,
@@ -1132,6 +1153,7 @@ impl Journal {
             }
         }
         state.claude_results.extend(previous);
+        state.chat_weak = Some(chat.downgrade());
         state.chat = Some(chat);
         state.retained_bytes = retained_bytes;
         state.trim_history();
@@ -1210,6 +1232,11 @@ impl Journal {
         }
         state.queries = Some(queries);
     }
+    pub(crate) fn ensure_root(&self, id: &str) {
+        if self.state.lock().unwrap().queries.is_none() {
+            self.bind_root(id);
+        }
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn usage_for(&self, session: &str) -> crate::SessionUsage {
         self.state
@@ -1252,6 +1279,93 @@ impl Journal {
                     .iter()
                     .any(|p| &p.id == id && &p.cursor == cursor)
             })
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pending_request(
+        &self,
+        id: &Value,
+        cursor: Option<&Cursor>,
+    ) -> Option<crate::PendingRequest> {
+        let state = self.state.lock().unwrap();
+        let pending = &state.queries.as_ref()?.snapshot().pending_requests;
+        match cursor {
+            Some(c) => pending
+                .iter()
+                .find(|p| &p.id == id && &p.cursor == c)
+                .cloned(),
+            None => pending.iter().find(|p| &p.id == id).cloned(),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn record_unconfirmed_request_delivery(
+        &self,
+        request: &crate::PendingRequest,
+        reason: &str,
+        secrets: &[String],
+    ) {
+        let (record, late_chat) = {
+            let mut s = self.state.lock().unwrap();
+            let already_recorded = s.records.iter().any(|r| {
+                r.events.iter().any(|e| {
+                    matches!(
+                        e,
+                        Event::RequestDeliveryFailed { cursor, .. }
+                            | Event::RequestAnswerDispatched {
+                                cursor,
+                                confirmed: true,
+                                ..
+                            }
+                            if cursor == &request.cursor
+                    )
+                })
+            });
+            if already_recorded {
+                return;
+            }
+            let mut reason = reason.to_owned();
+            crate::transport::redact_text(&mut reason, secrets);
+            let event = Event::RequestDeliveryFailed {
+                cursor: request.cursor.clone(),
+                id: request.id.clone(),
+                method: request.method.clone(),
+                kind: request.kind.clone(),
+                status: crate::RequestDeliveryStatus::Unconfirmed,
+                reason,
+            };
+            let record = self.append_locked(
+                &mut s,
+                RecordStamp::frame(Direction::Host, "kar/notification"),
+                RecordKind::Frame,
+                request.session_id.clone(),
+                request.agent_path.clone(),
+                None,
+                Value::Null,
+                vec![event],
+            );
+            let late_chat = if s.chat.is_none() {
+                s.chat_weak.as_ref().and_then(crate::chat::WeakSink::upgrade)
+            } else {
+                None
+            };
+            (record, late_chat)
+        };
+        if let Some(chat) = late_chat {
+            chat.capture(&record, false);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn orphaned_questions(&self) -> Option<Vec<crate::OrphanedQuestion>> {
+        let chat = self.state.lock().unwrap().chat.clone()?;
+        Some(chat.orphaned_questions())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_orphaned_question(
+        &self,
+        cursor: &Cursor,
+        id: &Value,
+    ) -> Option<Result<Option<crate::OrphanedQuestion>>> {
+        let chat = self.state.lock().unwrap().chat.clone()?;
+        Some(chat.take_orphaned_question(cursor, id))
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn latest_record(&self) -> Option<Arc<Record>> {

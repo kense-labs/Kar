@@ -167,6 +167,18 @@ async fn status(
 ) -> std::result::Result<Json<Value>, ApiError> {
     let gate = app.0.mcp.command_gate(id);
     let _guard = gate.lock().await;
+    let prior = scoped(&app, p, parent, id)?;
+    if matches!(
+        prior.phase,
+        super::Phase::Admitted
+            | super::Phase::Opening
+            | super::Phase::Running
+            | super::Phase::WaitingForChildren
+    ) && let Err(e) = super::progress(&app, prior).await
+        && !matches!(e, crate::Error::Busy)
+    {
+        return Err(e.into());
+    }
     Ok(Json(
         sync(&app, &scoped(&app, p, parent, id)?, None, None)?.view(),
     ))

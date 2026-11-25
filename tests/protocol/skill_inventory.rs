@@ -37,7 +37,7 @@ pub(super) fn peer(id: &str, case: &str, args: &[&str]) {
         return println!("{response}");
     }
     if id == "pi" {
-        assert_eq!(args, ["--mode", "rpc", "--no-session"]);
+        assert_eq!(args, ["--mode", "rpc", "--no-session", "--offline"]);
         let mut lines = io::stdin().lock().lines();
         let packet: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
         assert_eq!(packet["type"], "get_commands");

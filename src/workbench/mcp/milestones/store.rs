@@ -10,9 +10,22 @@ use std::{
 pub(in crate::workbench) struct Log {
     seq: u64,
     rows: VecDeque<(u64, Value)>,
+    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    seen: VecDeque<String>,
 }
 impl Log {
     pub(in crate::workbench) fn push(&mut self, row: Value) {
+        if let Some(id) = row["id"].as_str().filter(|s| !s.is_empty()) {
+            if self.seen.iter().any(|s| s == id)
+                || self.rows.iter().any(|(_, v)| v["id"].as_str() == Some(id))
+            {
+                return;
+            }
+            self.seen.push_back(id.to_owned());
+            if self.seen.len() > 4096 {
+                self.seen.pop_front();
+            }
+        }
         self.seq += 1;
         self.rows.push_back((self.seq, row));
         if self.rows.len() > 1000 {

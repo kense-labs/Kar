@@ -51,10 +51,27 @@ pub enum Step {
     },
     Ask {
         question: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<i64>,
     },
-    WaitSignal {channel:String},
+    WaitSignal {
+        channel: String,
+    },
     Wait {
         duration_ms: i64,
+    },
+    Workflow {
+        workflow: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<Value>,
+    },
+    Stop {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    Skip {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
 }
 
@@ -67,7 +84,11 @@ pub struct Definition {
 }
 impl Definition {
     fn validate(&self) -> Result<()> {
+        self.validate_for(None)
+    }
+    fn validate_for(&self, self_id: Option<Uuid>) -> Result<()> {
         let bounded = |s: &str| !s.trim().is_empty() && s.len() <= 65536;
+        let valid_timeout = |ms: &Option<i64>| ms.is_none_or(|d| (0..=365 * 86_400_000).contains(&d));
         if !bounded(&self.name)
             || self.steps.is_empty()
             || self.steps.len() > 256
@@ -77,8 +98,15 @@ impl Definition {
                     runtime, prompt, ..
                 } => !bounded(runtime) || !bounded(prompt),
                 Step::WaitSignal { channel } => !mailbox::valid_key(channel),
-                Step::Ask { question } => !bounded(question),
+                Step::Ask {
+                    question,
+                    timeout_ms,
+                } => !bounded(question) || !valid_timeout(timeout_ms),
                 Step::Wait { duration_ms } => *duration_ms < 0 || *duration_ms > 365 * 86400000i64,
+                Step::Workflow { workflow, .. } => self_id == Some(*workflow),
+                Step::Stop { reason } | Step::Skip { reason } => {
+                    reason.as_ref().is_some_and(|r| r.len() > 65536)
+                }
             })
         {
             return Err(Error::Refused("invalid workflow name or steps".into()));
@@ -103,9 +131,10 @@ pub enum Trigger {
     Manual(Uuid),
     Scheduled(i64),
     Webhook(String),
+    Child { parent_run: Uuid, attempt: Uuid },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Ready,
@@ -115,7 +144,26 @@ pub enum Status {
     Reconcile,
     Failed,
     Cancelled,
+    Stopped,
+    Skipped,
     Completed,
+}
+impl Status {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Stopped | Self::Skipped | Self::Cancelled
+        )
+    }
+    pub(super) fn outcome_str(self) -> Option<&'static str> {
+        match self {
+            Self::Completed => Some("completed"),
+            Self::Stopped => Some("stopped"),
+            Self::Skipped => Some("skipped"),
+            Self::Cancelled => Some("cancelled"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -143,6 +191,12 @@ pub struct Run {
     webhook_templates: Option<Vec<Step>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     webhook_rendered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_attempt_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requested_terminal: Option<Status>,
     pub id: Uuid,
     pub project: Uuid,
     pub workflow: Uuid,
@@ -179,8 +233,14 @@ impl Run {
                 self.status = Status::Waiting;
                 self.wake_at_ms = Some(now.saturating_add(*duration_ms));
             }
-            Step::Ask { .. } => self.status = Status::Asking,
-            Step::WaitSignal { .. } => self.status = Status::Waiting,
+            Step::Ask { timeout_ms, .. } => {
+                self.status = Status::Asking;
+                self.wake_at_ms = timeout_ms.map(|d| now.saturating_add(d));
+            }
+            Step::WaitSignal { .. } | Step::Workflow { .. } => {
+                self.status = Status::Waiting;
+                self.wake_at_ms = None;
+            }
             _ => self.status = Status::Running,
         }
         attempt
@@ -198,12 +258,14 @@ impl Run {
             ended_ms: now,
         });
         self.wake_at_ms = None;
-        self.detail = None;
+        if !self.cancel_requested {
+            self.detail = None;
+        }
         if success {
             self.cursor += 1;
         }
         self.status = if self.cancel_requested {
-            Status::Cancelled
+            self.requested_terminal.unwrap_or(Status::Cancelled)
         } else if !success {
             Status::Failed
         } else if self.cursor == self.steps.len() {
@@ -221,7 +283,18 @@ pub enum Action {
         attempt: Uuid,
         answer: Value,
     },
-    Cancel,
+    Cancel {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    Stop {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    Skip {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     Retry {
         attempt: Uuid,
     },
@@ -276,6 +349,19 @@ impl Engine {
                 .any(|attempt| attempt.chat == Some(chat))
         })
     }
+    pub(in crate::workbench) fn active_run_for_chat(&self, chat: Uuid) -> Option<Uuid> {
+        self.db
+            .lock()
+            .unwrap()
+            .runs
+            .values()
+            .find(|run| {
+                !run.status.is_terminal()
+                    && run.status != Status::Failed
+                    && run.attempt.as_ref().is_some_and(|a| a.chat == Some(chat))
+            })
+            .map(|run| run.id)
+    }
 
     pub(super) fn open(state: &Path, clock: Arc<dyn Clock>) -> Result<Self> {
         let file = state.join("workflows.json");
@@ -329,7 +415,9 @@ impl Engine {
         let approved = check(&current)?;
         let mut next = current.clone();
         let value = f(&mut next, approved)?;
-        milestones::record(&current,&mut next,self.clock.now_ms());
+        let now = self.clock.now_ms();
+        reconcile_hierarchy(&mut next, now);
+        milestones::record(&current, &mut next, now);
         next.revision = next
             .revision
             .checked_add(1)
@@ -354,13 +442,133 @@ fn same_project(project: Uuid, other: Uuid) -> Result<()> {
     }
 }
 
+fn reconcile_hierarchy(d: &mut Data, now: i64) {
+    loop {
+        let mut progressed = false;
+        let parent_stops: BTreeMap<Uuid, (Status, Option<String>)> = d
+            .runs
+            .values()
+            .filter_map(|p| {
+                let target = if p.status == Status::Stopped
+                    || p.requested_terminal == Some(Status::Stopped)
+                {
+                    Some(Status::Stopped)
+                } else if p.cancel_requested
+                    || matches!(p.status, Status::Cancelled | Status::Skipped)
+                {
+                    Some(Status::Cancelled)
+                } else {
+                    None
+                }?;
+                Some((p.id, (target, p.detail.clone())))
+            })
+            .collect();
+        for c in d.runs.values_mut() {
+            if c.status.is_terminal() {
+                continue;
+            }
+            let Some(pid) = c.parent_run_id else {
+                continue;
+            };
+            let Some((target, reason)) = parent_stops.get(&pid) else {
+                continue;
+            };
+            if !c.cancel_requested || c.requested_terminal != Some(*target) {
+                c.cancel_requested = true;
+                c.requested_terminal = Some(*target);
+                if c.detail.is_none() {
+                    c.detail = reason.clone();
+                }
+                progressed = true;
+            }
+            if !matches!(c.status, Status::Running | Status::Reconcile) && c.status != *target {
+                c.status = *target;
+                c.wake_at_ms = None;
+                progressed = true;
+            }
+        }
+        let finished_children: Vec<(Uuid, Uuid, Uuid, Status, Option<String>, Vec<Receipt>)> = d
+            .runs
+            .values()
+            .filter_map(|c| {
+                if !c.status.is_terminal() {
+                    return None;
+                }
+                let pid = c.parent_run_id?;
+                let aid = c.parent_attempt_id?;
+                let waiting = d.runs.get(&pid).is_some_and(|p| {
+                    p.status == Status::Waiting
+                        && p.attempt.as_ref().map(|a| a.id) == Some(aid)
+                });
+                waiting.then(|| {
+                    (
+                        pid,
+                        aid,
+                        c.id,
+                        c.status,
+                        c.detail.clone(),
+                        c.receipts.clone(),
+                    )
+                })
+            })
+            .collect();
+        for (pid, aid, cid, cstatus, cdetail, creceipts) in finished_children {
+            let Some(parent) = d.runs.get_mut(&pid) else {
+                continue;
+            };
+            if parent.status != Status::Waiting
+                || parent.attempt.as_ref().map(|a| a.id) != Some(aid)
+            {
+                continue;
+            }
+            if cstatus == Status::Completed {
+                parent.finish(
+                    true,
+                    json!({"run_id": cid, "outcome": "completed", "receipts": creceipts}),
+                    now,
+                );
+            } else {
+                let outcome = cstatus.outcome_str().unwrap_or("cancelled");
+                parent.finish(
+                    false,
+                    json!({"run_id": cid, "outcome": outcome, "detail": cdetail, "receipts": creceipts}),
+                    now,
+                );
+                if !parent.cancel_requested && parent.status == Status::Failed {
+                    parent.detail =
+                        Some(cdetail.unwrap_or_else(|| format!("child workflow {outcome}")));
+                }
+            }
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+}
+
 fn insert_run(d: &mut Data, w: &Workflow, trigger: Trigger, input: Value, now: i64) -> Result<Run> {
+    insert_run_with_parent(d, w, trigger, input, None, None, now)
+}
+
+fn insert_run_with_parent(
+    d: &mut Data,
+    w: &Workflow,
+    trigger: Trigger,
+    input: Value,
+    parent_run_id: Option<Uuid>,
+    parent_attempt_id: Option<Uuid>,
+    now: i64,
+) -> Result<Run> {
     if let Some(old) = d
         .runs
         .values()
         .find(|r| r.workflow == w.id && r.trigger == trigger)
     {
-        if old.input != input {
+        if old.input != input
+            || old.parent_run_id != parent_run_id
+            || old.parent_attempt_id != parent_attempt_id
+        {
             return Err(Error::Refused(
                 "delivery identifier reused with different input".into(),
             ));
@@ -375,6 +583,9 @@ fn insert_run(d: &mut Data, w: &Workflow, trigger: Trigger, input: Value, now: i
         webhook_due_ms: None,
         webhook_templates: None,
         webhook_rendered: false,
+        parent_run_id,
+        parent_attempt_id,
+        requested_terminal: None,
         id: Uuid::new_v4(),
         project: w.project,
         workflow: w.id,
@@ -402,7 +613,7 @@ fn install_definition(
     webhook_secret: Option<String>,
     now: i64,
 ) -> Result<Workflow> {
-    definition.validate()?;
+    definition.validate_for(Some(id))?;
     let candidate = definition.schedule.next_after(now)?;
     let old = d.workflows.get(&id);
     if let Some(old) = old {
@@ -517,7 +728,17 @@ impl Workbench {
         operation: Uuid,
         input: Value,
     ) -> Result<Run> {
-        self.trigger_workflow_checked(project, id, operation, input, || Ok(()))
+        self.trigger_workflow_with_parent(project, id, operation, input, None)
+    }
+    pub fn trigger_workflow_with_parent(
+        &self,
+        project: Uuid,
+        id: Uuid,
+        operation: Uuid,
+        input: Value,
+        parent_run_id: Option<Uuid>,
+    ) -> Result<Run> {
+        self.trigger_workflow_checked(project, id, operation, input, parent_run_id, || Ok(()))
     }
     pub(in crate::workbench) fn trigger_workflow_checked(
         &self,
@@ -525,6 +746,7 @@ impl Workbench {
         id: Uuid,
         operation: Uuid,
         input: Value,
+        parent_run_id: Option<Uuid>,
         authorize: impl FnOnce() -> Result<()>,
     ) -> Result<Run> {
         self.project(project)?;
@@ -533,10 +755,22 @@ impl Workbench {
             authorize()?;
             let w = d.workflows.get(&id).ok_or_else(missing)?.clone();
             same_project(project, w.project)?;
+            if let Some(pid) = parent_run_id {
+                let parent = d.runs.get(&pid).ok_or_else(missing)?;
+                same_project(project, parent.project)?;
+            }
             if matches!(w.definition.schedule, Schedule::Webhook) {
                 return Err(Error::Refused("webhook tasks run on delivery".into()));
             }
-            insert_run(d, &w, Trigger::Manual(operation), input, e.clock.now_ms())
+            insert_run_with_parent(
+                d,
+                &w,
+                Trigger::Manual(operation),
+                input,
+                parent_run_id,
+                None,
+                e.clock.now_ms(),
+            )
         })
     }
     pub fn workflow_action(
@@ -571,16 +805,55 @@ impl Workbench {
                 return Ok(r.clone());
             }
             let active = r.attempt.as_ref().map(|a| a.id);
+            let clean_reason = |reason: &Option<String>| -> Result<Option<String>> {
+                if reason.as_ref().is_some_and(|s| s.len() > 65536) {
+                    return Err(Error::Refused("reason exceeds limit".into()));
+                }
+                Ok(reason
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned))
+            };
             match &action {
                 Action::Answer { attempt, answer }
                     if (r.status == Status::Asking || r.status==Status::Waiting && matches!(r.steps.get(r.cursor),Some(Step::WaitSignal{..}))) && active == Some(*attempt) =>
                 {
                     r.finish(true, answer.clone(), now)
                 }
-                Action::Cancel if !matches!(r.status, Status::Cancelled | Status::Completed) => {
+                Action::Cancel { reason } if !r.status.is_terminal() => {
+                    let msg = clean_reason(reason)?;
                     r.cancel_requested = true;
+                    r.requested_terminal = Some(Status::Cancelled);
+                    if let Some(msg) = msg {
+                        r.detail = Some(msg);
+                    }
                     if !matches!(r.status, Status::Running | Status::Reconcile) {
                         r.status = Status::Cancelled;
+                        r.wake_at_ms = None;
+                    }
+                }
+                Action::Stop { reason } if !r.status.is_terminal() => {
+                    let msg = clean_reason(reason)?;
+                    r.cancel_requested = true;
+                    r.requested_terminal = Some(Status::Stopped);
+                    if let Some(msg) = msg {
+                        r.detail = Some(msg);
+                    }
+                    if !matches!(r.status, Status::Running | Status::Reconcile) {
+                        r.status = Status::Stopped;
+                        r.wake_at_ms = None;
+                    }
+                }
+                Action::Skip { reason } if !r.status.is_terminal() => {
+                    let msg = clean_reason(reason)?;
+                    r.cancel_requested = true;
+                    r.requested_terminal = Some(Status::Skipped);
+                    if let Some(msg) = msg {
+                        r.detail = Some(msg);
+                    }
+                    if !matches!(r.status, Status::Running | Status::Reconcile) {
+                        r.status = Status::Skipped;
                         r.wake_at_ms = None;
                     }
                 }
@@ -613,7 +886,8 @@ impl Workbench {
                 }
             }
             d.actions.insert(operation, (id, action));
-            Ok(r.clone())
+            reconcile_hierarchy(d, now);
+            Ok(d.runs.get(&id).cloned().unwrap())
         })
     }
 }

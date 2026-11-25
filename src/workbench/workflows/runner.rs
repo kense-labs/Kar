@@ -53,8 +53,10 @@ impl Workbench {
         let advance = |r: &Run| {
             projects.contains(&r.project)
                 && ((r.status == Status::Ready && r.webhook_due_ms.is_none_or(|at| at <= now))
-                    || (r.status == Status::Waiting && r.wake_at_ms.is_some_and(|at| at <= now)))
+                    || (matches!(r.status, Status::Waiting | Status::Asking)
+                        && r.wake_at_ms.is_some_and(|at| at <= now)))
         };
+        let is_external = |s: &Step| matches!(s, Step::Agent { .. } | Step::Script { .. });
         {
             let d = engine.db.lock().unwrap();
             let remaining = MAX_ACTIVE.saturating_sub(
@@ -67,8 +69,8 @@ impl Workbench {
                 && !d.runs.values().any(|r| {
                     advance(r)
                         && (remaining > 0
-                            || r.status == Status::Waiting
-                            || matches!(r.steps[r.cursor], Step::Ask { .. } | Step::Wait { .. } | Step::WaitSignal{..}))
+                            || r.status != Status::Ready
+                            || !r.steps.get(r.cursor).is_some_and(is_external))
                 })
             {
                 return Ok(0);
@@ -109,27 +111,165 @@ impl Workbench {
                     .count(),
             );
             let mut jobs = Vec::new();
-            for run in d.runs.values_mut().filter(|r| advance(r)) {
-                if run.status == Status::Waiting {
-                    run.finish(true, json!({"woke_at_ms":now}), now);
+            let runnable: Vec<Uuid> = d
+                .runs
+                .values()
+                .filter(|r| advance(r))
+                .map(|r| r.id)
+                .collect();
+            for run_id in runnable {
+                let Some(status) = d.runs.get(&run_id).filter(|r| advance(r)).map(|r| r.status)
+                else {
+                    continue;
+                };
+                if status == Status::Waiting {
+                    d.runs
+                        .get_mut(&run_id)
+                        .unwrap()
+                        .finish(true, json!({"woke_at_ms": now}), now);
+                    reconcile_hierarchy(d, now);
+                } else if status == Status::Asking {
+                    d.runs
+                        .get_mut(&run_id)
+                        .unwrap()
+                        .finish(true, json!({"expired": true, "woke_at_ms": now}), now);
+                    reconcile_hierarchy(d, now);
                 }
-                if run.status == Status::Ready {
-                    let external = matches!(
-                        run.steps[run.cursor],
-                        Step::Agent { .. } | Step::Script { .. }
-                    );
-                    if external && remaining == 0 {
-                        continue;
-                    }
+                let Some(step) = d
+                    .runs
+                    .get(&run_id)
+                    .filter(|r| {
+                        r.status == Status::Ready && r.webhook_due_ms.is_none_or(|at| at <= now)
+                    })
+                    .and_then(|r| r.steps.get(r.cursor).cloned())
+                else {
+                    continue;
+                };
+                let external = is_external(&step);
+                if external && remaining == 0 {
+                    continue;
+                }
+                let attempt = {
+                    let run = d.runs.get_mut(&run_id).unwrap();
                     run.webhook_due_ms = None;
                     run.webhook_templates = None;
-                    if run.model_schedule.is_some() && run.attempt.is_some() {run.status=Status::Running;}
-                    else {run.begin(now);}
-                    d.mailbox.consume(run,now);
-                    if external {
-                        remaining -= 1;
-                        jobs.push(run.clone());
+                    let attempt = if run.model_schedule.is_some() && run.attempt.is_some() {
+                        run.status = Status::Running;
+                        run.attempt.clone().unwrap()
+                    } else {
+                        run.begin(now)
+                    };
+                    d.mailbox.consume(run, now);
+                    attempt
+                };
+                match step {
+                    Step::Stop { reason } => {
+                        let run = d.runs.get_mut(&run_id).unwrap();
+                        let attempt = run.attempt.take().expect("active step");
+                        let reason = reason
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned);
+                        run.receipts.push(Receipt {
+                            attempt,
+                            status: Status::Stopped,
+                            result: json!({"stopped": true, "reason": reason}),
+                            ended_ms: now,
+                        });
+                        run.wake_at_ms = None;
+                        run.cursor += 1;
+                        if run.cancel_requested {
+                            run.status = run.requested_terminal.unwrap_or(Status::Cancelled);
+                        } else {
+                            run.detail = reason;
+                            run.status = Status::Stopped;
+                        }
+                        reconcile_hierarchy(d, now);
                     }
+                    Step::Skip { reason } => {
+                        let run = d.runs.get_mut(&run_id).unwrap();
+                        let attempt = run.attempt.take().expect("active step");
+                        let reason = reason
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned);
+                        run.receipts.push(Receipt {
+                            attempt,
+                            status: Status::Skipped,
+                            result: json!({"skipped": true, "reason": reason}),
+                            ended_ms: now,
+                        });
+                        run.wake_at_ms = None;
+                        run.cursor += 1;
+                        if run.cancel_requested {
+                            run.status = run.requested_terminal.unwrap_or(Status::Cancelled);
+                        } else {
+                            run.detail = reason;
+                            run.status = Status::Skipped;
+                        }
+                        reconcile_hierarchy(d, now);
+                    }
+                    Step::Workflow { workflow, input } => {
+                        let project = d.runs[&run_id].project;
+                        let mut cyclic = d.runs[&run_id].workflow == workflow;
+                        let mut cur = d.runs[&run_id].parent_run_id;
+                        let mut visited = std::collections::BTreeSet::new();
+                        while let Some(anc_id) = cur {
+                            if !visited.insert(anc_id) {
+                                cyclic = true;
+                                break;
+                            }
+                            let Some(anc) = d.runs.get(&anc_id) else {
+                                break;
+                            };
+                            if anc.workflow == workflow {
+                                cyclic = true;
+                                break;
+                            }
+                            cur = anc.parent_run_id;
+                        }
+                        let child_wf = d
+                            .workflows
+                            .get(&workflow)
+                            .filter(|w| w.project == project)
+                            .cloned();
+                        let problem = if cyclic {
+                            Some(format!("recursive workflow invocation of {workflow}"))
+                        } else if let Some(w) = &child_wf {
+                            (!w.definition.enabled)
+                                .then(|| format!("nested workflow {workflow} is disabled"))
+                        } else {
+                            Some(format!("nested workflow {workflow} not found in project"))
+                        };
+                        if let Some(err) = problem {
+                            let run = d.runs.get_mut(&run_id).unwrap();
+                            run.finish(false, json!({"workflow": workflow, "error": err}), now);
+                            if !run.cancel_requested && run.status == Status::Failed {
+                                run.detail = Some(err);
+                            }
+                            reconcile_hierarchy(d, now);
+                        } else if let Some(w) = child_wf {
+                            insert_run_with_parent(
+                                d,
+                                &w,
+                                Trigger::Child {
+                                    parent_run: run_id,
+                                    attempt: attempt.id,
+                                },
+                                input.unwrap_or(Value::Null),
+                                Some(run_id),
+                                Some(attempt.id),
+                                now,
+                            )?;
+                        }
+                    }
+                    _ if external => {
+                        remaining -= 1;
+                        jobs.push(d.runs[&run_id].clone());
+                    }
+                    _ => {}
                 }
             }
             Ok((triggered, jobs))
@@ -175,10 +315,29 @@ impl Workbench {
                 {
                     eprintln!("Kar workflow dispatcher: {e}");
                 }
+                let sleep_ms = {
+                    let now = app.0.workflows.clock.now_ms();
+                    let db = app.0.workflows.db.lock().unwrap();
+                    let run_wake = db
+                        .runs
+                        .values()
+                        .filter_map(|r| match r.status {
+                            Status::Waiting | Status::Asking => r.wake_at_ms,
+                            Status::Ready => r.webhook_due_ms,
+                            _ => None,
+                        })
+                        .min();
+                    let sched_wake = db.workflows.values().filter_map(|w| w.next_ms).min();
+                    [run_wake, sched_wake]
+                        .into_iter()
+                        .flatten()
+                        .min()
+                        .map_or(250, |at| (at.saturating_sub(now)).clamp(10, 250) as u64)
+                };
                 drop(app);
                 tokio::select! {
                     r=changed.changed()=>{if r.is_err(){break;}},
-                    _=tokio::time::sleep(Duration::from_millis(250))=>{},
+                    _=tokio::time::sleep(Duration::from_millis(sleep_ms))=>{},
                 }
             }
         });

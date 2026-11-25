@@ -228,6 +228,7 @@ async fn scenario() {
         StatusCode::OK
     );
     assert_eq!(fs::read(root.join("shared")).unwrap(), b"shared-next");
+    fs::write(root.join("shared"), "keep").unwrap();
     assert!(state.join(format!("{parent}.ancestry")).is_file());
     server.kill().await.unwrap();
     let (mut server, url) = serve(&state, &allowed, &native).await;

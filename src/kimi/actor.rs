@@ -406,17 +406,54 @@ impl Actor {
         None
     }
     async fn answer(&mut self, id: &str, body: Value) -> Result<()> {
-        self.web
+        self.answer_host(id, body, None, &[]).await
+    }
+    async fn answer_host(
+        &mut self,
+        id: &str,
+        body: Value,
+        pending_req: Option<crate::PendingRequest>,
+        extra_secrets: &[String],
+    ) -> Result<()> {
+        if let Err(err) = self
+            .web
             .request(
                 Method::POST,
                 &format!("{}/interactions/{}", self.path, segment(id)),
                 Some(body),
             )
-            .await?;
+            .await
+        {
+            self.requests.remove(id);
+            if let Some(req) = pending_req {
+                let mut reason = err.to_string();
+                crate::transport::redact_text(&mut reason, &self.secrets);
+                crate::transport::redact_text(&mut reason, extra_secrets);
+                self.journal.host_event(Event::RequestDeliveryFailed {
+                    cursor: req.cursor,
+                    id: req.id,
+                    method: req.method,
+                    kind: req.kind,
+                    status: crate::RequestDeliveryStatus::Failed,
+                    reason,
+                });
+            }
+            return Err(err);
+        }
         self.requests.remove(id);
         self.resolved_requests.insert(id.to_owned());
         self.journal
             .host_event(Event::RequestResolved { id: id.into() });
+        if let Some(req) = pending_req {
+            self.journal
+                .host_event(Event::RequestAnswerDispatched {
+                    cursor: req.cursor,
+                    id: req.id,
+                    method: req.method,
+                    kind: req.kind,
+                    confirmed: true,
+                });
+        }
         Ok(())
     }
     async fn interaction(&mut self, mut v: Value) -> Result<()> {
@@ -643,10 +680,23 @@ impl Actor {
                 .await?;
             }
             Command::Respond(id, reply, ack) => {
+                let pending_req = self.journal.pending_request(&id, reply.cursor());
+                let extra_secrets = pending_req
+                    .as_ref()
+                    .map(|req| reply.submitted_secrets(req))
+                    .unwrap_or_default();
                 let res =
                     if let Some((method, body)) = id.as_str().and_then(|s| self.requests.get(s)) {
                         match reply.payload(&self.journal, &id, method, body) {
-                            Ok(value) => self.answer(id.as_str().unwrap(), value).await,
+                            Ok(value) => {
+                                self.answer_host(
+                                    id.as_str().unwrap(),
+                                    value,
+                                    pending_req,
+                                    &extra_secrets,
+                                )
+                                .await
+                            }
                             Err(e) => Err(e),
                         }
                     } else {

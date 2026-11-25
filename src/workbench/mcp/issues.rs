@@ -88,6 +88,35 @@ impl Policy {
         }
         Self::get(db, project, chat)
     }
+    pub(in crate::workbench) fn watch_permitted(
+        db: &Catalog,
+        project: Uuid,
+        chat: Uuid,
+        repo: &str,
+        owner_started: bool,
+    ) -> Option<bool> {
+        if db.model_tasks.contains_key(&chat)
+            || db.family.deleted.contains_key(&chat)
+            || db.projects.get(&project).is_none_or(|p| p.metadata.deleted)
+        {
+            return None;
+        }
+        if owner_started {
+            let plan = Self::get(db, project, chat).is_some_and(|p| p.mode == Mode::Plan);
+            return Some(!db.archived.contains(&chat) && !plan);
+        }
+        let p = Self::get(db, project, chat)?;
+        if !p.pull_writes || p.pull_repository.as_deref().is_some_and(|r| r != repo) {
+            return None;
+        }
+        if db.archived.contains(&chat)
+            || p.mode == Mode::Plan
+            || p.pull_repository.as_deref() != Some(repo)
+        {
+            return Some(false);
+        }
+        Some(true)
+    }
     pub(super) fn worktree_directory(&self) -> Option<&std::path::Path> {
         self.worktree_directory.as_deref().filter(|_| self.mode == Mode::Execute)
     }

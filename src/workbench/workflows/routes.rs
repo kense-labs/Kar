@@ -93,13 +93,18 @@ struct TriggerRequest {
     operation: Uuid,
     #[serde(default)]
     input: Value,
+    #[serde(default)]
+    parent_run_id: Option<Uuid>,
 }
 async fn trigger(
     State(app): State<Workbench>,
     Param((p, id)): Param<(Uuid, Uuid)>,
     Json(req): Json<TriggerRequest>,
 ) -> Reply<Run> {
-    call(move || app.trigger_workflow(p, id, req.operation, req.input)).await
+    call(move || {
+        app.trigger_workflow_with_parent(p, id, req.operation, req.input, req.parent_run_id)
+    })
+    .await
 }
 #[derive(Deserialize)]
 struct ActionRequest {

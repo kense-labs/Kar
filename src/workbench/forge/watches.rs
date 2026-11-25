@@ -24,6 +24,10 @@ pub(super) struct Watch {
     number: u64,
     until: Until,
     active: bool,
+    #[serde(default)]
+    reopenable: bool,
+    #[serde(default)]
+    owner_started: bool,
     last: Baseline,
     next_ms: u64,
     comments_only: u8,
@@ -44,18 +48,31 @@ pub(super) struct Command {
 fn now() -> u64 {
     jiff::Timestamp::now().as_millisecond().max(0) as u64
 }
-fn permitted(db: &Catalog, row: &Watch) -> bool {
-    !db.model_tasks.contains_key(&row.chat)
-        && Policy::current(db, row.project, row.chat)
-            .is_some_and(|p| p.writes_pulls() && p.pull_repository.as_deref() == Some(&row.repo))
+fn access(db: &Catalog, row: &Watch) -> Option<bool> {
+    Policy::watch_permitted(db, row.project, row.chat, &row.repo, row.owner_started)
 }
 pub(in crate::workbench) fn waiting(db: &Catalog) -> BTreeSet<Uuid> {
     db.forge
         .watches
         .values()
-        .filter(|w| w.active && permitted(db, w) && (w.until == Until::Merged || !w.last.settled()))
+        .filter(|w| {
+            w.active
+                && access(db, w) == Some(true)
+                && (w.until == Until::Merged || !w.last.settled())
+        })
         .map(|w| w.chat)
         .collect()
+}
+pub(in crate::workbench) async fn http_command(
+    app: Workbench,
+    p: Uuid,
+    chat: Uuid,
+    n: u64,
+    cmd: Option<Uuid>,
+    action: &str,
+    until: Option<Until>,
+) -> Result<Value, ForgeError> {
+    run_command(app, p, chat, n, cmd, action, until, true, |_, _| Ok(())).await
 }
 pub(in crate::workbench) async fn command(
     app: Workbench,
@@ -65,6 +82,20 @@ pub(in crate::workbench) async fn command(
     cmd: Option<Uuid>,
     action: &str,
     until: Option<Until>,
+    authorize: impl Fn(&Catalog, &str) -> crate::Result<()>,
+) -> Result<Value, ForgeError> {
+    run_command(app, p, chat, n, cmd, action, until, false, authorize).await
+}
+#[allow(clippy::too_many_arguments)]
+async fn run_command(
+    app: Workbench,
+    p: Uuid,
+    chat: Uuid,
+    n: u64,
+    cmd: Option<Uuid>,
+    action: &str,
+    until: Option<Until>,
+    owner_started: bool,
     authorize: impl Fn(&Catalog, &str) -> crate::Result<()>,
 ) -> Result<Value, ForgeError> {
     if n == 0 {
@@ -140,13 +171,17 @@ pub(in crate::workbench) async fn command(
             if !matches!(snapshot.state.as_str(), "open" | "opened") {
                 if let Some(w) = db.forge.watches.get_mut(&key) {
                     w.active = false;
+                    w.reopenable = matches!(snapshot.state.as_str(), "closed" | "declined");
                 }
                 json!({"number":n,"was_watching":was,"watching":false,"state":snapshot.state})
             } else {
                 let stamp = now();
                 let id = prior.as_ref().map(|w| w.id).unwrap_or(key);
                 let mut row = if was {
-                    prior.unwrap()
+                    let mut existing = prior.unwrap();
+                    existing.owner_started |= owner_started;
+                    existing.reopenable = false;
+                    existing
                 } else {
                     Watch {
                         id,
@@ -156,6 +191,8 @@ pub(in crate::workbench) async fn command(
                         number: n,
                         until: Until::Checks,
                         active: true,
+                        reopenable: false,
+                        owner_started,
                         last: snapshot,
                         comments_only: 0,
                         awaiting_since: Some(stamp),
@@ -197,6 +234,7 @@ pub(in crate::workbench) async fn command(
                 && let Some(w) = db.forge.watches.get_mut(&old.id)
             {
                 w.active = false;
+                w.reopenable = false;
                 w.pending = None;
             }
             json!({"number":n,"was_watching":was,"watching":false})
@@ -222,7 +260,7 @@ pub(in crate::workbench) fn recover(app: &Workbench) {
         .forge
         .watches
         .values()
-        .filter(|r| r.pending.is_some() || r.active && r.next_ms <= stamp)
+        .filter(|r| r.pending.is_some() || (r.active || r.reopenable) && r.next_ms <= stamp)
         .map(|r| r.id)
         .collect();
     for id in ids {
@@ -235,40 +273,92 @@ pub(in crate::workbench) fn recover(app: &Workbench) {
                 db.forge.watches.get(&id).cloned()
             };
             let Some(r) = row else { return };
-            let allowed = {
+            let permission = {
                 let db = app.0.catalog.lock().unwrap();
-                permitted(&db, &r)
+                access(&db, &r)
             };
-            if !allowed {
-                let _ = app.update(|db| {
-                    if let Some(w) = db.forge.watches.get_mut(&id) {
-                        w.active = false;
-                        w.pending = None;
-                    }
-                    Ok(())
-                });
-                return;
-            }
-            if let Some(n) = &r.pending {
-                if app.0.chats.enqueue(r.chat, n.id, n.text.clone()).is_ok() {
+            match permission {
+                None => {
                     let _ = app.update(|db| {
-                        if let Some(w) = db.forge.watches.get_mut(&id)
-                            && w.pending.as_ref().is_some_and(|v| v.id == n.id)
-                        {
-                            let remote=w.repo.split_once("://").and_then(|(_,s)|s.split_once('/'));
-                            if let Some((host,repository))=remote{
-                                let outcome=match w.last.state.as_str(){"merged"=>"completed","closed"|"declined"=>"cancelled",_ if w.last.passed()=>"completed",_ if w.last.checks.as_ref().is_some_and(|checks|checks.values().any(|s|s=="failure"))=>"failed",_=>"updated"};
-                                db.milestone_watches.push(json!({"type":"pr.watch_wake","id":n.id,"projectId":w.project,"threadId":w.chat,"at":now(),"pullRequests":[{"host":host,"repository":repository,"number":w.number}],"outcome":outcome,"summary":n.text,"watchEnded":!w.active}));
-                            }
+                        if let Some(w) = db.forge.watches.get_mut(&id) {
+                            w.active = false;
+                            w.reopenable = false;
                             w.pending = None;
                         }
                         Ok(())
                     });
+                    return;
+                }
+                Some(false) => {
+                    let _ = app.update(|db| {
+                        if let Some(w) = db
+                            .forge
+                            .watches
+                            .get_mut(&id)
+                            .filter(|w| w.pending.is_none() && w.next_ms == r.next_ms)
+                        {
+                            w.next_ms = now() + 30_000;
+                        }
+                        Ok(())
+                    });
+                    return;
+                }
+                Some(true) => {}
+            }
+            if let Some(n) = &r.pending {
+                if app.0.chats.enqueue(r.chat, n.id, n.text.clone()).is_ok() {
+                    let mut unsettled_seq = None;
+                    let _ = app.update(|db| {
+                        if let Some(w) = db.forge.watches.get_mut(&id)
+                            && w.pending.as_ref().is_some_and(|v| v.id == n.id)
+                        {
+                            let stamp = now();
+                            let remote =
+                                w.repo.split_once("://").and_then(|(_, s)| s.split_once('/'));
+                            if let Some((host, repository)) = remote {
+                                let outcome = match w.last.state.as_str() {
+                                    "merged" => "completed",
+                                    "closed" | "declined" => "cancelled",
+                                    _ if w.last.passed() => "completed",
+                                    _ if w.last.checks.as_ref().is_some_and(|checks| {
+                                        checks.values().any(|s| s == "failure")
+                                    }) =>
+                                    {
+                                        "failed"
+                                    }
+                                    _ => "updated",
+                                };
+                                db.milestone_watches.push(json!({"type":"pr.watch_wake","id":n.id,"projectId":w.project,"threadId":w.chat,"at":stamp,"pullRequests":[{"host":host,"repository":repository,"number":w.number}],"outcome":outcome,"summary":n.text,"watchEnded":!w.active && !w.reopenable}));
+                            }
+                            w.pending = None;
+                            if let Some(meta) = db.thread_state.rows.get_mut(&r.chat)
+                                && (meta.settled_override.is_some()
+                                    || meta.settled_ms.is_some()
+                                    || meta.snoozed_until_ms.is_some())
+                            {
+                                meta.settled_override = None;
+                                meta.settled_ms = None;
+                                meta.unsettled_ms = Some(stamp);
+                                meta.snoozed_until_ms = None;
+                                meta.snoozed_ms = None;
+                                meta.updated_ms = meta.updated_ms.max(stamp);
+                                db.thread_state.record_lifecycle(r.project, r.chat, false);
+                                unsettled_seq = Some(db.thread_state.sequence());
+                                db.forge.linked_chat_changed(r.chat)?;
+                            }
+                        }
+                        Ok(())
+                    });
+                    if let Some(seq) = unsettled_seq {
+                        app.0
+                            .thread_updates
+                            .send_modify(|seen| *seen = (*seen).max(seq));
+                    }
                     app.wake_queue();
                 }
                 return;
             }
-            if !r.active || r.next_ms > now() {
+            if !(r.active || r.reopenable) || r.next_ms > now() {
                 return;
             }
             let observed = async {
@@ -280,19 +370,23 @@ pub(in crate::workbench) fn recover(app: &Workbench) {
             }
             .await;
             let _ = app.update(|db| {
-                let allowed = permitted(db, &r);
-                let Some(w) = db
-                    .forge
-                    .watches
-                    .get_mut(&id)
-                    .filter(|w| w.active && w.pending.is_none() && w.next_ms == r.next_ms)
-                else {
+                let permission = access(db, &r);
+                let Some(w) = db.forge.watches.get_mut(&id).filter(|w| {
+                    (w.active || w.reopenable) && w.pending.is_none() && w.next_ms == r.next_ms
+                }) else {
                     return Ok(());
                 };
                 w.next_ms = now() + 30_000;
-                if !allowed {
-                    w.active = false;
-                    return Ok(());
+                match permission {
+                    None => {
+                        w.active = false;
+                        w.reopenable = false;
+                        return Ok(());
+                    }
+                    Some(false) => {
+                        return Ok(());
+                    }
+                    Some(true) => {}
                 }
                 let mut current = match observed {
                     Ok(v) => v,
@@ -302,7 +396,25 @@ pub(in crate::workbench) fn recover(app: &Workbench) {
                     }
                 };
                 w.error = None;
-                let mut changes = current.changes(&w.last);
+                if !w.active && w.reopenable && current.state != "open" {
+                    w.last.state = current.state;
+                    w.last.head = current.head;
+                    return Ok(());
+                }
+                let reopened = w.last.state != "open" && current.state == "open";
+                if reopened {
+                    w.active = true;
+                    w.reopenable = false;
+                    w.awaiting_since = Some(now());
+                }
+                let mut prior = w.last.clone();
+                if reopened && prior.checks.is_none() && current.checks.is_some() {
+                    prior.checks = Some(BTreeMap::new());
+                }
+                let mut changes = current.changes(&prior);
+                if reopened {
+                    changes.insert(0, "pull request reopened".into());
+                }
                 if current.head != w.last.head {
                     w.awaiting_since = Some(now());
                 }
@@ -339,8 +451,12 @@ pub(in crate::workbench) fn recover(app: &Workbench) {
                         });
                     }
                 }
-                if matches!(current.state.as_str(), "merged" | "closed" | "declined") {
+                if current.state == "merged" {
                     w.active = false;
+                    w.reopenable = false;
+                } else if matches!(current.state.as_str(), "closed" | "declined") {
+                    w.active = false;
+                    w.reopenable = true;
                 }
                 w.last = current;
                 Ok(())

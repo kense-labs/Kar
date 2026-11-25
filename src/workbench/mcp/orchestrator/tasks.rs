@@ -26,7 +26,7 @@ struct Spec {
 }
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum Phase {
+pub(super) enum Phase {
     Admitted,
     Opening,
     Running,
@@ -63,6 +63,142 @@ pub(in crate::workbench) struct Task {
 impl Task {
     pub(in crate::workbench) fn blocks_thread_archive(&self, chat: Uuid) -> bool {
         self.parent == chat && !self.terminal()
+    }
+    pub(in crate::workbench) fn prepare_force_stop(
+        app: &Workbench,
+        project: Uuid,
+        chat: Uuid,
+    ) -> Result<bool> {
+        let is_active_child = {
+            let db = app.0.catalog.lock().unwrap();
+            db.model_tasks
+                .get(&chat)
+                .is_some_and(|t| t.project == project && !t.terminal())
+        };
+        if !is_active_child {
+            return Ok(false);
+        }
+        app.update(|db| {
+            if let Some(t) = db
+                .model_tasks
+                .get_mut(&chat)
+                .filter(|t| t.project == project && !t.terminal())
+            {
+                t.phase = Phase::Cancelling;
+                let mut parents = vec![chat];
+                while let Some(p) = parents.pop() {
+                    for r in db.model_tasks.values_mut().filter(|r| {
+                        r.parent == p
+                            && r.inbound_device.is_none()
+                            && !r.terminal()
+                            && r.phase != Phase::Cancelling
+                    }) {
+                        r.phase = Phase::Cancelling;
+                        parents.push(r.id);
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(true)
+    }
+    pub(in crate::workbench) fn finish_force_stop_fenced(
+        app: &Workbench,
+        project: Uuid,
+        chat: Uuid,
+        turn: Option<Uuid>,
+        interrupted: bool,
+    ) -> Result<Vec<Uuid>> {
+        let parent_task_ids: Vec<Uuid> = {
+            let db = app.0.catalog.lock().unwrap();
+            db.model_tasks
+                .values()
+                .filter(|t| {
+                    t.project == project
+                        && t.parent == chat
+                        && t.inbound_device.is_none()
+                        && t.completion.as_ref().is_none_or(|c| !c.settled())
+                        && (interrupted
+                            || turn.is_some_and(|id| t.parent_turn == Some(id))
+                            || !t.terminal())
+                })
+                .map(|t| t.id)
+                .collect()
+        };
+        let stop_run = turn.filter(|_| interrupted);
+        let disposed = if stop_run.is_some() || !parent_task_ids.is_empty() {
+            app.0
+                .chats
+                .record_parent_force_stop(chat, stop_run, &parent_task_ids)?
+        } else {
+            Default::default()
+        };
+        let needs_update = !disposed.is_empty()
+            || app
+                .0
+                .catalog
+                .lock()
+                .unwrap()
+                .model_tasks
+                .get(&chat)
+                .is_some_and(|t| t.project == project && !t.terminal());
+        let mut sync_ids = Vec::new();
+        if needs_update {
+            app.update(|db| {
+                for (task_id, comp) in &disposed {
+                    if let Some(t) = db.model_tasks.get_mut(task_id) {
+                        t.delivered = comp.native_received;
+                        t.completion = Some(comp.clone());
+                    }
+                }
+                if let Some(t) = db
+                    .model_tasks
+                    .get_mut(&chat)
+                    .filter(|t| t.project == project && !t.terminal())
+                {
+                    t.phase = Phase::Cancelled;
+                    if t.inbound_device.is_none() {
+                        sync_ids.push(chat);
+                    }
+                }
+                Ok(())
+            })?;
+        }
+        {
+            let db = app.0.catalog.lock().unwrap();
+            for id in parent_task_ids {
+                if db
+                    .model_tasks
+                    .get(&id)
+                    .is_some_and(|t| t.inbound_device.is_none() && t.terminal())
+                {
+                    sync_ids.push(id);
+                }
+            }
+        }
+        Ok(sync_ids)
+    }
+    pub(in crate::workbench) fn finish_force_stop_unfenced(
+        app: &Workbench,
+        chat: Uuid,
+        is_child: bool,
+        sync_ids: &[Uuid],
+    ) {
+        if is_child
+            && let Ok(queued) = app.0.chats.queued_inputs(chat)
+        {
+            for q in queued.into_iter().filter(|r| r.status == InputStatus::Pending) {
+                let _ = app.0.chats.withdraw(chat, q.id);
+            }
+        }
+        for &id in sync_ids {
+            if let Ok(t) = get(app, id)
+                && t.inbound_device.is_none()
+                && t.terminal()
+            {
+                let _ = delivery::sync(app, &t, None, None);
+            }
+        }
     }
     fn input(&self) -> Uuid {
         crate::chat::stable_id([self.id.as_bytes().as_slice(), b"delegated input"])
@@ -136,16 +272,34 @@ fn still_granted(app: &Workbench, t: &Task) -> Result<()> {
     Ok(())
 }
 pub(in crate::workbench) fn recover(app: &Workbench) {
-    let ids: Vec<_> = app
-        .0
-        .catalog
-        .lock()
-        .unwrap()
-        .model_tasks
-        .iter()
-        .filter(|(_, r)| !r.terminal() || (r.inbound_device.is_none() && r.completion.as_ref().is_none_or(|c|!c.settled() || matches!(c.queue_status,Some(InputStatus::Pending|InputStatus::Sending|InputStatus::Uncertain)))))
-        .map(|(id, _)| *id)
-        .collect();
+    let ids: Vec<_> = {
+        let catalog = app.0.catalog.lock().unwrap();
+        for (&id, r) in &catalog.model_tasks {
+            if r.directory.is_none() && r.spec.remote.is_none() {
+                app.0.chats.register_shared_delegate(id, r.parent);
+            }
+        }
+        catalog
+            .model_tasks
+            .iter()
+            .filter(|(_, r)| {
+                !r.terminal()
+                    || (r.inbound_device.is_none()
+                        && r.completion.as_ref().is_none_or(|c| {
+                            !c.settled()
+                                || matches!(
+                                    c.queue_status,
+                                    Some(
+                                        InputStatus::Pending
+                                            | InputStatus::Sending
+                                            | InputStatus::Uncertain
+                                    )
+                                )
+                        }))
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    };
     for id in ids {
         launch(app.clone(), id);
     }
@@ -167,7 +321,7 @@ fn launch(app: Workbench, id: Uuid) {
         }
     });
 }
-async fn progress(app: &Workbench, t: Task) -> Result<()> {
+pub(super) async fn progress(app: &Workbench, t: Task) -> Result<()> {
     if t.inbound_device.is_some() && !t.terminal() && t.phase!=Phase::Cancelling && still_granted(app,&t).is_err(){
         let cancelled=change(app,t.id,|r|r.phase=Phase::Cancelling)?;
         return cancel_one(app,&cancelled).await;
@@ -235,6 +389,9 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
         };
         app.workspace_at(&cwd)?;
         app.bind_model_checkout(t.project, t.id, &cwd)?;
+        if t.directory.is_none() && t.spec.remote.is_none() {
+            app.0.chats.register_shared_delegate(t.id, t.parent);
+        }
         change(app, t.id, |r| r.phase = Phase::Opening)?;
         app.create_chat_with_settings(
             t.project,
@@ -346,16 +503,17 @@ async fn progress(app: &Workbench, t: Task) -> Result<()> {
             } => Some(text.chars().take(16000).collect()),
             _ => None,
         });
-    change(app, t.id, |r| {
-        r.phase = match turn.status {
-            TurnStatus::Completed => Phase::ResultAvailable,
-            TurnStatus::Interrupted => Phase::Unconfirmed,
-            TurnStatus::Aborted => Phase::Cancelled,
-            _ => Phase::Failed,
-        };
-        r.summary = summary;
-        r.output = turn.structured_output.clone();
-    })?;
+        change(app, t.id, |r| {
+            r.phase = match turn.status {
+                TurnStatus::Completed => Phase::ResultAvailable,
+                TurnStatus::Interrupted if r.phase == Phase::Cancelling => Phase::Cancelled,
+                TurnStatus::Interrupted => Phase::Unconfirmed,
+                TurnStatus::Aborted => Phase::Cancelled,
+                _ => Phase::Failed,
+            };
+            r.summary = summary;
+            r.output = turn.structured_output.clone();
+        })?;
     app.wake_queue();
     Ok(())
 }
@@ -520,6 +678,9 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, mut req: Value
             db.model_tasks.insert(id, task.clone());
             Ok(task)
         })?;
+        if saved.directory.is_none() && saved.spec.remote.is_none() {
+            app.0.chats.register_shared_delegate(saved.id, saved.parent);
+        }
         app.wake_queue();
         Ok(saved.view())
     }

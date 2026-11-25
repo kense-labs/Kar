@@ -46,7 +46,8 @@ pub(super) async fn exercise(
     }
     observer.recv(&mut [0u8; 192]).await.unwrap();
     let ready = |id: Uuid| async move {
-        tokio::time::timeout(Duration::from_secs(35), async {
+        let mut last = Value::Null;
+        match tokio::time::timeout(Duration::from_secs(35), async {
             loop {
                 let s = server::json(host.get(format!(
                     "{url}/projects/{project}/chats/{caller}/delegations/{id}"
@@ -55,11 +56,22 @@ pub(super) async fn exercise(
                 if s["work_state"] == "result_available" {
                     break s;
                 }
+                assert!(
+                    !matches!(
+                        s["work_state"].as_str(),
+                        Some("failed" | "cancelled" | "unconfirmed")
+                    ),
+                    "delegation entered unexpected terminal state: {s}"
+                );
+                last = s;
                 tokio::time::sleep(Duration::from_millis(80)).await;
             }
         })
         .await
-        .unwrap()
+        {
+            Ok(s) => s,
+            Err(_) => panic!("delegation {id} timed out, last state: {last}"),
+        }
     };
     let r = ready(task).await;
     assert_eq!(r["parent_run_id"], json!(parent_turn));
@@ -181,5 +193,30 @@ pub(super) async fn exercise(
             ["tasks"],
         json!([])
     );
+
+    let stopped_child = Uuid::new_v4();
+    server::json(invoke(
+        "kar_delegate_task",
+        json!({"command_id":stopped_child,"task":"await interrupt","title":"Stop child"}),
+    ))
+    .await;
+    observer.recv(&mut [0u8; 192]).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !db.join("interrupt-ready").exists() {
+            let _ = server::json(host.get(details(stopped_child))).await;
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let _ = fs::remove_file(db.join("interrupt-ready"));
+    server::json(
+        host.post(format!("{url}/projects/{project}/chats/{stopped_child}/force-stop"))
+            .json(&json!({})),
+    )
+    .await;
+    let cancelled = server::json(host.get(details(stopped_child))).await;
+    assert_eq!(cancelled["work_state"], "cancelled", "{cancelled}");
+
     server::json(host.put(&permissions).json(&json!({"mode":"execute"}))).await;
 }

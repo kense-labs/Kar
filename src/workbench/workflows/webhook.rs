@@ -215,6 +215,57 @@ fn redacted_query(query: &str) -> String {
         .collect::<Vec<_>>()
         .join("&")
 }
+const TIMESTAMP_HEADERS: &[&str] = &[
+    "x-kar-relay-queued-at",
+    "x-kar-relay-timestamp",
+    "x-kar-relay-received-at",
+    "x-kar-timestamp",
+    "x-kar-linear-timestamp",
+    "x-linear-timestamp",
+    "x-webhook-timestamp",
+    "webhook-timestamp",
+    "svix-timestamp",
+    "x-slack-request-timestamp",
+    "x-request-timestamp",
+];
+
+fn parse_delivery_timestamp_ms(raw: &str) -> Option<i64> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(n) = s.parse::<i64>() {
+        if n < 0 {
+            return None;
+        }
+        return Some(if (1_000_000_000..100_000_000_000).contains(&n) {
+            n.saturating_mul(1_000)
+        } else {
+            n
+        });
+    }
+    if let Some((sec_part, frac_part)) = s.split_once('.')
+        && !sec_part.is_empty()
+        && sec_part.bytes().all(|b| b.is_ascii_digit())
+        && !frac_part.is_empty()
+        && frac_part.bytes().all(|b| b.is_ascii_digit())
+        && let Ok(sec) = sec_part.parse::<i64>()
+        && (1_000_000_000..100_000_000_000).contains(&sec)
+    {
+        let mut frac = [b'0'; 3];
+        for (dst, src) in frac.iter_mut().zip(frac_part.bytes()) {
+            *dst = src;
+        }
+        let ms = i64::from(frac[0] - b'0') * 100
+            + i64::from(frac[1] - b'0') * 10
+            + i64::from(frac[2] - b'0');
+        return Some(sec.saturating_mul(1_000).saturating_add(ms));
+    }
+    s.parse::<jiff::Timestamp>()
+        .ok()
+        .map(|ts| ts.as_millisecond())
+}
+
 struct Request {
     received_ms: i64,
     project: Uuid,
@@ -225,6 +276,18 @@ struct Request {
     body: Bytes,
 }
 impl Request {
+    pub(super) fn origin_ms(&self, now: i64) -> i64 {
+        TIMESTAMP_HEADERS
+            .iter()
+            .find_map(|name| {
+                self.headers
+                    .get(*name)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(parse_delivery_timestamp_ms)
+            })
+            .unwrap_or(self.received_ms)
+            .min(now)
+    }
     fn receipt(
         &self,
         now: i64,

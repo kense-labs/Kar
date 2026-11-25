@@ -17,7 +17,7 @@ use std::convert::Infallible;
 use uuid::Uuid;
 
 fn ended(s: &Status) -> bool {
-    matches!(s, Status::Failed | Status::Completed | Status::Cancelled)
+    s.is_terminal() || *s == Status::Failed
 }
 fn counts(db: &Data, p: Uuid) -> Value {
     let (mut total, mut active, mut needs_you) = (0, 0, 0);
@@ -40,13 +40,13 @@ fn snapshot(db: &Data, p: Uuid, only_schedule: bool) -> Value {
     let mut runs: Vec<_> = db.runs.values().filter(|r| r.project == p).collect();
     runs.sort_by_key(|r| (std::cmp::Reverse(r.started_ms), r.id));
     let questions:Vec<_>=runs.iter().filter(|r|r.status==Status::Asking).filter_map(|r|{
-        let Step::Ask{question}=r.steps.get(r.cursor)? else{return None;};
+        let Step::Ask{question,..}=r.steps.get(r.cursor)? else{return None;};
         Some(json!({"run":r.id,"workflow":r.workflow,"attempt":r.attempt.as_ref()?.id,"question":question}))
     }).collect();
     let summaries: Vec<_> = runs
         .iter()
         .map(|r| {
-            json!({"id":r.id,"workflow":r.workflow,"started_ms":r.started_ms,
+            json!({"id":r.id,"workflow":r.workflow,"parent_run_id":r.parent_run_id,"started_ms":r.started_ms,
             "status":r.status,"step":r.cursor,"cancel_requested":r.cancel_requested})
         })
         .collect();
@@ -159,6 +159,7 @@ fn cancel_deferred(runs: &mut std::collections::BTreeMap<Uuid, super::Run>, work
     }) {
         r.status = Status::Cancelled;
         r.cancel_requested = true;
+        r.requested_terminal = Some(Status::Cancelled);
         r.webhook_due_ms = None;
         r.webhook_templates = None;
     }
@@ -172,6 +173,18 @@ pub(super) fn erase_workflow(db: &mut Data, id: Uuid) {
     db.webhook_windows.remove(&id);
     db.deliveries.remove(&id);
     cancel_deferred(&mut db.runs, id);
+    for r in db
+        .runs
+        .values_mut()
+        .filter(|r| r.workflow == id && !r.status.is_terminal())
+    {
+        r.cancel_requested = true;
+        r.requested_terminal = Some(Status::Cancelled);
+        if !matches!(r.status, Status::Running | Status::Reconcile) {
+            r.status = Status::Cancelled;
+            r.wake_at_ms = None;
+        }
+    }
 }
 
 pub(super) async fn remove(

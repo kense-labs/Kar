@@ -74,6 +74,7 @@ impl ChatStore {
         let mut tmp = tempfile::NamedTempFile::new_in(&self.dir)?;
         log::header(tmp.as_file_mut(), &info)?;
         let mut writer = log::Log::new(tmp.as_file().try_clone()?, lease, info.clone());
+        writer.attachment_store = Some(self.clone());
         if info.protocol == Protocol::Claude || info.runtime == "grok" {
             writer.native_store = Some(self.clone());
         }

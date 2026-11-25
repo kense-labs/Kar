@@ -128,10 +128,23 @@ impl Operation {
     async fn run(self: &Arc<Self>) -> Result<Value> {
         let app = self.app.clone();
         let project = self.project;
+        let chat = self.input.chat;
         let checkout = Arc::new(
-            tokio::task::spawn_blocking(move || StackCheckout::acquire(app.repository(project)?))
-                .await
-                .map_err(|e| Error::Closed(e.to_string()))??,
+            tokio::task::spawn_blocking(move || {
+                let repo = match chat {
+                    Some(chat_id) => {
+                        let info = app.binding(project, chat_id)?;
+                        if app.archived(chat_id) {
+                            return Err(Error::Refused("chat is archived".into()));
+                        }
+                        crate::workbench_git::Repository::open(&info.workspace)?
+                    }
+                    None => app.repository(project)?,
+                };
+                StackCheckout::acquire(repo)
+            })
+            .await
+            .map_err(|e| Error::Closed(e.to_string()))??,
         );
         let status = checkout.repo.status()?;
         let input = &self.input;
@@ -310,6 +323,9 @@ async fn start(
     app.project(project)?;
     if let Some(chat) = input.chat {
         app.binding(project, chat)?;
+        if app.archived(chat) {
+            return Err(Error::Refused("chat is archived".into()).into());
+        }
     }
     if input.branch_name.is_some() && !input.feature_branch
         || input.feature_branch && !input.action.commit()

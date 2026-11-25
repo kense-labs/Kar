@@ -72,20 +72,34 @@ pub(super) async fn call(
             }
         }
         _ => {
-            let questions = app
-                .active_control(p, t)?
+            let active = app.active_control(p, t)?;
+            let questions = active
+                .as_ref()
                 .map(|s| s.snapshot().pending_requests)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|r| r.kind == crate::RequestKind::Question)
                 .collect::<Vec<_>>();
+            let orphaned = match active.and_then(|s| s.orphaned_questions()) {
+                Some(qs) => qs,
+                None => app.0.chats.feed_snapshot(t)?.history.orphaned_questions,
+            };
             if input["action"] == "list" {
-                return Ok(json!({"requests":questions}));
+                return Ok(json!({
+                    "requests": questions,
+                    "orphaned_questions": orphaned,
+                }));
             }
-            questions
+            if let Some(r) = questions
                 .into_iter()
                 .find(|r| json!(r.cursor) == input["cursor"] && r.id == input["id"])
-                .map(|r| json!({"request":r}))
+            {
+                return Ok(json!({"request": r}));
+            }
+            orphaned
+                .into_iter()
+                .find(|q| json!(q.cursor) == input["cursor"] && q.id == input["id"])
+                .map(|q| json!({"orphaned_question": q}))
                 .ok_or_else(|| Error::Refused("question occurrence is no longer pending".into()))
         }
     }

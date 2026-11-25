@@ -137,7 +137,7 @@ fn description(name: &str) -> Value {
         ),
         "workflow.needs_input" => ("A workflow asked a question.", vec!["step", "question"]),
         "workflow.input_resolved" => (
-            "A workflow question was answered or cancelled.",
+            "A workflow question was answered, cancelled, or expired.",
             vec!["step", "resolution"],
         ),
         "workflow.run_paused" => ("A workflow needs retry or reconciliation.", vec!["reason"]),
@@ -151,7 +151,12 @@ fn description(name: &str) -> Value {
     if name.starts_with("workflow.") {
         fields["parentWorkflowRunId"] = json!({"type":["string","null"]});
     }
+    if name == "workflow.input_resolved" {
+        fields["resolution"] = json!({"type":"string","enum":["answered","cancelled","expired"]});
+    }
     if name == "workflow.run_ended" {
+        fields["outcome"] =
+            json!({"type":"string","enum":["completed","stopped","skipped","cancelled"]});
         fields["detail"] = json!({"type":["string","null"]});
     }
     if name == "pr.watch_wake" {
@@ -293,6 +298,7 @@ pub(super) async fn rpc(
                 last = tokio::time::Instant::now();
             }
             args.cursor = Some(page.cursor);
+            args.max_age_ms = None;
             if last.elapsed() >= Duration::from_millis(hb) {
                 if tx
                     .send(notify(

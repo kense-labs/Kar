@@ -5,17 +5,137 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum HandoffWhen {
+    #[default]
+    Immediate,
+    Interrupt,
+    NextTurn,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct HandoffOptions {
+    settings: Option<SessionSettings>,
+    interrupt: bool,
+    when: Option<HandoffWhen>,
+}
+
+thread_local! {
+    static PENDING_OPTIONS: std::cell::RefCell<Vec<(Uuid, HandoffOptions)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandoffRequest {
     pub id: Uuid,
     pub runtime: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
-    #[serde(default)]
     pub model: Option<String>,
-    #[serde(default = "default_budget")]
     pub budget_bytes: usize,
+}
+impl HandoffRequest {
+    pub fn with_settings(self, settings: SessionSettings) -> Self {
+        PENDING_OPTIONS.with(|buf| {
+            let mut buf = buf.borrow_mut();
+            if buf.len() >= 32 {
+                buf.remove(0);
+            }
+            buf.push((
+                self.id,
+                HandoffOptions {
+                    settings: Some(settings),
+                    interrupt: false,
+                    when: None,
+                },
+            ));
+        });
+        self
+    }
+
+    pub(crate) fn take_options(&self) -> (Option<SessionSettings>, bool, Option<&'static str>) {
+        let opts = PENDING_OPTIONS.with(|buf| {
+            let mut buf = buf.borrow_mut();
+            if let Some(pos) = buf.iter().rposition(|(id, _)| *id == self.id) {
+                buf.remove(pos).1
+            } else {
+                HandoffOptions::default()
+            }
+        });
+        let when = opts.when.map(|w| match w {
+            HandoffWhen::Immediate => "immediate",
+            HandoffWhen::Interrupt => "interrupt",
+            HandoffWhen::NextTurn => "next_turn",
+        });
+        (opts.settings, opts.interrupt, when)
+    }
+}
+impl Serialize for HandoffRequest {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            id: Uuid,
+            runtime: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            instance_id: &'a Option<String>,
+            model: &'a Option<String>,
+            budget_bytes: usize,
+        }
+        Wire {
+            id: self.id,
+            runtime: &self.runtime,
+            instance_id: &self.instance_id,
+            model: &self.model,
+            budget_bytes: self.budget_bytes,
+        }
+        .serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for HandoffRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            id: Uuid,
+            runtime: String,
+            #[serde(default)]
+            instance_id: Option<String>,
+            #[serde(default)]
+            model: Option<String>,
+            #[serde(default = "default_budget")]
+            budget_bytes: usize,
+            #[serde(default)]
+            settings: Option<SessionSettings>,
+            #[serde(default)]
+            interrupt: bool,
+            #[serde(default)]
+            when: Option<HandoffWhen>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.settings.is_some() || wire.interrupt || wire.when.is_some() {
+            PENDING_OPTIONS.with(|buf| {
+                let mut buf = buf.borrow_mut();
+                if buf.len() >= 32 {
+                    buf.remove(0);
+                }
+                buf.push((
+                    wire.id,
+                    HandoffOptions {
+                        settings: wire.settings,
+                        interrupt: wire.interrupt,
+                        when: wire.when,
+                    },
+                ));
+            });
+        }
+        Ok(Self {
+            id: wire.id,
+            runtime: wire.runtime,
+            instance_id: wire.instance_id,
+            model: wire.model,
+            budget_bytes: wire.budget_bytes,
+        })
+    }
 }
 fn default_budget() -> usize {
     64 * 1024
@@ -89,6 +209,8 @@ pub struct Handoff {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_workspace: Option<PathBuf>,
     pub request: HandoffRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_settings: Option<SessionSettings>,
     /// Pin the selected namespace before native launch so retry cannot switch accounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub destination_instance: Option<crate::provider_instance::HistoryInstance>,
@@ -128,6 +250,16 @@ impl Handoff {
         turns: &[ChatTurn],
         history: &[Self],
     ) -> Result<Self> {
+        Self::prepare_with_settings(request, None, destination_instance, info, turns, history)
+    }
+    pub(crate) fn prepare_with_settings(
+        request: HandoffRequest,
+        requested_settings: Option<SessionSettings>,
+        destination_instance: Option<crate::provider_instance::HistoryInstance>,
+        info: &ChatInfo,
+        turns: &[ChatTurn],
+        history: &[Self],
+    ) -> Result<Self> {
         if !(512..=1024 * 1024).contains(&request.budget_bytes) {
             return Err(Error::Refused(
                 "handoff budget must be between 512 and 1048576 UTF-8 bytes".into(),
@@ -139,6 +271,9 @@ impl Handoff {
             h.status == HandoffStatus::Ready
                 && h.from.runtime == request.runtime
                 && h.from.model == request.model
+                && requested_settings
+                    .as_ref()
+                    .is_none_or(|s| s == &h.from.settings)
                 && destination_instance
                     .as_ref()
                     .is_none_or(|instance| h.from.matches_instance(instance))
@@ -253,6 +388,7 @@ impl Handoff {
         Ok(Self {
             source_workspace: None,
             request,
+            requested_settings,
             destination_instance,
             status: HandoffStatus::Prepared,
             from: ProviderSession::current(info),
@@ -446,10 +582,29 @@ impl super::ChatStore {
         })?;
         Ok(new)
     }
-    pub(crate) async fn handoff(
+    pub(crate) fn preview_handoff(
         &self,
         id: Uuid,
         request: HandoffRequest,
+        requested_settings: Option<SessionSettings>,
+        destination: Option<crate::provider_instance::HistoryInstance>,
+    ) -> Result<Handoff> {
+        let state = self.read_state(std::fs::File::open(self.path(id))?, id)?;
+        Handoff::prepare_with_settings(
+            request,
+            requested_settings,
+            destination,
+            &state.info,
+            &state.turns,
+            state.resumable_handoffs(),
+        )
+    }
+
+    pub(crate) async fn handoff_with_settings(
+        &self,
+        id: Uuid,
+        request: HandoffRequest,
+        requested_settings: Option<SessionSettings>,
         destination: Option<crate::provider_instance::HistoryInstance>,
         configure: impl FnOnce(&mut crate::SessionOptions),
     ) -> Result<(Handoff, Option<super::ChatSession>)> {
@@ -471,7 +626,7 @@ impl super::ChatStore {
             .iter()
             .find(|h| h.request.id == request.id)
         {
-            if existing.request != request {
+            if existing.request != request || existing.requested_settings != requested_settings {
                 return Err(Error::Refused(
                     "handoff id belongs to another request".into(),
                 ));
@@ -489,6 +644,9 @@ impl super::ChatStore {
             }
             if log.state.info.runtime == request.runtime
                 && log.state.info.model == request.model
+                && requested_settings
+                    .as_ref()
+                    .is_none_or(|s| s == &log.state.info.settings)
                 && destination.as_ref().is_none_or(|instance| {
                     log.state
                         .info
@@ -504,8 +662,9 @@ impl super::ChatStore {
             if request.runtime.is_empty() {
                 return Err(Error::Refused("empty target runtime".into()));
             }
-            let h = Handoff::prepare(
+            let h = Handoff::prepare_with_settings(
                 request,
+                requested_settings,
                 destination,
                 &log.state.info,
                 &log.state.turns,
@@ -547,6 +706,14 @@ impl super::ChatStore {
             let mut saved = log.state.info.clone();
             target.activate(&mut saved);
             saved.configure_instance(&mut opts);
+        } else if h.request.runtime == log.state.info.runtime {
+            opts.settings = log.state.info.settings.clone();
+            if h.destination_instance.is_none() {
+                log.state.info.configure_instance(&mut opts);
+            }
+        }
+        if let Some(settings) = &h.requested_settings {
+            opts.settings = settings.clone();
         }
         opts.model = h.request.model.clone();
         configure(&mut opts)?;
@@ -607,7 +774,12 @@ impl super::ChatStore {
                 .target
                 .as_ref()
                 .and_then(|s| s.instance.clone())
-                .or(h.destination_instance.clone()),
+                .or_else(|| h.destination_instance.clone())
+                .or_else(|| {
+                    (h.request.runtime == log.state.info.runtime)
+                        .then(|| log.state.info.active_instance().cloned())
+                        .flatten()
+                }),
             runtime: runtime.id,
             protocol: session.protocol(),
             program: runtime.program,

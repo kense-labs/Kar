@@ -248,7 +248,12 @@ impl Actor {
         }
         Ok(answer)
     }
-    async fn decide(&mut self, id: &str, result: &Value) -> Result<()> {
+    async fn decide(
+        &mut self,
+        id: &str,
+        result: &Value,
+        pending_req: Option<crate::PendingRequest>,
+    ) -> Result<()> {
         let task = self
             .pending
             .get(id)
@@ -265,17 +270,50 @@ impl Actor {
         };
         let body =
             json!({"actor":"kar","note":result["note"].as_str().unwrap_or("Rust host decision")});
-        let answer = self
+        let answer = match self
             .lease
             .console
             .call(Method::POST, &["approvals", id, action], Some(&body))
-            .await?;
+            .await
+        {
+            Ok(answer) => answer,
+            Err(err) => {
+                self.pending.remove(id);
+                if let Some(req) = pending_req {
+                    self.record(
+                        Some(&task),
+                        Direction::Host,
+                        RecordKind::Frame,
+                        Value::Null,
+                        vec![Event::RequestDeliveryFailed {
+                            cursor: req.cursor,
+                            id: req.id,
+                            method: req.method,
+                            kind: req.kind,
+                            status: crate::RequestDeliveryStatus::Failed,
+                            reason: err.to_string(),
+                        }],
+                    );
+                }
+                return Err(err);
+            }
+        };
+        let mut events = vec![Event::RequestResolved { id: id.into() }];
+        if let Some(req) = pending_req {
+            events.push(Event::RequestAnswerDispatched {
+                cursor: req.cursor,
+                id: req.id,
+                method: req.method,
+                kind: req.kind,
+                confirmed: true,
+            });
+        }
         self.record(
             Some(&task),
             Direction::ToRuntime,
             RecordKind::Response,
             answer,
-            vec![Event::RequestResolved { id: id.into() }],
+            events,
         );
         self.answered.insert(id.into(), task);
         self.pending.remove(id);
@@ -307,7 +345,7 @@ impl Actor {
             );
         }
         if self.approvals == ApprovalMode::Deny {
-            let _ = self.decide(id, &json!({"decision":"deny"})).await;
+            let _ = self.decide(id, &json!({"decision":"deny"}), None).await;
         }
     }
     async fn update(&mut self, update: Update) -> Result<()> {
@@ -453,9 +491,10 @@ impl Actor {
                 let _ = ack.send(result);
             }
             Command::Respond(id, result, ack) => {
+                let pending_req = self.journal.pending_request(&id, result.cursor());
                 let result =
                     match result.payload(&self.journal, &id, "morph/approval", &Value::Null) {
-                        Ok(value) => self.decide(id.as_str().unwrap_or(""), &value).await,
+                        Ok(value) => self.decide(id.as_str().unwrap_or(""), &value, pending_req).await,
                         Err(err) => Err(err),
                     };
                 let _ = ack.send(result);

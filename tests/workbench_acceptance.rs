@@ -204,6 +204,7 @@ async fn coedit(f: &Host, owner: &Client, ai: &Client) -> Value {
     let file = format!("{scope}/file?path=notes.md");
     let docs = format!("{scope}/documents");
     let doc = |cmd: &str| format!("{docs}/{cmd}?path=notes.md");
+    assert_eq!(ok(owner.get(doc("state"))).await["revision"], 0);
     assert_eq!(ok(owner.get(&file)).await["revision"], 0);
     fs::write(f.native.join("hold-document"), []).unwrap();
     let request = json!({"operation_id":"md-native","base_revision":0,"runtime":"codex","instructions":"kar-acceptance-edit-notes: replace author=original with author=assistant; preserve the rest."});

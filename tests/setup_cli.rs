@@ -250,3 +250,37 @@ fn workspace_inventories_keep_missing_provider_rows_and_validate_options() {
         assert!(!kar(&[kind, "--timeout-ms", "0"]).status.success());
     }
 }
+
+#[test]
+fn install_lines_expose_selection_values_and_user_descriptions() {
+    let opencode = kar::runtime("opencode").unwrap();
+    let lines = opencode.install_lines();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].line, "v1");
+    assert!(lines[0].description.contains("OpenCode 1"));
+    assert_eq!(lines[1].line, "v2");
+    assert!(lines[1].description.contains("OpenCode 2"));
+    assert!(kar::runtime("codex").unwrap().install_lines().is_empty());
+
+    let plan_json = kar(&["install", "opencode", "--plan", "--json"]);
+    assert!(plan_json.status.success());
+    let plan_row: serde_json::Value = serde_json::from_slice(&plan_json.stdout).unwrap();
+    assert_eq!(plan_row["plan"]["kind"], "unsupported");
+    assert_eq!(plan_row["plan"]["reason"], "line_required");
+    let refusal_lines = plan_row["plan"]["lines"].as_array().unwrap();
+    assert_eq!(refusal_lines.len(), 2);
+    assert_eq!(refusal_lines[0]["line"], "v1");
+    assert_eq!(refusal_lines[0]["description"], lines[0].description);
+    assert_eq!(refusal_lines[1]["line"], "v2");
+    assert_eq!(refusal_lines[1]["description"], lines[1].description);
+
+    let list_out = kar(&["list", "opencode"]);
+    assert!(list_out.status.success());
+    let list_row: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    let listed = list_row["install_lines"].as_array().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0]["line"], "v1");
+    assert_eq!(listed[0]["description"], lines[0].description);
+    assert_eq!(listed[1]["line"], "v2");
+    assert_eq!(listed[1]["description"], lines[1].description);
+}

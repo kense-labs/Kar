@@ -113,11 +113,11 @@ fn tools(caller: &Caller) -> Vec<Tool> {
     }
     if let Some(policy) = caller.policy.as_ref().filter(|p| p.reads_workflows()) {
         let mut actions = vec!["definitions","list","read","questions","hooks","store"];
-        if !caller.plan && policy.writes_workflows() { actions.extend(["start","resume","cancel","signal","reconcile","store_set","store_delete"]); }
+        if !caller.plan && policy.writes_workflows() { actions.extend(["start","resume","cancel","stop","skip","signal","reconcile","store_set","store_delete"]); }
         tools.push(Tool {
             name:"kar_workflow",
-            description:"Inspect durable project workflows and runs. Start a saved workflow, retry a failed step, answer a question, reconcile an interrupted attempt or cancel. Reuse command_id on retries.",
-            properties:json!({"project_id":id,"thread_id":id,"action":{"enum":actions},"workflow_id":id,"run_id":id,"key":{"type":"string"},"channel":{"type":"string"},"command_id":id,"attempt_id":id,"input":{},"value":{},"succeeded":{"type":"boolean"},"evidence":{"type":"string"},"status":{"enum":["ready","running","asking","waiting","reconcile","failed","cancelled","completed"]},"cursor":cursor,"limit":limit}),
+            description:"Inspect durable project workflows and runs. Start a saved workflow, retry a failed step, answer a question, reconcile an interrupted attempt, stop, skip or cancel. Reuse command_id on retries.",
+            properties:json!({"project_id":id,"thread_id":id,"action":{"enum":actions},"workflow_id":id,"run_id":id,"parent_run_id":id,"reason":{"type":"string"},"key":{"type":"string"},"channel":{"type":"string"},"command_id":id,"attempt_id":id,"input":{},"value":{},"succeeded":{"type":"boolean"},"evidence":{"type":"string"},"status":{"enum":["ready","running","asking","waiting","reconcile","failed","cancelled","stopped","skipped","completed"]},"cursor":cursor,"limit":limit}),
             required:&["action"],
         });
     }

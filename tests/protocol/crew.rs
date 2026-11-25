@@ -91,7 +91,13 @@ pub(super) async fn exercise() -> kar::Result<()> {
             ));
         }
         assert_eq!(calls(&session, method, "wait"), 1);
-        crew.interrupt(agent.id).await?;
+        let queue_method = if protocol == Protocol::Codex {
+            crew.steer(agent.id, "finish-wait".into()).await?;
+            "thread/queue/add"
+        } else {
+            crew.interrupt(agent.id).await?;
+            method
+        };
         let mut reports = Vec::new();
         while reports.len() < 2 {
             let batch = crew.wait(&[agent.id], Duration::from_secs(3)).await;
@@ -103,7 +109,7 @@ pub(super) async fn exercise() -> kar::Result<()> {
         assert_eq!(
             calls(
                 &session,
-                method,
+                queue_method,
                 if protocol == Protocol::Codex {
                     "fallback"
                 } else {
@@ -112,6 +118,9 @@ pub(super) async fn exercise() -> kar::Result<()> {
             ),
             1
         );
+        if protocol == Protocol::Codex {
+            assert_eq!(calls(&session, method, "fallback"), 0);
+        }
         let other = crew.spawn(&runtime, opts, None, "wait".into()).await?;
         assert!(matches!(
             crew.send_mode(agent.id, "blocked".into(), SendMode::Queue)
@@ -133,7 +142,7 @@ pub(super) async fn exercise() -> kar::Result<()> {
             Landed::Queued
         );
         take(&crew, agent.id, 4).await;
-        assert_eq!(calls(&session, method, "queued"), 1);
+        assert_eq!(calls(&session, queue_method, "queued"), 1);
         crew.close(agent.id).await?;
         crew.close(other.id).await?;
     }

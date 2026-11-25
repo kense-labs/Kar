@@ -312,7 +312,12 @@ async fn durable_chat(runtime: &Runtime, opts: &SessionOptions) -> kar::Result<(
     chat.close().await?;
     let key = Uuid::new_v4();
     store.enqueue(id, key, "same")?;
-    let reopened = store.resume_with(id, |o| o.env = opts.env.clone()).await?;
+    let reopened = store
+        .resume_with(id, |o| {
+            o.env = opts.env.clone();
+            o.launch_args = opts.launch_args.clone();
+        })
+        .await?;
     assert_eq!(reopened.info().native_id, native);
     reopened.drain_queue().await?;
     reopened.drain_queue().await?;

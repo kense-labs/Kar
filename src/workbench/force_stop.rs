@@ -70,29 +70,52 @@ async fn stop(
     Json(input): Json<Stop>,
 ) -> std::result::Result<Json<Receipt>, ApiError> {
     let state = app.clone();
-    let (fence, target, running, stream) = tokio::task::spawn_blocking(move || -> Result<_> {
-        state.binding(project, chat)?;
-        let fence = state.0.chats.stop_fence(chat, true)?;
-        let history = state.0.chats.history(chat)?;
-        let last = history.turns.last();
-        let target = last.map(|t| t.id);
-        if input.turn.is_some() && input.turn != target {
-            return Err(crate::transport::AbortRequest::stale());
-        }
-        Ok((
-            fence,
-            target,
-            last.is_some_and(|t| t.status == TurnStatus::Running),
-            history.cursor.map(|c| c.stream_id),
-        ))
-    })
-    .await
-    .map_err(|e| Error::Closed(e.to_string()))??;
+    let (fence, target, running, interrupted, stream) =
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            state.binding(project, chat)?;
+            let fence = state.0.chats.stop_fence(chat, true)?;
+            let history = state.0.chats.history(chat)?;
+            let last = history.turns.last();
+            let target = last.map(|t| t.id);
+            if input.turn.is_some() && input.turn != target {
+                return Err(crate::transport::AbortRequest::stale());
+            }
+            let running = last.is_some_and(|t| t.status == TurnStatus::Running);
+            let interrupted = running
+                || last.is_some_and(|t| t.status == TurnStatus::Interrupted);
+            Ok((
+                fence,
+                target,
+                running,
+                interrupted,
+                history.cursor.map(|c| c.stream_id),
+            ))
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
     let controller = app.controller(chat);
     let live = controller.live.lock().unwrap().upgrade();
     let Some(session) = live else {
         // A CLI process can own this journal even when the HTTP server has no controller.
-        let _offline = app.0.chats.confirm_offline(chat)?;
+        let state = app.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let _offline = state.0.chats.confirm_offline(chat)?;
+            let is_child =
+                super::mcp::orchestrator::Task::prepare_force_stop(&state, project, chat)?;
+            let sync_ids = super::mcp::orchestrator::Task::finish_force_stop_fenced(
+                &state,
+                project,
+                chat,
+                target,
+                interrupted,
+            )?;
+            drop(fence);
+            super::mcp::orchestrator::Task::finish_force_stop_unfenced(&state, chat, is_child, &sync_ids);
+            state.wake_queue();
+            Ok(())
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
         return Ok(Json(Receipt {
             turn: target,
             outcome: Outcome::Released,
@@ -102,6 +125,12 @@ async fn stop(
     if stream.is_some_and(|stream| stream != session.stream_id()) {
         return Err(Error::Busy.into());
     }
+    let state = app.clone();
+    let is_child = tokio::task::spawn_blocking(move || {
+        super::mcp::orchestrator::Task::prepare_force_stop(&state, project, chat)
+    })
+    .await
+    .map_err(|e| Error::Closed(e.to_string()))??;
     let shared_with = app.shared_controllers(chat, &session);
     let shared = !shared_with.is_empty();
     let mut teardown = tokio::spawn(async move {
@@ -176,7 +205,26 @@ async fn stop(
             bound.close().await?;
         }
         drop(owner);
-        drop(fence);
+        let state = app.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let sync_ids = super::mcp::orchestrator::Task::finish_force_stop_fenced(
+                &state,
+                project,
+                chat,
+                target,
+                interrupted,
+            )?;
+            drop(fence);
+            super::mcp::orchestrator::Task::finish_force_stop_unfenced(
+                &state,
+                chat,
+                is_child,
+                &sync_ids,
+            );
+            Ok(())
+        })
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
         app.wake_queue();
         closed?;
         Ok::<_, Error>(if shared {

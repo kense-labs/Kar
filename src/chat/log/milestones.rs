@@ -36,7 +36,7 @@ impl Before {
             requests: requests(state),
         }
     }
-    fn after(self, state: &State, expired: bool) -> Vec<Value> {
+    fn after(self, state: &State, resolution: &'static str) -> Vec<Value> {
         let mut data = vec![];
         if let Some(turn) = self.turn
             && let Some(t) = state.find(turn)
@@ -54,7 +54,7 @@ impl Before {
         let current = requests(state);
         for (key, (id, kind)) in &self.requests {
             if !current.contains_key(key) {
-                data.push(json!({"type":"thread.input_resolved","requestId":id,"kind":kind,"resolution":if expired{"expired"}else{"resolved"}}));
+                data.push(json!({"type":"thread.input_resolved","requestId":id,"kind":kind,"resolution":resolution}));
             }
         }
         for (key, (id, kind)) in current {
@@ -68,17 +68,31 @@ impl Before {
 
 fn encoded_transition(state: &mut State, row: ChatUpdate, expired: bool) -> Result<Vec<u8>> {
     let before = Before::capture(state);
-    let expired = expired
+    let resolution = if matches!(
+        &row,
+        ChatUpdate::End {
+            status: TurnStatus::Aborted,
+            ..
+        }
+    ) {
+        "cancelled"
+    } else if expired
         || matches!(
             row,
             ChatUpdate::Opened { .. }
                 | ChatUpdate::ContextRewound { .. }
                 | ChatUpdate::HandoffReady { .. }
+                | ChatUpdate::RequestDeliveryFailed { .. }
         )
-        || matches!(&row,ChatUpdate::End{status,..} if *status!=TurnStatus::Completed);
+        || matches!(&row, ChatUpdate::End { status, .. } if *status != TurnStatus::Completed)
+    {
+        "expired"
+    } else {
+        "resolved"
+    };
     let mut bytes = serde_json::to_vec(&row)?;
     state.apply(row)?;
-    let events = before.after(state, expired);
+    let events = before.after(state, resolution);
     if !events.is_empty() {
         bytes.pop();
         bytes.extend_from_slice(b",\"_kar_milestones\":");

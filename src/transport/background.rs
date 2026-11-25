@@ -1,5 +1,6 @@
 //! Claude's live roster is process-owned. Wait marks change the Working view, never the native result.
 mod antigravity;
+mod cursor;
 mod shells;
 
 use super::{Actor, Direction, Event, Protocol, RecordKind, Value};
@@ -15,6 +16,7 @@ pub(super) const WAIT: &str = "kar/background/wait";
 #[derive(Default)]
 pub(super) struct ClaudeBackground {
     shells: Option<shells::Tracker>,
+    cursor: Option<cursor::Tracker>,
     antigravity: Option<antigravity::Commands>,
     tools: VecDeque<Launch>,
     seen: VecDeque<Uuid>,
@@ -27,6 +29,12 @@ struct Launch {
 }
 
 impl ClaudeBackground {
+    pub(super) fn before_prompt(&mut self, root: Option<&str>) {
+        if let Some(tracker) = &mut self.cursor {
+            tracker.before_prompt(root);
+        }
+    }
+
     pub(super) fn for_runtime(
         protocol: Protocol,
         id: &str,
@@ -41,6 +49,7 @@ impl ClaudeBackground {
         }
         Self {
             shells,
+            cursor: cursor::Tracker::for_runtime(protocol, id, process, opts, secrets),
             antigravity: (protocol == Protocol::Acp && id == "antigravity").then(Default::default),
             ..Default::default()
         }
@@ -140,13 +149,32 @@ fn mark(id: &str, work: BackgroundWork) -> Event {
     }
 }
 impl Actor {
-    pub(super) fn has_opencode_shells(&self) -> bool {
-        self.background.shells.is_some()
+    pub(super) fn has_background_shells(&self) -> bool {
+        self.background.shells.is_some() || self.background.cursor.is_some()
+    }
+    pub(super) fn has_cursor_shells(&self) -> bool {
+        self.background.cursor.is_some()
     }
     pub(super) fn refresh_shells(&mut self) {
         let Some(root) = self.session() else {
             return;
         };
+        if let Some(tracker) = self.background.cursor.as_mut() {
+            tracker.root(&root);
+            let mut events = Vec::new();
+            tracker.refresh(&mut events);
+            if !events.is_empty() {
+                self.journal.push(
+                    Direction::FromRuntime,
+                    RecordKind::Frame,
+                    Some(root),
+                    vec![],
+                    serde_json::json!({"type":"kar/cursor-shell-jobs"}),
+                    events,
+                );
+            }
+            return;
+        }
         let Some(tracker) = self.background.shells.as_mut() else {
             return;
         };
@@ -165,6 +193,32 @@ impl Actor {
         }
     }
     pub(super) fn stop_shell(&mut self, id: &str, expected: Option<&crate::Cursor>) -> Result<()> {
+        if let Some(tracker) = self.background.cursor.as_ref() {
+            let key = tracker.resolve_alias(id).ok_or_else(|| {
+                Error::Refused("unknown Cursor background shell in this native session".into())
+            })?;
+            let snapshot = self.journal.snapshot();
+            if !snapshot.tasks.iter().any(|r| {
+                r.id == key
+                    && r.pending_background()
+                    && r.source.path.is_empty()
+                    && r.source.session_id.as_deref() == Some(&snapshot.id)
+                    && r.started_at.as_ref().is_some_and(|c| {
+                        c.stream_id == self.journal.id() && expected.is_none_or(|e| e == c)
+                    })
+            }) {
+                return Err(Error::Refused(
+                    "Cursor background shell occurrence is no longer running".into(),
+                ));
+            }
+            let key = key.to_owned();
+            return self
+                .background
+                .cursor
+                .as_mut()
+                .expect("selected Cursor tracker")
+                .stop(&key);
+        }
         let tracker =
             self.background.shells.as_ref().ok_or_else(|| {
                 Error::Unsupported("OpenCode shell controller unavailable".into())
@@ -195,6 +249,19 @@ impl Actor {
     }
     pub(super) fn background_frame(&mut self, v: &Value, events: &mut Vec<Event>) {
         let root = self.session();
+        if let Some(tracker) = &mut self.background.cursor {
+            if let Some(root) = root {
+                tracker.root(&root);
+                tracker.frame(
+                    v,
+                    self.turn
+                        .as_ref()
+                        .map(|t| t.chat_input.unwrap_or(t.prompt_request)),
+                    events,
+                );
+            }
+            return;
+        }
         if let Some(tracker) = &mut self.background.shells {
             if let Some(root) = root {
                 tracker.root(&root);
@@ -394,7 +461,11 @@ impl Actor {
         req: BackgroundWaitRequest,
     ) -> Result<BackgroundWaitReceipt> {
         let held_commands = self.background.antigravity.is_some();
-        if self.protocol != Protocol::Claude && !held_commands && self.background.shells.is_none() {
+        if self.protocol != Protocol::Claude
+            && !held_commands
+            && self.background.shells.is_none()
+            && self.background.cursor.is_none()
+        {
             return Err(Error::Unsupported(
                 "background waits on this runtime".into(),
             ));
@@ -431,6 +502,12 @@ impl Actor {
                         .shells
                         .as_ref()
                         .and_then(|s| s.resolve_alias(id))
+                        .or_else(|| {
+                            self.background
+                                .cursor
+                                .as_ref()
+                                .and_then(|c| c.resolve_alias(id))
+                        })
                         .unwrap_or(id.as_str()),
                 )
             }

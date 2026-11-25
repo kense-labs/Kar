@@ -10,6 +10,41 @@ use crate::{Error, Result, Runtime};
 use serde::Serialize;
 pub use update::UpdateCheck;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct InstallLine {
+    pub line: &'static str,
+    pub description: &'static str,
+}
+
+impl PartialEq<&str> for InstallLine {
+    fn eq(&self, other: &&str) -> bool {
+        self.line == *other
+    }
+}
+
+impl PartialEq<str> for InstallLine {
+    fn eq(&self, other: &str) -> bool {
+        self.line == other
+    }
+}
+
+impl AsRef<str> for InstallLine {
+    fn as_ref(&self) -> &str {
+        self.line
+    }
+}
+
+const OPENCODE_INSTALL_LINES: &[InstallLine] = &[
+    InstallLine {
+        line: "v1",
+        description: "OpenCode 1: the opencode-ai 1.x releases",
+    },
+    InstallLine {
+        line: "v2",
+        description: "OpenCode 2: the @opencode/cli 2.x releases, with a new plugin and server API",
+    },
+];
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum InstallPlan {
@@ -23,9 +58,9 @@ pub enum InstallPlan {
     },
 }
 impl Runtime {
-    pub fn install_lines(&self) -> &'static [&'static str] {
+    pub fn install_lines(&self) -> &'static [InstallLine] {
         if self.id == "opencode" {
-            &["v1", "v2"]
+            OPENCODE_INSTALL_LINES
         } else {
             &[]
         }
@@ -42,10 +77,14 @@ impl Runtime {
                 return Err(Error::Unsupported(format!(
                     "{} needs a release line; choose --line {}",
                     self.id,
-                    lines.join(" or ")
+                    lines
+                        .iter()
+                        .map(|entry| entry.line)
+                        .collect::<Vec<_>>()
+                        .join(" or ")
                 )));
             }
-            Some(line) if !lines.contains(&line) => {
+            Some(line) if !lines.iter().any(|entry| entry.line == line) => {
                 return Err(Error::Unsupported(format!(
                     "{} has no release line {line:?}",
                     self.id

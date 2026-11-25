@@ -115,9 +115,10 @@ impl Workbench {
                 }
                 "kar_delete_scheduled_task"=>{
                     let target=task.ok_or_else(missing)?;
-                    for r in d.runs.values_mut().filter(|r|r.workflow==target&&!matches!(r.status,Status::Completed|Status::Cancelled|Status::Failed)){
+                    for r in d.runs.values_mut().filter(|r|r.workflow==target&&!r.status.is_terminal()&&r.status!=Status::Failed){
                         r.cancel_requested=true;
-                        if r.status!=Status::Running{r.status=Status::Cancelled;}
+                        r.requested_terminal=Some(Status::Cancelled);
+                        if !matches!(r.status,Status::Running|Status::Reconcile){r.status=Status::Cancelled;r.wake_at_ms=None;}
                     }
                     views::erase_workflow(d,target);d.model_schedules.remove(&target);
                     json!({"scheduled_task_id":target,"deleted":true})

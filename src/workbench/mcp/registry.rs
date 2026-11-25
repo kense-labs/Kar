@@ -46,6 +46,7 @@ impl Grant {
     }
     pub(super) fn supports_background_wait(&self) -> bool {
         matches!(self.runtime.as_str(), "claude" | "antigravity")
+            || (cfg!(target_os = "macos") && self.runtime == "cursor")
             || self
                 .process
                 .get()

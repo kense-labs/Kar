@@ -54,7 +54,10 @@ pub use permissions::{PermissionResource, PolicyChoice, PolicyOption, ResourceId
 mod questions;
 pub use questions::{FieldKind, QuestionField, QuestionForm, QuestionOption, QuestionReply};
 mod interaction;
-pub use interaction::{PendingRequest, PermissionDecision, RequestControls, RequestKind};
+pub use interaction::{
+    OrphanedQuestion, PendingRequest, PermissionDecision, RequestControls, RequestDeliveryError,
+    RequestDeliveryStatus, RequestKind,
+};
 #[cfg(not(target_arch = "wasm32"))]
 mod antigravity;
 mod placement;
@@ -172,7 +175,10 @@ pub use side_question::SideQuestionOptions;
 #[cfg(not(target_arch = "wasm32"))]
 mod setup;
 #[cfg(not(target_arch = "wasm32"))]
-pub use setup::{HostInstallPlan, InstallCommand, InstallPlan, InstallPreview, InstallReason, InstallRefusal, InstallResult, InstallStep, UpdateCheck, UpgradeReason, UpgradeResult};
+pub use setup::{
+    HostInstallPlan, InstallCommand, InstallLine, InstallPlan, InstallPreview, InstallReason,
+    InstallRefusal, InstallResult, InstallStep, UpdateCheck, UpgradeReason, UpgradeResult,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod input;

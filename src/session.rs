@@ -189,6 +189,7 @@ impl Session {
         id: String,
         info: Value,
     ) -> Self {
+        journal.ensure_root(&id);
         let preflight_secrets = Arc::new(crate::options::session_secrets(&options));
         Self {
             attribution: AttributionTier::native(protocol, "", false),
@@ -416,7 +417,7 @@ impl Session {
         let mut extended_children = false;
         let mut opencode_v1 = false;
         let mut opencode_shells=false;
-        let mut opencode_shell_stop=false;
+        let mut opencode_shell_stop = cfg!(target_os = "macos") && cursor_acp;
         let mut installed_version = version.map(str::to_owned);
         let _startup = if runtime.protocol == Protocol::Acp && runtime.id == "opencode" {
             let lock = crate::options::opencode::startup(&options, &cwd).await?;
@@ -2127,8 +2128,38 @@ impl Session {
         .await
         .map(drop)
     }
+    pub(crate) fn orphaned_questions(&self) -> Option<Vec<crate::OrphanedQuestion>> {
+        self.journal.orphaned_questions()
+    }
+    pub(crate) fn take_orphaned_question(
+        &self,
+        cursor: &Cursor,
+        id: &Value,
+    ) -> Option<Result<Option<crate::OrphanedQuestion>>> {
+        self.journal.take_orphaned_question(cursor, id)
+    }
+    pub(crate) async fn respond_request(
+        &self,
+        request: &crate::PendingRequest,
+        answer: crate::transport::HostAnswer,
+    ) -> Result<()> {
+        let mut secrets = (*self.preflight_secrets).clone();
+        secrets.extend(answer.submitted_secrets(request));
+        let id = request.id.clone();
+        let res = self.call(|tx| Command::Respond(id, answer, tx)).await;
+        if let Err(Error::Closed(reason) | Error::Timeout(reason)) = &res {
+            self.journal
+                .record_unconfirmed_request_delivery(request, reason, &secrets);
+        }
+        res
+    }
     /// Answer a live request using its protocol-native response payload.
     pub async fn respond(&self, id: Value, result: Value) -> Result<()> {
+        if let Some(req) = self.journal.pending_request(&id, None) {
+            return self
+                .respond_request(&req, crate::transport::HostAnswer::Native(result))
+                .await;
+        }
         self.call(|tx| Command::Respond(id, crate::transport::HostAnswer::Native(result), tx))
             .await
     }
@@ -2138,13 +2169,10 @@ impl Session {
         request: &crate::PendingRequest,
         payload: Value,
     ) -> Result<()> {
-        self.call(|tx| {
-            Command::Respond(
-                request.id.clone(),
-                crate::transport::HostAnswer::Checked(request.cursor.clone(), payload),
-                tx,
-            )
-        })
+        self.respond_request(
+            request,
+            crate::transport::HostAnswer::Checked(request.cursor.clone(), payload),
+        )
         .await
     }
     pub async fn select_policy(
@@ -2152,13 +2180,10 @@ impl Session {
         request: &crate::PendingRequest,
         choice: crate::PolicyChoice,
     ) -> Result<()> {
-        self.call(|tx| {
-            Command::Respond(
-                request.id.clone(),
-                crate::transport::HostAnswer::Policy(request.cursor.clone(), choice),
-                tx,
-            )
-        })
+        self.respond_request(
+            request,
+            crate::transport::HostAnswer::Policy(request.cursor.clone(), choice),
+        )
         .await
     }
     pub async fn grant_resources(
@@ -2167,13 +2192,10 @@ impl Session {
         scope: crate::PermissionDecision,
         resources: Vec<crate::ResourceId>,
     ) -> Result<()> {
-        self.call(|tx| {
-            Command::Respond(
-                request.id.clone(),
-                crate::transport::HostAnswer::Resources(request.cursor.clone(), scope, resources),
-                tx,
-            )
-        })
+        self.respond_request(
+            request,
+            crate::transport::HostAnswer::Resources(request.cursor.clone(), scope, resources),
+        )
         .await
     }
     pub async fn answer_question(
@@ -2187,13 +2209,10 @@ impl Session {
         &self, request: &crate::PendingRequest, reply: crate::QuestionReply,
         files: std::collections::BTreeMap<String,String>,
     ) -> Result<()> {
-        self.call(|tx| {
-            Command::Respond(
-                request.id.clone(),
-                crate::transport::HostAnswer::Question(request.cursor.clone(), reply, files),
-                tx,
-            )
-        })
+        self.respond_request(
+            request,
+            crate::transport::HostAnswer::Question(request.cursor.clone(), reply, files),
+        )
         .await
     }
     /// Submit a one-time permission decision for this specific pending request.
@@ -2202,13 +2221,10 @@ impl Session {
         request: &crate::PendingRequest,
         decision: crate::PermissionDecision,
     ) -> Result<()> {
-        self.call(|tx| {
-            Command::Respond(
-                request.id.clone(),
-                crate::transport::HostAnswer::Permission(request.cursor.clone(), decision),
-                tx,
-            )
-        })
+        self.respond_request(
+            request,
+            crate::transport::HostAnswer::Permission(request.cursor.clone(), decision),
+        )
         .await
     }
     /// Dispatch compaction and follow its native admission and completion independently.

@@ -393,6 +393,14 @@ pub(super) async fn link_second_project(
             .json(&json!({"id":Uuid::new_v4(),"chat":chat,"kind":"issue","number":7})))
         .await;
     }
+    assert_eq!(
+        ok(c.get(format!("{url}/forge/links")))
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     let meta = format!("{url}/chats/{chat}/metadata");
     ok(c.post(&meta)
         .json(&json!({"command_id":Uuid::new_v4(),"action":"rename","title":"Second copy"})))
@@ -448,7 +456,7 @@ pub(super) async fn linked(
     rows
 }
 
-pub(super) async fn issue_pages(c: &reqwest::Client, base: &str, projects: [&str; 2]) {
+pub(super) async fn issue_pages(c: &reqwest::Client, base: &str, projects: &[&str]) {
     let detail_url = format!("{base}/projects/{}/forge/issues/7/detail", projects[0]);
     let detail = ok(c.get(&detail_url)).await;
     assert_eq!(
@@ -481,7 +489,7 @@ pub(super) async fn issue_pages(c: &reqwest::Client, base: &str, projects: [&str
     assert_eq!(entries[0]["state"]["closeReason"], "not-planned");
     assert_eq!(entries[0]["key"], "7");
     assert_eq!(first["viewers"]["review.example"], "kar-test");
-    assert_eq!(first["trackers"][0]["projectCount"], 2);
+    assert_eq!(first["trackers"][0]["projectCount"], projects.len());
     assert_eq!(first["scopes"].as_array().unwrap().len(), 1);
     let scope = "review.example team/repo";
     assert_eq!(first["nextCursors"][scope], "page2");

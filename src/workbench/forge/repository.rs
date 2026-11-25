@@ -286,12 +286,37 @@ pub(super) struct Prepared {
     pub(super) repo: Option<CloneUrls>,
 }
 pub(super) async fn prepare(app: &Workbench, req: CloneInput) -> Result<Prepared, ForgeError> {
+    if !req.directory.is_absolute()
+        || req
+            .directory
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(super::super::denied().into());
+    }
     if std::fs::symlink_metadata(&req.directory).is_ok_and(|meta| meta.is_symlink()) {
         return Err(ForgeError::bad("clone destination is a symbolic link"));
     }
-    let root = app.allowed(&req.directory)?;
-    let relative = req
-        .directory
+    let mut ancestor = req.directory.as_path();
+    let resolved = loop {
+        match ancestor.canonicalize() {
+            Ok(existing) => {
+                break existing.join(
+                    req.directory
+                        .strip_prefix(ancestor)
+                        .map_err(|_| ForgeError::bad("invalid clone destination"))?,
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| ForgeError::from(super::super::denied()))?;
+            }
+            Err(e) => return Err(Error::Io(e).into()),
+        }
+    };
+    let root = app.allowed(&resolved)?;
+    let relative = resolved
         .strip_prefix(&root.path)
         .map_err(|_| ForgeError::bad("invalid clone destination"))?;
     let ws = app.workspace_at(&root.path)?;

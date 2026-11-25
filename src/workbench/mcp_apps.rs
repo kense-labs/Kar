@@ -287,7 +287,7 @@ async fn context(
         }
         cursor =
             w.0.chats
-                .saved_info(cursor)?
+                .ancestry_info(cursor)?
                 .forked_from
                 .ok_or_else(|| bad("MCP app context belongs to its chat or a fork descendant"))?
                 .chat;

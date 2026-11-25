@@ -205,7 +205,8 @@ fn load(app: &Workbench) -> Result<Loaded> {
     if file.metadata()?.len() > 1 << 20 {
         return Err(bad("Keyboard configuration exceeds 1 MiB"));
     }
-    let entries: Vec<Value> = serde_json::from_reader(json_comments::StripComments::new(file))?;
+    let entries: Vec<Value> = serde_json::from_reader(json_comments::StripComments::new(file))
+        .map_err(|e| bad(&format!("Invalid keybindings file: {e}")))?;
     if entries.len() > 256 {
         return Err(bad("At most 256 keyboard rules are supported"));
     }

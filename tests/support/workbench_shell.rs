@@ -83,7 +83,7 @@ async fn scenario() {
     assert_eq!(seen, right.matching(pid, |p| p["name"] == "shell").await);
     let id = Uuid::new_v4().to_string();
     ok(b.post(format!("{url}/projects/{pid}/chats"))
-        .json(&json!({"id":id,"runtime":"codex"})))
+        .json(&json!({"id":id,"runtime":"codex","approvals":"host"})))
     .await;
     let created = left.matching(&id, |c| c["activity"]["turns"] == 0).await;
     assert_eq!(
@@ -166,5 +166,86 @@ async fn scenario() {
             .status()
             .is_success()
     );
+
+    // Verify additive /shell chat row metadata (approvals, provider_instance, forge_links).
+    let chat_entry = stable["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "chat" && r["id"] == id)
+        .expect("chat row in shell");
+    assert!(chat_entry["row"]["approvals"].is_string());
+    assert!(chat_entry["row"].get("provider_instance").is_some());
+    assert_eq!(chat_entry["row"]["forge_links"], json!([]));
+
+    // Empty side chat opened before turn 1 is included in query: "family",
+    // and side chats + archived projects are excluded from older_settled.
+    let sub = work.join("family-settled");
+    fs::create_dir(&sub).unwrap();
+    let p2 = ok(a
+        .post(format!("{url}/projects"))
+        .json(&json!({"root": sub, "name": "family-settled"})))
+    .await;
+    let p2_id = p2["id"].as_str().unwrap();
+    let parent_chat = Uuid::new_v4();
+    ok(a.post(format!("{url}/projects/{p2_id}/chats"))
+        .json(&json!({"id": parent_chat, "runtime": "codex"})))
+    .await;
+    let side_chat = Uuid::new_v4();
+    ok(a.post(format!("{url}/projects/{p2_id}/chats/{parent_chat}/forks"))
+        .json(&json!({"id": side_chat, "side_chat": true})))
+    .await;
+
+    let query = format!("{url}/chat-state/query");
+    for target in [parent_chat, side_chat] {
+        let family = ok(a
+            .post(&query)
+            .json(&json!({"query": "family", "chat": target})))
+        .await;
+        let ids: Vec<String> = family["chats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["info"]["id"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&parent_chat.to_string()));
+        assert!(ids.contains(&side_chat.to_string()));
+    }
+
+    for (cid, ms) in [(parent_chat, 500u64), (side_chat, 400u64)] {
+        ok(a.post(format!("{url}/projects/{p2_id}/chats/{cid}/metadata"))
+            .json(&json!({
+                "command_id": Uuid::new_v4(),
+                "action": "settle",
+                "settled_ms": ms
+            })))
+        .await;
+    }
+    let settled = ok(a
+        .post(&query)
+        .json(&json!({"query": "older_settled", "before_ms": 1000, "project_ids": [p2_id], "limit": 10})))
+    .await;
+    let settled_ids: Vec<String> = settled["chats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["info"]["id"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(settled_ids, vec![parent_chat.to_string()]);
+
+    ok(a.post(format!("{url}/projects/mutate")).json(&json!({
+        "type": "project.update",
+        "commandId": Uuid::new_v4().to_string(),
+        "projectId": p2_id,
+        "archived": true
+    })))
+    .await;
+    let after_archive = ok(a
+        .post(&query)
+        .json(&json!({"query": "older_settled", "before_ms": 1000, "project_ids": [p2_id], "limit": 10})))
+    .await;
+    assert_eq!(after_archive["chats"], json!([]));
+
     next.kill().await.unwrap();
 }

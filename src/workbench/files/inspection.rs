@@ -315,10 +315,22 @@ struct Metadata {
 }
 fn file_metadata(app: &Workbench, path: &Path) -> Result<Value> {
     let path = expanded(path)?;
-    if !path.is_absolute() {
+    if !path.is_absolute()
+        || path.starts_with(app.0.chats.directory())
+        || path
+            .components()
+            .any(|p| p.as_os_str().eq_ignore_ascii_case(".git"))
+    {
         return Err(denied());
     }
-    app.allowed(&path)?;
+    if app.allowed(&path).is_err() {
+        let parent = path.parent().ok_or_else(denied)?.canonicalize()?;
+        let candidate = match path.file_name() {
+            Some(name) => parent.join(name),
+            None => parent,
+        };
+        app.allowed(&candidate)?;
+    }
     let real = path.canonicalize()?;
     let root = &app.allowed(&real)?.path;
     let ws = app.workspace_at(root)?;
