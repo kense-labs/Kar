@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-label="Kar — Air Traffic Control for Every Coding Agent">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B0F17"/>
+      <stop offset="55%" stop-color="#0F1624"/>
+      <stop offset="100%" stop-color="#0B1220"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0.74" cy="0.5" r="0.38">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.16"/>
+      <stop offset="60%" stop-color="#6366F1" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#0B0F17" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.16" cy="0.24" r="0.34">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.11"/>
+      <stop offset="100%" stop-color="#0B0F17" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="coreGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#172338"/>
+      <stop offset="100%" stop-color="#101929"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="50%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#818CF8"/>
+    </linearGradient>
+    <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
+      <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#1E293B" stroke-width="0.7" stroke-opacity="0.55"/>
+    </pattern>
+  </defs>
+
+  <!-- Outer Card -->
+  <rect x="1" y="1" width="1198" height="358" rx="20" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1198" height="358" rx="20" fill="url(#grid)"/>
+  <rect x="1" y="1" width="1198" height="358" rx="20" fill="url(#glowA)"/>
+  <rect x="1" y="1" width="1198" height="358" rx="20" fill="url(#glowB)"/>
+  <rect x="1" y="1" width="1198" height="358" rx="20" fill="none" stroke="#1E2D45" stroke-width="1.5"/>
+
+  <!-- Left Column: Eyebrow Pill -->
+  <rect x="48" y="38" width="388" height="28" rx="14" fill="#111C2D" stroke="#233554" stroke-width="1"/>
+  <circle cx="65" cy="52" r="4.5" fill="#34D399"/>
+  <circle cx="65" cy="52" r="8" fill="#34D399" fill-opacity="0.22"/>
+  <text x="80" y="56.5" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11.5" font-weight="600" letter-spacing="0.4">RUST 2024 · #![forbid(unsafe_code)] · APACHE-2.0</text>
+
+  <!-- Brand Mark + Wordmark -->
+  <g transform="translate(48, 86)">
+    <rect x="0" y="0" width="54" height="54" rx="14" fill="#132036" stroke="url(#accentGrad)" stroke-width="1.6"/>
+    <circle cx="27" cy="27" r="16" fill="none" stroke="#38BDF8" stroke-width="1.4" stroke-dasharray="3 3" stroke-opacity="0.7"/>
+    <path d="M18 16 V38 M18 27 L35 16 M24 23 L36 38" fill="none" stroke="#F8FAFC" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="35" cy="16" r="3" fill="#34D399"/>
+    <circle cx="36" cy="38" r="3" fill="#818CF8"/>
+    <text x="70" y="45" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Inter, sans-serif" font-size="52" font-weight="800" letter-spacing="-1.5">KAR</text>
+    <rect x="192" y="18" width="66" height="22" rx="6" fill="#0F2922" stroke="#10B981" stroke-opacity="0.45"/>
+    <text x="225" y="33" text-anchor="middle" fill="#34D399" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="700">v0.1.0</text>
+  </g>
+
+  <!-- Headline -->
+  <text x="48" y="182" fill="#F1F5F9" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Inter, sans-serif" font-size="27" font-weight="700" letter-spacing="-0.4">Air Traffic Control for</text>
+  <text x="48" y="216" fill="url(#accentGrad)" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Inter, sans-serif" font-size="27" font-weight="800" letter-spacing="-0.4">Every Coding Agent.</text>
+
+  <!-- Subtitle -->
+  <text x="48" y="250" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="14" font-weight="400">One crash-proof Rust engine to launch, steer, fork, checkpoint, and</text>
+  <text x="48" y="271" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="14" font-weight="400">orchestrate 20+ native agent runtimes across CLI, SDK, HTTP &amp; Wasm.</text>
+
+  <!-- Metric Capsules -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="600">
+    <rect x="48" y="296" width="114" height="28" rx="8" fill="#111C2E" stroke="#243552"/>
+    <text x="105" y="314" text-anchor="middle" fill="#E2E8F0">20+ Runtimes</text>
+
+    <rect x="170" y="296" width="132" height="28" rx="8" fill="#111C2E" stroke="#243552"/>
+    <text x="236" y="314" text-anchor="middle" fill="#38BDF8">Crash-Proof SSE</text>
+
+    <rect x="310" y="296" width="118" height="28" rx="8" fill="#111C2E" stroke="#243552"/>
+    <text x="369" y="314" text-anchor="middle" fill="#34D399">95 MCP Tools</text>
+
+    <rect x="436" y="296" width="128" height="28" rx="8" fill="#111C2E" stroke="#243552"/>
+    <text x="500" y="314" text-anchor="middle" fill="#A5B4FC">Office Co-Edit</text>
+  </g>
+
+  <!-- Right Schematic: Signal Curves -->
+  <g fill="none" stroke-width="1.6">
+    <!-- Left-to-Core -->
+    <path d="M 748 67 C 786 67, 786 150, 822 156" stroke="#34D399" stroke-opacity="0.65"/>
+    <path d="M 748 123 C 784 123, 788 164, 822 168" stroke="#38BDF8" stroke-opacity="0.7"/>
+    <path d="M 748 179 C 784 179, 788 180, 822 180" stroke="#60A5FA" stroke-opacity="0.75"/>
+    <path d="M 748 235 C 784 235, 788 196, 822 192" stroke="#818CF8" stroke-opacity="0.7"/>
+    <path d="M 748 291 C 786 291, 786 210, 822 204" stroke="#A78BFA" stroke-opacity="0.65"/>
+
+    <!-- Core-to-Right -->
+    <path d="M 970 156 C 1002 156, 1000 84, 1028 84" stroke="#34D399" stroke-opacity="0.75"/>
+    <path d="M 970 172 C 1000 172, 1000 148, 1028 148" stroke="#38BDF8" stroke-opacity="0.75"/>
+    <path d="M 970 188 C 1000 188, 1000 212, 1028 212" stroke="#60A5FA" stroke-opacity="0.75"/>
+    <path d="M 970 204 C 1002 204, 1000 276, 1028 276" stroke="#818CF8" stroke-opacity="0.75"/>
+  </g>
+
+  <!-- Left Schematic Column: Agent Dialect Nodes -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" font-weight="600">
+    <rect x="610" y="48" width="138" height="38" rx="9" fill="#111B2C" stroke="#243B55"/>
+    <circle cx="626" cy="67" r="3.5" fill="#34D399"/>
+    <text x="637" y="71" fill="#E2E8F0">Codex · Claude</text>
+
+    <rect x="610" y="104" width="138" height="38" rx="9" fill="#111B2C" stroke="#243B55"/>
+    <circle cx="626" cy="123" r="3.5" fill="#38BDF8"/>
+    <text x="637" y="127" fill="#E2E8F0">Cursor · Agy</text>
+
+    <rect x="610" y="160" width="138" height="38" rx="9" fill="#111B2C" stroke="#243B55"/>
+    <circle cx="626" cy="179" r="3.5" fill="#60A5FA"/>
+    <text x="637" y="183" fill="#E2E8F0">OpenCode · Pi</text>
+
+    <rect x="610" y="216" width="138" height="38" rx="9" fill="#111B2C" stroke="#243B55"/>
+    <circle cx="626" cy="235" r="3.5" fill="#818CF8"/>
+    <text x="637" y="239" fill="#E2E8F0">Kimi · Grok</text>
+
+    <rect x="610" y="272" width="138" height="38" rx="9" fill="#111B2C" stroke="#243B55"/>
+    <circle cx="626" cy="291" r="3.5" fill="#A78BFA"/>
+    <text x="637" y="295" fill="#E2E8F0">DSH · Qwen +9</text>
+  </g>
+
+  <!-- Center KAR Core -->
+  <rect x="822" y="84" width="148" height="192" rx="16" fill="url(#coreGrad)" stroke="url(#accentGrad)" stroke-width="1.8"/>
+  <text x="896" y="113" text-anchor="middle" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="800" letter-spacing="1.2">KAR CORE</text>
+  <line x1="840" y1="124" x2="952" y2="124" stroke="#263B59" stroke-width="1"/>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" text-anchor="middle">
+    <rect x="836" y="135" width="120" height="26" rx="6" fill="#0D1626" stroke="#223552"/>
+    <text x="896" y="152" fill="#34D399">UUID FIFO Ledger</text>
+
+    <rect x="836" y="168" width="120" height="26" rx="6" fill="#0D1626" stroke="#223552"/>
+    <text x="896" y="185" fill="#38BDF8">Git Trees (gix)</text>
+
+    <rect x="836" y="201" width="120" height="26" rx="6" fill="#0D1626" stroke="#223552"/>
+    <text x="896" y="218" fill="#93C5FD">Crash Reconciler</text>
+
+    <rect x="836" y="234" width="120" height="26" rx="6" fill="#0D1626" stroke="#223552"/>
+    <text x="896" y="251" fill="#C4B5FD">Scoped MCP Bus</text>
+  </g>
+
+  <!-- Right Schematic Column: Workbench Surfaces -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif">
+    <rect x="1028" y="60" width="134" height="48" rx="10" fill="#111B2C" stroke="#243B55"/>
+    <text x="1042" y="81" fill="#F1F5F9" font-size="12" font-weight="700">Time-Travel</text>
+    <text x="1042" y="98" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">Fork · Rewind · Diff</text>
+
+    <rect x="1028" y="124" width="134" height="48" rx="10" fill="#111B2C" stroke="#243B55"/>
+    <text x="1042" y="145" fill="#F1F5F9" font-size="12" font-weight="700">Workbench</text>
+    <text x="1042" y="162" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">HTTP · SSE · Relay</text>
+
+    <rect x="1028" y="188" width="134" height="48" rx="10" fill="#111B2C" stroke="#243B55"/>
+    <text x="1042" y="209" fill="#F1F5F9" font-size="12" font-weight="700">PTY &amp; Forge</text>
+    <text x="1042" y="226" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">Stacked PR · CI</text>
+
+    <rect x="1028" y="252" width="134" height="48" rx="10" fill="#111B2C" stroke="#243B55"/>
+    <text x="1042" y="273" fill="#F1F5F9" font-size="12" font-weight="700">Live Co-Edit</text>
+    <text x="1042" y="290" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">Docx · Xlsx · Pptx</text>
+  </g>
+</svg>
