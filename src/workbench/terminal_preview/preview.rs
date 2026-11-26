@@ -293,6 +293,7 @@ pub(super) struct Grants(
     Mutex<HashMap<(Uuid, Uuid), Instant>>,
 );
 impl Grants {
+    #[allow(clippy::too_many_arguments)]
     pub async fn open(
         &self,
         project: Uuid,

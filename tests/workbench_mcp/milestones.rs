@@ -26,12 +26,7 @@ pub(super) async fn begin(
     let list = server::json(request(c, url, owner, "events/list", json!({}))).await;
     let listed_events = list["result"]["events"].as_array().unwrap();
     assert_eq!(listed_events.len(), 12);
-    let find_schema = |name: &str| {
-        listed_events
-            .iter()
-            .find(|e| e["name"] == name)
-            .unwrap()
-    };
+    let find_schema = |name: &str| listed_events.iter().find(|e| e["name"] == name).unwrap();
     assert_eq!(
         find_schema("workflow.input_resolved")["payloadSchema"]["properties"]["resolution"]["enum"],
         json!(["answered", "cancelled", "expired"])
@@ -60,7 +55,21 @@ pub(super) async fn begin(
     ))
     .await;
     assert_eq!(hidden["error"]["code"], -32023);
+    assert_eq!(
+        find_schema("thread.run_settled")["delivery"],
+        json!(["poll", "push", "webhook"])
+    );
     let unsupported = server::json(request(
+        c,
+        url,
+        owner,
+        "events/subscribe",
+        json!({"name":"thread.run_settled","delivery":{"mode":"email"}}),
+    ))
+    .await;
+    assert_eq!(unsupported["error"]["code"], -32026);
+    assert_eq!(unsupported["error"]["data"]["value"], "email");
+    let incomplete = server::json(request(
         c,
         url,
         owner,
@@ -68,8 +77,7 @@ pub(super) async fn begin(
         json!({"name":"thread.run_settled","delivery":{"mode":"webhook"}}),
     ))
     .await;
-    assert_eq!(unsupported["error"]["code"], -32026);
-    assert_eq!(unsupported["error"]["data"]["value"], "webhook");
+    assert_eq!(incomplete["error"]["code"], -32602);
     let first = server::json(request(
         c,
         url,
@@ -156,7 +164,14 @@ impl SseReader {
 
 static NESTED_EXPECTATIONS: std::sync::OnceLock<(String, Vec<String>)> = std::sync::OnceLock::new();
 
-async fn wait_run_status(c: &Client, url: &str, owner: &str, p: &str, run_id: &str, want: &str) -> Value {
+async fn wait_run_status(
+    c: &Client,
+    url: &str,
+    owner: &str,
+    p: &str,
+    run_id: &str,
+    want: &str,
+) -> Value {
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let row = server::json(
@@ -175,12 +190,12 @@ async fn wait_run_status(c: &Client, url: &str, owner: &str, p: &str, run_id: &s
 }
 
 async fn exercise_nested_and_terminal_milestones(c: &Client, url: &str, owner: &str) {
-    let projects = server::json(c.get(format!("{url}/projects")).header("Authorization", owner)).await;
-    let p = projects
-        .as_array()
-        .unwrap()
-        .first()
-        .unwrap()["id"]
+    let projects = server::json(
+        c.get(format!("{url}/projects"))
+            .header("Authorization", owner),
+    )
+    .await;
+    let p = projects.as_array().unwrap().first().unwrap()["id"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -420,13 +435,15 @@ async fn exercise_nested_and_terminal_milestones(c: &Client, url: &str, owner: &
         .to_owned();
     wait_run_status(c, url, owner, &p, &stop_run_id, "asking").await;
     server::json(
-        c.post(format!("{url}/projects/{p}/workflow-runs/{stop_run_id}/actions"))
-            .header("Authorization", owner)
-            .json(&json!({
-                "type": "stop",
-                "operation": Uuid::new_v4(),
-                "reason": "operator halted run"
-            })),
+        c.post(format!(
+            "{url}/projects/{p}/workflow-runs/{stop_run_id}/actions"
+        ))
+        .header("Authorization", owner)
+        .json(&json!({
+            "type": "stop",
+            "operation": Uuid::new_v4(),
+            "reason": "operator halted run"
+        })),
     )
     .await;
     wait_run_status(c, url, owner, &p, &stop_run_id, "stopped").await;
@@ -483,7 +500,11 @@ async fn exercise_nested_and_terminal_milestones(c: &Client, url: &str, owner: &
         .collect();
     assert_eq!(
         resumed_ids,
-        vec![http_child_skip.as_str(), skip_run_id.as_str(), stop_run_id.as_str()]
+        vec![
+            http_child_skip.as_str(),
+            skip_run_id.as_str(),
+            stop_run_id.as_str()
+        ]
     );
     assert_eq!(
         resumed_events[0]["params"]["data"]["parentWorkflowRunId"],
@@ -528,9 +549,17 @@ async fn exercise_nested_and_terminal_milestones(c: &Client, url: &str, owner: &
         .collect();
     assert_eq!(
         b_run_ids,
-        vec![parent_run_id.as_str(), skip_run_id.as_str(), stop_run_id.as_str()]
+        vec![
+            parent_run_id.as_str(),
+            skip_run_id.as_str(),
+            stop_run_id.as_str()
+        ]
     );
-    assert!(b_events.iter().all(|m| m["params"]["data"]["isSubagentChild"] == false));
+    assert!(
+        b_events
+            .iter()
+            .all(|m| m["params"]["data"]["isSubagentChild"] == false)
+    );
 
     // 5) Poll workflow.input_resolved from edge with includeSubagentChildren: true vs false.
     let resolved_all = server::json(request(
@@ -675,7 +704,10 @@ pub(super) async fn recover(
             .collect();
         let mut unique = std::collections::BTreeSet::new();
         for eid in &seen_ids {
-            assert!(unique.insert(*eid), "duplicate eventId after restart: {eid}");
+            assert!(
+                unique.insert(*eid),
+                "duplicate eventId after restart: {eid}"
+            );
         }
         for exp in expected_ids {
             assert!(

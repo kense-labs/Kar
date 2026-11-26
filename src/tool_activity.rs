@@ -106,3 +106,72 @@ pub(crate) fn parts(value: &Value) -> Option<Vec<OutputPart>> {
         None => vec![one(value)],
     })
 }
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn mcp_raw_parts(raw: &Value, status: Option<&ToolStatus>) -> Option<Vec<OutputPart>> {
+    if raw["type"] != "MCP" {
+        return None;
+    }
+    let output = raw["output"].as_object()?;
+    let has_ok = output.contains_key("OkayOutput");
+    let has_err = output.contains_key("Error");
+    if has_ok && has_err {
+        return None;
+    }
+    let text = match status {
+        Some(ToolStatus::Failed) if has_err => output.get("Error").and_then(Value::as_str),
+        Some(ToolStatus::Succeeded) | None if has_ok => {
+            output.get("OkayOutput").and_then(Value::as_str)
+        }
+        _ => None,
+    }
+    .filter(|s| !s.is_empty())?;
+    Some(vec![OutputPart::Text {
+        text: text.to_owned(),
+    }])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn mcp_raw_parts_projects_okay_and_error_text_by_status() {
+        let ok = json!({"type": "MCP", "output": {"OkayOutput": "mcp ok"}});
+        let err = json!({"type": "MCP", "output": {"Error": "mcp failed"}});
+        let both = json!({"type": "MCP", "output": {"OkayOutput": "a", "Error": "b"}});
+
+        assert_eq!(
+            mcp_raw_parts(&ok, Some(&ToolStatus::Succeeded)),
+            Some(vec![OutputPart::Text {
+                text: "mcp ok".into(),
+            }])
+        );
+        assert_eq!(
+            mcp_raw_parts(&ok, None),
+            Some(vec![OutputPart::Text {
+                text: "mcp ok".into(),
+            }])
+        );
+        assert!(mcp_raw_parts(&ok, Some(&ToolStatus::Failed)).is_none());
+        assert!(mcp_raw_parts(&ok, Some(&ToolStatus::Cancelled)).is_none());
+
+        assert_eq!(
+            mcp_raw_parts(&err, Some(&ToolStatus::Failed)),
+            Some(vec![OutputPart::Text {
+                text: "mcp failed".into(),
+            }])
+        );
+        assert!(mcp_raw_parts(&err, Some(&ToolStatus::Succeeded)).is_none());
+        assert!(mcp_raw_parts(&both, Some(&ToolStatus::Succeeded)).is_none());
+        assert!(mcp_raw_parts(&both, Some(&ToolStatus::Failed)).is_none());
+        assert!(
+            mcp_raw_parts(
+                &json!({"type": "MCP", "output": {"OkayOutput": ""}}),
+                Some(&ToolStatus::Succeeded),
+            )
+            .is_none()
+        );
+    }
+}

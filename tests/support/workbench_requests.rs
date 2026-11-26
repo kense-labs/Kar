@@ -451,8 +451,7 @@ async fn orphan_and_delivery_error_scenario() {
     );
 
     let seed_cursor = view_a.cursor().to_string();
-    let mut sse_a =
-        SseClient::open_with_client(&a, &chat, &seed_cursor, Some(&seed_cursor)).await;
+    let mut sse_a = SseClient::open_with_client(&a, &chat, &seed_cursor, Some(&seed_cursor)).await;
     let mut sse_b = SseClient::open_with_client(&b, &chat, &seed_cursor, None).await;
 
     // Answering the invalidated permission after restart is refused.
@@ -629,14 +628,12 @@ async fn orphan_and_delivery_error_scenario() {
 
     loop {
         let snap = ok(b.get(format!("{chat}/snapshot"))).await;
-        let settled = snap["history"]["turns"]
-            .as_array()
-            .is_some_and(|turns| {
-                turns
-                    .iter()
-                    .find(|t| t["id"] == secret_turn.to_string())
-                    .is_some_and(|t| t["status"] != "running")
-            });
+        let settled = snap["history"]["turns"].as_array().is_some_and(|turns| {
+            turns
+                .iter()
+                .find(|t| t["id"] == secret_turn.to_string())
+                .is_some_and(|t| t["status"] != "running")
+        });
         if settled {
             check_error_turn(&snap);
             break;

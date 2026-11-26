@@ -40,7 +40,8 @@ fn excel_input_formula_and_fill_merge_on_named_sheet_after_tab_reorder() -> Resu
     book.set_input(1, 2, 1, "99")?;
     book.set_input(0, 2, 3, "=B3*2")?;
     book.save_as(&path)?;
-    let text_from_file = kar_documents::extract::document_text("sample.xlsx", &std::fs::read(&path)?).unwrap();
+    let text_from_file =
+        kar_documents::extract::document_text("sample.xlsx", &std::fs::read(&path)?).unwrap();
     assert!(text_from_file.contains("预算") && text_from_file.contains("99"));
     let mut book = Workbook::open(&path)?;
     let b3 = Cell::at(&book, 0, 2, 1)?;
@@ -117,7 +118,8 @@ fn slides_merge_after_slide_and_layer_reorder_preserves_media_and_relationships(
     deck.add_picture(0, png.to_vec())?;
     deck.new_slide(Some(0))?;
     deck.save_as(&path)?;
-    let text_from_file = kar_documents::extract::document_text("sample.pptx", &std::fs::read(&path)?).unwrap();
+    let text_from_file =
+        kar_documents::extract::document_text("sample.pptx", &std::fs::read(&path)?).unwrap();
     assert!(text_from_file.contains("## Slide 1") && text_from_file.contains("## Slide 2"));
     let source_part = deck.slide(0).part.clone();
     let rel_part = format!(

@@ -1,6 +1,10 @@
 //! GitHub App device sign-in on the workbench host. Device grants are never sent to clients.
 use super::*;
-use axum::{Router, extract::State, routing::post};
+use axum::{
+    Router,
+    extract::{Path as AxumPath, State},
+    routing::{get, post, put},
+};
 use std::{sync::Mutex, time::Duration};
 use tokio::sync::watch;
 mod sessions;
@@ -143,6 +147,115 @@ pub(in crate::workbench::forge) fn routes() -> Router<Workbench> {
         .route("/forge/sign-in/wait", post(wait))
         .route("/forge/sign-in/cancel", post(cancel))
         .route("/forge/app-access", post(access))
+        .route("/forge/credentials", get(list_credentials))
+        .route(
+            "/forge/credentials/{host}",
+            put(put_credential).delete(delete_credential),
+        )
+}
+
+pub(in crate::workbench::forge) fn forge_pat_secret_name(host: &str) -> String {
+    let mut out = String::from("forge_pat_");
+    for ch in host.trim().to_ascii_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.len() > 120 {
+        out.truncate(120);
+    }
+    out
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PutForgeCredential {
+    token: Option<String>,
+    kind: Option<String>,
+    api_base: Option<String>,
+}
+
+async fn list_credentials(State(app): State<Workbench>) -> Reply<Value> {
+    let svc = crate::workbench::secrets::SecretService::for_workbench(&app)?;
+    let stored: Vec<_> = svc
+        .list()
+        .into_iter()
+        .filter(|m| m.name.starts_with("forge_pat_"))
+        .collect();
+    let custom_hosts = app.0.catalog.lock().unwrap().forge.custom_hosts.clone();
+    Ok(Json(json!({
+        "credentials": stored,
+        "custom_hosts": custom_hosts,
+    })))
+}
+
+async fn put_credential(
+    State(app): State<Workbench>,
+    AxumPath(host): AxumPath<String>,
+    Json(req): Json<PutForgeCredential>,
+) -> Reply<Value> {
+    let normalized = host.trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized.len() > 255 || normalized.chars().any(char::is_control) {
+        return Err(ForgeError::bad("invalid forge host"));
+    }
+    if let (Some(kind), Some(api_base)) = (req.kind, req.api_base) {
+        if !super::DRIVER_KINDS.contains(&kind.as_str()) {
+            return Err(ForgeError::bad("unknown forge driver kind"));
+        }
+        let validated = Context::base(&api_base)?.to_string();
+        let h_key = normalized.clone();
+        app.update(|db| {
+            db.forge.custom_hosts.insert(
+                h_key,
+                super::CustomHost {
+                    kind,
+                    api_base: validated,
+                },
+            );
+            Ok(())
+        })?;
+    }
+    let secret_name = forge_pat_secret_name(&normalized);
+    if let Some(raw_token) = req.token {
+        let trimmed = raw_token.trim();
+        if trimmed.is_empty() || trimmed.len() > 8192 || trimmed.chars().any(char::is_control) {
+            return Err(ForgeError::bad("invalid forge personal access token"));
+        }
+        let svc = crate::workbench::secrets::SecretService::for_workbench(&app)?;
+        if let Some(uri) = trimmed.strip_prefix("keychain://") {
+            let (service, account) = uri
+                .split_once('/')
+                .ok_or_else(|| ForgeError::bad("expected keychain://service/account"))?;
+            svc.put_keychain(&secret_name, service, account, None, None)
+                .await?;
+        } else if trimmed.starts_with("op://") {
+            svc.put_onepassword(&secret_name, trimmed, None)?;
+        } else {
+            svc.put_encrypted(&secret_name, trimmed)?;
+        }
+    }
+    Ok(Json(json!({
+        "ok": true,
+        "host": normalized,
+        "secret_name": secret_name,
+    })))
+}
+
+async fn delete_credential(
+    State(app): State<Workbench>,
+    AxumPath(host): AxumPath<String>,
+) -> Reply<Value> {
+    let normalized = host.trim().to_ascii_lowercase();
+    let secret_name = forge_pat_secret_name(&normalized);
+    let svc = crate::workbench::secrets::SecretService::for_workbench(&app)?;
+    let removed_secret = svc.delete(&secret_name)?;
+    let removed_host = app.update(|db| Ok(db.forge.custom_hosts.remove(&normalized).is_some()))?;
+    Ok(Json(json!({
+        "ok": true,
+        "removed": removed_secret || removed_host,
+    })))
 }
 
 fn finish(tx: &watch::Sender<Option<Result<Value, ForgeError>>>, v: Result<Value, ForgeError>) {
@@ -345,7 +458,21 @@ pub(in crate::workbench::forge) async fn attach(
     app: &Workbench,
     c: &mut Context,
 ) -> Result<(), ForgeError> {
-    if c.kind != "github" || c.token.is_some() {
+    if c.token.is_some() {
+        return Ok(());
+    }
+    // Check encrypted workbench SecretService for a host-scoped PAT (`forge_pat_{host}`).
+    if let Ok(svc) = crate::workbench::secrets::SecretService::for_workbench(app) {
+        let name = forge_pat_secret_name(&c.host);
+        if svc.metadata(&name).is_ok()
+            && let Ok(pat) = svc.resolve(&name).await
+            && !pat.trim().is_empty()
+        {
+            c.token = Some(pat.trim().to_owned());
+            return Ok(());
+        }
+    }
+    if c.kind != "github" {
         return Ok(());
     }
     let mut app_token = None;

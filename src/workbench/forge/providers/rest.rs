@@ -47,7 +47,11 @@ fn state(raw: &Value) -> Result<&'static str, ForgeError> {
         _ => Err(invalid("PR or issue state")),
     }
 }
-pub(in crate::workbench::forge) fn item(c: &Context, raw: &Value, pull: bool) -> Result<Value, ForgeError> {
+pub(in crate::workbench::forge) fn item(
+    c: &Context,
+    raw: &Value,
+    pull: bool,
+) -> Result<Value, ForgeError> {
     let v = raw;
     let gitlab = c.kind == "gitlab";
     let bitbucket = c.kind == "bitbucket";
@@ -217,7 +221,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         ));
     }
     match op {
-        Operation::PullCommand{number,command}=>crate::workbench::forge::providers::pull_tools::execute(c,*number,command).await,
+        Operation::PullCommand { number, command } => {
+            crate::workbench::forge::providers::pull_tools::execute(c, *number, command).await
+        }
         op @ (Operation::SubmitReview { .. }
         | Operation::ReplyToThread { .. }
         | Operation::SetThreadResolution { .. }
@@ -300,8 +306,16 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
             body,
             draft,
         } => {
-            if *draft && matches!(c.kind.as_str(),"bitbucket"|"forgejo"){return Err(ForgeError::unsupported("this driver does not expose draft creation"));}
-            let title=if *draft && gitlab {format!("Draft: {title}")}else{title.clone()};
+            if *draft && matches!(c.kind.as_str(), "bitbucket" | "forgejo") {
+                return Err(ForgeError::unsupported(
+                    "this driver does not expose draft creation",
+                ));
+            }
+            let title = if *draft && gitlab {
+                format!("Draft: {title}")
+            } else {
+                title.clone()
+            };
             let source = head_repository
                 .as_ref()
                 .filter(|s| !s.eq_ignore_ascii_case(&c.repository));

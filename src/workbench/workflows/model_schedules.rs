@@ -29,6 +29,12 @@ pub(in crate::workbench) struct Save {
     pub fresh_session: Option<bool>,
     pub bind_to_current_thread: Option<bool>,
     pub webhook_secret_ref: Option<Uuid>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
+    pub workspace_strategy: Option<WorkspaceStrategy>,
+    pub concurrency: Option<ConcurrencyPolicy>,
+    pub tags: Option<Vec<String>>,
+    pub subject: Option<String>,
 }
 impl Workbench {
     pub(in crate::workbench) fn model_schedules(
@@ -37,9 +43,38 @@ impl Workbench {
         actor: Uuid,
     ) -> Result<Value> {
         let db = self.0.workflows.db.lock().unwrap();
-        let rows=db.workflows.values().filter(|w|w.project==project&&db.model_schedules.get(&w.id).is_some_and(|m|m.owner==actor)).map(|w|json!({"scheduled_task_id":w.id,"project_id":project,"title":w.definition.name,"enabled":w.definition.enabled,"schedule":w.definition.schedule,"next_ms":w.next_ms,"trigger_path":matches!(w.definition.schedule,Schedule::Webhook).then(||format!("/hooks/workflows/{project}/{}",w.id))})).collect::<Vec<_>>();
+        let rows = db
+            .workflows
+            .values()
+            .filter(|w| {
+                w.project == project
+                    && db
+                        .model_schedules
+                        .get(&w.id)
+                        .is_some_and(|m| m.owner == actor)
+            })
+            .map(|w| {
+                json!({
+                    "scheduled_task_id": w.id,
+                    "project_id": project,
+                    "title": w.definition.name,
+                    "enabled": w.definition.enabled,
+                    "schedule": w.definition.schedule,
+                    "next_ms": w.next_ms,
+                    "effort": w.metadata.effort,
+                    "service_tier": w.metadata.service_tier,
+                    "workspace_strategy": w.metadata.workspace_strategy,
+                    "concurrency": w.metadata.concurrency,
+                    "tags": w.metadata.tags,
+                    "subject": w.metadata.subject,
+                    "trigger_path": matches!(w.definition.schedule, Schedule::Webhook)
+                        .then(|| format!("/hooks/workflows/{project}/{}", w.id)),
+                })
+            })
+            .collect::<Vec<_>>();
         Ok(json!({"tasks":rows}))
     }
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::workbench) fn model_schedule_command(
         &self,
         project: Uuid,
@@ -85,7 +120,8 @@ impl Workbench {
                     let target=req.scheduled_task_id.unwrap_or(id);
                     if task.is_none()&&(d.workflows.contains_key(&target)||d.model_schedules.contains_key(&target)){return Err(Error::Refused("scheduled task ID is occupied".into()));}
                     let old=d.workflows.get(&target);
-                    let old_step=old.and_then(|w|w.definition.steps.first()).and_then(|s|if let Step::Agent{runtime,model,prompt}=s{Some((runtime.clone(),model.clone(),prompt.clone()))}else{None});
+                    let old_meta = old.map(|w| w.metadata.clone()).unwrap_or_default();
+                    let old_step=old.and_then(|w|w.definition.steps.first()).and_then(|s|if let Step::Agent{runtime,model,prompt,..}=s{Some((runtime.clone(),model.clone(),prompt.clone()))}else{None});
                     if old.is_some()&&old_step.is_none(){return Err(Error::Refused("scheduled workflow has been reconfigured by its owner".into()));}
                     let (runtime,selected_model)=if req.runtime.is_none()&&req.model.is_none(){old_step.as_ref().map_or((rt,model),|s|(s.0.clone(),s.1.clone()))}else{(rt,model)};
                     let prompt=req.prompt.or_else(||old_step.map(|s|s.2)).ok_or_else(||Error::Refused("new task needs a prompt".into()))?;
@@ -95,15 +131,61 @@ impl Workbench {
                     let mut binding=d.model_schedules.get(&target).cloned().unwrap_or(binding);
                     if let Some(f)=req.bind_to_current_thread{binding.bind=f;}
                     if let Some(f)=req.fresh_session{binding.fresh=f;}
-                    if binding.bind && (req.runtime.is_some()||req.model.is_some()||req.fresh_session==Some(true)){
+                    let metadata = WorkflowMetadata {
+                        effort: req.effort.clone().or(old_meta.effort),
+                        service_tier: req.service_tier.clone().or(old_meta.service_tier),
+                        workspace_strategy: req
+                            .workspace_strategy
+                            .unwrap_or(old_meta.workspace_strategy),
+                        concurrency: req.concurrency.unwrap_or(old_meta.concurrency),
+                        tags: req.tags.unwrap_or(old_meta.tags),
+                        subject: req.subject.or(old_meta.subject),
+                    };
+                    metadata.validate()?;
+                    if binding.bind
+                        && (req.runtime.is_some()
+                            || req.model.is_some()
+                            || req.fresh_session == Some(true)
+                            || req.effort.is_some()
+                            || req.service_tier.is_some()
+                            || metadata.workspace_strategy == WorkspaceStrategy::Worktree)
+                    {
                         return Err(Error::Refused("bound schedules use their existing chat's model and context".into()));
                     }
-                    let definition=Definition{name:title,enabled,schedule,steps:vec![Step::Agent{runtime,model:selected_model,prompt}]};
+                    if let Some(e) = &metadata.effort {
+                        binding.settings.effort = Some(e.clone());
+                    }
+                    if let Some(st) = &metadata.service_tier {
+                        binding.settings.service_tier = Some(st.clone());
+                    }
+                    let definition = Definition {
+                        name: title,
+                        enabled,
+                        schedule,
+                        steps: vec![Step::Agent {
+                            runtime,
+                            model: selected_model,
+                            prompt,
+                            effort: metadata.effort.clone(),
+                            service_tier: metadata.service_tier.clone(),
+                            workspace_strategy: (metadata.workspace_strategy
+                                != WorkspaceStrategy::Local)
+                                .then_some(metadata.workspace_strategy),
+                        }],
+                    };
                     definition.validate()?;definition.schedule.next_after(engine.clock.now_ms())?;
                     if req.webhook_secret_ref.is_some() && !matches!(definition.schedule,Schedule::Webhook){return Err(Error::Refused("webhook signing secret requires a webhook schedule".into()));}
-                    let w=install_definition(d,project,target,definition,secret,engine.clock.now_ms())?;
+                    let w = install_definition_with_extras(
+                        d,
+                        project,
+                        target,
+                        definition,
+                        Some((metadata, BTreeMap::new())),
+                        secret,
+                        engine.clock.now_ms(),
+                    )?;
                     d.model_schedules.insert(target,binding);
-                    let mut result=json!({"scheduled_task_id":target,"project_id":project,"next_ms":w.next_ms,"enabled":w.definition.enabled});
+                    let mut result=json!({"scheduled_task_id":target,"project_id":project,"next_ms":w.next_ms,"enabled":w.definition.enabled,"workspace_strategy":w.metadata.workspace_strategy,"concurrency":w.metadata.concurrency});
                     if matches!(w.definition.schedule,Schedule::Webhook){
                         if task.is_none() && req.webhook_secret_ref.is_none() {
                             let token=format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple());

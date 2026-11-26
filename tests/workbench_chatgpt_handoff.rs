@@ -212,7 +212,7 @@ async fn perform(mock: &Mock, c: &Client, wrong: &Client, helper: &str, target: 
     raw.lines()
         .filter_map(|l| l.strip_prefix("data: "))
         .map(|v| serde_json::from_str::<Value>(v).unwrap())
-        .last()
+        .next_back()
         .unwrap()
 }
 async fn open(state: &Path, root: &Path, mock: &Mock) -> (tokio::process::Child, String) {

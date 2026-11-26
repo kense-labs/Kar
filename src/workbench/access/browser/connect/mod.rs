@@ -14,6 +14,14 @@ pub(in crate::workbench) struct ManagedTunnelConfig {
     pub(in crate::workbench) tunnel_name: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredTunnelConfig {
+    provider_kind: String,
+    connector_token: crate::workbench::secrets::SecretValue,
+    tunnel_id: Option<String>,
+    tunnel_name: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Binding {
     link: Uuid,
     thumb: String,
@@ -24,9 +32,9 @@ struct Link {
     user: String,
     url: String,
     issuer: String,
-    credential: String,
+    credential: crate::workbench::secrets::SecretValue,
     mint_key: String,
-    runtime: Option<ManagedTunnelConfig>,
+    runtime: Option<StoredTunnelConfig>,
     scopes: BTreeSet<String>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -47,7 +55,8 @@ struct Pending {
 }
 impl Workbench {
     pub(in crate::workbench) fn managed_tunnel_config(&self) -> Option<ManagedTunnelConfig> {
-        self.0
+        let rt = self
+            .0
             .access
             .registry
             .lock()
@@ -57,7 +66,17 @@ impl Workbench {
             .link
             .as_ref()?
             .runtime
-            .clone()
+            .clone()?;
+        let svc = crate::workbench::secrets::SecretService::for_workbench(self).ok()?;
+        let token = svc
+            .resolve_local_sync("relay:tunnel_token", &rt.connector_token)
+            .ok()?;
+        Some(ManagedTunnelConfig {
+            provider_kind: rt.provider_kind,
+            connector_token: token.as_str().to_owned(),
+            tunnel_id: rt.tunnel_id,
+            tunnel_name: rt.tunnel_name,
+        })
     }
     pub(in crate::workbench) fn connect_changes(&self) -> watch::Receiver<()> {
         self.0.access.changed.subscribe()
@@ -156,7 +175,7 @@ fn state(auth: &Auth, available: &BTreeSet<String>) -> Value {
     let db = auth.app.0.access.registry.lock().unwrap();
     let s = &db.environment.cloud;
     let l = s.link.as_ref();
-    let tunnel=auth.app.managed_tunnel_status();
+    let tunnel = auth.app.managed_tunnel_status();
     json!({"managedTunnelActive":tunnel["connected"], "managedTunnel":tunnel, "linked":l.is_some(),"relayUrl":l.map(|l|&l.url),"relayIssuer":l.map(|l|&l.issuer),"cloudUserId":l.map(|l|&l.user),"publishAgentActivity":s.publish,"holdWebhooksWhileOffline":s.hold,"requireConnectDeviceApproval":s.require_approval.unwrap_or(true),"linkableHere":available.contains("relay:configure")&&available.contains("relay:write")})
 }
 async fn get_state(State(auth): State<Auth>, h: HeaderMap, uri: Uri) -> AccessResult<Json<Value>> {
@@ -194,6 +213,17 @@ async fn configure(
         return Err(bad("Unsupported or invalid managed tunnel configuration"));
     }
     let mint_key = signed::normalize_key(&req.cloud_mint_public_key)?;
+    let secrets = crate::workbench::secrets::SecretService::for_workbench(&auth.app)?;
+    let sealed_credential = secrets.seal_input("relay:credential", req.environment_credential)?;
+    let sealed_runtime = match req.endpoint_runtime {
+        Some(rt) => Some(StoredTunnelConfig {
+            provider_kind: rt.provider_kind,
+            connector_token: secrets.seal_input("relay:tunnel_token", rt.connector_token)?,
+            tunnel_id: rt.tunnel_id,
+            tunnel_name: rt.tunnel_name,
+        }),
+        None => None,
+    };
     let _guard = auth.app.0.access.connect_lock.lock().await;
     auth.app.0.access.update(|db| {
         let mut id = Uuid::new_v4();
@@ -214,9 +244,9 @@ async fn configure(
             user: req.cloud_user_id,
             url,
             issuer,
-            credential: req.environment_credential,
+            credential: sealed_credential,
             mint_key,
-            runtime: req.endpoint_runtime,
+            runtime: sealed_runtime,
             scopes,
         });
         Ok(())
@@ -245,7 +275,16 @@ fn link(auth: &Auth) -> AccessResult<Link> {
         .clone()
         .ok_or(AccessError::Missing)
 }
-async fn send(link: &Link, id: Uuid, path: &str, value: Value) -> AccessResult<()> {
+async fn send(
+    app: &Workbench,
+    link: &Link,
+    id: Uuid,
+    path: &str,
+    value: Value,
+) -> AccessResult<()> {
+    let bearer = crate::workbench::secrets::SecretService::for_workbench(app)?
+        .resolve_secret_value("relay:credential", &link.credential)
+        .await?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
@@ -253,7 +292,7 @@ async fn send(link: &Link, id: Uuid, path: &str, value: Value) -> AccessResult<(
         .map_err(|_| bad("Could not initialize relay transport"))?;
     let r = client
         .post(format!("{}/v1/environments/{id}/{path}", link.url))
-        .bearer_auth(&link.credential)
+        .bearer_auth(bearer.as_str())
         .json(&value)
         .send()
         .await
@@ -289,6 +328,7 @@ async fn preferences(
     let l = link(&auth)?;
     if let Some(hold) = p.hold_webhooks_while_offline {
         send(
+            &auth.app,
             &l,
             environment_id(&auth)?,
             "link-preferences",
@@ -326,6 +366,7 @@ async fn activities(
         return Ok(Json(json!({"ok":false})));
     };
     send(
+        &auth.app,
         &l,
         environment_id(&auth)?,
         "live-activity-preference",
@@ -342,7 +383,7 @@ async fn reachability(
     permits(&auth, &h, &Method::POST, &uri, "relay:read")?;
     let id = environment_id(&auth)?;
     let origin = oauth::origin(&auth.app);
-    let tunnel=auth.app.managed_tunnel_status();
+    let tunnel = auth.app.managed_tunnel_status();
     let check = async {
         link(&auth).ok()?;
         let u = origin.as_ref().filter(|u| u.starts_with("https://"))?;
@@ -379,6 +420,179 @@ async fn reachability(
 async fn public_descriptor(State(auth): State<Auth>) -> AccessResult<Json<Value>> {
     Ok(Json(json!({"environmentId":environment_id(&auth)?})))
 }
+
+fn relay_snapshot(app: &Workbench) -> (Option<Link>, bool, bool) {
+    let db = app.0.access.registry.lock().unwrap();
+    let s = &db.environment.cloud;
+    (s.link.clone(), s.publish, s.hold)
+}
+
+async fn drain_held_webhooks_once(app: &Workbench, link: &Link) {
+    let Ok(env_id) = environment::id(app) else {
+        return;
+    };
+    let Ok(svc) = crate::workbench::secrets::SecretService::for_workbench(app) else {
+        return;
+    };
+    let Ok(bearer) = svc
+        .resolve_secret_value("relay:credential", &link.credential)
+        .await
+    else {
+        return;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    else {
+        return;
+    };
+    let Ok(resp) = client
+        .post(format!(
+            "{}/v1/environments/{env_id}/held-webhooks/drain",
+            link.url
+        ))
+        .bearer_auth(bearer.as_str())
+        .json(&json!({"maxItems": 32}))
+        .send()
+        .await
+    else {
+        return;
+    };
+    if !resp.status().is_success() {
+        return;
+    }
+    let Ok(payload) = resp.json::<Value>().await else {
+        return;
+    };
+    let Some(items) = payload["webhooks"].as_array() else {
+        return;
+    };
+    if items.is_empty() {
+        return;
+    }
+    let hooks_router = crate::workbench::workflows::hooks().with_state(app.clone());
+    for item in items.iter().take(32) {
+        let Some(raw_path) = item["path"]
+            .as_str()
+            .filter(|p| p.starts_with("/hooks/workflows/"))
+        else {
+            continue;
+        };
+        let body_bytes = if let Some(b64) = item["bodyBase64"].as_str() {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .unwrap_or_default()
+        } else if let Some(s) = item["body"].as_str() {
+            s.as_bytes().to_vec()
+        } else {
+            serde_json::to_vec(&item["body"]).unwrap_or_default()
+        };
+        let mut builder = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri(raw_path);
+        if let Some(headers) = item["headers"].as_object() {
+            for (k, v) in headers {
+                if let Some(val) = v.as_str() {
+                    builder = builder.header(k.as_str(), val);
+                }
+            }
+        }
+        if let Ok(req) = builder.body(axum::body::Body::from(body_bytes)) {
+            use tower::ServiceExt as _;
+            let _ = hooks_router.clone().oneshot(req).await;
+        }
+    }
+}
+
+pub(in crate::workbench) fn start_relay_workers(app: Workbench) {
+    // 1. AgentAwarenessRelay: pushes live agent activity transitions when `publish == true`.
+    let relay_app = app.clone();
+    tokio::spawn(async move {
+        let weak = std::sync::Arc::downgrade(&relay_app.0);
+        let mut hub_rx = relay_app.0.milestone_hub.subscribe();
+        let mut th_rx = relay_app.0.thread_updates.subscribe();
+        let mut wf_rx = relay_app.0.workflows.subscribe();
+        drop(relay_app);
+        let mut last_payload: Option<Value> = None;
+
+        loop {
+            tokio::select! {
+                r = hub_rx.changed() => { if r.is_err() { break; } }
+                r = th_rx.changed() => { if r.is_err() { break; } }
+                r = wf_rx.changed() => { if r.is_err() { break; } }
+            }
+            let Some(inner) = weak.upgrade() else {
+                break;
+            };
+            let app = Workbench(inner);
+            let (Some(link), true, _) = relay_snapshot(&app) else {
+                last_payload = None;
+                continue;
+            };
+            let Ok(env_id) = environment::id(&app) else {
+                continue;
+            };
+            let active_chats: Vec<Uuid> = app
+                .0
+                .controllers
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|(id, c)| {
+                    c.owner
+                        .try_lock()
+                        .ok()
+                        .and_then(|g| g.as_ref().filter(|s| !s.is_closed()).map(|_| *id))
+                })
+                .collect();
+            if active_chats.is_empty() && last_payload.is_none() {
+                continue;
+            }
+            let summary = json!({
+                "environmentId": env_id,
+                "cloudUserId": link.user,
+                "activeChatIds": active_chats,
+                "activeChatCount": active_chats.len(),
+                "threadSequence": *app.0.thread_updates.borrow(),
+            });
+            if last_payload.as_ref() == Some(&summary) {
+                continue;
+            }
+            let mut body = summary.clone();
+            body["publishedAt"] = json!(date(now()));
+            if send(&app, &link, env_id, "agent-activity", body)
+                .await
+                .is_ok()
+            {
+                last_payload = Some(summary);
+            }
+        }
+    });
+
+    // 2. HeldHooksWaker: drains queued offline webhooks on connect/wake when `hold == true`.
+    tokio::spawn(async move {
+        let weak = std::sync::Arc::downgrade(&app.0);
+        let mut cfg_rx = app.connect_changes();
+        drop(app);
+        loop {
+            if let Some(inner) = weak.upgrade() {
+                let live = Workbench(inner);
+                if let (Some(link), _, true) = relay_snapshot(&live) {
+                    drain_held_webhooks_once(&live, &link).await;
+                }
+            } else {
+                break;
+            }
+            tokio::select! {
+                r = cfg_rx.changed() => { if r.is_err() { break; } }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+            }
+        }
+    });
+}
+
 pub(super) fn routes() -> Router<Auth> {
     Router::new()
         .route("/api/connect/link-state", get(get_state))

@@ -108,7 +108,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
     };
     let mut parts = vec!["repos", *owner, *repo];
     match op {
-        Operation::PullCommand{number,command}=>crate::workbench::forge::providers::pull_tools::execute(c,*number,command).await,
+        Operation::PullCommand { number, command } => {
+            crate::workbench::forge::providers::pull_tools::execute(c, *number, command).await
+        }
         op @ (Operation::SubmitReview { .. }
         | Operation::ReplyToThread { .. }
         | Operation::SetThreadResolution { .. }
@@ -192,7 +194,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         } => {
             parts.push("pulls");
             let mut payload = json!({"head":head,"base":base,"title":title,"body":body});
-            if *draft {payload["draft"]=json!(true);}
+            if *draft {
+                payload["draft"] = json!(true);
+            }
             if let Some(source) = head_repository
                 .as_ref()
                 .filter(|s| !s.eq_ignore_ascii_case(&c.repository))

@@ -6,10 +6,12 @@ use uuid::Uuid;
 
 #[tokio::main]
 pub(super) async fn run() {
-    assert!(
-        cfg!(target_os = "macos"),
-        "host telemetry acceptance requires macOS"
-    );
+    const {
+        assert!(
+            cfg!(target_os = "macos"),
+            "host telemetry acceptance requires macOS"
+        );
+    };
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("workspace");
     let state = temp.path().join("state");

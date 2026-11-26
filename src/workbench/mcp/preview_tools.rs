@@ -79,7 +79,7 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         (
             "kar_preview_resize",
             "Set a fill, freeform or preset viewport. Supply viewport in Kar's workbench format.",
-            json!({"viewport":{"type":"object"}}),
+            json!({"viewport":{"type":"object","properties":{"mode":{"enum":["fill","preset","freeform"]},"preset":string,"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1},"device_scale_factor":{"type":"number","minimum":0.25},"mobile":yes}}}),
             &["viewport"],
             Access::Control,
         ),
@@ -160,8 +160,11 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
     let device = json!({"type":"string","minLength":1});
     let props = json!({"device_id":device,"host_id":device});
     if allowed(c, Access::DeviceRead) {
+        let mut shot_props = props.clone();
+        shot_props["save"] = yes.clone();
+        shot_props["include_image"] = yes;
         out.push(Tool{name:"kar_device_list",description:"List devices, host readiness and this chat's open device views on the granted hosts.",properties:json!({"host_id":device}),required:&[]});
-        out.push(Tool{name:"kar_device_screenshot",description:"Capture the real PNG from a device open in this chat. Defaults to the latest open device.",properties:props.clone(),required:&[]});
+        out.push(Tool{name:"kar_device_screenshot",description:"Capture the real PNG from a device open in this chat. Defaults to the latest open device.",properties:shot_props,required:&[]});
     }
     if allowed(c, Access::DeviceControl) {
         out.push(Tool{name:"kar_device_open",description:"Open a device in this chat, boot if needed, and return its bound Kar device-agent command.",properties:json!({"device_id":device,"host_id":device,"platform":{"enum":["ios","android"]}}),required:&[]});
@@ -250,8 +253,43 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
         .await;
     }
     if name.starts_with("kar_device_") {
-        return super::super::devices::model::call(app, DevicePermission(c.clone()), name, input)
-            .await;
+        let mut forward = input;
+        let mut save_shot = false;
+        let mut include_image: Option<bool> = None;
+        if name == "kar_device_screenshot"
+            && let Some(obj) = forward.as_object_mut()
+        {
+            if let Some(v) = obj.remove("save") {
+                save_shot = serde_json::from_value(v)?;
+            }
+            if let Some(v) = obj.remove("include_image") {
+                include_image = serde_json::from_value(v)?;
+            }
+        }
+        let mut out =
+            super::super::devices::model::call(app, DevicePermission(c.clone()), name, forward)
+                .await?;
+        if name == "kar_device_screenshot" && save_shot {
+            let g = check(app, c, Access::DeviceRead)?;
+            if let Some(b64) = out["screenshot"]["data"].as_str() {
+                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                let bytes = STANDARD
+                    .decode(b64)
+                    .map_err(|_| Error::Protocol("invalid device PNG base64".into()))?;
+                out["attachment"] = json!(app.0.chats.persist_attachment(
+                    g.chat,
+                    Uuid::new_v4(),
+                    "device.png",
+                    "image/png",
+                    crate::chat::AttachmentKind::Image,
+                    &bytes,
+                )?);
+            }
+            if include_image == Some(false) {
+                out["_omit_inline_image"] = Value::Bool(true);
+            }
+        }
+        return Ok(out);
     }
     let g = check(
         app,
@@ -293,6 +331,9 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
             Ok(json!({"closed":tab.tab_id}))
         }
         _ => {
+            let omit_inline = name == "kar_preview_snapshot"
+                && input.get("save") == Some(&Value::Bool(true))
+                && input.get("include_image") == Some(&Value::Bool(false));
             let weak = std::sync::Arc::downgrade(&app.0);
             let caller = c.clone();
             let access = if matches!(
@@ -303,7 +344,7 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
             } else {
                 Access::Control
             };
-            super::super::terminal_preview::automation(
+            let mut out = super::super::terminal_preview::automation(
                 app,
                 g.project,
                 g.chat,
@@ -321,24 +362,292 @@ pub(super) async fn call(app: &Workbench, c: &Caller, name: &str, input: Value) 
                     check(&app, &caller, access).map(|_| ())
                 }),
             )
-            .await
+            .await?;
+            if omit_inline {
+                out["_omit_inline_image"] = Value::Bool(true);
+            }
+            Ok(out)
+        }
+    }
+}
+
+pub(super) const MAX_SNAPSHOT_TEXT_BYTES: usize = 20_000;
+
+fn truncate_str_chars(s: &mut String, max_chars: usize) {
+    if let Some((byte_idx, _)) = s.char_indices().nth(max_chars) {
+        s.truncate(byte_idx);
+    }
+}
+
+fn truncate_str_bytes(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
+fn shed_console_arrays(obj: &mut serde_json::Map<String, Value>, clear_all: bool) {
+    for key in ["consoleMessages", "console", "logs"] {
+        if let Some(Value::Array(arr)) = obj.get_mut(key) {
+            if clear_all {
+                arr.clear();
+            } else {
+                arr.truncate(8);
+                for item in arr.iter_mut() {
+                    if let Some(s) = item.as_str().map(str::to_owned) {
+                        let mut trimmed = s;
+                        truncate_str_chars(&mut trimmed, 120);
+                        *item = Value::String(trimmed);
+                    } else if let Some(entry_obj) = item.as_object_mut()
+                        && let Some(Value::String(text)) = entry_obj.get_mut("text")
+                    {
+                        truncate_str_chars(text, 120);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Progressively shed verbose console logs and long DOM text nodes so serialized
+/// `kar_preview_snapshot` metadata stays `<= MAX_SNAPSHOT_TEXT_BYTES` while preserving
+/// interactive ARIA element refs/locators (`tag`, `role`, `selector`, `locator`, `ref`).
+pub(super) fn bound_snapshot_metadata(meta: &mut Value) {
+    if meta.to_string().len() <= MAX_SNAPSHOT_TEXT_BYTES {
+        return;
+    }
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert("truncated".into(), Value::Bool(true));
+        shed_console_arrays(obj, false);
+        if let Some(page) = obj.get_mut("page").and_then(Value::as_object_mut) {
+            shed_console_arrays(page, false);
+        }
+    }
+    if meta.to_string().len() <= MAX_SNAPSHOT_TEXT_BYTES {
+        return;
+    }
+
+    // Stage 1b: Drop remaining verbose console log arrays completely before touching page content/ARIA refs.
+    if let Some(obj) = meta.as_object_mut() {
+        shed_console_arrays(obj, true);
+        if let Some(page) = obj.get_mut("page").and_then(Value::as_object_mut) {
+            shed_console_arrays(page, true);
+        }
+    }
+    if meta.to_string().len() <= MAX_SNAPSHOT_TEXT_BYTES {
+        return;
+    }
+
+    // Stage 2: Progressively shrink `page.text` (and top-level `text` if present), keeping all interactive `elements` intact.
+    for budget_bytes in [8_000usize, 4_000, 1_500, 512, 0] {
+        if let Some(obj) = meta.as_object_mut() {
+            if let Some(Value::String(t)) = obj.get_mut("text") {
+                truncate_str_bytes(t, budget_bytes);
+            }
+            if let Some(page) = obj.get_mut("page").and_then(Value::as_object_mut)
+                && let Some(Value::String(t)) = page.get_mut("text")
+            {
+                truncate_str_bytes(t, budget_bytes);
+            }
+        }
+        if meta.to_string().len() <= MAX_SNAPSHOT_TEXT_BYTES {
+            return;
+        }
+    }
+
+    // Stage 3: Trim verbose element `text` labels while preserving `tag`, `role`, `selector`, `locator`, `ref`.
+    for label_chars in [48usize, 16, 0] {
+        if let Some(elements) = meta
+            .pointer_mut("/page/elements")
+            .and_then(Value::as_array_mut)
+        {
+            for elem in elements.iter_mut() {
+                if let Some(eobj) = elem.as_object_mut()
+                    && let Some(Value::String(label)) = eobj.get_mut("text")
+                {
+                    truncate_str_chars(label, label_chars);
+                }
+            }
+        }
+        if meta.to_string().len() <= MAX_SNAPSHOT_TEXT_BYTES {
+            return;
+        }
+    }
+
+    // Stage 4: Hard cap fallback if huge URLs/titles or hundreds of oversized CSS selectors still exceed 20 KB.
+    if let Some(page) = meta.get_mut("page").and_then(Value::as_object_mut) {
+        for field in ["title", "url"] {
+            if let Some(Value::String(s)) = page.get_mut(field) {
+                truncate_str_bytes(s, 512);
+            }
+        }
+    }
+    while meta.to_string().len() > MAX_SNAPSHOT_TEXT_BYTES {
+        let popped = meta
+            .pointer_mut("/page/elements")
+            .and_then(Value::as_array_mut)
+            .and_then(Vec::pop);
+        if popped.is_some() {
+            if let Some(page) = meta.get_mut("page").and_then(Value::as_object_mut) {
+                page.insert("elements_truncated".into(), Value::Bool(true));
+            }
+        } else {
+            break;
         }
     }
 }
 
 pub(super) fn result(name: &str, value: Value) -> Value {
-    if matches!(
+    let omit_inline = value.get("_omit_inline_image") == Some(&Value::Bool(true))
+        || (value.get("save") == Some(&Value::Bool(true))
+            && value.get("include_image") == Some(&Value::Bool(false)))
+        || (value.get("attachment").is_some()
+            && value.get("include_image") == Some(&Value::Bool(false)));
+    let is_screenshot_tool = matches!(
         name,
         "kar_device_screenshot" | "kar_preview_snapshot" | "kar_html_preview"
-    ) && let Some(image) = value["screenshot"]["data"].as_str()
-        && value["screenshot"]["mimeType"] == "image/png"
-    {
-        let mut metadata = value.clone();
-        metadata["screenshot"]
-            .as_object_mut()
-            .unwrap()
-            .remove("data");
-        return json!({"structuredContent":value,"content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":image}]});
+    );
+    let image_data = if is_screenshot_tool && value["screenshot"]["mimeType"] == "image/png" {
+        value["screenshot"]["data"].as_str().map(str::to_owned)
+    } else {
+        None
+    };
+
+    let mut metadata = value;
+    if let Some(obj) = metadata.as_object_mut() {
+        obj.remove("_omit_inline_image");
     }
-    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value})
+    if is_screenshot_tool
+        && let Some(sc) = metadata
+            .get_mut("screenshot")
+            .and_then(Value::as_object_mut)
+    {
+        sc.remove("data");
+    }
+    if name == "kar_preview_snapshot" {
+        bound_snapshot_metadata(&mut metadata);
+    }
+
+    let text = metadata.to_string();
+    if let Some(image) = image_data.filter(|_| !omit_inline) {
+        return json!({
+            "structuredContent": metadata,
+            "content": [
+                {"type": "text", "text": text},
+                {"type": "image", "mimeType": "image/png", "data": image}
+            ]
+        });
+    }
+    json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": metadata
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_strips_screenshot_data_from_structured_content_and_respects_omit_inline_image() {
+        let raw = json!({
+            "tab_id": Uuid::nil(),
+            "screenshot": {
+                "mimeType": "image/png",
+                "width": 800,
+                "height": 600,
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+            }
+        });
+        let out = result("kar_preview_snapshot", raw);
+        assert!(out["structuredContent"]["screenshot"].get("data").is_none());
+        assert_eq!(out["structuredContent"]["screenshot"]["width"], 800);
+        assert_eq!(out["content"].as_array().unwrap().len(), 2);
+        assert_eq!(out["content"][1]["type"], "image");
+        assert!(
+            !out["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("iVBORw0KGgo")
+        );
+
+        // When save == true and include_image == Some(false), omit inline base64 image block!
+        let saved_no_inline = json!({
+            "tab_id": Uuid::nil(),
+            "attachment": {"id": Uuid::nil()},
+            "_omit_inline_image": true,
+            "screenshot": {
+                "mimeType": "image/png",
+                "width": 800,
+                "height": 600,
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+            }
+        });
+        let omitted = result("kar_preview_snapshot", saved_no_inline);
+        assert!(
+            omitted["structuredContent"]["screenshot"]
+                .get("data")
+                .is_none()
+        );
+        assert!(
+            omitted["structuredContent"]
+                .get("_omit_inline_image")
+                .is_none()
+        );
+        assert_eq!(omitted["content"].as_array().unwrap().len(), 1);
+        assert_eq!(omitted["content"][0]["type"], "text");
+    }
+
+    #[test]
+    fn snapshot_bounding_sheds_logs_and_body_text_while_preserving_aria_locators() {
+        let elements: Vec<Value> = (0..40)
+            .map(|i| {
+                json!({
+                    "tag": "button",
+                    "role": "button",
+                    "ref": format!("e{i}"),
+                    "selector": format!("#action-btn-{i}"),
+                    "locator": format!("role=button[name='Action {i}']"),
+                    "text": format!("Action button {i} description"),
+                })
+            })
+            .collect();
+        let logs: Vec<Value> = (0..80)
+            .map(|i| json!({"level": "info", "text": "verbose-log-".repeat(30) + &i.to_string()}))
+            .collect();
+        let huge = json!({
+            "tab_id": Uuid::nil(),
+            "page": {
+                "url": "http://127.0.0.1:3000/dashboard",
+                "title": "Dashboard",
+                "text": "Long prose paragraph content. ".repeat(1_500),
+                "width": 1280,
+                "height": 800,
+                "consoleMessages": logs,
+                "elements": elements,
+            },
+            "screenshot": {"width": 1280, "height": 800}
+        });
+
+        let out = result("kar_preview_snapshot", huge);
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.len() <= MAX_SNAPSHOT_TEXT_BYTES,
+            "snapshot text was {} bytes (> {})",
+            text.len(),
+            MAX_SNAPSHOT_TEXT_BYTES
+        );
+        assert_eq!(out["structuredContent"]["truncated"], true);
+        let preserved = out["structuredContent"]["page"]["elements"]
+            .as_array()
+            .unwrap();
+        assert_eq!(preserved.len(), 40);
+        assert_eq!(preserved[0]["selector"], "#action-btn-0");
+        assert_eq!(preserved[39]["locator"], "role=button[name='Action 39']");
+        assert_eq!(preserved[39]["ref"], "e39");
+    }
 }

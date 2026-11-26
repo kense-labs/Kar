@@ -28,13 +28,13 @@ pub(in crate::workbench) struct Policy {
     #[serde(default)]
     workflow_reads: bool,
     #[serde(default)]
-    pub(in crate::workbench) review_guides:Option<forge::guides::Settings>,
+    pub(in crate::workbench) review_guides: Option<forge::guides::Settings>,
     #[serde(default)]
-    pub(super) thread_tools:Option<super::operations::Scope>,
+    pub(super) thread_tools: Option<super::operations::Scope>,
     #[serde(default)]
-    pull_reads:bool,
+    pull_reads: bool,
     #[serde(default)]
-    pull_writes:bool,
+    pull_writes: bool,
     #[serde(default)]
     workflow_writes: bool,
     #[serde(default)]
@@ -42,7 +42,7 @@ pub(in crate::workbench) struct Policy {
     pub(super) issue_scope: Option<String>,
     pub(super) repository: Option<String>,
     #[serde(default)]
-    pub(in crate::workbench) pull_repository:Option<String>,
+    pub(in crate::workbench) pull_repository: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,13 +62,13 @@ struct Configure {
     #[serde(default)]
     workflow_reads: bool,
     #[serde(default)]
-    pub(in crate::workbench) review_guides:Option<forge::guides::Settings>,
+    pub(in crate::workbench) review_guides: Option<forge::guides::Settings>,
     #[serde(default)]
-    pub(super) thread_tools:Option<super::operations::Scope>,
+    pub(super) thread_tools: Option<super::operations::Scope>,
     #[serde(default)]
-    pull_reads:bool,
+    pull_reads: bool,
     #[serde(default)]
-    pull_writes:bool,
+    pull_writes: bool,
     #[serde(default)]
     workflow_writes: bool,
     #[serde(default)]
@@ -77,8 +77,12 @@ struct Configure {
 }
 
 impl Policy {
-    pub(super) fn writes_environment(&self)->bool {self.executes() && self.environment_writes}
-    pub(super) fn executes(&self) -> bool { self.mode == Mode::Execute }
+    pub(super) fn writes_environment(&self) -> bool {
+        self.executes() && self.environment_writes
+    }
+    pub(super) fn executes(&self) -> bool {
+        self.mode == Mode::Execute
+    }
     fn get(db: &Catalog, project: Uuid, chat: Uuid) -> Option<&Self> {
         db.model_tool_permissions.get(&project)?.get(&chat)
     }
@@ -117,11 +121,17 @@ impl Policy {
         }
         Some(true)
     }
-    pub(super) fn worktree_directory(&self) -> Option<&std::path::Path> {
-        self.worktree_directory.as_deref().filter(|_| self.mode == Mode::Execute)
+    pub(in crate::workbench) fn worktree_directory(&self) -> Option<&std::path::Path> {
+        self.worktree_directory
+            .as_deref()
+            .filter(|_| self.mode == Mode::Execute)
     }
-    pub(super) fn reads_pulls(&self)->bool{(self.pull_reads || self.writes_pulls()) && self.pull_repository.is_some()}
-    pub(in crate::workbench) fn writes_pulls(&self)->bool{self.mode==Mode::Execute && self.pull_writes && self.pull_repository.is_some()}
+    pub(super) fn reads_pulls(&self) -> bool {
+        (self.pull_reads || self.writes_pulls()) && self.pull_repository.is_some()
+    }
+    pub(in crate::workbench) fn writes_pulls(&self) -> bool {
+        self.mode == Mode::Execute && self.pull_writes && self.pull_repository.is_some()
+    }
     pub(super) fn reads_workflows(&self) -> bool {
         self.workflow_reads || self.writes_workflows()
     }
@@ -159,22 +169,36 @@ async fn configure(
     Json(cfg): Json<Configure>,
 ) -> Result<Json<Policy>, forge::ForgeError> {
     app.binding(p, c)?;
-    if cfg.environment_writes && device.is_some(){return Err(forge::ForgeError::bad("only the owner can grant model environment writes"));}
+    if cfg.environment_writes && device.is_some() {
+        return Err(forge::ForgeError::bad(
+            "only the owner can grant model environment writes",
+        ));
+    }
     let repository = if cfg.issue_reads || cfg.issue_writes && cfg.mode == Mode::Execute {
         Some(forge::Context::issue_repository(app.clone(), p, cfg.issue_scope.as_deref()).await?)
     } else {
         None
     };
     let worktree_directory = if let Some(path) = cfg.worktree_directory {
-        let dir=app.workspace_at(&path)?;
+        let dir = app.workspace_at(&path)?;
         Some(dir.root)
-    } else {None};
-    let pull_repository=if cfg.pull_reads || cfg.pull_writes && cfg.mode==Mode::Execute {Some(forge::model::pull_repository(app.clone(),p).await?)}else{None};
-    if let Some(s)=&cfg.thread_tools {s.validate(&app,p)?;}
+    } else {
+        None
+    };
+    let pull_repository = if cfg.pull_reads || cfg.pull_writes && cfg.mode == Mode::Execute {
+        Some(forge::model::pull_repository(app.clone(), p).await?)
+    } else {
+        None
+    };
+    if let Some(s) = &cfg.thread_tools {
+        s.validate(&app, p)?;
+    }
     let policy = Policy {
-        review_guides:cfg.review_guides,
-        thread_tools:cfg.thread_tools,
-        pull_repository,pull_reads:cfg.pull_reads,pull_writes:cfg.pull_writes,
+        review_guides: cfg.review_guides,
+        thread_tools: cfg.thread_tools,
+        pull_repository,
+        pull_reads: cfg.pull_reads,
+        pull_writes: cfg.pull_writes,
         worktree_directory,
         mode: cfg.mode,
         environment_writes: cfg.environment_writes,
@@ -188,7 +212,11 @@ async fn configure(
         repository,
     };
     app.update(|db| {
-        if (policy.thread_tools.is_some() || policy.reads_pulls() || policy.reads_issues() || policy.reads_workflows() || policy.worktree_directory().is_some())
+        if (policy.thread_tools.is_some()
+            || policy.reads_pulls()
+            || policy.reads_issues()
+            || policy.reads_workflows()
+            || policy.worktree_directory().is_some())
             && (db.archived.contains(&c)
                 || db
                     .projects

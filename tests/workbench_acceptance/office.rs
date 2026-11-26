@@ -36,7 +36,7 @@ pub fn seed(tree: &Path) {
     let mut book = Workbook::new_empty().unwrap();
     book.set_input(0, 0, 0, "left").unwrap();
     book.set_input(0, 0, 1, "right").unwrap();
-    book.save_as(&path(tree, DOCUMENTS[1])).unwrap();
+    book.save_as(path(tree, DOCUMENTS[1])).unwrap();
     let mut deck = Presentation::new();
     deck.add_element(0, &shape("left", 100)).unwrap();
     deck.add_element(0, &shape("right", 400)).unwrap();
@@ -54,7 +54,7 @@ fn edit(tree: &Path, file: &str, lane: usize, old: &str, new: &str) -> OfficeEdi
             replacement: new.into(),
         }]),
         "plan.xlsx" => {
-            let book = Workbook::open(&path(tree, file)).unwrap();
+            let book = Workbook::open(path(tree, file)).unwrap();
             OfficeEdits::Excel(vec![(
                 Cell::at(&book, 0, 0, lane as u32).unwrap(),
                 CellEdit::Input(change),
@@ -76,7 +76,7 @@ pub fn verify(tree: &Path, file: &str, left: &str, right: &str) {
         "plan.docx" => Document::open(&path)
             .unwrap()
             .paragraphs()
-            .into_iter()
+            .iter()
             .map(|p| p.text.clone())
             .collect::<Vec<_>>(),
         "plan.xlsx" => {

@@ -191,8 +191,10 @@ fn audio() -> Vec<u8> {
         } else if &bytes[..4] == b"data" {
             assert!(format);
             let samples: Vec<i16> = chunk
-                .chunks_exact(2)
-                .map(|c| i16::from_le_bytes(c.try_into().unwrap()))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| i16::from_le_bytes(*c))
                 .collect();
             return frame(&samples);
         }

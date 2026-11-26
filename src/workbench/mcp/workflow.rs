@@ -30,10 +30,16 @@ enum Operation {
     List {
         workflow_id: Option<Uuid>,
         status: Option<Status>,
+        #[serde(default)]
+        tag: Option<String>,
+        #[serde(default)]
+        subject: Option<String>,
         cursor: Option<usize>,
         limit: Option<usize>,
     },
     Questions {
+        #[serde(default)]
+        kind: Option<String>,
         cursor: Option<usize>,
         limit: Option<usize>,
     },
@@ -91,6 +97,14 @@ enum Operation {
         #[serde(default)]
         reason: Option<String>,
     },
+    Withdraw {
+        run_id: Uuid,
+        command_id: Uuid,
+        #[serde(default)]
+        attempt_id: Option<Uuid>,
+        #[serde(default)]
+        reason: Option<String>,
+    },
 }
 
 pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Value> {
@@ -99,14 +113,36 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
     let fields = args
         .as_object_mut()
         .ok_or_else(|| Error::Refused("expected workflow arguments".into()))?;
-    let project = serde_json::from_value(fields.remove("project_id").unwrap_or(Value::Null))?;
-    let thread = serde_json::from_value(fields.remove("thread_id").unwrap_or(Value::Null))?;
-    let (project, chat) = toolkit::target(app, caller, project, thread)?;
-    let grant = caller
-        .grant
-        .as_ref()
-        .ok_or_else(|| Error::Refused("model session required".into()))?;
-    let authorize = |write: bool| {
+    let project: Option<Uuid> =
+        serde_json::from_value(fields.remove("project_id").unwrap_or(Value::Null))?;
+    let thread: Option<Uuid> =
+        serde_json::from_value(fields.remove("thread_id").unwrap_or(Value::Null))?;
+
+    let (project, chat_scope) = if caller.grant.is_some() {
+        let (p, c) = toolkit::target(app, caller, project, thread)?;
+        (p, Some(c))
+    } else {
+        let p = project.ok_or_else(|| Error::Refused("project_id is required".into()))?;
+        let registered = app.project(p)?;
+        if registered.metadata.deleted {
+            return Err(super::super::missing());
+        }
+        if let Some(c) = thread {
+            app.binding(p, c)?;
+        }
+        (p, thread)
+    };
+
+    let authorize = |write: bool| -> Result<()> {
+        let Some(grant) = caller.grant.as_ref() else {
+            if write && caller.plan {
+                return Err(Error::Refused(
+                    "workflow writes require an execute grant".into(),
+                ));
+            }
+            return Ok(());
+        };
+        let chat = chat_scope.expect("model grant chat");
         let db = app.0.catalog.lock().unwrap();
         let current = Policy::current(&db, project, chat);
         if !grant.active()
@@ -142,7 +178,7 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
             let parent = if parent_run_id.is_some() {
                 parent_run_id
             } else {
-                let mut cur = Some(chat);
+                let mut cur = chat_scope;
                 let mut seen = std::collections::BTreeSet::new();
                 let mut found = None;
                 while let Some(c) = cur {
@@ -196,6 +232,19 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
             command_id,
             reason,
         } => mutate(run_id, command_id, Action::Skip { reason }),
+        Operation::Withdraw {
+            run_id,
+            command_id,
+            attempt_id,
+            reason,
+        } => mutate(
+            run_id,
+            command_id,
+            Action::Withdraw {
+                attempt: attempt_id,
+                reason,
+            },
+        ),
         Operation::Store { key, cursor, limit } => toolkit::page(
             app.stored_workflow_values(project, key.as_deref().unwrap_or(""))?,
             "entries",
@@ -276,6 +325,8 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
                 Operation::List {
                     workflow_id,
                     status,
+                    tag,
+                    subject,
                     cursor,
                     limit,
                 } => {
@@ -285,6 +336,14 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
                         .filter(|v| {
                             workflow_id.is_none_or(|id| v["workflow"] == json!(id))
                                 && status.as_ref().is_none_or(|s| &v["status"] == s)
+                                && tag.as_ref().is_none_or(|t| {
+                                    v["tags"].as_array().is_some_and(|ts| {
+                                        ts.iter().any(|x| x.as_str() == Some(t.as_str()))
+                                    })
+                                })
+                                && subject
+                                    .as_ref()
+                                    .is_none_or(|s| v["subject"].as_str() == Some(s.as_str()))
                         })
                         .collect();
                     ("runs", cursor, limit, rows)
@@ -292,8 +351,19 @@ pub(super) fn call(app: &Workbench, caller: &Caller, args: Value) -> Result<Valu
                 Operation::Definitions { cursor, limit } => {
                     ("workflows", cursor, limit, take(&mut index, "workflows"))
                 }
-                Operation::Questions { cursor, limit } => {
-                    ("questions", cursor, limit, take(&mut index, "questions"))
+                Operation::Questions {
+                    kind,
+                    cursor,
+                    limit,
+                } => {
+                    let rows = take(&mut index, "questions")
+                        .into_iter()
+                        .filter(|v| {
+                            kind.as_ref()
+                                .is_none_or(|k| v["kind"].as_str() == Some(k.as_str()))
+                        })
+                        .collect();
+                    ("questions", cursor, limit, rows)
                 }
                 Operation::Hooks { cursor, limit } => {
                     let hooks=take(&mut index,"workflows").into_iter().filter(|w|w["schedule"]["type"]=="webhook").map(|w|json!({"workflow":w["id"],"path":format!("/hooks/workflows/{project}/{}",w["id"].as_str().unwrap_or(""))})).collect();
@@ -310,4 +380,123 @@ fn take(index: &mut Value, key: &str) -> Vec<Value> {
         .as_array_mut()
         .map(std::mem::take)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workbench::workflows::Definition;
+
+    #[tokio::test]
+    async fn external_and_owner_mcp_callers_work_without_grant_and_support_withdraw_and_filters()
+    -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().join("proj");
+        std::fs::create_dir_all(&root)?;
+        let app = Workbench::open(
+            crate::chat::ChatStore::open(tmp.path().join("store"))?,
+            std::slice::from_ref(&root),
+        )?;
+        let project = app.register(&root, "proj")?.id;
+
+        let wf_id = Uuid::new_v4();
+        let def: Definition = serde_json::from_value(json!({
+            "name": "External Flow",
+            "enabled": true,
+            "schedule": {"type": "manual"},
+            "tags": ["release", "nightly"],
+            "subject": "pr-101",
+            "steps": [
+                {"type": "ask", "question": "Approve release?", "kind": "approval"},
+                {"type": "wait", "duration_ms": 0}
+            ]
+        }))?;
+        app.save_workflow(project, wf_id, def, None)?;
+
+        let owner = Caller {
+            identity: Identity::Owner,
+            grant: None,
+            plan: false,
+            files_allowed: true,
+            policy: None,
+        };
+        let readonly_ext = Caller {
+            identity: Identity::External(Uuid::new_v4()),
+            grant: None,
+            plan: true,
+            files_allowed: false,
+            policy: None,
+        };
+
+        // Missing project_id must be refused cleanly when caller.grant.is_none().
+        assert!(call(&app, &owner, json!({"action": "list"})).is_err());
+        // Read-only external caller cannot mutate workflows.
+        assert!(
+            call(
+                &app,
+                &readonly_ext,
+                json!({"action": "start", "project_id": project, "workflow_id": wf_id, "command_id": Uuid::new_v4()})
+            )
+            .is_err()
+        );
+
+        // Owner/external caller with execute scope starts workflow without thread_id or model grant!
+        let started = call(
+            &app,
+            &owner,
+            json!({
+                "action": "start",
+                "project_id": project,
+                "workflow_id": wf_id,
+                "command_id": Uuid::new_v4()
+            }),
+        )?;
+        let run_id: Uuid = serde_json::from_value(started["run"]["id"].clone())?;
+
+        app.tick_workflows()?;
+
+        // Filter questions by kind.
+        let matching_q = call(
+            &app,
+            &readonly_ext,
+            json!({"action": "questions", "project_id": project, "kind": "approval"}),
+        )?;
+        assert_eq!(matching_q["questions"].as_array().unwrap().len(), 1);
+        let non_matching_q = call(
+            &app,
+            &readonly_ext,
+            json!({"action": "questions", "project_id": project, "kind": "free_text"}),
+        )?;
+        assert_eq!(non_matching_q["questions"].as_array().unwrap().len(), 0);
+
+        // Withdraw question via MCP without cancelling workflow!
+        let withdrawn = call(
+            &app,
+            &owner,
+            json!({
+                "action": "withdraw",
+                "project_id": project,
+                "run_id": run_id,
+                "command_id": Uuid::new_v4(),
+                "reason": "no longer needed"
+            }),
+        )?;
+        assert_eq!(withdrawn["run"]["status"], "ready");
+        assert_eq!(withdrawn["run"]["receipts"][0]["result"]["withdrawn"], true);
+
+        // Filter list by tag and subject.
+        let by_tag = call(
+            &app,
+            &readonly_ext,
+            json!({"action": "list", "project_id": project, "tag": "release", "subject": "pr-101"}),
+        )?;
+        assert_eq!(by_tag["runs"].as_array().unwrap().len(), 1);
+        let miss_tag = call(
+            &app,
+            &readonly_ext,
+            json!({"action": "list", "project_id": project, "tag": "other"}),
+        )?;
+        assert_eq!(miss_tag["runs"].as_array().unwrap().len(), 0);
+        Ok(())
+    }
 }

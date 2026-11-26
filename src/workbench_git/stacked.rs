@@ -16,6 +16,7 @@ pub(crate) struct StackCheckout {
 }
 mod publish;
 pub(crate) use publish::PublishTarget;
+#[allow(clippy::enum_variant_names)]
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum HookEvent {

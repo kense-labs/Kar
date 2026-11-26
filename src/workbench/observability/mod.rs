@@ -96,8 +96,12 @@ impl Frame {
                 v
             })
             .collect::<Vec<_>>();
+        #[cfg(target_os = "macos")]
+        let power = macos::power(self.at);
+        #[cfg(not(target_os = "macos"))]
+        let power = json!({"source":"unknown","idle":"unknown","idle_seconds":null,"locked":"unknown","suspended":false,"on_battery":"unknown","low_power_mode":"unknown","thermal_state":"unknown","stale":true,"updated_at":stamp(self.at)});
         json!({"read_at":stamp(self.at),"sample_interval_ms":interval,"processes":processes,"groups":{"backend":group,"all_kar":group,"desktop":empty,"monitor":empty},
-        "power":{"source":"unknown","idle":"unknown","idle_seconds":null,"locked":"unknown","suspended":false,"on_battery":"unknown","low_power_mode":"unknown","thermal_state":"unknown","stale":true,"updated_at":stamp(self.at)},
+        "power":power,
         "speed_limit_percent":null,"health":self.health()})
     }
 }

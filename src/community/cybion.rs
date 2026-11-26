@@ -800,10 +800,13 @@ impl ThreadActor {
         }
         self.clear_queue("detached from Cybion thread");
         let event = Event::Released;
-        let release=crate::SessionRelease::new(crate::ReleaseReason::Dispose);
+        let release = crate::SessionRelease::new(crate::ReleaseReason::Dispose);
         if let Some(id) = id {
-            self.journal
-                .control_outcome(id, json!({"type":"accepted", "action":"detach","release":release}), event);
+            self.journal.control_outcome(
+                id,
+                json!({"type":"accepted", "action":"detach","release":release}),
+                event,
+            );
         } else {
             self.record(
                 Direction::Host,

@@ -84,7 +84,7 @@ impl Service {
         };
         Ok(
             json!({"supported":true,"state":state,"modelId":m.id,"model":m.details["name"],"size":m.size,
-            "supportsStreaming":false,"supportsBufferedStreaming":true,"supportsModelLinking":true,"supportsTranslation":m.details["supportsTranslation"],
+            "supportsStreaming":true,"supportsBufferedStreaming":true,"supportsModelLinking":true,"supportsTranslation":m.details["supportsTranslation"],
             "languages":m.details["languages"],"supportsLanguageDetection":m.details["supportsLanguageDetection"],"acceleration":cfg.acceleration,
             "benchmarkTier":if cfg.acceleration=="cpu"||gpu.is_empty(){"cpu"}else{"accelerated"},
             "modelUnloadTimeout":"immediately","gpuDevices":gpu}),

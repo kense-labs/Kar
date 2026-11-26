@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub(in crate::workbench) mod cards;
 pub(super) mod links;
-pub(in crate::workbench) use links::{peer_request,bound_peer_request,peer_identity};
-mod threads;
+pub(in crate::workbench) use links::{bound_peer_request, peer_identity, peer_request};
 pub(in crate::workbench) mod secrets;
 mod theme;
+mod threads;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -108,27 +108,27 @@ fn update_prefs(app: &Workbench, c: Option<(&Caller, &Grant)>, patch: Value) -> 
         if let Some((caller, grant)) = c {
             check(db, caller, grant)?;
         }
-        apply_prefs(db,&patch)?;
+        apply_prefs(db, &patch)?;
         Ok(prefs(db))
     })
 }
-pub(in crate::workbench) fn apply_prefs(db:&mut Catalog,patch:&Value)->Result<()> {
-let changes = validate_patch(patch)?;
-        for (key, v) in changes {
-            if key == "prompt_suggestions" {
-                db.prompt_suggestions = v.as_bool().unwrap();
-            } else if key == "source_control_writing_style" {
-                let mut style = prefs(db)[key].clone();
-                style
-                    .as_object_mut()
-                    .unwrap()
-                    .extend(v.as_object().unwrap().clone());
-                db.environment.preferences.insert(key.clone(), style);
-            } else {
-                db.environment.preferences.insert(key.clone(), v.clone());
-            }
+pub(in crate::workbench) fn apply_prefs(db: &mut Catalog, patch: &Value) -> Result<()> {
+    let changes = validate_patch(patch)?;
+    for (key, v) in changes {
+        if key == "prompt_suggestions" {
+            db.prompt_suggestions = v.as_bool().unwrap();
+        } else if key == "source_control_writing_style" {
+            let mut style = prefs(db)[key].clone();
+            style
+                .as_object_mut()
+                .unwrap()
+                .extend(v.as_object().unwrap().clone());
+            db.environment.preferences.insert(key.clone(), style);
+        } else {
+            db.environment.preferences.insert(key.clone(), v.clone());
         }
-Ok(())
+    }
+    Ok(())
 }
 async fn read(State(app): State<Workbench>) -> Reply {
     Ok(Json(descriptor(&app)?))
@@ -146,10 +146,69 @@ async fn read_theme(State(app): State<Workbench>, Query(q): Query<ThemeQuery>) -
 async fn save_theme(State(app): State<Workbench>, Json(input): Json<Value>) -> Reply {
     Ok(Json(theme::set(&app, None, input)?))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeerMcpCall {
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+async fn peer_mcp(
+    State(app): State<Workbench>,
+    device: Option<axum::Extension<crate::workbench::access::DeviceLease>>,
+    Json(req): Json<PeerMcpCall>,
+) -> Reply {
+    let (write, thread_access) = match req.name.as_str() {
+        "kar_project_list" | "kar_project_read" => (false, false),
+        "kar_thread_list" | "kar_thread_read" => (false, true),
+        "kar_thread_send" => (true, true),
+        _ => return Err(denied().into()),
+    };
+    let mut target_project = req
+        .arguments
+        .get("project_id")
+        .and_then(|v| serde_json::from_value::<Uuid>(v.clone()).ok());
+    if target_project.is_none()
+        && let Some(tid) = req
+            .arguments
+            .get("thread_id")
+            .and_then(|v| serde_json::from_value::<Uuid>(v.clone()).ok())
+        && let Ok(info) = app.0.chats.saved_info(tid)
+    {
+        let db = app.0.catalog.lock().unwrap();
+        target_project = db
+            .projects
+            .values()
+            .find(|p| !p.metadata.deleted && app.owns_chat(&db, p, &info).unwrap_or(false))
+            .map(|p| p.id);
+    }
+    let identity = if let Some(axum::Extension(lease)) = device {
+        if !app
+            .0
+            .access
+            .peer_mcp_access(lease.id, write, thread_access, target_project)
+        {
+            return Err(denied().into());
+        }
+        super::super::Identity::Device(lease.id)
+    } else {
+        super::super::Identity::Owner
+    };
+    let caller = Caller {
+        policy: None,
+        files_allowed: false,
+        identity,
+        grant: None,
+        plan: !write,
+    };
+    let out = super::super::toolkit::call(app, caller, &req.name, req.arguments).await?;
+    Ok(Json(json!({"structuredContent": out})))
+}
 pub(in crate::workbench) fn routes() -> Router<Workbench> {
     Router::new()
         .route("/environment", get(read))
         .route("/environment/theme", get(read_theme))
+        .route("/peer/mcp", axum::routing::post(peer_mcp))
         .merge(links::session_routes())
         .merge(threads::remote_routes())
         .merge(crate::workbench::mcp::orchestrator::peer_routes())
@@ -159,6 +218,7 @@ pub(in crate::workbench) fn owner_routes() -> Router<Workbench> {
     Router::new()
         .route("/environment/preferences", put(save))
         .route("/environment/theme/settings", put(save_theme))
+        .merge(links::owner_routes())
         .merge(cards::routes())
         .merge(threads::local_routes())
 }

@@ -211,8 +211,10 @@ pub(super) async fn exercise(
     .unwrap();
     let _ = fs::remove_file(db.join("interrupt-ready"));
     server::json(
-        host.post(format!("{url}/projects/{project}/chats/{stopped_child}/force-stop"))
-            .json(&json!({})),
+        host.post(format!(
+            "{url}/projects/{project}/chats/{stopped_child}/force-stop"
+        ))
+        .json(&json!({})),
     )
     .await;
     let cancelled = server::json(host.get(details(stopped_child))).await;

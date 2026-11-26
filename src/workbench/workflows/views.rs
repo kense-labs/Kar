@@ -39,15 +39,66 @@ fn snapshot(db: &Data, p: Uuid, only_schedule: bool) -> Value {
     }
     let mut runs: Vec<_> = db.runs.values().filter(|r| r.project == p).collect();
     runs.sort_by_key(|r| (std::cmp::Reverse(r.started_ms), r.id));
-    let questions:Vec<_>=runs.iter().filter(|r|r.status==Status::Asking).filter_map(|r|{
-        let Step::Ask{question,..}=r.steps.get(r.cursor)? else{return None;};
-        Some(json!({"run":r.id,"workflow":r.workflow,"attempt":r.attempt.as_ref()?.id,"question":question}))
-    }).collect();
+    let questions: Vec<_> = runs
+        .iter()
+        .filter(|r| r.status == Status::Asking)
+        .filter_map(|r| {
+            let Step::Ask {
+                question,
+                timeout_ms,
+            } = r.steps.get(r.cursor)?
+            else {
+                return None;
+            };
+            let meta = r.ask_metadata.get(&r.cursor);
+            let kind = meta.and_then(|m| m.kind.as_deref()).unwrap_or("text");
+            let mut row = json!({
+                "run": r.id,
+                "workflow": r.workflow,
+                "attempt": r.attempt.as_ref()?.id,
+                "question": question,
+                "kind": kind,
+            });
+            if let Some(ms) = timeout_ms {
+                row["timeout_ms"] = json!(ms);
+            }
+            if let Some(m) = meta {
+                if !m.choices.is_empty() {
+                    row["choices"] = json!(m.choices);
+                }
+                if m.require_reason {
+                    row["require_reason"] = json!(true);
+                }
+                if !m.links.is_empty() {
+                    row["links"] = json!(m.links);
+                }
+            }
+            if !r.metadata.tags.is_empty() {
+                row["tags"] = json!(r.metadata.tags);
+            }
+            if let Some(subject) = &r.metadata.subject {
+                row["subject"] = json!(subject);
+            }
+            Some(row)
+        })
+        .collect();
     let summaries: Vec<_> = runs
         .iter()
         .map(|r| {
-            json!({"id":r.id,"workflow":r.workflow,"parent_run_id":r.parent_run_id,"started_ms":r.started_ms,
-            "status":r.status,"step":r.cursor,"cancel_requested":r.cancel_requested})
+            let mut row = json!({
+                "id": r.id,
+                "workflow": r.workflow,
+                "parent_run_id": r.parent_run_id,
+                "started_ms": r.started_ms,
+                "status": r.status,
+                "step": r.cursor,
+                "cancel_requested": r.cancel_requested,
+                "tags": r.metadata.tags,
+            });
+            if let Some(subject) = &r.metadata.subject {
+                row["subject"] = json!(subject);
+            }
+            row
         })
         .collect();
     json!({"revision":db.revision,"workflows":definitions,"runs":summaries,"questions":questions,"counts":counts(db,p)})
@@ -55,7 +106,11 @@ fn snapshot(db: &Data, p: Uuid, only_schedule: bool) -> Value {
 impl Workbench {
     pub(in crate::workbench) fn workflow_index(&self, project: Uuid) -> crate::Result<Value> {
         self.project(project)?;
-        Ok(snapshot(&self.0.workflows.db.lock().unwrap(), project, false))
+        Ok(snapshot(
+            &self.0.workflows.db.lock().unwrap(),
+            project,
+            false,
+        ))
     }
 }
 type Reply = std::result::Result<Json<Value>, ApiError>;

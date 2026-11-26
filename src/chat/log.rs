@@ -1,7 +1,7 @@
 mod acp_children;
 mod claude;
-pub(super) mod milestones;
 mod codex;
+pub(super) mod milestones;
 pub(crate) mod pi;
 use super::checkpoint::RepositoryCheckpoint;
 use super::{
@@ -28,14 +28,18 @@ struct Header {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChatUpdate {
-    RewindPrepared { pending: Box<super::PreparedRewind> },
+    RewindPrepared {
+        pending: Box<super::PreparedRewind>,
+    },
     ContextRewound {
         rewind: Box<super::ContextRewind>,
         binding: Option<Box<super::Handoff>>,
     },
     WorkspaceHandoff {
-        workspace: std::path::PathBuf, worktree_id: Option<Uuid>,
-        handoff: Box<super::Handoff>, target: Box<super::ProviderSession>,
+        workspace: std::path::PathBuf,
+        worktree_id: Option<Uuid>,
+        handoff: Box<super::Handoff>,
+        target: Box<super::ProviderSession>,
     },
     HandoffPrepared {
         handoff: Box<super::Handoff>,
@@ -116,9 +120,9 @@ pub enum ChatUpdate {
         requested_output_schema: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         background_note: Option<super::BackgroundNote>,
-        #[serde(default,skip_serializing_if="Option::is_none")]
-        app_context:Option<String>,
-        #[serde(default,skip_serializing_if="Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_context: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         merged_context: Option<super::MergedContext>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<super::Attachment>,
@@ -353,7 +357,12 @@ impl State {
         let root = Some(self.info.native_id.as_str());
         self.pending_requests
             .iter()
-            .filter(|req| !self.unconfirmed_answers.iter().any(|u| u.cursor == req.cursor))
+            .filter(|req| {
+                !self
+                    .unconfirmed_answers
+                    .iter()
+                    .any(|u| u.cursor == req.cursor)
+            })
             .filter_map(|req| req.recoverable_question(root, Some(turn_id)))
             .collect()
     }
@@ -557,13 +566,17 @@ impl State {
     pub(super) fn apply(&mut self, row: ChatUpdate) -> Result<()> {
         match row {
             ChatUpdate::RewindPrepared { pending } => {
-                if self.restoring.is_some() || !pending.receipt.restore_files
+                if self.restoring.is_some()
+                    || !pending.receipt.restore_files
                     || pending.receipt.chat != self.info.id
                     || self.turns.last().map(|t| t.id) != Some(pending.receipt.previous_head)
                 {
                     return Err(Error::Protocol("invalid prepared workspace rewind".into()));
                 }
-                self.restoring = Some(CheckpointPoint { turn: pending.receipt.turn, before: false });
+                self.restoring = Some(CheckpointPoint {
+                    turn: pending.receipt.turn,
+                    before: false,
+                });
                 self.pending_rewind = Some(*pending);
             }
             ChatUpdate::ContextRewound { rewind, binding } => {
@@ -572,9 +585,16 @@ impl State {
                 self.orphaned_questions.clear();
                 self.unconfirmed_answers.clear();
             }
-            ChatUpdate::WorkspaceHandoff { workspace, worktree_id, handoff, target } => {
+            ChatUpdate::WorkspaceHandoff {
+                workspace,
+                worktree_id,
+                handoff,
+                target,
+            } => {
                 if handoff.source_workspace.as_ref() != Some(&self.info.workspace) {
-                    return Err(Error::Protocol("workspace handoff source has changed".into()));
+                    return Err(Error::Protocol(
+                        "workspace handoff source has changed".into(),
+                    ));
                 }
                 let id = handoff.request.id;
                 self.info.workspace = workspace;
@@ -742,11 +762,7 @@ impl State {
                         "unknown turn for pending request answer".into(),
                     ));
                 }
-                if !self
-                    .unconfirmed_answers
-                    .iter()
-                    .any(|u| u.cursor == cursor)
-                {
+                if !self.unconfirmed_answers.iter().any(|u| u.cursor == cursor) {
                     self.unconfirmed_answers.push(UnconfirmedAnswer {
                         turn,
                         cursor,
@@ -918,7 +934,7 @@ impl State {
                 turn.attachments = attachments;
                 turn.background_note = background_note;
                 turn.merged_context = merged_context;
-                turn.app_context=app_context;
+                turn.app_context = app_context;
                 turn.requested_output_schema = requested_output_schema;
                 if let Some(h) = self
                     .handoffs
@@ -1182,7 +1198,11 @@ impl State {
                     .unwrap()
                     .finish(status, &self.info.native_id);
             }
-            ChatUpdate::PiInput { id, timestamp_ms, image_content_sha256 } => {
+            ChatUpdate::PiInput {
+                id,
+                timestamp_ms,
+                image_content_sha256,
+            } => {
                 if self.info.protocol != Protocol::Pi || self.active() != Some(id) {
                     return Err(Error::Protocol(
                         "Pi input receipt outside its active turn".into(),
@@ -1365,7 +1385,11 @@ pub(super) fn visit_info_changes(
         ContextRewound {
             binding: Option<Box<super::Handoff>>,
         },
-        WorkspaceHandoff { workspace: std::path::PathBuf, worktree_id: Option<Uuid>, target: Box<super::ProviderSession> },
+        WorkspaceHandoff {
+            workspace: std::path::PathBuf,
+            worktree_id: Option<Uuid>,
+            target: Box<super::ProviderSession>,
+        },
         Opened {
             #[serde(default)]
             antigravity_profile: Option<super::AntigravityProfile>,
@@ -1396,7 +1420,11 @@ pub(super) fn visit_info_changes(
                     .ok_or_else(|| Error::Protocol("rewind has no provider binding".into()))?
                     .activate(info);
             }
-            Change::WorkspaceHandoff { workspace, worktree_id, target } => {
+            Change::WorkspaceHandoff {
+                workspace,
+                worktree_id,
+                target,
+            } => {
                 info.workspace = workspace;
                 info.worktree_id = worktree_id;
                 target.activate(info);
@@ -1425,9 +1453,24 @@ pub(super) fn info(mut file: File, id: Uuid) -> Result<ChatInfo> {
 pub(super) fn staged_info(file: File) -> Result<ChatInfo> {
     Ok(parse_header(&mut BufReader::new(file), None)?.0.info)
 }
-pub(super) fn prepare_portable_fork(file: &mut File, child: &ChatInfo, handoff: super::Handoff) -> Result<()> {
-    append(file, &ChatUpdate::HandoffPrepared { handoff: Box::new(handoff) })?;
-    append(file, &ChatUpdate::HandoffReady { id: child.id, target: Box::new(super::ProviderSession::current(child)) })
+pub(super) fn prepare_portable_fork(
+    file: &mut File,
+    child: &ChatInfo,
+    handoff: super::Handoff,
+) -> Result<()> {
+    append(
+        file,
+        &ChatUpdate::HandoffPrepared {
+            handoff: Box::new(handoff),
+        },
+    )?;
+    append(
+        file,
+        &ChatUpdate::HandoffReady {
+            id: child.id,
+            target: Box::new(super::ProviderSession::current(child)),
+        },
+    )
 }
 pub(super) fn inherit(file: &mut File, turns: Vec<ChatTurn>) -> Result<()> {
     append(file, &ChatUpdate::Inherited { turns })
@@ -1561,11 +1604,16 @@ impl Log {
         }
         Ok(())
     }
-    pub(super) fn commit(&mut self,row:ChatUpdate)->Result<()>{self.commit_transition(row,false)}
-    fn commit_transition(&mut self, mut row: ChatUpdate, expired:bool) -> Result<()> {
+    pub(super) fn commit(&mut self, row: ChatUpdate) -> Result<()> {
+        self.commit_transition(row, false)
+    }
+    fn commit_transition(&mut self, mut row: ChatUpdate, expired: bool) -> Result<()> {
         self.healthy()?;
         if let ChatUpdate::Frame { id, frame } | ChatUpdate::Reconciled { id, frame } = &mut row {
-            if let Some(store) = self.attachment_store.as_ref().or(self.native_store.as_ref())
+            if let Some(store) = self
+                .attachment_store
+                .as_ref()
+                .or(self.native_store.as_ref())
                 && frame.source.path.is_empty()
                 && frame.source.session_id.as_deref() == Some(&self.state.info.native_id)
             {
@@ -1606,7 +1654,7 @@ impl Log {
             }
             self.state.clean_handoff_echo(*id, frame);
         }
-        let result=milestones::commit(&mut self.file,&mut self.state,row,expired);
+        let result = milestones::commit(&mut self.file, &mut self.state, row, expired);
         if let Err(e) = &result {
             self.error = Some(format!("chat journal write: {e}"));
         }
@@ -1892,6 +1940,7 @@ impl Log {
         }
         Ok(None)
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn begin(
         &mut self,
         id: Uuid,
@@ -1899,7 +1948,7 @@ impl Log {
         before: &super::checkpoint::Capture,
         attachments: Vec<super::Attachment>,
         background_note: Option<super::BackgroundNote>,
-        app_context:Option<String>,
+        app_context: Option<String>,
         merged_context: Option<super::MergedContext>,
         requested_output_schema: Option<serde_json::Value>,
     ) -> Result<()> {
@@ -2111,7 +2160,7 @@ impl Log {
             requested_output_schema: None,
             background_note: None,
             merged_context: None,
-            app_context:None,
+            app_context: None,
             attachments: Vec::new(),
             id: input
                 .filter(|id| self.state.find(*id).is_none())
@@ -2231,9 +2280,7 @@ impl Log {
             && !r.events.iter().any(|e| {
                 matches!(
                     e,
-                    Event::Exited { .. }
-                        | Event::Released
-                        | Event::RequestDeliveryFailed { .. }
+                    Event::Exited { .. } | Event::Released | Event::RequestDeliveryFailed { .. }
                 )
             })
         {
@@ -2301,7 +2348,17 @@ impl Log {
         }) {
             let mut requests = self.state.pending_requests.clone();
             if crate::interaction::update_pending(&mut requests, r, root) {
-                self.commit_transition(ChatUpdate::RequestsChanged { requests },r.events.iter().any(|e|matches!(e,Event::Exited{..}|Event::Released|Event::RequestDeliveryFailed{..})))?;
+                self.commit_transition(
+                    ChatUpdate::RequestsChanged { requests },
+                    r.events.iter().any(|e| {
+                        matches!(
+                            e,
+                            Event::Exited { .. }
+                                | Event::Released
+                                | Event::RequestDeliveryFailed { .. }
+                        )
+                    }),
+                )?;
             }
         }
         for e in &r.events {
@@ -2324,9 +2381,7 @@ impl Log {
                                 cursor: cursor.clone(),
                             })?;
                         }
-                    } else if root
-                        && let Some(turn) = self.target_turn_for_request()
-                    {
+                    } else if root && let Some(turn) = self.target_turn_for_request() {
                         self.commit(ChatUpdate::RequestAnswerPending {
                             turn,
                             cursor: cursor.clone(),

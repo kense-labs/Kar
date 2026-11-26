@@ -19,10 +19,10 @@ mod declared_turn;
 mod pi_history;
 #[path = "support/pre_cancelled_compaction.rs"]
 mod pre_cancelled_compaction;
-#[path = "support/public_readbacks.rs"]
-mod public_readbacks;
 #[path = "native_live/prompt_suggestions.rs"]
 mod prompt_suggestions;
+#[path = "support/public_readbacks.rs"]
+mod public_readbacks;
 #[path = "native_live/resume_prompts.rs"]
 mod resume_prompts;
 #[path = "support/sse.rs"]
@@ -99,7 +99,10 @@ fn respond_observed(
     reader.read_exact(&mut body)?;
     let mut reply_text = "rust-wire-ok";
     let request: Value = serde_json::from_slice(&body).unwrap_or_default();
-    if body.windows(b"KAR-NEXT-PROMPT-PROBE".len()).any(|p| p == b"KAR-NEXT-PROMPT-PROBE") {
+    if body
+        .windows(b"KAR-NEXT-PROMPT-PROBE".len())
+        .any(|p| p == b"KAR-NEXT-PROMPT-PROBE")
+    {
         reply_text = "Run the calculator tests";
     }
     observe(&path, &request);
@@ -329,7 +332,11 @@ fn respond_observed(
             && conversation.contains("KAR-LIVE-STEER-TEXT")
             && last.contains("KAR-LIVE-SECOND")
             && !last.contains("tool_result");
-        let opencode_shell = workspace.is_some() && last.contains("KAR-SHELL-JOB-PROBE") && request["tools"].as_array().is_some_and(|tools| tools.iter().any(|t|t["name"]=="shell"));
+        let opencode_shell = workspace.is_some()
+            && last.contains("KAR-SHELL-JOB-PROBE")
+            && request["tools"]
+                .as_array()
+                .is_some_and(|tools| tools.iter().any(|t| t["name"] == "shell"));
         let fork_read = workspace.is_some() && last.contains("KAR-FORK-READ-SHARED");
         let queue_read = workspace.is_some()
             && !summarizing
@@ -357,7 +364,11 @@ fn respond_observed(
             if !answered || background || asking || schema_turn || spawn_probe {
                 let (name, id, input) = if opencode_shell {
                     // The real provider starts and owns the process. The test releases it by creating a file.
-                    ("shell","toolu_shell_job",json!({"command":"i=0; while [ ! -f shell-release ] && [ $i -lt 45 ]; do sleep 1; i=$((i+1)); done; exit 7","background":true}))
+                    (
+                        "shell",
+                        "toolu_shell_job",
+                        json!({"command":"i=0; while [ ! -f shell-release ] && [ $i -lt 45 ]; do sleep 1; i=$((i+1)); done; exit 7","background":true}),
+                    )
                 } else if queue_read {
                     let tool = request["tools"]
                         .as_array()
@@ -2337,24 +2348,40 @@ async fn actual_claude_waits_for_host_approval() {
                         }
                         Event::Task {
                             id,
-                            change:
-                                kar::TaskChange::Background { work },
-                        } if stopped.is_none() && work.pending && work.tool_use_id.as_deref() == Some("toolu_bg") => {
+                            change: kar::TaskChange::Background { work },
+                        } if stopped.is_none()
+                            && work.pending
+                            && work.tool_use_id.as_deref() == Some("toolu_bg") =>
+                        {
                             assert_eq!(work.kind, kar::BackgroundKind::Command);
                             assert_eq!(work.turn_id, Some(background_input));
                             assert!(!work.awaited);
-                            let task = session.snapshot().tasks.into_iter().find(|t| t.id == *id && t.pending_background()).unwrap();
+                            let task = session
+                                .snapshot()
+                                .tasks
+                                .into_iter()
+                                .find(|t| t.id == *id && t.pending_background())
+                                .unwrap();
                             let occurrence = task.started_at.unwrap();
                             let request = kar::BackgroundWaitRequest {
                                 task_ids: vec![id.clone(), id.clone(), "unknown".into()],
                                 waiting: true,
                                 started_at: [(id.clone(), occurrence)].into(),
                             };
-                            let receipt = session.await_background_tasks(request.clone()).await.unwrap();
-                            assert_eq!(receipt.matched, [id.clone()]);
+                            let receipt = session
+                                .await_background_tasks(request.clone())
+                                .await
+                                .unwrap();
+                            assert_eq!(receipt.matched, std::slice::from_ref(id));
                             assert_eq!(receipt.unmatched, ["unknown"]);
                             assert!(session.history().unwrap().background_working);
-                            session.await_background_tasks(kar::BackgroundWaitRequest{waiting:false,..request}).await.unwrap();
+                            session
+                                .await_background_tasks(kar::BackgroundWaitRequest {
+                                    waiting: false,
+                                    ..request
+                                })
+                                .await
+                                .unwrap();
                             assert!(!session.history().unwrap().background_working);
                             session.stop_task(id).await.unwrap();
                             stopped = Some(id.clone());

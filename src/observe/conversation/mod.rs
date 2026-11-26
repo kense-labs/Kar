@@ -290,13 +290,13 @@ impl Conversation {
                         input.turn = None;
                     }
                 }
-                evidence::Signal::Drop(reason) => {
-                    if input.drop.is_none_or(|(old, _)| old <= loc.attempt + 1) {
-                        input.drop = Some((loc.attempt + 1, reason));
-                        input.refresh();
-                        if latest {
-                            input.turn = None;
-                        }
+                evidence::Signal::Drop(reason)
+                    if input.drop.is_none_or(|(old, _)| old <= loc.attempt + 1) =>
+                {
+                    input.drop = Some((loc.attempt + 1, reason));
+                    input.refresh();
+                    if latest {
+                        input.turn = None;
                     }
                 }
                 _ => {}

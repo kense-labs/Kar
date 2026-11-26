@@ -1,16 +1,16 @@
 //! Project-owned interactive terminals and revocable previews of their listeners.
 mod browser;
 pub(super) use browser::html as html_browser;
-mod events;
 mod automation;
+mod events;
 pub(super) use automation::call as automation;
 mod history;
-mod scripts;
-mod viewers;
 mod metadata;
 mod preview;
 mod process;
 mod routes;
+mod scripts;
+mod viewers;
 use super::{Workbench, missing};
 use crate::{Error, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -53,7 +53,7 @@ struct Meta {
     project: Uuid,
     cwd: PathBuf,
     shell: PathBuf,
-    #[serde(default, skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     setup_digest: Option<String>,
     cols: u16,
     rows: u16,
@@ -89,9 +89,9 @@ struct InputReceipt {
     id: Uuid,
     sha256: String,
     delivered: bool,
-    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     reply: bool,
-    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     suppressed: bool,
 }
 
@@ -153,7 +153,14 @@ struct Terminal {
 }
 impl Terminal {
     fn new(dir: PathBuf, mut meta: Meta, directory: Arc<metadata::Metadata>) -> Result<Arc<Self>> {
-        if meta.label.is_empty() { meta.label = meta.shell.file_name().and_then(|s| s.to_str()).unwrap_or("Terminal").into(); }
+        if meta.label.is_empty() {
+            meta.label = meta
+                .shell
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Terminal")
+                .into();
+        }
         fs::create_dir_all(dir.join("input"))?;
         let history = history::History::open(&dir.join("history"))?;
         Ok(Arc::new(Self {
@@ -170,11 +177,16 @@ impl Terminal {
         let mut record = self.meta.lock().unwrap();
         let mut next = record.clone();
         f(&mut next);
-        if !matches!(next.status,Status::Running) || !next.has_running_subprocess {
-            next.has_running_subprocess=false;
-            next.label=next.shell.file_name().and_then(|s|s.to_str()).unwrap_or("Terminal").into();
+        if !matches!(next.status, Status::Running) || !next.has_running_subprocess {
+            next.has_running_subprocess = false;
+            next.label = next
+                .shell
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Terminal")
+                .into();
         }
-        next.updated_at_ms=Some(jiff::Timestamp::now().as_millisecond());
+        next.updated_at_ms = Some(jiff::Timestamp::now().as_millisecond());
         write_json(&self.dir.join("session.json"), &next)?;
         self.directory.update(&next);
         *record = next;
@@ -191,7 +203,12 @@ impl Terminal {
         }
         m
     }
-    fn start(self: &Arc<Self>, cwd: std::fs::File, worktree_pin: Option<File>, script: Option<&str>) -> Result<()> {
+    fn start(
+        self: &Arc<Self>,
+        cwd: std::fs::File,
+        worktree_pin: Option<File>,
+        script: Option<&str>,
+    ) -> Result<()> {
         let m = self.snapshot();
         let pair = native_pty_system()
             .openpty(size(m.cols, m.rows)?)
@@ -333,7 +350,11 @@ impl Terminal {
         self.viewer_input(id, bytes, false, None)
     }
     fn viewer_input(
-        &self, id: Uuid, bytes: &[u8], reply: bool, viewer: Option<viewers::Viewer>,
+        &self,
+        id: Uuid,
+        bytes: &[u8],
+        reply: bool,
+        viewer: Option<viewers::Viewer>,
     ) -> Result<InputReceipt> {
         if bytes.is_empty() || bytes.len() > 65536 {
             return Err(Error::Refused("invalid terminal input length".into()));
@@ -362,7 +383,9 @@ impl Terminal {
             suppressed: reply && !views.can_answer(viewer),
         };
         write_json(&path, &receipt)?;
-        if receipt.suppressed {return Ok(receipt);}
+        if receipt.suppressed {
+            return Ok(receipt);
+        }
         owner.writer.write_all(bytes)?;
         owner.writer.flush()?;
         receipt.delivered = true;
@@ -383,7 +406,10 @@ impl Terminal {
     }
     fn close(&self) -> Result<Meta> {
         if let Some(live) = self.live.lock().unwrap().as_mut() {
-            self.update(|m| {m.closed=true; m.status=Status::Closing;})?;
+            self.update(|m| {
+                m.closed = true;
+                m.status = Status::Closing;
+            })?;
             live.kill();
         } else if let Some(root) = self.snapshot().process
             && matches!(
@@ -395,7 +421,9 @@ impl Terminal {
         {
             process::stop_tree(root);
         }
-        if !self.snapshot().closed {self.update(|m| m.closed=true)?;}
+        if !self.snapshot().closed {
+            self.update(|m| m.closed = true)?;
+        }
         Ok(self.snapshot())
     }
 }
@@ -461,7 +489,9 @@ impl TerminalPreview {
                     }
                 })?;
             }
-            if !interrupted {directory.update(&terminal.snapshot());}
+            if !interrupted {
+                directory.update(&terminal.snapshot());
+            }
             terminals.insert(id, terminal);
         }
         Ok(Self {
@@ -517,24 +547,51 @@ impl Workbench {
                 }
             }
         }
-        self.terminal_at(project,id,p.root,cols,rows)
+        self.terminal_at(project, id, p.root, cols, rows)
     }
 
-    pub(in crate::workbench) fn start_task_script(&self, project:Uuid, task:Uuid,cwd:&Path,terminal:Uuid,command:&str)->Result<bool>{
-        if self.0.task_folders.workspace(project,task)?.as_deref()!=Some(cwd) {
+    pub(in crate::workbench) fn start_task_script(
+        &self,
+        project: Uuid,
+        task: Uuid,
+        cwd: &Path,
+        terminal: Uuid,
+        command: &str,
+    ) -> Result<bool> {
+        if self.0.task_folders.workspace(project, task)?.as_deref() != Some(cwd) {
             return Err(super::denied());
         }
-        self.terminal_at(project,terminal,cwd.into(),120,30)?;
-        let mut input=command.as_bytes().to_vec();
+        self.terminal_at(project, terminal, cwd.into(), 120, 30)?;
+        let mut input = command.as_bytes().to_vec();
         input.push(b'\r');
-        Ok(self.0.terminal_preview.find(project,terminal)?.input(task,&input)?.delivered)
+        Ok(self
+            .0
+            .terminal_preview
+            .find(project, terminal)?
+            .input(task, &input)?
+            .delivered)
     }
 
-    fn terminal_at(&self,project:Uuid,id:Uuid,cwd:PathBuf,cols:u16,rows:u16)->Result<Meta>{
-        self.terminal_command(project,id,cwd,cols,rows,None)
+    fn terminal_at(
+        &self,
+        project: Uuid,
+        id: Uuid,
+        cwd: PathBuf,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Meta> {
+        self.terminal_command(project, id, cwd, cols, rows, None)
     }
-    fn terminal_command(&self,project:Uuid,id:Uuid,cwd:PathBuf,cols:u16,rows:u16,script:Option<&str>)->Result<Meta>{
-        let setup_digest=script.map(|cmd| format!("{:x}", Sha256::digest(cmd.as_bytes())));
+    fn terminal_command(
+        &self,
+        project: Uuid,
+        id: Uuid,
+        cwd: PathBuf,
+        cols: u16,
+        rows: u16,
+        script: Option<&str>,
+    ) -> Result<Meta> {
+        let setup_digest = script.map(|cmd| format!("{:x}", Sha256::digest(cmd.as_bytes())));
         let workspace = self.workspace_at(&cwd)?;
         let worktree_pin = crate::workbench_git::pin_checkout(&cwd)?.map(|(_, f)| f);
         let state = &self.0.terminal_preview;
@@ -549,7 +606,7 @@ impl Workbench {
         let shell = std::env::var_os("SHELL")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute() && p.is_file())
-            .unwrap_or_else(|| PathBuf::from("/bin/sh"));
+            .unwrap_or_else(crate::process::find_sh);
         let m = Meta {
             id,
             project,
@@ -584,26 +641,66 @@ impl Workbench {
 }
 
 impl TerminalPreview {
-    pub(super) fn model_tabs(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>,terminals:&std::collections::BTreeSet<Uuid>)->Vec<serde_json::Value>{
-        let mut tabs=self.grants.list(project,None);
-        tabs.retain(|tab|(tab.chat==Some(chat) && (tab.terminal.is_some_and(|t|terminals.contains(&t)) || tab.public_origin.is_some())) || shared.contains(&tab.id));
-        tabs.sort_by_key(|tab|tab.id);
-        tabs.into_iter().map(|t|serde_json::json!({"tab_id":t.id,"runtime":t.runtime,"preview":t})).collect()
+    pub(super) fn model_tabs(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        shared: &std::collections::BTreeSet<Uuid>,
+        terminals: &std::collections::BTreeSet<Uuid>,
+    ) -> Vec<serde_json::Value> {
+        let mut tabs = self.grants.list(project, None);
+        tabs.retain(|tab| {
+            (tab.chat == Some(chat)
+                && (tab.terminal.is_some_and(|t| terminals.contains(&t))
+                    || tab.public_origin.is_some()))
+                || shared.contains(&tab.id)
+        });
+        tabs.sort_by_key(|tab| tab.id);
+        tabs.into_iter()
+            .map(|t| serde_json::json!({"tab_id":t.id,"runtime":t.runtime,"preview":t}))
+            .collect()
     }
-    fn model_grant(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>,terminals:&std::collections::BTreeSet<Uuid>,tab:Uuid)->Result<Arc<preview::Grant>>{
-        let grant=self.grants.get(project,tab,None)?;
-        if !(grant.info.chat==Some(chat) && (grant.info.terminal.is_some_and(|t|terminals.contains(&t)) || grant.info.public_origin.is_some()) || shared.contains(&tab)){return Err(missing());}
+    fn model_grant(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        shared: &std::collections::BTreeSet<Uuid>,
+        terminals: &std::collections::BTreeSet<Uuid>,
+        tab: Uuid,
+    ) -> Result<Arc<preview::Grant>> {
+        let grant = self.grants.get(project, tab, None)?;
+        if !(grant.info.chat == Some(chat)
+            && (grant.info.terminal.is_some_and(|t| terminals.contains(&t))
+                || grant.info.public_origin.is_some())
+            || shared.contains(&tab))
+        {
+            return Err(missing());
+        }
         Ok(grant)
     }
-    pub(super) fn model_close(&self,project:Uuid,chat:Uuid,shared:&std::collections::BTreeSet<Uuid>,terminals:&std::collections::BTreeSet<Uuid>,tab:Uuid)->Result<()>{
-        self.model_grant(project,chat,shared,terminals,tab)?;
-        self.grants.close(project,tab,None)
+    pub(super) fn model_close(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        shared: &std::collections::BTreeSet<Uuid>,
+        terminals: &std::collections::BTreeSet<Uuid>,
+        tab: Uuid,
+    ) -> Result<()> {
+        self.model_grant(project, chat, shared, terminals, tab)?;
+        self.grants.close(project, tab, None)
     }
 }
 
-pub(in crate::workbench) fn owns_local_port(owner: ProcessId, port:u16)->bool {
-    process::identity(owner.pid)==Some(owner) && process::ports(owner).is_ok_and(|ports| ports.iter().any(|p|p.port==port && p.address.is_loopback()))
+pub(in crate::workbench) fn owns_local_port(owner: ProcessId, port: u16) -> bool {
+    process::identity(owner.pid) == Some(owner)
+        && process::ports(owner).is_ok_and(|ports| {
+            ports
+                .iter()
+                .any(|p| p.port == port && p.address.is_loopback())
+        })
 }
-pub(in crate::workbench) fn stop_owned_process(owner:ProcessId) {
-    if process::identity(owner.pid)==Some(owner){process::stop_tree(owner);}
+pub(in crate::workbench) fn stop_owned_process(owner: ProcessId) {
+    if process::identity(owner.pid) == Some(owner) {
+        process::stop_tree(owner);
+    }
 }

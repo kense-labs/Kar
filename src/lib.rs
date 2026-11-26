@@ -61,7 +61,13 @@ pub use interaction::{
 #[cfg(not(target_arch = "wasm32"))]
 mod antigravity;
 mod placement;
-pub use placement::{Execution, Opening, PlacementRequest, ReleaseReason, SessionPlacement, SessionRelease};
+pub use placement::{
+    Execution, Opening, PlacementRequest, ReleaseReason, SessionPlacement, SessionRelease,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use placement::{
+    PoolReleaseOutcome, PooledDaemon, SharedDaemonLease, SharedDaemonPool, SharedPoolKey,
+};
 mod capabilities;
 pub use capabilities::{
     CompactionDuringTurn, CompactionEvents, ContextUsageCapability, ManualCompactionCapability,
@@ -75,18 +81,18 @@ mod options;
 pub mod provider_instance;
 #[cfg(not(target_arch = "wasm32"))]
 pub use options::{
-    McpServer, WorkbenchRegistration, NativeMemory, NativeMemoryDefault, SessionLogUpload, SessionSettings,
-    UserConfigurationCategory,
+    CodexNativePermissions, McpServer, NativeMemory, NativeMemoryDefault, SessionLogUpload,
+    SessionSettings, UserConfigurationCategory, WorkbenchRegistration,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chat;
 pub mod observe;
+#[cfg(not(target_arch = "wasm32"))]
+mod prompt_suggestions;
 mod tasks;
 mod usage;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod workbench;
-#[cfg(not(target_arch = "wasm32"))]
-mod prompt_suggestions;
 #[cfg(not(target_arch = "wasm32"))]
 pub use prompt_suggestions::{PromptSuggestion, PromptSuggestionSource, PromptSuggestions};
 #[cfg(not(target_arch = "wasm32"))]
@@ -95,10 +101,15 @@ pub use usage::{
     AgentTokens, CacheWriteByTtl, SessionUsage, TokenReading, TokenTotals, UsageSnapshot,
 };
 mod tool_activity;
-pub use tasks::{BackgroundExit, BackgroundKind, BackgroundWaitReceipt, BackgroundWaitRequest, BackgroundWork, NativeTask, TaskChange, TaskDetails, TaskStatus, TaskType};
+pub use tasks::{
+    BackgroundExit, BackgroundKind, BackgroundWaitReceipt, BackgroundWaitRequest, BackgroundWork,
+    NativeTask, TaskChange, TaskDetails, TaskStatus, TaskType,
+};
 pub use tool_activity::{ChangeKind, FileChange, OutputPart, ToolResult, ToolStatus};
 #[cfg(not(target_arch = "wasm32"))]
 mod dsh;
+#[cfg(not(target_arch = "wasm32"))]
+pub use dsh::run_dsh_mcp_bridge;
 #[cfg(not(target_arch = "wasm32"))]
 mod factory;
 #[cfg(not(target_arch = "wasm32"))]
@@ -133,22 +144,22 @@ mod wire;
 pub use error::{Error, Result};
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::{
-    AcpTimeouts, ApprovalMode, McpToolsListChanged, Protocol, Runtime, SessionOptions, runtime,
-    runtimes,
+    AcpTimeouts, ApprovalMode, McpToolsListChanged, Protocol, Runtime, SessionOptions,
+    UserQuestionsMode, runtime, runtimes,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use session::{
-    AttributionTier, Capabilities, Delivery, DeliverWhen, DeliverOptions, DeliverReceipt, DeliverLanded, MergeInput, MergedInput, InputOptions, PromptDecision, PromptInterrupt, PromptRun,
+    AttributionTier, Capabilities, DeliverLanded, DeliverOptions, DeliverReceipt, DeliverWhen,
+    Delivery, InputOptions, MergeInput, MergedInput, PromptDecision, PromptInterrupt, PromptRun,
     PromptRunOptions, Session, Turn, TurnReport,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use stream::CoalescedEvents;
 pub use stream::{
-    MessageBoundary,
     ControlReceipt, Cursor, Direction, Event, EventCursor, EventSubscription, ImageReference,
-    ImageSubmission, InputOrigin, InputOriginKind, InputReceipt, McpStartupStatus, ObservedEvent,
-    Outcome, ProcessCleanupResult, PromptIdentity, Record, RecordKind, SteerStatus, Subscription,
-    TurnProcessCleanup,
+    ImageSubmission, InputOrigin, InputOriginKind, InputReceipt, McpStartupStatus, MessageBoundary,
+    ObservedEvent, Outcome, ProcessCleanupResult, PromptIdentity, Record, RecordKind, SteerStatus,
+    Subscription, TurnProcessCleanup, coalesce_events,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -186,6 +197,13 @@ mod input;
 pub use input::InputImage;
 
 pub mod voyage;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod harbor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pi_durable;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod testing;
 
 #[cfg(target_arch = "wasm32")]
 pub mod browser;

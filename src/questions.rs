@@ -443,24 +443,46 @@ pub(crate) fn answer(method: &str, body: &Value, reply: QuestionReply) -> Result
     Ok(match method {
         "userInput/requested" => {
             let mut answers = Vec::new();
-            for (field, q) in form.fields.iter().zip(body["questions"].as_array().expect("parsed Muse questions")) {
+            for (field, q) in form
+                .fields
+                .iter()
+                .zip(body["questions"].as_array().expect("parsed Muse questions"))
+            {
                 let inputs = &values[&field.id];
-                let inputs = inputs.as_array().map_or_else(|| std::slice::from_ref(inputs), Vec::as_slice);
-                let (selected, other): (Vec<_>,Vec<_>) = inputs.iter().filter_map(Value::as_str)
-                    .partition(|s|field.options.iter().any(|o|o.value == *s));
+                let inputs = inputs
+                    .as_array()
+                    .map_or_else(|| std::slice::from_ref(inputs), Vec::as_slice);
+                let (selected, other): (Vec<_>, Vec<_>) = inputs
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .partition(|s| field.options.iter().any(|o| o.value == *s));
                 let custom = other.join("\n");
                 let n = selected.len() as u64;
-                if custom.encode_utf16().count()>500 || (n==0 && custom.is_empty())
-                    || (n!=0 && (q["selection"]["minSelections"].as_u64().is_some_and(|min|n<min)
-                        || q["selection"]["maxSelections"].as_u64().is_some_and(|max|n>max))) {
-                    return Err(Error::Refused("invalid Muse question selection or custom answer length".into()));
+                if custom.encode_utf16().count() > 500
+                    || (n == 0 && custom.is_empty())
+                    || (n != 0
+                        && (q["selection"]["minSelections"]
+                            .as_u64()
+                            .is_some_and(|min| n < min)
+                            || q["selection"]["maxSelections"]
+                                .as_u64()
+                                .is_some_and(|max| n > max)))
+                {
+                    return Err(Error::Refused(
+                        "invalid Muse question selection or custom answer length".into(),
+                    ));
                 }
                 let mut value = json!({"questionId":field.id});
-                if n>0 {
-                    if q["selection"]["mode"]=="single" { value["selectedLabel"]=selected[0].into(); }
-                    else { value["selectedLabels"]=json!(selected); }
+                if n > 0 {
+                    if q["selection"]["mode"] == "single" {
+                        value["selectedLabel"] = selected[0].into();
+                    } else {
+                        value["selectedLabels"] = json!(selected);
+                    }
                 }
-                if !custom.is_empty() { value[if n>0 {"note"} else {"freeText"}] = custom.into(); }
+                if !custom.is_empty() {
+                    value[if n > 0 { "note" } else { "freeText" }] = custom.into();
+                }
                 answers.push(value);
             }
             json!({"answers":answers})
@@ -539,7 +561,33 @@ pub(crate) fn answer(method: &str, body: &Value, reply: QuestionReply) -> Result
             json!({"kind":"question","answers":answers})
         }
         "item/tool/requestUserInput" => {
-            json!({"answers":values.into_iter().map(|(k,v)|(k,json!({"answers":[v]}))).collect::<Map<_,_>>()})
+            let mut answers = Map::new();
+            for (k, v) in values {
+                let field = form.fields.iter().find(|f| f.id == k);
+                let has_options = field.is_some_and(|f| !f.options.is_empty());
+                let format_item = |item: &Value| -> Option<Value> {
+                    if let Some(s) = item.as_str() {
+                        if has_options
+                            && !field
+                                .unwrap()
+                                .options
+                                .iter()
+                                .any(|o| o.value == s || o.label == s)
+                        {
+                            return (!s.is_empty())
+                                .then(|| Value::String(format!("user_note: {s}")));
+                        }
+                        return Some(Value::String(s.to_owned()));
+                    }
+                    Some(item.clone())
+                };
+                let formatted: Vec<Value> = match &v {
+                    Value::Array(items) => items.iter().filter_map(format_item).collect(),
+                    other => format_item(other).into_iter().collect(),
+                };
+                answers.insert(k, json!({ "answers": formatted }));
+            }
+            json!({ "answers": answers })
         }
         "can_use_tool" => {
             let mut input = body["input"].clone();
@@ -791,6 +839,53 @@ mod tests {
         assert_eq!(
             answer(method, &url, QuestionReply::Cancel).unwrap(),
             json!({"action":"cancel"})
+        );
+    }
+
+    #[test]
+    fn codex_request_user_input_prefixes_custom_free_text_notes_on_choice_fields() {
+        let method = "item/tool/requestUserInput";
+        let body = json!({
+            "questions": [
+                {
+                    "id": "db",
+                    "question": "Which database?",
+                    "isOther": true,
+                    "options": [{"label": "SQLite"}, {"label": "Postgres"}]
+                },
+                {
+                    "id": "notes",
+                    "question": "Extra details?"
+                }
+            ]
+        });
+        assert_eq!(
+            answer(
+                method,
+                &body,
+                submit(json!({"db": "SQLite", "notes": "keep plain"}))
+            )
+            .unwrap(),
+            json!({
+                "answers": {
+                    "db": {"answers": ["SQLite"]},
+                    "notes": {"answers": ["keep plain"]}
+                }
+            })
+        );
+        assert_eq!(
+            answer(
+                method,
+                &body,
+                submit(json!({"db": "DuckDB", "notes": "analytic"}))
+            )
+            .unwrap(),
+            json!({
+                "answers": {
+                    "db": {"answers": ["user_note: DuckDB"]},
+                    "notes": {"answers": ["analytic"]}
+                }
+            })
         );
     }
 }

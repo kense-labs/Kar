@@ -1,5 +1,7 @@
 pub(crate) mod delivery;
-pub use delivery::{DeliverWhen, DeliverOptions, DeliverReceipt, DeliverLanded, MergeInput, MergedInput};
+pub use delivery::{
+    DeliverLanded, DeliverOptions, DeliverReceipt, DeliverWhen, MergeInput, MergedInput,
+};
 mod image_input;
 mod muse;
 mod prompt_run;
@@ -106,7 +108,9 @@ impl AttributionTier {
         Some(match protocol {
             Protocol::Cybion | Protocol::Pi => Self::None,
             Protocol::Codex | Protocol::Dsh => Self::Nested,
-            Protocol::Claude | Protocol::KimiKap | Protocol::Qoder | Protocol::Qwen => Self::Attributed,
+            Protocol::Claude | Protocol::KimiKap | Protocol::Qoder | Protocol::Qwen => {
+                Self::Attributed
+            }
             Protocol::Factory | Protocol::Morph => Self::Opaque,
             Protocol::Acp => match runtime {
                 "grok" => Self::Nested,
@@ -165,7 +169,7 @@ pub struct Session {
     pub(crate) image_input: bool,
     pub(crate) opencode_shells: bool,
     opencode_shell_stop: bool,
-    pub(crate) claude_mcp_apps:Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) claude_mcp_apps: Arc<std::sync::atomic::AtomicBool>,
     native_resume: bool,
     cursor_parameterized: bool,
     acp_steering: bool,
@@ -205,9 +209,9 @@ impl Session {
             image_input: matches!(protocol, Protocol::Cybion | Protocol::KimiKap),
             request_capture: None,
             process_root: None,
-            claude_mcp_apps:Default::default(),
-            opencode_shells:false,
-            opencode_shell_stop:false,
+            claude_mcp_apps: Default::default(),
+            opencode_shells: false,
+            opencode_shell_stop: false,
             factory_dir: None,
             dsh_file: None,
             text_limit: None,
@@ -238,7 +242,9 @@ impl Session {
         version: Option<&str>,
     ) -> Result<Self> {
         if runtime.protocol == Protocol::Muse && fork.is_some() {
-            return Err(Error::Unsupported("native Muse fork is unavailable on this adapter".into()));
+            return Err(Error::Unsupported(
+                "native Muse fork is unavailable on this adapter".into(),
+            ));
         }
         let explicit_mcp = !options.mcp_servers.is_empty();
         let probed_version = if options.workbench_registration.is_some()
@@ -257,7 +263,7 @@ impl Session {
                 Protocol::Codex | Protocol::Claude | Protocol::Qoder => {
                     options.add_workbench_server(crate::McpTransport::Http)
                 }
-                Protocol::Factory | Protocol::Qwen => {
+                Protocol::Factory | Protocol::Qwen | Protocol::Dsh => {
                     let support = McpSupport::new(runtime.protocol, &runtime.id, version);
                     if let Some(transports) = support.transports {
                         let transport = if transports.contains(&crate::McpTransport::Http) {
@@ -275,6 +281,24 @@ impl Session {
         let journal = runtime.session_journal(options.retained_bytes)?;
         crate::options::launch_args::validate(runtime, &options, fork.is_some())?;
         options.settings.validate(runtime.protocol, &runtime.id)?;
+        let probed_questions_version = if options.user_questions
+            == Some(crate::runtime::UserQuestionsMode::Host)
+            && options.approvals != crate::ApprovalMode::Host
+        {
+            if !matches!(runtime.protocol, Protocol::Codex | Protocol::Claude) {
+                return Err(Error::Unsupported(
+                    "user_questions requires Codex or Claude when approvals is not Host".into(),
+                ));
+            }
+            let probed = match version {
+                Some(v) => v.to_owned(),
+                None => runtime.launch_version(&options).await?,
+            };
+            check_user_questions_version(runtime.protocol, &probed)?;
+            Some(probed)
+        } else {
+            None
+        };
         if let Some(reason) =
             crate::options::availability::credential_refusal(runtime.protocol, &runtime.id)
             && options
@@ -309,7 +333,8 @@ impl Session {
                 options.settings.pi_project_trusted,
                 options.settings.pi_allow_project_package_install,
                 options.handshake_timeout,
-            ).await?;
+            )
+            .await?;
         }
         let optional_pi_sdk = if runtime.protocol == Protocol::Pi
             && options.workbench_registration.is_some()
@@ -351,7 +376,9 @@ impl Session {
         )?;
         if runtime.protocol == Protocol::Muse {
             for (key, _) in std::env::vars_os().chain(options.env.clone()) {
-                if key.to_string_lossy().eq_ignore_ascii_case("META_API_KEY") { process.env_remove(key); }
+                if key.to_string_lossy().eq_ignore_ascii_case("META_API_KEY") {
+                    process.env_remove(key);
+                }
             }
             process.env("MUSE_NO_AUTO_UPDATE", "1");
         }
@@ -364,6 +391,29 @@ impl Session {
                 .args(&runtime.args[..runtime.args.len() - 1])
                 .args(&options.launch_args)
                 .arg("stdio");
+        } else if runtime.protocol == Protocol::Acp
+            && runtime.id == "antigravity"
+            && options.approvals == crate::ApprovalMode::Allow
+            && !runtime
+                .args
+                .iter()
+                .any(|a| a == "--dangerously-skip-permissions")
+            && !options
+                .launch_args
+                .iter()
+                .any(|a| a.split('=').next() == Some("--dangerously-skip-permissions"))
+        {
+            let mut inserted = false;
+            for arg in &runtime.args {
+                if !inserted && arg == "--process-per-session" {
+                    process.arg("--dangerously-skip-permissions");
+                    inserted = true;
+                }
+                process.arg(arg);
+            }
+            if !inserted {
+                process.arg("--dangerously-skip-permissions");
+            }
         } else if runtime.protocol != Protocol::Qoder {
             process.args(&runtime.args);
         }
@@ -411,21 +461,33 @@ impl Session {
                 "Grok cannot reapply append-only instructions on resume".into(),
             ));
         }
+        if runtime.protocol == Protocol::Claude
+            && options.user_questions == Some(crate::runtime::UserQuestionsMode::Host)
+            && options.approvals != crate::ApprovalMode::Host
+        {
+            for tool in ["EnterPlanMode", "ExitPlanMode"] {
+                if !options.settings.disallowed_tools.iter().any(|t| t == tool) {
+                    options.settings.disallowed_tools.push(tool.into());
+                }
+            }
+        }
         let mut prompt_files =
             crate::options::instructions::launch(&mut process, runtime, &options, &cwd)?;
         let mut opencode_agents = vec![];
         let mut extended_children = false;
         let mut opencode_v1 = false;
-        let mut opencode_shells=false;
+        let mut opencode_shells = false;
         let mut opencode_shell_stop = cfg!(target_os = "macos") && cursor_acp;
-        let mut installed_version = version.map(str::to_owned);
+        let mut installed_version = version.map(str::to_owned).or(probed_questions_version);
         let _startup = if runtime.protocol == Protocol::Acp && runtime.id == "opencode" {
             let lock = crate::options::opencode::startup(&options, &cwd).await?;
             let release = crate::options::opencode::release(runtime, &options).await?;
             installed_version = Some(release.to_string());
             opencode_v1 = release.major == 1;
-            opencode_shells=release.major==2 && release>=semver::Version::new(2,2,7);
-            opencode_shell_stop=opencode_shells && cfg!(target_os="macos") && release>=semver::Version::new(2,3,2);
+            opencode_shells = release.major == 2 && release >= semver::Version::new(2, 2, 7);
+            opencode_shell_stop = opencode_shells
+                && cfg!(target_os = "macos")
+                && release >= semver::Version::new(2, 3, 2);
             extended_children = release.major == 2 && release >= semver::Version::new(2, 3, 0);
             if options.settings.system_prompt.is_some()
                 || options.settings.append_system_prompt.is_some()
@@ -468,9 +530,27 @@ impl Session {
         };
         let mut qoder = None;
         let mut memory = None;
+        let (codex_cli_sandbox, codex_rpc_sandbox) = if runtime.protocol == Protocol::Codex {
+            codex_sandbox_plan(&options)
+        } else {
+            (None, None)
+        };
         match runtime.protocol {
-            Protocol::Codex if options.settings.goals => {
-                process.args(["-c", "features.goals=true"]);
+            Protocol::Codex => {
+                if options.settings.goals {
+                    process.args(["-c", "features.goals=true"]);
+                }
+                if options.user_questions == Some(crate::runtime::UserQuestionsMode::Host)
+                    || options.approvals == crate::ApprovalMode::Host
+                {
+                    process.args(["-c", "features.default_mode_request_user_input=true"]);
+                }
+                if let Some(ref sandbox) = codex_cli_sandbox {
+                    process.args([
+                        "-c",
+                        &format!("sandbox_mode={}", serde_json::to_string(sandbox)?),
+                    ]);
+                }
             }
             Protocol::Claude => {
                 crate::options::claude_environment(&mut process, &options.env);
@@ -512,9 +592,15 @@ impl Session {
                     "stream-json",
                     "--replay-user-messages",
                     "--include-partial-messages",
-                    "--permission-prompt-tool",
-                    "stdio",
                 ]);
+                process.args(crate::options::launch_args::claude_allow_permission_args(
+                    &options,
+                ));
+                if options.approvals != crate::ApprovalMode::Allow
+                    || options.user_questions == Some(crate::runtime::UserQuestionsMode::Host)
+                {
+                    process.args(["--permission-prompt-tool", "stdio"]);
+                }
                 if let Some((source, through)) = fork {
                     Uuid::parse_str(source).map_err(|_| {
                         Error::Protocol("Claude fork requires a native source UUID".into())
@@ -579,7 +665,11 @@ impl Session {
                     "--channel=SDK",
                     "--include-partial-messages",
                     "--approval-mode",
-                    "default",
+                    if options.approvals == crate::ApprovalMode::Allow {
+                        "yolo"
+                    } else {
+                        "default"
+                    },
                 ]);
                 process
                     .arg(if options.resume.is_some() {
@@ -613,7 +703,9 @@ impl Session {
                 }
                 process.arg("--no-mcp");
                 if options.pi_session_root.is_some() {
-                    process.arg("--session-dir").arg(crate::options::pi_workspace_sessions(&cwd, &options)?);
+                    process
+                        .arg("--session-dir")
+                        .arg(crate::options::pi_workspace_sessions(&cwd, &options)?);
                 }
                 if let Some(pi) = &pi {
                     pi.configure(&mut process);
@@ -728,13 +820,13 @@ impl Session {
         options.bind_bridge_process(process_root.as_ref());
         let native_memory = memory.as_ref().and_then(|m| m.effective);
         let preflight_secrets = Arc::new(secrets.clone());
-        let claude_mcp_apps=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let claude_mcp_apps = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let commands = Actor::start(
             runtime,
             &options,
             crate::transport::Launch {
                 registry_installation,
-                claude_mcp_apps:claude_mcp_apps.clone(),
+                claude_mcp_apps: claude_mcp_apps.clone(),
                 opencode_shells,
                 opencode_v2: runtime.id == "opencode" && !opencode_v1,
                 dsh_patch,
@@ -825,9 +917,9 @@ impl Session {
                 };
             }
             Protocol::Codex => {
-                let mut capabilities=json!({"experimentalApi":true});
-                if options.workbench_registration.is_some(){
-                    capabilities["extensions"]=json!({"io.modelcontextprotocol/ui":{"mimeTypes":["text/html;profile=mcp-app"]}});
+                let mut capabilities = json!({"experimentalApi":true});
+                if options.workbench_registration.is_some() {
+                    capabilities["extensions"] = json!({"io.modelcontextprotocol/ui":{"mimeTypes":["text/html;profile=mcp-app"]}});
                 }
                 session.rpc("initialize",json!({"clientInfo":{"name":"kar","title":"Kar","version":env!("CARGO_PKG_VERSION")},"capabilities":capabilities})).await?;
                 session
@@ -856,6 +948,14 @@ impl Session {
                 }
                 if options.approvals == crate::ApprovalMode::Host {
                     params["approvalPolicy"] = "on-request".into();
+                } else if options.approvals == crate::ApprovalMode::Allow
+                    && options.settings.native_permissions
+                        != Some(crate::options::CodexNativePermissions::Inherit)
+                {
+                    params["approvalPolicy"] = "never".into();
+                }
+                if let Some(ref sandbox) = codex_rpc_sandbox {
+                    params["sandbox"] = sandbox.as_str().into();
                 }
                 if !options.mcp_servers.is_empty() {
                     let servers: serde_json::Map<_, _> = options
@@ -970,10 +1070,26 @@ impl Session {
                 session.mcp = McpSupport::acp(&runtime.id, installed_version.as_deref(), &init);
                 let steering =
                     crate::wire::acp_prompt::Steering::negotiate(&runtime.id, opencode_v1, &init);
-                session.acp_steering = steering.is_some();
-                identity.lock().unwrap().acp_steering = steering;
+                let kiro_steering = runtime.id == "kiro"
+                    && init.pointer("/_meta/steering/supported") != Some(&Value::Bool(false));
+                let kiro_compact = runtime.id == "kiro"
+                    && init
+                        .pointer("/agentCapabilities/_meta/kiro/extensionMethods")
+                        .and_then(Value::as_array)
+                        .is_some_and(|m| {
+                            m.iter()
+                                .any(|x| x.as_str() == Some("_kiro/session/compact"))
+                        });
+                session.acp_steering = steering.is_some() || kiro_steering;
+                {
+                    let mut ident = identity.lock().unwrap();
+                    ident.acp_steering = steering;
+                    ident.kiro_steering = kiro_steering;
+                    ident.kiro_compact = kiro_compact;
+                }
                 // Native OpenCode releases were resolved before launch, including for pinned binaries.
-                session.manual_compaction = grok || (runtime.id == "opencode" && !opencode_v1);
+                session.manual_compaction =
+                    grok || (runtime.id == "opencode" && !opencode_v1) || kiro_compact;
                 session.native_fork = init
                     .pointer("/agentCapabilities/sessionCapabilities/fork")
                     .is_some_and(|v| v.is_object() || v == &Value::Bool(true));
@@ -1014,9 +1130,19 @@ impl Session {
                     ));
                 }
                 let dynamic_acp = crate::workbench::acp_registry::dynamic(&runtime.id);
-                let in_band = init.pointer("/agentCapabilities/mcpCapabilities/acp") == Some(&Value::Bool(true))
-                    && runtime.id != "dsh" && options.workbench_registration.as_ref().is_some_and(|r|
-                        r.acp.compare_exchange(1, 2, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire).is_ok());
+                let in_band = init.pointer("/agentCapabilities/mcpCapabilities/acp")
+                    == Some(&Value::Bool(true))
+                    && runtime.id != "dsh"
+                    && options.workbench_registration.as_ref().is_some_and(|r| {
+                        r.acp
+                            .compare_exchange(
+                                1,
+                                2,
+                                std::sync::atomic::Ordering::AcqRel,
+                                std::sync::atomic::Ordering::Acquire,
+                            )
+                            .is_ok()
+                    });
                 let before = options.mcp_servers.len();
                 if !in_band && runtime.id != "dsh" && options.workbench_registration.is_some() {
                     let http = init.pointer("/agentCapabilities/mcpCapabilities/http")
@@ -1026,9 +1152,14 @@ impl Session {
                         &runtime.id,
                     )
                     .is_some();
-                    if http && !dynamic_acp && !sensitive && !matches!(runtime.id.as_str(), "kiro" | "fx") {
+                    if http
+                        && !dynamic_acp
+                        && !sensitive
+                        && !matches!(runtime.id.as_str(), "kiro" | "fx" | "cursor")
+                    {
                         options.add_workbench_server(crate::McpTransport::Http);
-                    } else if http || dynamic_acp
+                    } else if http
+                        || dynamic_acp
                         || session
                             .mcp
                             .transports
@@ -1048,7 +1179,10 @@ impl Session {
                     .map(|(name, s)| s.acp(name))
                     .collect();
                 if in_band {
-                    let registration = options.workbench_registration.as_ref().expect("negotiated ACP");
+                    let registration = options
+                        .workbench_registration
+                        .as_ref()
+                        .expect("negotiated ACP");
                     servers.push(json!({"type":"acp","name":crate::WorkbenchRegistration::NAME,"serverId":registration.acp_id}));
                 }
                 let mut params = json!({"cwd":cwd_str,"mcpServers":servers});
@@ -1098,11 +1232,23 @@ impl Session {
                     )
                     .await?;
                 }
-                let (method, step) = if let Some((source, _)) = fork {
+                let (method, step) = if let Some((source, through)) = fork {
                     if !session.native_fork {
                         return Err(Error::Unsupported(
                             "ACP agent did not advertise session/fork".into(),
                         ));
+                    }
+                    if let Some(anchor) = through {
+                        if runtime.id != "kiro"
+                            || init.pointer(
+                                "/agentCapabilities/sessionCapabilities/fork/_meta/kiro/messageId",
+                            ) != Some(&Value::Bool(true))
+                        {
+                            return Err(Error::Unsupported(
+                                "ACP agent did not advertise turn-anchored session/fork".into(),
+                            ));
+                        }
+                        params["_meta"]["kiro"]["messageId"] = anchor.into();
                     }
                     params["sessionId"] = source.into();
                     ("session/fork", OpenStep::Target(source.into()))
@@ -1132,24 +1278,41 @@ impl Session {
                 session.info = loop {
                     let open_step = if include_workbench {
                         OpenStep::Workbench(Box::new(step.clone()))
-                    } else { step.clone() };
-                    let opened = session.acp_rpc(method, params.clone(), Some(open_step), open_limit).await;
+                    } else {
+                        step.clone()
+                    };
+                    let opened = session
+                        .acp_rpc(method, params.clone(), Some(open_step), open_limit)
+                        .await;
                     match opened {
-                        Err(Error::Open(error)) if include_workbench && error.rejected_mcp_parameters(method) => {
+                        Err(Error::Open(error))
+                            if include_workbench && error.rejected_mcp_parameters(method) =>
+                        {
                             if let Some(registration) = &options.workbench_registration {
-                                registration.acp.store(0, std::sync::atomic::Ordering::Release);
+                                registration
+                                    .acp
+                                    .store(0, std::sync::atomic::Ordering::Release);
                             }
                             if let Some(entries) = params["mcpServers"].as_array_mut() {
                                 entries.retain(|e| e["name"] != crate::WorkbenchRegistration::NAME);
                             }
                             include_workbench = false;
                         }
-                        Err(Error::Open(error)) if !authenticated && crate::workbench::acp_registry::dynamic(&runtime.id)
-                            && matches!(&*error, crate::OpenError::RuntimeFailure {cause: Some(c), ..} if c.native["code"] == -32000) => {
-                            let Some(id) = crate::workbench::acp_registry::auth::headless(&init, options.acp_auth_method.as_deref())? else {
+                        Err(Error::Open(error))
+                            if !authenticated
+                                && crate::workbench::acp_registry::dynamic(&runtime.id)
+                                && matches!(&*error, crate::OpenError::RuntimeFailure {cause: Some(c), ..} if c.native["code"] == -32000) =>
+                        {
+                            let Some(id) = crate::workbench::acp_registry::auth::headless(
+                                &init,
+                                options.acp_auth_method.as_deref(),
+                            )?
+                            else {
                                 return Err(Error::Open(error));
                             };
-                            session.open_rpc("authenticate", json!({"methodId":id}), OpenStep::Open).await?;
+                            session
+                                .open_rpc("authenticate", json!({"methodId":id}), OpenStep::Open)
+                                .await?;
                             authenticated = true;
                         }
                         result => break result?,
@@ -1161,7 +1324,11 @@ impl Session {
                         (true, false) => "native_refused",
                         _ => "no_transport",
                     };
-                    let transport = if in_band {Some("acp")} else {optional_acp.then_some("stdio")};
+                    let transport = if in_band {
+                        Some("acp")
+                    } else {
+                        optional_acp.then_some("stdio")
+                    };
                     session.journal.push(
                         crate::Direction::Host,
                         crate::RecordKind::Frame,
@@ -1205,9 +1372,21 @@ impl Session {
                 }
                 crate::options::opencode::confirm(&session.info, &opencode_agents)?;
                 let workbench_acp = matches!(runtime.id.as_str(), "kiro" | "fx");
+                let implicit_kimi_yolo = !workbench_acp
+                    && options.settings.acp_mode.is_none()
+                    && runtime.id == "kimi"
+                    && options.approvals == crate::ApprovalMode::Allow
+                    && crate::options::acp_mode_advertised(&session.info, "kimi", "yolo");
                 if workbench_acp {
-                    session.configure_workbench_acp(&runtime.id, &id, &options).await?;
-                } else if let Some(mode) = &options.settings.acp_mode {
+                    session
+                        .configure_workbench_acp(&runtime.id, &id, &options)
+                        .await?;
+                } else if let Some(mode) = options
+                    .settings
+                    .acp_mode
+                    .as_deref()
+                    .or(implicit_kimi_yolo.then_some("yolo"))
+                {
                     if !crate::options::acp_mode_advertised(&session.info, &runtime.id, mode) {
                         return Err(Error::Unsupported(format!(
                             "ACP did not advertise session mode {mode:?}"
@@ -1269,7 +1448,10 @@ impl Session {
                             .await?;
                     }
                 }
-                if !antigravity && !workbench_acp && let Some(effort) = &options.settings.effort {
+                if !antigravity
+                    && !workbench_acp
+                    && let Some(effort) = &options.settings.effort
+                {
                     let option = crate::options::acp_effort_option(&session.info, cursor_acp)
                         .ok_or_else(|| {
                             Error::Unsupported(format!(
@@ -1309,6 +1491,58 @@ impl Session {
                         session.info["configOptions"] = reply["configOptions"].clone();
                     }
                 }
+                if cursor_acp && let Some(tier) = &options.settings.service_tier {
+                    let want_fast = tier == "fast";
+                    if let Some(option) = crate::cursor_models::fast(&session.info) {
+                        if !crate::cursor_models::fast_supports(option, want_fast) {
+                            return Err(Error::Unsupported(format!(
+                                "Cursor model does not offer service_tier {tier:?}"
+                            )));
+                        }
+                        if crate::cursor_models::fast_flag(&option["currentValue"])
+                            != Some(want_fast)
+                        {
+                            let wire_val = if option["type"] == "boolean" {
+                                Value::Bool(want_fast)
+                            } else {
+                                Value::String(if want_fast { "true" } else { "false" }.into())
+                            };
+                            let reply = session
+                                .rpc(
+                                    "session/set_config_option",
+                                    json!({"sessionId":id,"configId":"fast","value":wire_val}),
+                                )
+                                .await?;
+                            if let Some(expected) = crate::options::acp_model_option(&session.info)
+                                .and_then(|v| v["currentValue"].as_str())
+                                && crate::options::acp_model_option(&reply)
+                                    .and_then(|v| v["currentValue"].as_str())
+                                    != Some(expected)
+                            {
+                                return Err(Error::Refused(format!(
+                                    "Cursor changed the model while applying service_tier {tier:?}"
+                                )));
+                            }
+                            let confirmed = crate::cursor_models::fast(&reply)
+                                .and_then(|v| crate::cursor_models::fast_flag(&v["currentValue"]))
+                                == Some(want_fast);
+                            if !confirmed {
+                                return Err(Error::Refused(format!(
+                                    "Cursor did not confirm service_tier {tier:?}"
+                                )));
+                            }
+                            session.info["configOptions"] = reply["configOptions"].clone();
+                        }
+                    } else if want_fast {
+                        return Err(Error::Unsupported(
+                            "Cursor model does not offer service_tier \"fast\"".into(),
+                        ));
+                    } else {
+                        session.journal.host_event(crate::Event::ServiceTier {
+                            tier: "default".into(),
+                        });
+                    }
+                }
             }
             Protocol::Claude => {
                 let initialized = session.rpc("initialize", json!({})).await;
@@ -1340,12 +1574,21 @@ impl Session {
                         "Claude did not confirm effort {effort:?}"
                     )));
                 }
-                if let Some(tier) = &options.settings.service_tier
-                    && session.info["fast_mode_state"] != if tier == "fast" { "on" } else { "off" }
-                {
-                    return Err(Error::Refused(
-                        "Claude did not confirm requested service tier".into(),
-                    ));
+                if let Some(tier) = &options.settings.service_tier {
+                    let state = session.info["fast_mode_state"].as_str();
+                    let fallback_default =
+                        options.settings.service_tier_fallback.as_deref() == Some("default");
+                    let accepted = if tier == "fast" {
+                        state == Some("on")
+                            || (fallback_default && matches!(state, Some("off" | "cooldown")))
+                    } else {
+                        state == Some("off")
+                    };
+                    if !accepted {
+                        return Err(Error::Refused(
+                            "Claude did not confirm requested service tier".into(),
+                        ));
+                    }
                 }
                 if fork.is_some()
                     && session.rpc("get_status", json!({})).await?.as_str() != Some(id.as_str())
@@ -1464,7 +1707,9 @@ impl Session {
                     v.as_str()
                 }
             });
-            if actual != Some(requested.as_str()) {
+            let fallback_ok = settings.service_tier_fallback.as_deref() == Some("default")
+                && matches!(actual, None | Some("default"));
+            if actual != Some(requested.as_str()) && !fallback_ok {
                 return Err(Error::Refused(
                     "Codex did not confirm requested service tier".into(),
                 ));
@@ -1632,7 +1877,8 @@ impl Session {
                         | Protocol::Qoder
                 ),
             session_mcp: !matches!(self.protocol, Protocol::Morph | Protocol::Cybion)
-                && (self.protocol != Protocol::Muse || self.mcp.transports.is_some_and(|s| !s.is_empty())),
+                && (self.protocol != Protocol::Muse
+                    || self.mcp.transports.is_some_and(|s| !s.is_empty())),
             mcp_transports: self.mcp.transports,
             mcp_startup: self.mcp.startup.or_else(|| {
                 (self.protocol == Protocol::Codex && self.journal.has_mcp_startup())
@@ -1645,14 +1891,15 @@ impl Session {
             host_queue: self.protocol != Protocol::Codex,
             durable_native_queue: self.protocol == Protocol::Codex,
             output_schema: self.supports_output_schema,
-            stop_task: self.opencode_shell_stop || matches!(
-                self.protocol,
-                Protocol::Codex
-                    | Protocol::Claude
-                    | Protocol::Qoder
-                    | Protocol::KimiKap
-                    | Protocol::Dsh
-            ),
+            stop_task: self.opencode_shell_stop
+                || matches!(
+                    self.protocol,
+                    Protocol::Codex
+                        | Protocol::Claude
+                        | Protocol::Qoder
+                        | Protocol::KimiKap
+                        | Protocol::Dsh
+                ),
             goals: self.goals,
             manual_compaction: self.manual_compaction,
         }
@@ -1665,15 +1912,24 @@ impl Session {
         self.journal.control_receipt(request_id)
     }
 
-    pub(crate) fn latest_cursor(&self)->Option<Cursor>{self.journal.latest_record().map(|r|r.cursor())}
+    pub(crate) fn latest_cursor(&self) -> Option<Cursor> {
+        self.journal.latest_record().map(|r| r.cursor())
+    }
     pub fn records(&self) -> Vec<Arc<Record>> {
         self.journal.records()
     }
     pub(crate) fn model_caller_turn(&self) -> Option<Uuid> {
-        self.journal.active_prompt().and_then(|(id,_)|id.parse().ok())
+        self.journal
+            .active_prompt()
+            .and_then(|(id, _)| id.parse().ok())
     }
-    pub(crate) fn publish_model_tool_result(&self,turn:Uuid,tool:&str,event:crate::Event)->Result<()> {
-        self.journal.model_tool_result(turn,tool,event)
+    pub(crate) fn publish_model_tool_result(
+        &self,
+        turn: Uuid,
+        tool: &str,
+        event: crate::Event,
+    ) -> Result<()> {
+        self.journal.model_tool_result(turn, tool, event)
     }
     /// Consistent root queries and the last record they include.
     pub fn snapshot(&self) -> crate::observe::SessionSnapshot {
@@ -1815,11 +2071,23 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<PromptDecision> {
-        self.submit_prompt_with_options(text, InputOptions { input_id, images, origin: None }).await
+        self.submit_prompt_with_options(
+            text,
+            InputOptions {
+                input_id,
+                images,
+                origin: None,
+            },
+        )
+        .await
     }
 
     /// Return the paired decision records for an input with caller-supplied metadata.
-    pub async fn submit_prompt_with_options(&self, text: impl Into<String>, options: InputOptions) -> Result<PromptDecision> {
+    pub async fn submit_prompt_with_options(
+        &self,
+        text: impl Into<String>,
+        options: InputOptions,
+    ) -> Result<PromptDecision> {
         let (id, input) = self.prepare_input(text.into(), options);
         self.submit_prepared(id, input).await
     }
@@ -1948,9 +2216,18 @@ impl Session {
         text: impl Into<String>,
         images: Vec<crate::InputImage>,
     ) -> Result<Delivery> {
-        let (id, input) = self.prepare_input(text.into(), InputOptions { input_id: Some(input_id), images, origin: None });
+        let (id, input) = self.prepare_input(
+            text.into(),
+            InputOptions {
+                input_id: Some(input_id),
+                images,
+                origin: None,
+            },
+        );
         let _gate = self.delivery_gate().await;
-        self.deliver_single(id, input, DeliverWhen::Now).await.map(|(delivery, _)| delivery)
+        self.deliver_single(id, input, DeliverWhen::Now)
+            .await
+            .map(|(delivery, _)| delivery)
     }
     pub async fn steer(&self, text: impl Into<String>) -> Result<()> {
         self.steer_with_id(Uuid::new_v4(), text).await
@@ -2073,20 +2350,28 @@ impl Session {
         req: crate::BackgroundWaitRequest,
     ) -> Result<crate::BackgroundWaitReceipt> {
         if !matches!(self.protocol, Protocol::Claude | Protocol::Acp) {
-            return Err(Error::Unsupported("background waits on this runtime".into()));
+            return Err(Error::Unsupported(
+                "background waits on this runtime".into(),
+            ));
         }
         req.validate()?;
-        let receipt = self.rpc("kar/background/wait", serde_json::to_value(req)?).await?;
+        let receipt = self
+            .rpc("kar/background/wait", serde_json::to_value(req)?)
+            .await?;
         Ok(serde_json::from_value(receipt)?)
     }
 
     /// Stop the selected running workflow in its original Claude process.
     pub async fn stop_workflow(&self, id: &str, occurrence: crate::Cursor) -> Result<()> {
         if self.protocol() != Protocol::Claude {
-            return Err(Error::Unsupported("native workflow stop on this adapter".into()));
+            return Err(Error::Unsupported(
+                "native workflow stop on this adapter".into(),
+            ));
         }
         if id.is_empty() || occurrence.stream_id != self.stream_id() {
-            return Err(Error::Refused("workflow occurrence is no longer running".into()));
+            return Err(Error::Refused(
+                "workflow occurrence is no longer running".into(),
+            ));
         }
         self.call(|reply| Command::StopTask(id.into(), Some(occurrence), reply))
             .await
@@ -2203,11 +2488,14 @@ impl Session {
         request: &crate::PendingRequest,
         reply: crate::QuestionReply,
     ) -> Result<()> {
-        self.answer_question_with_files(request, reply, Default::default()).await
+        self.answer_question_with_files(request, reply, Default::default())
+            .await
     }
     pub(crate) async fn answer_question_with_files(
-        &self, request: &crate::PendingRequest, reply: crate::QuestionReply,
-        files: std::collections::BTreeMap<String,String>,
+        &self,
+        request: &crate::PendingRequest,
+        reply: crate::QuestionReply,
+        files: std::collections::BTreeMap<String, String>,
     ) -> Result<()> {
         self.respond_request(
             request,
@@ -2408,7 +2696,13 @@ impl Session {
         let echo = local.pi_image_content_sha256.clone();
         let snapshot = tokio::task::spawn_blocking(move || {
             crate::chat::recover_pi(
-                &path, &root, &cwd, timestamp, &prompt, &attachments, echo.as_deref(),
+                &path,
+                &root,
+                &cwd,
+                timestamp,
+                &prompt,
+                &attachments,
+                echo.as_deref(),
             )
         })
         .await
@@ -2562,18 +2856,209 @@ fn required_id(v: &Value, path: &str) -> Result<String> {
         .ok_or_else(|| Error::Protocol(format!("missing native identity at {path}")))
 }
 
+fn check_user_questions_version(protocol: Protocol, raw: &str) -> Result<()> {
+    let parsed = raw
+        .split_whitespace()
+        .find_map(|s| semver::Version::parse(s.trim_start_matches('v')).ok());
+    let (name, min) = match protocol {
+        Protocol::Codex => ("Codex", semver::Version::new(0, 107, 0)),
+        Protocol::Claude => ("Claude", semver::Version::new(2, 1, 274)),
+        _ => {
+            return Err(Error::Unsupported(
+                "user_questions requires Codex or Claude when approvals is not Host".into(),
+            ));
+        }
+    };
+    if parsed.is_none_or(|v| v < min) {
+        return Err(Error::Unsupported(format!(
+            "{name} user questions require verified installation {min} or later"
+        )));
+    }
+    Ok(())
+}
+
+fn codex_launch_arg_sandbox(launch_args: &[String]) -> (bool, Option<String>) {
+    let mut overrides = false;
+    let mut mode = None;
+    let parse_config_kv = |kv: &str, overrides: &mut bool, mode: &mut Option<String>| {
+        let trimmed = kv.trim();
+        if let Some((raw_k, raw_v)) = trimmed.split_once('=') {
+            let key = raw_k.trim().trim_matches(['"', '\'']);
+            if key == "sandbox_mode" {
+                *overrides = true;
+                let val = raw_v.trim().trim_matches(['"', '\'']);
+                if !val.is_empty() {
+                    *mode = Some(val.to_owned());
+                }
+            } else if key == "default_permissions"
+                || key == "permissions"
+                || key.starts_with("permissions.")
+            {
+                *overrides = true;
+                *mode = None;
+            }
+        } else if trimmed.starts_with("permissions.") || trimmed.starts_with("\"permissions\"") {
+            *overrides = true;
+            *mode = None;
+        }
+    };
+    let mut i = 0;
+    while i < launch_args.len() {
+        let arg = launch_args[i].as_str();
+        if arg == "--" {
+            break;
+        }
+        if arg == "--full-auto" {
+            overrides = true;
+            mode = Some("workspace-write".into());
+        } else if arg == "--dangerously-bypass-approvals-and-sandbox" {
+            overrides = true;
+            mode = Some("danger-full-access".into());
+        } else if arg == "-s" || arg == "--sandbox" {
+            overrides = true;
+            if let Some(next) = launch_args.get(i + 1).filter(|s| !s.is_empty()) {
+                mode = Some(next.clone());
+            }
+            i += 2;
+            continue;
+        } else if let Some(val) = arg
+            .strip_prefix("--sandbox=")
+            .or_else(|| arg.strip_prefix("-s").filter(|_| !arg.starts_with("--")))
+        {
+            overrides = true;
+            let val = val.trim_start_matches('=');
+            if !val.is_empty() {
+                mode = Some(val.to_owned());
+            }
+        } else if arg == "-c" || arg == "--config" {
+            if let Some(next) = launch_args.get(i + 1) {
+                parse_config_kv(next, &mut overrides, &mut mode);
+            }
+            i += 2;
+            continue;
+        } else if let Some(inline) = arg
+            .strip_prefix("--config=")
+            .or_else(|| arg.strip_prefix("-c="))
+            .or_else(|| arg.strip_prefix("-c").filter(|_| !arg.starts_with("--")))
+        {
+            parse_config_kv(inline, &mut overrides, &mut mode);
+        }
+        i += 1;
+    }
+    (overrides, mode)
+}
+
+fn codex_sandbox_plan(options: &SessionOptions) -> (Option<String>, Option<String>) {
+    let (overrides, arg_mode) = codex_launch_arg_sandbox(&options.launch_args);
+    if options.settings.native_permissions == Some(crate::options::CodexNativePermissions::Inherit)
+    {
+        return (None, arg_mode);
+    }
+    if overrides {
+        return (None, arg_mode);
+    }
+    let env_mode = options
+        .env_value("KAR_CODEX_SANDBOX")
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            options
+                .env_value("OAR_CODEX_SANDBOX")
+                .filter(|s| !s.is_empty())
+        });
+    if let Some(mode) = env_mode {
+        let mode = mode.to_string_lossy().into_owned();
+        if mode == "inherit" {
+            return (None, None);
+        }
+        return (Some(mode.clone()), Some(mode));
+    }
+    if options.approvals == crate::ApprovalMode::Allow {
+        let mode = "danger-full-access".to_owned();
+        return (Some(mode.clone()), Some(mode));
+    }
+    (None, None)
+}
 
 #[cfg(test)]
 mod attribution_tests {
-    use super::{AttributionTier, Protocol};
+    use super::{
+        AttributionTier, Protocol, SessionOptions, check_user_questions_version, codex_sandbox_plan,
+    };
+    use crate::{ApprovalMode, options::CodexNativePermissions};
     #[test]
     fn native_attribution_uses_the_selected_transport_and_release() {
         use AttributionTier::*;
-        assert_eq!(AttributionTier::native(Protocol::KimiKap, "kimi", false), Some(Attributed));
-        assert_eq!(AttributionTier::native(Protocol::Acp, "kimi", false), Some(Opaque));
-        assert_eq!(AttributionTier::native(Protocol::Acp, "opencode", false), Some(Opaque));
-        assert_eq!(AttributionTier::native(Protocol::Acp, "opencode", true), Some(Nested));
-        assert_eq!(AttributionTier::native(Protocol::Acp, "acp:custom", true), Option::None);
-        assert_eq!(AttributionTier::native(Protocol::Pi, "pi", false), Some(None));
+        assert_eq!(
+            AttributionTier::native(Protocol::KimiKap, "kimi", false),
+            Some(Attributed)
+        );
+        assert_eq!(
+            AttributionTier::native(Protocol::Acp, "kimi", false),
+            Some(Opaque)
+        );
+        assert_eq!(
+            AttributionTier::native(Protocol::Acp, "opencode", false),
+            Some(Opaque)
+        );
+        assert_eq!(
+            AttributionTier::native(Protocol::Acp, "opencode", true),
+            Some(Nested)
+        );
+        assert_eq!(
+            AttributionTier::native(Protocol::Acp, "acp:custom", true),
+            Option::None
+        );
+        assert_eq!(
+            AttributionTier::native(Protocol::Pi, "pi", false),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn codex_sandbox_and_user_question_version_gates_match_runtime_contracts() {
+        assert!(check_user_questions_version(Protocol::Codex, "codex-cli 0.107.0").is_ok());
+        assert!(check_user_questions_version(Protocol::Codex, "codex-cli 0.106.9").is_err());
+        assert!(check_user_questions_version(Protocol::Claude, "2.1.274 (Claude Code)").is_ok());
+        assert!(check_user_questions_version(Protocol::Claude, "2.1.273").is_err());
+        assert!(check_user_questions_version(Protocol::Acp, "2.3.0").is_err());
+
+        let mut opts = SessionOptions::new("/tmp");
+        assert_eq!(codex_sandbox_plan(&opts), (None, None));
+
+        opts.approvals = ApprovalMode::Allow;
+        assert_eq!(
+            codex_sandbox_plan(&opts),
+            (
+                Some("danger-full-access".into()),
+                Some("danger-full-access".into())
+            )
+        );
+
+        opts.settings.native_permissions = Some(CodexNativePermissions::Inherit);
+        assert_eq!(codex_sandbox_plan(&opts), (None, None));
+
+        opts.settings.native_permissions = None;
+        opts.env
+            .insert("OAR_CODEX_SANDBOX".into(), "workspace-write".into());
+        assert_eq!(
+            codex_sandbox_plan(&opts),
+            (
+                Some("workspace-write".into()),
+                Some("workspace-write".into())
+            )
+        );
+
+        opts.env
+            .insert("KAR_CODEX_SANDBOX".into(), "read-only".into());
+        assert_eq!(
+            codex_sandbox_plan(&opts),
+            (Some("read-only".into()), Some("read-only".into()))
+        );
+
+        opts.launch_args = vec!["-c".into(), "sandbox_mode=\"workspace-write\"".into()];
+        assert_eq!(
+            codex_sandbox_plan(&opts),
+            (None, Some("workspace-write".into()))
+        );
     }
 }

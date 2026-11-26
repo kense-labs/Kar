@@ -71,7 +71,10 @@ impl HandoffRequest {
     }
 }
 impl Serialize for HandoffRequest {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         #[derive(Serialize)]
         struct Wire<'a> {
             id: Uuid,
@@ -92,7 +95,9 @@ impl Serialize for HandoffRequest {
     }
 }
 impl<'de> Deserialize<'de> for HandoffRequest {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Wire {
@@ -238,10 +243,19 @@ impl Handoff {
         let instance = child.active_instance().cloned();
         // The parent session must never be chosen as a resumable route of this
         // child. The native owner of the copied turns is retained in ForkOrigin.
-        Self::prepare(HandoffRequest {
-            id: child.id, runtime: child.runtime.clone(), model: child.model.clone(),
-            instance_id: instance.as_ref().map(|i| i.id.clone()), budget_bytes: default_budget(),
-        }, instance, child, turns, &[])
+        Self::prepare(
+            HandoffRequest {
+                id: child.id,
+                runtime: child.runtime.clone(),
+                model: child.model.clone(),
+                instance_id: instance.as_ref().map(|i| i.id.clone()),
+                budget_bytes: default_budget(),
+            },
+            instance,
+            child,
+            turns,
+            &[],
+        )
     }
     pub(super) fn prepare(
         request: HandoffRequest,
@@ -266,7 +280,10 @@ impl Handoff {
             ));
         }
         // Native sessions from before a workspace move cannot be resumed in the new checkout.
-        let history = history.iter().rposition(|h| h.source_workspace.is_some()).map_or(history, |last| &history[last+1..]);
+        let history = history
+            .iter()
+            .rposition(|h| h.source_workspace.is_some())
+            .map_or(history, |last| &history[last + 1..]);
         let previous = history.iter().rev().find(|h| {
             h.status == HandoffStatus::Ready
                 && h.from.runtime == request.runtime
@@ -428,9 +445,46 @@ impl super::log::State {
             .find(|h| h.status == HandoffStatus::Ready)
     }
     pub(super) fn dispatch_text(&self, text: &str) -> String {
+        let with_cut_recovery = if self.info.runtime == "cursor" {
+            let mut dropped = Vec::new();
+            for turn in self.turns.iter().rev() {
+                let same_session = turn
+                    .items
+                    .first()
+                    .is_some_and(|i| i.source.session_id.as_deref() == Some(&self.info.native_id));
+                let stopped_early = matches!(
+                    turn.status,
+                    super::TurnStatus::Aborted | super::TurnStatus::Interrupted
+                ) && turn.items.iter().skip(1).all(|entry| {
+                    matches!(
+                        &entry.item,
+                        super::Item::Message {
+                            role: super::Role::User,
+                            ..
+                        }
+                    )
+                });
+                if same_session
+                    && stopped_early
+                    && let Some(p) = turn.prompt().filter(|s| !s.trim().is_empty())
+                {
+                    dropped.push(p);
+                } else {
+                    break;
+                }
+            }
+            if dropped.is_empty() {
+                text.to_owned()
+            } else {
+                dropped.reverse();
+                format!("{}\n\n{text}", dropped.join("\n\n"))
+            }
+        } else {
+            text.to_owned()
+        };
         match self.current_handoff().filter(|h| h.input.is_none()) {
-            Some(h) => h.native_input(text),
-            None => text.into(),
+            Some(h) => h.native_input(&with_cut_recovery),
+            None => with_cut_recovery,
         }
     }
     pub(super) fn recovery_turns(
@@ -439,10 +493,14 @@ impl super::log::State {
     ) -> std::borrow::Cow<'_, [ChatTurn]> {
         use std::borrow::Cow;
         if self.handoffs.is_empty()
-            && self
-                .turns
-                .iter()
-                .all(|t| t.attachments.is_empty() && t.steered_attachments.is_empty() && t.background_note.is_none() && t.app_context.is_none() && t.merged_context.is_none() && t.requested_output_schema.is_none())
+            && self.turns.iter().all(|t| {
+                t.attachments.is_empty()
+                    && t.steered_attachments.is_empty()
+                    && t.background_note.is_none()
+                    && t.app_context.is_none()
+                    && t.merged_context.is_none()
+                    && t.requested_output_schema.is_none()
+            })
         {
             return Cow::Borrowed(&self.turns);
         }
@@ -475,12 +533,17 @@ impl super::log::State {
                             if let Some(note) = &turn.background_note {
                                 *text = note.prompt(text);
                             }
-                            if let Some(m)=&turn.merged_context { *text=m.prompt(text); }
-                            *text=super::ChatTurn::app_prompt(turn.app_context.as_deref(),std::mem::take(text));
+                            if let Some(m) = &turn.merged_context {
+                                *text = m.prompt(text);
+                            }
+                            *text = super::ChatTurn::app_prompt(
+                                turn.app_context.as_deref(),
+                                std::mem::take(text),
+                            );
                             if let Some(h) = handoff {
                                 *text = h.native_input(text);
                             }
-                            if let Some(schema)=&turn.requested_output_schema {
+                            if let Some(schema) = &turn.requested_output_schema {
                                 text.push_str(&super::output_instructions(schema));
                             }
                             Some(&turn.attachments)
@@ -506,7 +569,12 @@ impl super::log::State {
         let Some(original) = turn.prompt() else {
             return;
         };
-        if handoff.is_none() && turn.background_note.is_none() && turn.app_context.is_none() && turn.merged_context.is_none() && turn.requested_output_schema.is_none() {
+        if handoff.is_none()
+            && turn.background_note.is_none()
+            && turn.app_context.is_none()
+            && turn.merged_context.is_none()
+            && turn.requested_output_schema.is_none()
+        {
             return;
         }
         if !frame.source.path.is_empty()
@@ -514,7 +582,10 @@ impl super::log::State {
         {
             return;
         }
-        let schema_suffix=turn.requested_output_schema.as_ref().map(super::output_instructions);
+        let schema_suffix = turn
+            .requested_output_schema
+            .as_ref()
+            .map(super::output_instructions);
         for edit in &mut frame.edits {
             let text = match edit {
                 super::ChatEdit::Text {
@@ -525,12 +596,22 @@ impl super::log::State {
                 | super::ChatEdit::UserInput { text, .. } => text,
                 _ => continue,
             };
-            let authored=schema_suffix.as_deref().and_then(|s|text.strip_suffix(s)).unwrap_or(text);
-            let carried = handoff.and_then(|h| h.user_input(authored)).unwrap_or(authored);
-            let mut expected=turn.background_note.as_ref().map_or_else(||original.to_owned(),|n|n.prompt(original));
-            if let Some(m)=&turn.merged_context {expected=m.prompt(&expected);}
-            expected=super::ChatTurn::app_prompt(turn.app_context.as_deref(),expected);
-            let matches=carried==expected;
+            let authored = schema_suffix
+                .as_deref()
+                .and_then(|s| text.strip_suffix(s))
+                .unwrap_or(text);
+            let carried = handoff
+                .and_then(|h| h.user_input(authored))
+                .unwrap_or(authored);
+            let mut expected = turn
+                .background_note
+                .as_ref()
+                .map_or_else(|| original.to_owned(), |n| n.prompt(original));
+            if let Some(m) = &turn.merged_context {
+                expected = m.prompt(&expected);
+            }
+            expected = super::ChatTurn::app_prompt(turn.app_context.as_deref(), expected);
+            let matches = carried == expected;
             if matches {
                 *text = original.to_owned();
             }
@@ -800,26 +881,45 @@ impl super::ChatStore {
 #[cfg(test)]
 mod output_recovery {
     use super::*;
-    use crate::chat::{ChatEdit,ChatFrame,ChatUpdate};
+    use crate::chat::{ChatEdit, ChatFrame, ChatUpdate};
     use serde_json::json;
 
     #[test]
     fn recovery_matches_the_schema_on_the_native_request_and_removes_its_echo() {
-        let tmp=tempfile::tempdir().unwrap();
-        let store=super::super::ChatStore::open(tmp.path()).unwrap();
-        let id=Uuid::new_v4();
+        let tmp = tempfile::tempdir().unwrap();
+        let store = super::super::ChatStore::open(tmp.path()).unwrap();
+        let id = Uuid::new_v4();
         let info:ChatInfo=serde_json::from_value(json!({"id":id,"workspace":tmp.path(),"runtime":"qwen","protocol":"qwen","native_id":"native","created_ms":1,"program":"qwen","approvals":"deny"})).unwrap();
-        let mut file=tempfile::tempfile().unwrap();
-        super::super::log::header(&mut file,&info).unwrap();
-        let (mut state,_)=super::super::log::read(&mut file,id).unwrap();
-        let turn=Uuid::new_v4();
-        let schema=json!({"type":"array"});
+        let mut file = tempfile::tempfile().unwrap();
+        super::super::log::header(&mut file, &info).unwrap();
+        let (mut state, _) = super::super::log::read(&mut file, id).unwrap();
+        let turn = Uuid::new_v4();
+        let schema = json!({"type":"array"});
         let begin:ChatUpdate=serde_json::from_value(json!({"kind":"begin","id":turn,"at":2,"text":"compare","requested_output_schema":schema})).unwrap();
         state.apply(begin).unwrap();
-        let expected=format!("compare{}",super::super::output_instructions(&schema));
-        assert_eq!(state.recovery_turns(&store)[0].prompt(),Some(expected.as_str()));
-        let mut frame=ChatFrame{cursor:crate::Cursor{stream_id:Uuid::new_v4(),after_seq:1},morph_progress:None,elided:false,native_turn:None,source:crate::observe::Agent{path:vec![],session_id:Some("native".into())},edits:vec![ChatEdit::UserInput{id:"native-user".into(),text:expected}]};
-        state.clean_handoff_echo(turn,&mut frame);
+        let expected = format!("compare{}", super::super::output_instructions(&schema));
+        assert_eq!(
+            state.recovery_turns(&store)[0].prompt(),
+            Some(expected.as_str())
+        );
+        let mut frame = ChatFrame {
+            cursor: crate::Cursor {
+                stream_id: Uuid::new_v4(),
+                after_seq: 1,
+            },
+            morph_progress: None,
+            elided: false,
+            native_turn: None,
+            source: crate::observe::Agent {
+                path: vec![],
+                session_id: Some("native".into()),
+            },
+            edits: vec![ChatEdit::UserInput {
+                id: "native-user".into(),
+                text: expected,
+            }],
+        };
+        state.clean_handoff_echo(turn, &mut frame);
         assert!(matches!(&frame.edits[0],ChatEdit::UserInput{text,..} if text=="compare"));
     }
 }

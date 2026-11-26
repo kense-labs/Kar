@@ -9,6 +9,46 @@ pub(super) fn peer(case: &str, args: &[String]) {
         std::env::var_os("KAR_MODELS_EXPECT_CWD").as_deref()
     );
     assert_eq!(std::env::var("KAR_MODELS_ENV").unwrap(), "scoped");
+    if args.first().is_some_and(|a| a == "serve") {
+        if case == "v2_serve" {
+            use std::io::{BufRead, BufReader};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            println!("opencode server listening on http://{addr}");
+            let _ = std::io::stdout().flush();
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(&stream);
+                let mut req_line = String::new();
+                if reader.read_line(&mut req_line).is_err() || req_line.is_empty() {
+                    continue;
+                }
+                loop {
+                    let mut hdr = String::new();
+                    if reader.read_line(&mut hdr).is_err() || hdr.trim().is_empty() {
+                        break;
+                    }
+                }
+                let body = if req_line.contains("/api/plugin") {
+                    json!([{"id": "builtin"}]).to_string()
+                } else if req_line.contains("/api/model") {
+                    json!({"data": [{"id": "fast", "providerID": "project", "name": "Fast V2", "variants": {"default": {}, "high": {}, "low": {}}}]}).to_string()
+                } else {
+                    "{}".to_owned()
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = (&stream).write_all(resp.as_bytes());
+                if req_line.contains("/api/model") {
+                    break;
+                }
+            }
+            return;
+        }
+        std::process::exit(1);
+    }
     let mut audit = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -58,7 +98,7 @@ pub(super) async fn run() -> kar::Result<()> {
     let temp = tempfile::tempdir()?;
     let bin = std::env::current_exe()?;
     let fallback: ModelEntry = serde_json::from_value(json!({"id":"bundled"}))?;
-    for case in ["v1", "v2", "empty", "bad", "exit", "timeout"] {
+    for case in ["v1", "v2", "v2_serve", "empty", "bad", "exit", "timeout"] {
         let work = temp.path().join(case);
         fs::create_dir(&work)?;
         let work = work.canonicalize()?;
@@ -76,6 +116,22 @@ pub(super) async fn run() -> kar::Result<()> {
             opts.handshake_timeout = Duration::from_secs(2);
         }
         let result = rt.form_model_listing(&opts, vec![fallback.clone()]).await;
+        if case == "v2_serve" {
+            let ModelListing::Live { models } = result else {
+                panic!("expected live v2_serve listing: {result:?}");
+            };
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].id, "project/fast");
+            assert_eq!(
+                models[0].metadata.get("displayName"),
+                Some(&json!("Fast V2"))
+            );
+            assert_eq!(
+                models[0].effort_levels,
+                Some(vec!["high".into(), "low".into()])
+            );
+            continue;
+        }
         match case {
             "v1" | "v2" => {
                 let ModelListing::Live { models } = result else {
@@ -129,8 +185,8 @@ pub(super) async fn run() -> kar::Result<()> {
         ];
         let count = if matches!(case, "v1" | "v2") { 2 } else { 1 };
         assert_eq!(queries.len(), count * 2);
-        for pair in queries.chunks_exact(2) {
-            assert_eq!(pair, expected);
+        for pair in queries.as_chunks::<2>().0 {
+            assert_eq!(*pair, expected);
         }
     }
     Ok(())

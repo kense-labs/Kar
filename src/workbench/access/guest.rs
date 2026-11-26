@@ -1,10 +1,10 @@
 //! A guest can see public messages in one chat and propose a message for its owner.
 use super::*;
 use crate::chat::{ChatCursor, InputStatus, Item, Role};
-mod retention;
-pub(super) mod milestones;
 mod delivery;
 mod files;
+pub(super) mod milestones;
+mod retention;
 use axum::{
     Extension,
     extract::{DefaultBodyLimit, Query},
@@ -86,12 +86,20 @@ impl Proposal {
     }
 }
 impl super::AccessStore {
-    pub(in crate::workbench) fn pending_guest_counts(&self,at:u64)->BTreeMap<Uuid,usize> {
-        let registry=self.registry.lock().unwrap();
-        let mut counts=BTreeMap::new();
-        for share in registry.shares.values().filter(|s|!s.revoked && at<s.expires_ms){
-            let count=share.proposals.values().filter(|p|p.status==Decision::Pending).count();
-            *counts.entry(share.chat).or_default()+=count;
+    pub(in crate::workbench) fn pending_guest_counts(&self, at: u64) -> BTreeMap<Uuid, usize> {
+        let registry = self.registry.lock().unwrap();
+        let mut counts = BTreeMap::new();
+        for share in registry
+            .shares
+            .values()
+            .filter(|s| !s.revoked && at < s.expires_ms)
+        {
+            let count = share
+                .proposals
+                .values()
+                .filter(|p| p.status == Decision::Pending)
+                .count();
+            *counts.entry(share.chat).or_default() += count;
         }
         counts
     }
@@ -283,7 +291,8 @@ fn attachments(input: Vec<FileInput>) -> AccessResult<Vec<Attachment>> {
             .to_ascii_lowercase();
         if bytes.is_empty()
             || (mime.starts_with("image/")
-                && !crate::InputImage::from_bytes(&bytes).is_ok_and(|image| image.mime_type() == mime))
+                && !crate::InputImage::from_bytes(&bytes)
+                    .is_ok_and(|image| image.mime_type() == mime))
         {
             return Err(AccessError::Bad("empty file or unsupported image".into()));
         }
@@ -296,8 +305,13 @@ fn attachments(input: Vec<FileInput>) -> AccessResult<Vec<Attachment>> {
         } else {
             mime
         };
-        crate::chat::Attachment::validate(&f.name, &mime, delivery::kind(&mime), bytes.len() as u64)
-            .map_err(|e| AccessError::Bad(e.to_string()))?;
+        crate::chat::Attachment::validate(
+            &f.name,
+            &mime,
+            delivery::kind(&mime),
+            bytes.len() as u64,
+        )
+        .map_err(|e| AccessError::Bad(e.to_string()))?;
         size += bytes.len();
         if size > MESSAGE_BYTES {
             return Err(AccessError::Bad("attachments exceed 10 MiB".into()));
@@ -449,7 +463,12 @@ fn visible(app: &Workbench, who: Principal) -> AccessResult<Value> {
                 .collect();
             let mut turn = json!({"id":t.id,"status":t.status,"messages":messages});
             if let Some(attached) = files.remove(&t.id) {
-                turn["attachments"] = json!(attached.iter().map(files::Visible::view).collect::<Vec<_>>());
+                turn["attachments"] = json!(
+                    attached
+                        .iter()
+                        .map(files::Visible::view)
+                        .collect::<Vec<_>>()
+                );
             }
             turn
         })

@@ -25,6 +25,7 @@ impl Inbox {
     }
 }
 impl ChatStore {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn set_app_context(
         &self,
         target: Uuid,

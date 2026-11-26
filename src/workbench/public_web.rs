@@ -125,41 +125,6 @@ pub(super) async fn get(
     }
     Err(Error::Refused("too many public web redirects".into()))
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn public_origins_exclude_local_addresses_and_hidden_credentials() {
-        for ip in [
-            "127.0.0.1",
-            "192.168.42.1",
-            "100.64.0.2",
-            "169.254.169.254",
-            "::1",
-            "fc00::1",
-            "::ffff:127.0.0.1",
-            "64:ff9b::7f00:1",
-            "2002:7f00:1::1",
-            "2001:db8::1",
-        ] {
-            assert!(!public(ip.parse().unwrap()), "{ip}");
-        }
-        let allow = BTreeSet::from(["https://example.org".to_string()]);
-        for raw in [
-            "http://example.org",
-            "https://example.org.example.net/",
-            "https://user@example.org/",
-            "https://example.org:444/",
-            "file:///etc/hosts",
-        ] {
-            assert!(
-                authorize(&allow, &Url::parse(raw).unwrap()).is_err(),
-                "{raw}"
-            );
-        }
-    }
-}
-
 // Replace explicitly authorized resource references with verified bytes. The final attachment
 // is standalone and can be opened without giving scripts ambient network or file access.
 pub(super) async fn bundle(allowed: &BTreeSet<String>, html: String) -> Result<String> {
@@ -238,4 +203,39 @@ pub(super) async fn bundle(allowed: &BTreeSet<String>, html: String) -> Result<S
     }
     page.push_str(&html[at..]);
     Ok(page)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn public_origins_exclude_local_addresses_and_hidden_credentials() {
+        for ip in [
+            "127.0.0.1",
+            "192.168.42.1",
+            "100.64.0.2",
+            "169.254.169.254",
+            "::1",
+            "fc00::1",
+            "::ffff:127.0.0.1",
+            "64:ff9b::7f00:1",
+            "2002:7f00:1::1",
+            "2001:db8::1",
+        ] {
+            assert!(!public(ip.parse().unwrap()), "{ip}");
+        }
+        let allow = BTreeSet::from(["https://example.org".to_string()]);
+        for raw in [
+            "http://example.org",
+            "https://example.org.example.net/",
+            "https://user@example.org/",
+            "https://example.org:444/",
+            "file:///etc/hosts",
+        ] {
+            assert!(
+                authorize(&allow, &Url::parse(raw).unwrap()).is_err(),
+                "{raw}"
+            );
+        }
+    }
 }

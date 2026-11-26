@@ -74,8 +74,11 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
             axum::routing::put(viewport),
         )
         .route("/projects/{p}/previews/{id}/screen", get(screen))
-        .route("/projects/{p}/previews/{id}/stream",get(stream::open))
-        .route("/projects/{p}/previews/{id}/stream/upload",post(stream::upload))
+        .route("/projects/{p}/previews/{id}/stream", get(stream::open))
+        .route(
+            "/projects/{p}/previews/{id}/stream/upload",
+            post(stream::upload),
+        )
         .route(
             "/projects/{p}/preview-profiles/{profile}/clear",
             post(clear_profile),
@@ -188,20 +191,27 @@ async fn clear(
 struct Input {
     id: Uuid,
     viewer_id: Option<Uuid>,
-    #[serde(default)] reply:bool,
+    #[serde(default)]
+    reply: bool,
     data_base64: String,
 }
 async fn input(
     State(app): State<Workbench>,
     Path((p, id)): Path<(Uuid, Uuid)>,
-    device:Device, Json(q): Json<Input>,
+    device: Device,
+    Json(q): Json<Input>,
 ) -> Reply<InputReceipt> {
     blocking(move || {
         app.project(p)?;
         let bytes = STANDARD
             .decode(q.data_base64)
             .map_err(|_| Error::Refused("invalid terminal input encoding".into()))?;
-        app.0.terminal_preview.find(p, id)?.viewer_input(q.id, &bytes, q.reply, views::viewer(device,q.viewer_id))
+        app.0.terminal_preview.find(p, id)?.viewer_input(
+            q.id,
+            &bytes,
+            q.reply,
+            views::viewer(device, q.viewer_id),
+        )
     })
     .await
 }
@@ -214,11 +224,16 @@ struct Size {
 async fn resize(
     State(app): State<Workbench>,
     Path((p, id)): Path<(Uuid, Uuid)>,
-    device:Device, Json(q): Json<Size>,
+    device: Device,
+    Json(q): Json<Size>,
 ) -> Reply<Meta> {
     blocking(move || {
         app.project(p)?;
-        app.0.terminal_preview.find(p, id)?.resize_view(views::viewer(device,q.viewer_id),q.cols, q.rows)
+        app.0.terminal_preview.find(p, id)?.resize_view(
+            views::viewer(device, q.viewer_id),
+            q.cols,
+            q.rows,
+        )
     })
     .await
 }

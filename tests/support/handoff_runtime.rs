@@ -216,7 +216,9 @@ fn fixture(runtime: &str) {
                 }
                 Some("turn/start") => {
                     let text = input(runtime, &v).unwrap();
-                    audit(json!({"runtime":runtime,"session":sid,"text":text,"cwd":cwd,"instance_home":std::env::var_os("CODEX_HOME").map(PathBuf::from)}));
+                    audit(
+                        json!({"runtime":runtime,"session":sid,"text":text,"cwd":cwd,"instance_home":std::env::var_os("CODEX_HOME").map(PathBuf::from)}),
+                    );
                     let turn = Uuid::new_v4();
                     writeln!(
                         std::fs::OpenOptions::new()

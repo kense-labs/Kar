@@ -34,13 +34,12 @@ impl McpSupport {
         let transports = match protocol {
             Protocol::Codex | Protocol::Claude | Protocol::Qoder | Protocol::KimiKap => Some(BOTH),
             Protocol::Factory if at_least(1, 12, 1) => Some(BOTH),
-            Protocol::Dsh => Some(STDIO),
+            Protocol::Dsh => Some(BOTH),
             Protocol::Cybion | Protocol::Morph => Some([].as_slice()),
             Protocol::Qwen if at_least(0, 26, 0) => Some(BOTH),
             Protocol::Qwen if release.is_some() => Some(STDIO),
             Protocol::Acp => match runtime {
-                "dsh" => Some(STDIO),
-                "antigravity" => Some(BOTH),
+                "dsh" | "cursor" | "antigravity" => Some(BOTH),
                 "grok" if at_least(1, 0, 46) => Some(BOTH),
                 "codebuddy" if at_least(2, 178, 1) => Some(BOTH),
                 "kimi" if at_least(2, 1, 1) => Some(BOTH),
@@ -53,7 +52,6 @@ impl McpSupport {
                 {
                     Some(BOTH)
                 }
-                // Cursor's SDK transport declaration does not establish its ACP CLI transports.
                 _ => None,
             },
             // Pi RPC confirms its SDK during registration.
@@ -114,9 +112,23 @@ mod tests {
             McpSupport::acp("devin", None, &hello("1.0.0", true)).transports,
             None
         );
+        for id in ["dsh", "cursor"] {
+            assert_eq!(
+                McpSupport::acp(id, None, &hello("1.0.0", true)).transports,
+                Some(BOTH)
+            );
+            assert_eq!(
+                McpSupport::acp(id, None, &hello("1.0.0", false)).transports,
+                Some(STDIO)
+            );
+        }
         assert_eq!(
-            McpSupport::acp("dsh", None, &hello("1.0.0", true)).transports,
-            Some(STDIO)
+            McpSupport::new(Protocol::Dsh, "dsh", None).transports,
+            Some(BOTH)
+        );
+        assert_eq!(
+            McpSupport::new(Protocol::Acp, "cursor", None).transports,
+            Some(BOTH)
         );
         assert_eq!(
             McpSupport::new(Protocol::Qwen, "qwen", Some("0.25.0")).transports,

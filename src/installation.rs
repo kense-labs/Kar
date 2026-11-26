@@ -165,7 +165,10 @@ impl Probe {
     }
     pub(crate) fn command(&self, program: &Path) -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new(program);
-        cmd.current_dir(&self.cwd).env_clear().envs(&self.env).env_remove("KAR_WORKBENCH_TOKEN");
+        cmd.current_dir(&self.cwd)
+            .env_clear()
+            .envs(&self.env)
+            .env_remove("KAR_WORKBENCH_TOKEN");
         cmd
     }
     async fn run(&self, program: &Path, args: &[&str], timeout: u64) -> Result<Output> {
@@ -234,18 +237,16 @@ impl Probe {
                 && candidates.is_empty()
                 && let Some(npm) = self.locate(Path::new("npm"), true)
                 && let Ok(p) = crate::setup::host::npm_prefix(self, &npm.command).await
+                && let Some(found) = self.locate(
+                    &p.join(if cfg!(windows) {
+                        "codebuddy.cmd"
+                    } else {
+                        "bin/codebuddy"
+                    }),
+                    true,
+                )
             {
-                if let Some(found) = self.locate(
-                        &p.join(if cfg!(windows) {
-                            "codebuddy.cmd"
-                        } else {
-                            "bin/codebuddy"
-                        }),
-                        true,
-                    )
-                {
-                    candidates.push(found);
-                }
+                candidates.push(found);
             }
         }
         let mut failed = None;
@@ -289,7 +290,9 @@ impl Probe {
     }
     async fn verify(&self, rt: &Runtime, c: &Candidate) -> InstallationSnapshot {
         use InstallationIssue::*;
-        if let Some(failure) = host::missing_interpreter(self, c) { return failure; }
+        if let Some(failure) = host::missing_interpreter(self, c) {
+            return failure;
+        }
         let id = rt.id.as_str();
         let (args, identity): (&[&str], &str) = match id {
             "codex" => (
@@ -347,10 +350,13 @@ impl Probe {
         if !args.is_empty() {
             let out = match self.run(&c.command, args, timeout).await {
                 Ok(out) => out,
-                Err(error) => return host::spawn_failure(c, error, "could not run the readiness probe"),
+                Err(error) => {
+                    return host::spawn_failure(c, error, "could not run the readiness probe");
+                }
             };
             if !out.status.success() {
-                return host::reported_failure(c, &out).unwrap_or_else(|| c.fail(ReadinessFailed, "the readiness command failed"));
+                return host::reported_failure(c, &out)
+                    .unwrap_or_else(|| c.fail(ReadinessFailed, "the readiness command failed"));
             }
             let help = format!(
                 "{}\n{}",
@@ -377,7 +383,9 @@ impl Probe {
             Ok(out) => out,
             Err(error) => return host::spawn_failure(c, error, "could not run the version probe"),
         };
-        if let Some(failure) = host::reported_failure(c, &out) { return failure; }
+        if let Some(failure) = host::reported_failure(c, &out) {
+            return failure;
+        }
         let version = out
             .status
             .success()

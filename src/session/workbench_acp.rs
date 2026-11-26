@@ -11,14 +11,25 @@ impl Session {
     ) -> Result<()> {
         let cfg = &options.settings;
         if runtime == "kiro" {
-            // Both Kar approval modes require the supervised native tool/review path.
-            self.workbench_acp_write(id, "autopilot", "off").await?;
+            let autopilot = if options.approvals == crate::ApprovalMode::Allow
+                && self.acp_offers("autopilot", "on")
+            {
+                "on"
+            } else {
+                "off"
+            };
+            self.workbench_acp_write(id, "autopilot", autopilot).await?;
             if let Some(agent) = &cfg.acp_mode {
                 self.workbench_acp_write(id, "mode", agent).await?;
             }
         } else {
             // Fx 0.0.13 reports ask even while its saved mode is still effective.
-            let requested = cfg.acp_mode.as_deref().unwrap_or("ask");
+            let default_mode = if options.approvals == crate::ApprovalMode::Allow {
+                "auto"
+            } else {
+                "ask"
+            };
+            let requested = cfg.acp_mode.as_deref().unwrap_or(default_mode);
             let value = if matches!(requested, "auto" | "code") {
                 if self.acp_offers("mode", "auto") {
                     "auto"

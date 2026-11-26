@@ -144,6 +144,7 @@ fn prepare(
     page.push_str(&source[copied..]);
     Ok((page, missing))
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn call(
     app: &Workbench,
     project: Uuid,

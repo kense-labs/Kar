@@ -118,24 +118,58 @@ pub(in crate::workbench) async fn model_issue_write(
 ) -> Result<Value, ForgeError> {
     if !matches!(
         operation,
-        Operation::CreateIssue { .. } | Operation::CommentIssue { .. } | Operation::SetIssueState { .. }
+        Operation::CreateIssue { .. }
+            | Operation::CommentIssue { .. }
+            | Operation::SetIssueState { .. }
     ) {
         return Err(ForgeError::bad("unsupported model issue operation"));
     }
-    model_forge_write(app,project,chat,id,issue_scope,operation,authorize).await
+    model_forge_write(app, project, chat, id, issue_scope, operation, authorize).await
 }
 pub(super) async fn model_forge_write(
-    app:Workbench,project:Uuid,chat:Uuid,id:Uuid,issue_scope:Option<String>,operation:Operation,
-    authorize:impl FnOnce(&crate::workbench::Catalog,&str)->crate::Result<()>
-)->Result<Value,ForgeError>{
-    model_forge_write_in(app,project,chat,id,issue_scope,operation,None,authorize).await
+    app: Workbench,
+    project: Uuid,
+    chat: Uuid,
+    id: Uuid,
+    issue_scope: Option<String>,
+    operation: Operation,
+    authorize: impl FnOnce(&crate::workbench::Catalog, &str) -> crate::Result<()>,
+) -> Result<Value, ForgeError> {
+    model_forge_write_in(
+        app,
+        project,
+        chat,
+        id,
+        issue_scope,
+        operation,
+        None,
+        authorize,
+    )
+    .await
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn model_forge_write_in(
-    app:Workbench,project:Uuid,chat:Uuid,id:Uuid,issue_scope:Option<String>,operation:Operation,context:Option<Context>,
-    authorize:impl FnOnce(&crate::workbench::Catalog,&str)->crate::Result<()>
-)->Result<Value,ForgeError>{
-    let input = Input {id,chat,issue_scope,operation,routing:None};
-    Ok(execute_with_context(app, project, input, context, authorize).await?.0)
+    app: Workbench,
+    project: Uuid,
+    chat: Uuid,
+    id: Uuid,
+    issue_scope: Option<String>,
+    operation: Operation,
+    context: Option<Context>,
+    authorize: impl FnOnce(&crate::workbench::Catalog, &str) -> crate::Result<()>,
+) -> Result<Value, ForgeError> {
+    let input = Input {
+        id,
+        chat,
+        issue_scope,
+        operation,
+        routing: None,
+    };
+    Ok(
+        execute_with_context(app, project, input, context, authorize)
+            .await?
+            .0,
+    )
 }
 
 async fn execute_checked(
@@ -180,7 +214,10 @@ async fn execute_with_context(
     let id = input.id;
     let remembered = app.update(|db| {
         authorize(db, &identity)?;
-        if db.forge.model_publications.contains_key(&id) || db.forge.model_link_receipts.contains_key(&id) || db.forge.bindings.contains_key(&id) && !db.forge.operations.contains_key(&id) {
+        if db.forge.model_publications.contains_key(&id)
+            || db.forge.model_link_receipts.contains_key(&id)
+            || db.forge.bindings.contains_key(&id) && !db.forge.operations.contains_key(&id)
+        {
             return Err(Error::Refused(
                 "operation ID already belongs to a binding".into(),
             ));
@@ -293,7 +330,7 @@ pub(in crate::workbench) async fn stacked_pull(
     let mut operation = Operation::CreatePull {
         head,
         head_repository: repository,
-        draft:false,
+        draft: false,
         base,
         title,
         body,
@@ -578,9 +615,10 @@ async fn delete_link(
         }
         db.forge.bindings.retain(|_, b| b != &existing);
         db.forge.links_changed()?;
-        db.forge
-            .link_activity
-            .insert(existing.chat, jiff::Timestamp::now().as_millisecond() as u64);
+        db.forge.link_activity.insert(
+            existing.chat,
+            jiff::Timestamp::now().as_millisecond() as u64,
+        );
         Ok(Ok(json!({"id": id, "removed": true, "binding": existing})))
     })??))
 }

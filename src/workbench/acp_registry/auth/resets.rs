@@ -144,18 +144,17 @@ async fn redeem(
     // Persist the settled spend before a subsequent read, including when the client disconnects.
     claim.result = Some(result.clone());
     record(&path, &claim)?;
-    if matches!(report.result, LimitResetResult::Reset) {
-        if let Ok(fresh) = rt
+    if matches!(report.result, LimitResetResult::Reset)
+        && let Ok(fresh) = rt
             .account_usage(&AccountUsageOptions {
                 installation,
                 ..Default::default()
             })
             .await
-        {
-            result["usage"] = json!(fresh);
-            claim.result = Some(result.clone());
-            record(&path, &claim)?;
-        }
+    {
+        result["usage"] = json!(fresh);
+        claim.result = Some(result.clone());
+        record(&path, &claim)?;
     }
     Ok(Json(result))
 }

@@ -6,7 +6,7 @@ struct Pairing {
     scopes: Option<BTreeSet<String>>,
     access: Option<String>,
     purpose: Option<String>,
-    peer_tasks:BTreeMap<Uuid,Uuid>,
+    peer_tasks: BTreeMap<Uuid, Uuid>,
 }
 pub(super) fn authorize(
     auth: &Auth,
@@ -57,9 +57,19 @@ async fn issue(
     {
         return Err(bad("Invalid pairing purpose"));
     }
-    if !p.peer_tasks.is_empty(){
-        if p.peer_tasks.len()>32 || p.purpose.as_deref()!=Some("peer-link") || p.access.as_deref()==Some("read-only") || !scopes.contains("orchestration:operate"){return Err(AccessError::Denied);}
-        for (project,template) in &p.peer_tasks {auth.app.binding(*project,*template).map_err(|_|bad("unknown remote delegation template"))?;}
+    if !p.peer_tasks.is_empty() {
+        if p.peer_tasks.len() > 32
+            || p.purpose.as_deref() != Some("peer-link")
+            || p.access.as_deref() == Some("read-only")
+            || !scopes.contains("orchestration:operate")
+        {
+            return Err(AccessError::Denied);
+        }
+        for (project, template) in &p.peer_tasks {
+            auth.app
+                .binding(*project, *template)
+                .map_err(|_| bad("unknown remote delegation template"))?;
+        }
     }
     let label = p.label.unwrap_or_else(|| "Kar device".into());
     if label.is_empty() || label.len() > 120 || label.chars().any(char::is_control) {
@@ -80,7 +90,7 @@ async fn issue(
                 label: label.clone(),
                 access: p.access.clone(),
                 peer: p.purpose.is_some(),
-                peer_tasks:p.peer_tasks.clone(),
+                peer_tasks: p.peer_tasks.clone(),
             },
         );
         Ok(())

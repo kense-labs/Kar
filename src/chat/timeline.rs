@@ -83,9 +83,9 @@ pub struct TimelineItem {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatTurn {
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    pub app_context:Option<String>,
-    #[serde(default, skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merged_context: Option<super::MergedContext>,
     /// The exact per-run schema included in this native prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,10 +189,12 @@ pub(super) fn snapshot_tools(edits: &mut Vec<Edit>, elided: bool) {
 }
 
 impl ChatTurn {
-    pub(super) fn app_prompt(context:Option<&str>,text:String)->String {
-        match context{
-            None=>text,
-            Some(data)=>format!("MCP application context (JSON data):\n{data}\n\nCurrent user message:\n{text}"),
+    pub(super) fn app_prompt(context: Option<&str>, text: String) -> String {
+        match context {
+            None => text,
+            Some(data) => format!(
+                "MCP application context (JSON data):\n{data}\n\nCurrent user message:\n{text}"
+            ),
         }
     }
     /// None means the native blocks conflict with a locally observed item.
@@ -363,7 +365,7 @@ impl ChatTurn {
             requested_output_schema: None,
             background_note: None,
             merged_context: None,
-            app_context:None,
+            app_context: None,
             pi_input_timestamp_ms: None,
             pi_image_content_sha256: None,
             input_sent: false,
@@ -1255,9 +1257,11 @@ impl MessageIds {
         }
         let block_key = |id: &str, index: u64| format!("{id}#{index}");
         let key = match p {
-            Protocol::Muse => n.pointer("/params/itemId")
+            Protocol::Muse => n
+                .pointer("/params/itemId")
                 .or_else(|| n.pointer("/params/item/itemId"))
-                .and_then(Value::as_str).map(str::to_owned),
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             Protocol::Codex => n
                 .pointer("/params/itemId")
                 .or_else(|| n.pointer("/params/item/id"))

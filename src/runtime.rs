@@ -254,7 +254,7 @@ impl Runtime {
                         .map(|(session, _)| session);
                 }
             }
-            Protocol::Acp if through.is_none() => {}
+            Protocol::Acp if through.is_none() || self.id == "kiro" => {}
             _ => {
                 return Err(Error::Unsupported(
                     "native session fork with the requested scope".into(),
@@ -350,7 +350,12 @@ fn builtins() -> &'static [RuntimeSpec] {
         ("grok", "grok", &["agent", "--no-leader", "stdio"], Acp),
         ("kimi", "kimi", &[], KimiKap),
         ("devin", "devin", &["acp"], Acp),
-        ("kiro", "kiro-cli", &["acp", "--agent-engine=v3", "--auth-method=cli"], Acp),
+        (
+            "kiro",
+            "kiro-cli",
+            &["acp", "--agent-engine=v3", "--auth-method=cli"],
+            Acp,
+        ),
         ("fx", "fx", &["acp"], Acp),
         ("muse", "muse", &["serve", "--trust-workspace"], Muse),
         ("codebuddy", "codebuddy", &["--acp"], Acp),
@@ -411,6 +416,14 @@ pub enum ApprovalMode {
     Deny,
     /// Publish requests for the application to answer with Session::respond.
     Host,
+    /// Allow native tool execution unattended without parking permission prompts.
+    Allow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserQuestionsMode {
+    Host,
 }
 
 const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -454,6 +467,8 @@ pub struct SessionOptions {
     /// Names removed from the inherited environment. Explicit `env` values take precedence.
     pub unset_env: std::collections::BTreeSet<String>,
     pub approvals: ApprovalMode,
+    /// Route agent user-question prompts to the host independently of `approvals`.
+    pub user_questions: Option<UserQuestionsMode>,
     /// Positive byte budget for retained native and tool payloads. Live subscribers and the newest frame stay complete.
     pub retained_bytes: Option<usize>,
     pub handshake_timeout: Duration,
@@ -505,10 +520,48 @@ impl SessionOptions {
             env: BTreeMap::new(),
             unset_env: Default::default(),
             approvals: ApprovalMode::Deny,
+            user_questions: None,
             retained_bytes: None,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             acp_timeouts: AcpTimeouts::default(),
             acp_auth_method: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approval_and_user_question_modes_preserve_defaults_and_wire_names() {
+        assert_eq!(ApprovalMode::default(), ApprovalMode::Deny);
+        assert_eq!(
+            serde_json::to_string(&ApprovalMode::Deny).unwrap(),
+            "\"deny\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApprovalMode::Host).unwrap(),
+            "\"host\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ApprovalMode::Allow).unwrap(),
+            "\"allow\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ApprovalMode>("\"allow\"").unwrap(),
+            ApprovalMode::Allow
+        );
+        assert_eq!(
+            serde_json::to_string(&UserQuestionsMode::Host).unwrap(),
+            "\"host\""
+        );
+        assert_eq!(
+            serde_json::from_str::<UserQuestionsMode>("\"host\"").unwrap(),
+            UserQuestionsMode::Host
+        );
+        let opts = SessionOptions::new("/tmp");
+        assert_eq!(opts.approvals, ApprovalMode::Deny);
+        assert_eq!(opts.user_questions, None);
     }
 }

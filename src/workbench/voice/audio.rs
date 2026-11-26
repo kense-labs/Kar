@@ -88,6 +88,7 @@ impl Options {
             Some("en") => list.extend(["um", "ah", "eh"]),
             Some("de") => list.extend(["äh", "ähm"]),
             Some("fr") => list.push("euh"),
+            Some("zh") => list.extend(["呃", "额", "唔"]),
             _ => {}
         }
         let mut parts = vec![];
@@ -177,12 +178,14 @@ pub(super) fn split(body: &[u8]) -> Result<(Options, &[u8])> {
     Ok((opts, data))
 }
 pub(super) fn validate(data: &[u8]) -> Result<()> {
-    if data.is_empty() || data.len() > PCM_MAX || data.len() % 4 != 0 {
+    if data.is_empty() || data.len() > PCM_MAX || !data.len().is_multiple_of(4) {
         return Err(invalid());
     }
     if data
-        .chunks_exact(4)
-        .any(|v| !(-1.0..=1.0).contains(&f32::from_le_bytes(v.try_into().unwrap())))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|v| !(-1.0..=1.0).contains(&f32::from_le_bytes(*v)))
     {
         return Err(invalid());
     }
@@ -203,10 +206,29 @@ pub(super) fn wave(data: &[u8]) -> Vec<u8> {
     out.extend(16u16.to_le_bytes());
     out.extend(b"data");
     out.extend(bytes.to_le_bytes());
-    for raw in data.chunks_exact(4) {
-        let v = f32::from_le_bytes(raw.try_into().unwrap()) as f64;
+    for raw in data.as_chunks::<4>().0 {
+        let v = f32::from_le_bytes(*raw) as f64;
         let n = (v * if v < 0.0 { 32768.0 } else { 32767.0 } + 0.5).floor() as i16;
         out.extend(n.to_le_bytes());
     }
     out
+}
+
+/// Pure-Rust RMS Voice Activity Detection over 16 kHz f32 mono PCM bytes.
+pub(super) fn has_voiced_audio(data: &[u8]) -> bool {
+    if data.len() < 4 {
+        return false;
+    }
+    let mut sum_sq = 0.0f64;
+    let mut count = 0usize;
+    for raw in data.as_chunks::<4>().0 {
+        let sample = f32::from_le_bytes(*raw) as f64;
+        sum_sq += sample * sample;
+        count += 1;
+    }
+    if count == 0 {
+        return false;
+    }
+    let rms = (sum_sq / count as f64).sqrt();
+    rms >= 0.008
 }

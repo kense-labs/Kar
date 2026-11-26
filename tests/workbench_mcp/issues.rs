@@ -45,7 +45,9 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
     let calls = Calls::default();
     let pull = json!({"number":19,"title":"Scoped pull","state":"open","html_url":"https://models.example/kar/demo/pull/19","head":{"ref":"feature","sha":"abc"},"base":{"ref":"main","sha":"def"}});
     let detail = pull.clone();
-    let mut other=pull.clone();other["number"]=json!(21);other["title"]=json!("Second pull");
+    let mut other = pull.clone();
+    other["number"] = json!(21);
+    other["title"] = json!("Second pull");
     let ci = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let api = Router::new()
         .route("/repos/kar/demo/pulls",get(move||async move{Json(json!([pull,other]))}).post(|Json(body):Json<Value>|async move{
@@ -118,6 +120,7 @@ pub(super) async fn fixture(root: &Path, config: &Path) -> Calls {
     calls
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn exercise(
     url: &str,
     host: &Client,
@@ -222,41 +225,121 @@ pub(super) async fn exercise(
             true
         );
     }
-    let first=server::json(make("kar_pull_request",json!({"action":"list_page","limit":1}))).await;
-    let page=&first["result"]["structuredContent"];
-    assert_eq!(page["entries"][0]["number"],19);
-    let rest=server::json(make("kar_pull_request",json!({"action":"list","cursor":page["next_cursor"],"limit":1}))).await;
-    assert_eq!(rest["result"]["structuredContent"]["entries"][0]["number"],21);
+    let first = server::json(make(
+        "kar_pull_request",
+        json!({"action":"list_page","limit":1}),
+    ))
+    .await;
+    let page = &first["result"]["structuredContent"];
+    assert_eq!(page["entries"][0]["number"], 19);
+    let rest = server::json(make(
+        "kar_pull_request",
+        json!({"action":"list","cursor":page["next_cursor"],"limit":1}),
+    ))
+    .await;
+    assert_eq!(
+        rest["result"]["structuredContent"]["entries"][0]["number"],
+        21
+    );
     assert!(rest["result"]["structuredContent"]["next_cursor"].is_null());
-    assert!(denied(&server::json(make("kar_pull_request",json!({"action":"list","query":"Second","cursor":page["next_cursor"]}))).await));
-    let sections=server::json(make("kar_pull_request",json!({"action":"read","number":19,"include":["comments"],"limit":1}))).await;
+    assert!(denied(
+        &server::json(make(
+            "kar_pull_request",
+            json!({"action":"list","query":"Second","cursor":page["next_cursor"]})
+        ))
+        .await
+    ));
+    let sections = server::json(make(
+        "kar_pull_request",
+        json!({"action":"read","number":19,"include":["comments"],"limit":1}),
+    ))
+    .await;
     assert!(sections["result"]["structuredContent"]["comments"]["items"].is_array());
-    let bare = root.parent().unwrap().join("workbench-publication-fixture.git");
-    git(root,&["init","--bare",bare.to_str().unwrap()]);
-    git(root,&["remote","set-url","--push","origin",bare.to_str().unwrap()]);
-    let publication=json!({"command_id":Uuid::new_v4(),"action":"create","title":"Current checkout","draft":true,"base":"release"});
-    let published=server::json(make("kar_pull_request",publication.clone())).await;
-    assert_eq!(published["result"]["structuredContent"]["pull"]["number"],20,"{published}");
-    let oid=Command::new("git").current_dir(&bare).args(["rev-parse","refs/heads/main"]).output().unwrap();
-    assert_eq!(published["result"]["structuredContent"]["head_sha"],String::from_utf8(oid.stdout).unwrap().trim());
-    assert_eq!(published["result"],server::json(make("kar_pull_request",publication)).await["result"]);
-    let links=server::json(make("kar_pull_request_links",json!({"action":"list"}))).await;
-    assert!(links["result"]["structuredContent"]["links"].as_array().unwrap().iter().any(|b|b["number"]==20));
-    let guide=server::json(make("kar_pull_request",json!({"action":"read_guide","number":19}))).await;
-    assert_eq!(guide["result"]["structuredContent"]["current_head_sha"],"abc");
+    let bare = root
+        .parent()
+        .unwrap()
+        .join("workbench-publication-fixture.git");
+    git(root, &["init", "--bare", bare.to_str().unwrap()]);
+    git(
+        root,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            bare.to_str().unwrap(),
+        ],
+    );
+    let publication = json!({"command_id":Uuid::new_v4(),"action":"create","title":"Current checkout","draft":true,"base":"release"});
+    let published = server::json(make("kar_pull_request", publication.clone())).await;
+    assert_eq!(
+        published["result"]["structuredContent"]["pull"]["number"], 20,
+        "{published}"
+    );
+    let oid = Command::new("git")
+        .current_dir(&bare)
+        .args(["rev-parse", "refs/heads/main"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        published["result"]["structuredContent"]["head_sha"],
+        String::from_utf8(oid.stdout).unwrap().trim()
+    );
+    assert_eq!(
+        published["result"],
+        server::json(make("kar_pull_request", publication)).await["result"]
+    );
+    let links = server::json(make("kar_pull_request_links", json!({"action":"list"}))).await;
+    assert!(
+        links["result"]["structuredContent"]["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["number"] == 20)
+    );
+    let guide = server::json(make(
+        "kar_pull_request",
+        json!({"action":"read_guide","number":19}),
+    ))
+    .await;
+    assert_eq!(
+        guide["result"]["structuredContent"]["current_head_sha"],
+        "abc"
+    );
     assert!(guide["result"]["structuredContent"]["guide"].is_null());
-    let off=server::json(make("kar_pull_request",json!({"action":"write_guides","command_id":Uuid::new_v4(),"numbers":[19]}))).await;
+    let off = server::json(make(
+        "kar_pull_request",
+        json!({"action":"write_guides","command_id":Uuid::new_v4(),"numbers":[19]}),
+    ))
+    .await;
     assert!(denied(&off));
-    let watch=json!({"action":"watch","command_id":Uuid::new_v4(),"number":19,"until":"merged"});
-    let first=server::json(make("kar_pull_request",watch.clone())).await;
-    assert_eq!(first["result"]["structuredContent"]["watching"],true);
-    assert_eq!(server::json(make("kar_pull_request",watch)).await["result"],first["result"]);
-    let status=server::json(make("kar_pull_request",json!({"action":"watch_status","number":19}))).await;
-    assert_eq!(status["result"]["structuredContent"]["until"],"merged");
-    let checks=server::json(make("kar_ci",json!({"action":"checks","number":19}))).await;
-    assert!(checks["result"]["structuredContent"]["checks"].as_array().unwrap().iter().any(|s|s["name"]=="legacy"));
-    let off=server::json(make("kar_pull_request",json!({"action":"unwatch","number":19,"command_id":Uuid::new_v4()}))).await;
-    assert_eq!(off["result"]["structuredContent"]["watching"],false);
+    let watch = json!({"action":"watch","command_id":Uuid::new_v4(),"number":19,"until":"merged"});
+    let first = server::json(make("kar_pull_request", watch.clone())).await;
+    assert_eq!(first["result"]["structuredContent"]["watching"], true);
+    assert_eq!(
+        server::json(make("kar_pull_request", watch)).await["result"],
+        first["result"]
+    );
+    let status = server::json(make(
+        "kar_pull_request",
+        json!({"action":"watch_status","number":19}),
+    ))
+    .await;
+    assert_eq!(status["result"]["structuredContent"]["until"], "merged");
+    let checks = server::json(make("kar_ci", json!({"action":"checks","number":19}))).await;
+    assert!(
+        checks["result"]["structuredContent"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "legacy")
+    );
+    let off = server::json(make(
+        "kar_pull_request",
+        json!({"action":"unwatch","number":19,"command_id":Uuid::new_v4()}),
+    ))
+    .await;
+    assert_eq!(off["result"]["structuredContent"]["watching"], false);
     let update =
         json!({"action":"update","number":19,"title":"Changed","command_id":Uuid::new_v4()});
     assert_eq!(

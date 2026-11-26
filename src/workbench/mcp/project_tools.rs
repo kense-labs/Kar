@@ -33,10 +33,19 @@ impl Access {
         self.directories.dedup();
         Ok(self)
     }
-    pub(in crate::workbench) fn authorizes_launch(&self, db:&crate::workbench::Catalog, project:Uuid, chat:Uuid)->bool {
-        self.launch && Policy::current(db,project,chat).is_some_and(|p|p.executes() && p.project_access==*self)
+    pub(in crate::workbench) fn authorizes_launch(
+        &self,
+        db: &crate::workbench::Catalog,
+        project: Uuid,
+        chat: Uuid,
+    ) -> bool {
+        self.launch
+            && Policy::current(db, project, chat)
+                .is_some_and(|p| p.executes() && p.project_access == *self)
     }
-    pub(in crate::workbench) fn check_directory(&self, path:&Path)->Result<()> {self.directory(path).map(drop)}
+    pub(in crate::workbench) fn check_directory(&self, path: &Path) -> Result<()> {
+        self.directory(path).map(drop)
+    }
     fn directory(&self, path: &Path) -> Result<PathBuf> {
         if !path.is_absolute() || path.components().any(|c| c == Component::ParentDir) {
             return Err(refused(
@@ -128,10 +137,54 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
     let flag = json!({"type":"boolean"});
     let mut tools = vec![];
     if policy.project_access.manage {
-        tools.push(Tool{name:"kar_project_create",description:"Register a folder in a granted directory or create a named Git project with a README and first commit.",properties:json!({"command_id":id,"project_id":id,"title":string,"workspace_root":string,"parent":string,"create_directory":flag,"settings":{"type":"object"}}),required:&["command_id","title"]});
-        tools.push(Tool{name:"kar_project_update",description:"Update an authorized project's title, default model, tracked folders or scripts.",properties:json!({"command_id":id,"project_id":id,"settings":{"type":"object"}}),required:&["command_id","project_id","settings"]});
+        let project_settings = json!({
+            "type": "object",
+            "properties": {
+                "title": string,
+                "workspaceRoot": string,
+                "pinned": flag,
+                "archived": flag,
+                "autoPull": flag,
+                "defaultRuntime": string,
+                "defaultModel": string,
+                "trackFolders": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"name": string, "path": string},
+                        "required": ["name", "path"]
+                    }
+                },
+                "scripts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": string,
+                            "name": string,
+                            "command": string,
+                            "icon": string,
+                            "runOnWorktreeCreate": flag
+                        },
+                        "required": ["id", "name", "command"]
+                    }
+                }
+            }
+        });
+        let repo_lookup = json!({
+            "type": "object",
+            "properties": {
+                "provider": string,
+                "host": string,
+                "owner": string,
+                "name": string,
+                "repository": string
+            }
+        });
+        tools.push(Tool{name:"kar_project_create",description:"Register a folder in a granted directory or create a named Git project with a README and first commit.",properties:json!({"command_id":id,"project_id":id,"title":string,"workspace_root":string,"parent":string,"create_directory":flag,"settings":project_settings}),required:&["command_id","title"]});
+        tools.push(Tool{name:"kar_project_update",description:"Update an authorized project's title, default model, tracked folders or scripts.",properties:json!({"command_id":id,"project_id":id,"settings":project_settings}),required:&["command_id","project_id","settings"]});
         tools.push(Tool{name:"kar_project_delete",description:"Remove a project registration. A nonempty project requires force. Files stay on disk.",properties:json!({"command_id":id,"project_id":id,"force":flag}),required:&["command_id","project_id"]});
-        tools.push(Tool{name:"kar_project_clone",description:"Start a tracked repository clone into a granted directory and register the project.",properties:json!({"command_id":id,"project_id":id,"title":string,"directory":string,"source":string,"lookup":{"type":"object"},"protocol":{"enum":["https","ssh","auto"]}}),required:&["command_id","title","directory"]});
+        tools.push(Tool{name:"kar_project_clone",description:"Start a tracked repository clone into a granted directory and register the project.",properties:json!({"command_id":id,"project_id":id,"title":string,"directory":string,"source":string,"lookup":repo_lookup,"protocol":{"enum":["https","ssh","auto"]}}),required:&["command_id","title","directory"]});
     }
     if policy.project_access.launch {
         tools.push(Tool{name:"kar_thread_launch",description:"Launch a top-level chat in a project, scratch folder, or verified worktree. Reuse command_id after a lost reply.",properties:json!({"command_id":id,"project_id":id,"scratch":flag,"title":string,"runtime":string,"model":string,"message":string,"attachments":{"type":"array","items":id},"requested_output_schema":{},"workspace":{"enum":["root","worktree","existing_worktree"]},"directory":string,"base_ref":string,"branch":string,"start_from_origin":flag,"generate_title":flag,"defer_release":flag,"approvals":{"enum":["deny","host"]},"effort":string,"acp_mode":string}),required:&["command_id","title"]});
@@ -221,7 +274,9 @@ pub(super) async fn call(
             return Ok(old.result.clone());
         }
         if name == "kar_thread_launch" {
-            if crate::workbench::prepared_runs::reservation(db,cmd).is_some(){return Err(Error::Busy);}
+            if crate::workbench::prepared_runs::reservation(db, cmd).is_some() {
+                return Err(Error::Busy);
+            }
             match app.0.chats.initial_info(cmd) {
                 Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => (),
                 Ok(_) => return Err(refused("launch ID belongs to an existing chat")),

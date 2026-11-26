@@ -1,36 +1,36 @@
 //! Exercise the authenticated Kar listener and the credential handed to a native Codex protocol peer.
+#[path = "workbench_mcp/collaboration.rs"]
+mod collaboration;
+#[allow(dead_code)]
+#[path = "support/workbench_devices.rs"]
+mod devices;
+#[path = "workbench_mcp/environment.rs"]
+mod environment;
 #[path = "workbench_mcp/issues.rs"]
 mod issues;
-#[path = "workbench_mcp/projects.rs"]
-mod projects;
-#[path = "workbench_mcp/worktree.rs"]
-mod worktree;
-#[path = "workbench_mcp/preview_tools.rs"]
-mod preview_tools;
-#[path="workbench_mcp/collaboration.rs"]
-mod collaboration;
-#[path="workbench_mcp/environment.rs"]
-mod environment;
-#[path = "workbench_mcp/workflow.rs"]
-mod workflow;
-#[path="workbench_mcp/milestones.rs"]
+#[path = "workbench_mcp/milestones.rs"]
 mod milestones;
 #[path = "workbench_mcp/operations.rs"]
 mod operations;
-#[path="workbench_mcp/orchestrator.rs"]
+#[path = "workbench_mcp/orchestrator.rs"]
 mod orchestrator;
 #[allow(dead_code)]
 #[path = "support/codex_chat_peer.rs"]
 mod peer;
+#[path = "workbench_mcp/preview_tools.rs"]
+mod preview_tools;
+#[path = "workbench_mcp/projects.rs"]
+mod projects;
 #[allow(dead_code)]
 #[path = "support/workbench_server.rs"]
 mod server;
-#[allow(dead_code)]
-#[path="support/workbench_devices.rs"]
-mod devices;
-use server as workbench_server;
+#[path = "workbench_mcp/workflow.rs"]
+mod workflow;
+#[path = "workbench_mcp/worktree.rs"]
+mod worktree;
 use reqwest::{Client, RequestBuilder, StatusCode};
 use serde_json::{Value, json};
+use server as workbench_server;
 use std::{
     fs,
     net::{Ipv4Addr, SocketAddr},
@@ -38,23 +38,51 @@ use std::{
 };
 use uuid::Uuid;
 
-#[path="workbench_mcp/provider_controls.rs"]
-mod provider_controls;
-#[path="workbench_mcp/apps.rs"]
+#[path = "workbench_mcp/apps.rs"]
 mod apps;
-#[path="workbench_mcp/preparation.rs"]
+#[path = "workbench_mcp/preparation.rs"]
 mod preparation;
+#[path = "workbench_mcp/provider_controls.rs"]
+mod provider_controls;
 fn main() {
-    if std::env::args().nth(1).as_deref()==Some("prepared-runs"){tokio::runtime::Runtime::new().unwrap().block_on(preparation::scenario());return;}
-    if std::env::args().next().as_deref().is_some_and(|s|s.ends_with("claude-control-fixture")) {provider_controls::claude_peer();return;}
-    if std::env::args().nth(1).as_deref()==Some("provider-controls"){tokio::runtime::Runtime::new().unwrap().block_on(provider_controls::scenario());return;}
-    if std::env::args().nth(1).as_deref()==Some("apps"){tokio::runtime::Runtime::new().unwrap().block_on(apps::scenario());return;}
-    if matches!(std::env::args().nth(1).as_deref(),Some("simctl"|"devices"|"-s"|"-version"|"version"|"-list-avds"|"--find")){
+    if std::env::args().nth(1).as_deref() == Some("prepared-runs") {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(preparation::scenario());
+        return;
+    }
+    if std::env::args()
+        .next()
+        .as_deref()
+        .is_some_and(|s| s.ends_with("claude-control-fixture"))
+    {
+        provider_controls::claude_peer();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("provider-controls") {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(provider_controls::scenario());
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("apps") {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(apps::scenario());
+        return;
+    }
+    if matches!(
+        std::env::args().nth(1).as_deref(),
+        Some("simctl" | "devices" | "-s" | "-version" | "version" | "-list-avds" | "--find")
+    ) {
         devices::peer(&std::env::args().skip(1).collect::<Vec<_>>());
         return;
     }
     match std::env::args().nth(1).as_deref() {
-        Some("--mcp-local-preview")=>{preview_tools::local_page();return;}
+        Some("--mcp-local-preview") => {
+            preview_tools::local_page();
+            return;
+        }
 
         Some("--version") => {
             println!("codex 0.143.0");
@@ -118,7 +146,7 @@ async fn scenario() {
         .await
         .unwrap();
     let address = observer.local_addr().unwrap().to_string();
-    let device_bin=std::env::current_exe().unwrap();
+    let device_bin = std::env::current_exe().unwrap();
     let (mut kar, url) = server::serve_with_env(
         &state,
         &authorized,
@@ -126,10 +154,10 @@ async fn scenario() {
         &[
             ("KAR_TEST_MCP_OBSERVER", address.as_ref()),
             ("KAR_FEEDBACK_URL", "".as_ref()),
-            ("KAR_DEVICE_TEST_DIR",db.as_os_str()),
-            ("KAR_DEVICE_XCRUN_BIN",device_bin.as_os_str()),
-            ("KAR_DEVICE_ADB_BIN",device_bin.as_os_str()),
-            ("KAR_DEVICE_EMULATOR_BIN",device_bin.as_os_str()),
+            ("KAR_DEVICE_TEST_DIR", db.as_os_str()),
+            ("KAR_DEVICE_XCRUN_BIN", device_bin.as_os_str()),
+            ("KAR_DEVICE_ADB_BIN", device_bin.as_os_str()),
+            ("KAR_DEVICE_EMULATOR_BIN", device_bin.as_os_str()),
             ("KAR_FORGE_CONFIG", config.as_os_str()),
             ("KAR_MCP_TEST_FORGE", "local-only".as_ref()),
         ],
@@ -230,19 +258,21 @@ async fn scenario() {
     assert_eq!(foreign["result"]["isError"], true);
     let comment = issues::exercise(&url, &a, p, chat, provider, &root, &writes, call).await;
     projects::exercise(&url, &a, p, chat, &root, &observer, call).await;
-    collaboration::run(&url,&a,p,chat,&db,call).await;
+    collaboration::run(&url, &a, p, chat, &db, call).await;
     preview_tools::controls(&url, &a, p, chat, call).await;
-    preview_tools::devices(&url,&a,p,chat,call).await;
-    preview_tools::html(&url,&a,p,chat,&root,call).await;
-    if std::env::var_os("KAR_MCP_BROWSER_LIVE").is_some(){preview_tools::browser(&url,&a,p,chat,&root,call).await;}
-    preview_tools::desktop(&url,&a,p,chat,call).await;
-    preview_tools::public_page(&url,&a,p,chat,call).await;
-    let (milestone_cursor,live_milestones)=milestones::begin(&c,&url,owner,provider).await;
+    preview_tools::devices(&url, &a, p, chat, call).await;
+    preview_tools::html(&url, &a, p, chat, &root, call).await;
+    if std::env::var_os("KAR_MCP_BROWSER_LIVE").is_some() {
+        preview_tools::browser(&url, &a, p, chat, &root, call).await;
+    }
+    preview_tools::desktop(&url, &a, p, chat, call).await;
+    preview_tools::public_page(&url, &a, p, chat, call).await;
+    let (milestone_cursor, live_milestones) = milestones::begin(&c, &url, owner, provider).await;
     workflow::exercise(&url, &a, p, chat, call).await;
     operations::exercise(&url, &a, p, chat, &observer, call).await;
-    orchestrator::exercise(&url,&a,p,chat,&observer,&db,call).await;
-    let first_milestone=milestones::recover(&c,&url,owner,&milestone_cursor,None).await;
-    milestones::observe_live(live_milestones,&first_milestone).await;
+    orchestrator::exercise(&url, &a, p, chat, &observer, &db, call).await;
+    let first_milestone = milestones::recover(&c, &url, owner, &milestone_cursor, None).await;
+    milestones::observe_live(live_milestones, &first_milestone).await;
     let stateless = |r: RequestBuilder| {
         r.header("mcp-method", "server/discover")
             .header("mcp-protocol-version", "2026-07-28")
@@ -315,11 +345,20 @@ async fn scenario() {
             .windows(provider.len())
             .any(|w| w == provider.as_bytes())
     );
-    let moved=worktree::exercise(&url,&a,&observer,p,&checkouts,&db).await;
-    let interrupted=worktree::Interrupted::prepare(&a,&url,p,&observer,&checkouts,&db).await;
+    let moved = worktree::exercise(&url, &a, &observer, p, &checkouts, &db).await;
+    let interrupted = worktree::Interrupted::prepare(&a, &url, p, &observer, &checkouts, &db).await;
     kar.kill().await.unwrap();
-    let (mut restarted, url) = server::serve_with_env(&state,&authorized,&db,&[("KAR_TEST_MCP_OBSERVER",address.as_ref()),("KAR_FEEDBACK_URL","".as_ref())]).await;
-    milestones::recover(&c,&url,owner,&milestone_cursor,Some(&first_milestone)).await;
+    let (mut restarted, url) = server::serve_with_env(
+        &state,
+        &authorized,
+        &db,
+        &[
+            ("KAR_TEST_MCP_OBSERVER", address.as_ref()),
+            ("KAR_FEEDBACK_URL", "".as_ref()),
+        ],
+    )
+    .await;
+    milestones::recover(&c, &url, owner, &milestone_cursor, Some(&first_milestone)).await;
     let policy = server::json(a.get(format!(
         "{url}/projects/{p}/chats/{chat}/model-tools/permissions"
     )))
@@ -330,7 +369,7 @@ async fn scenario() {
         server::json(a.get(format!("{url}/projects/{p}/forge/operations/{comment}"))).await;
     assert_eq!(receipt["result"]["Ok"]["comment_id"], 31);
     assert_eq!(writes.lock().unwrap().len(), 4);
-    moved.check(&a,&url,p).await;
-    interrupted.check(&a,&url,p,&db).await;
+    moved.check(&a, &url, p).await;
+    interrupted.check(&a, &url, p, &db).await;
     restarted.kill().await.unwrap();
 }

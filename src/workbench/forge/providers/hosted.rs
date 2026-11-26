@@ -27,7 +27,11 @@ pub(in crate::workbench::forge) fn resource(
     }
     Ok(url)
 }
-pub(in crate::workbench::forge) fn item(c: &Context, v: &Value, pull: bool) -> Result<Value, ForgeError> {
+pub(in crate::workbench::forge) fn item(
+    c: &Context,
+    v: &Value,
+    pull: bool,
+) -> Result<Value, ForgeError> {
     let cafe = c.kind == "gitcafe";
     let origin = c.kind == "cursor-origin";
     let n = number(&v["number"])?;
@@ -198,7 +202,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         )));
     }
     match op {
-        Operation::PullCommand{number,command}=>crate::workbench::forge::providers::pull_tools::execute(c,*number,command).await,
+        Operation::PullCommand { number, command } => {
+            crate::workbench::forge::providers::pull_tools::execute(c, *number, command).await
+        }
         op @ (Operation::SubmitReview { .. }
         | Operation::ReplyToThread { .. }
         | Operation::SetThreadResolution { .. }

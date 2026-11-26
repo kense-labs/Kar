@@ -43,8 +43,8 @@ impl PullTarget {
         requested_base: Option<&str>,
     ) -> Result<Self, ForgeError> {
         let base_remote = checkout.comparison_remote(local, target)?;
-        let c = Context::open_checkout(app, project, checkout.root().to_owned(), base_remote)
-            .await?;
+        let c =
+            Context::open_checkout(app, project, checkout.root().to_owned(), base_remote).await?;
         let (fetch, pushes) = checkout.publish_urls(target)?;
         let mut destination = None;
         for url in pushes {

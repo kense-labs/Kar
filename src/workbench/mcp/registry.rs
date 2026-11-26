@@ -86,7 +86,9 @@ impl Lease {
     pub(in crate::workbench) fn attach(&self, chat: &mut crate::chat::ChatSession) {
         chat.forget_workbench_registration();
         let _ = self.grant.process.set(chat.live_session());
-        if self.grant.runtime=="opencode" && self.grant.supports_background_wait(){self.tools_changed();}
+        if self.grant.runtime == "opencode" && self.grant.supports_background_wait() {
+            self.tools_changed();
+        }
     }
     pub(super) fn tools_changed(&self) {
         self.grant.changes.send_modify(|n| *n += 1);
@@ -120,7 +122,9 @@ pub(in crate::workbench) struct Registry {
     sessions: Mutex<HashMap<Uuid, Arc<HttpSession>>>,
 }
 impl Registry {
-    pub(in crate::workbench) fn origin(&self)->Option<String>{self.endpoint.get().map(|a|format!("http://{a}"))}
+    pub(in crate::workbench) fn origin(&self) -> Option<String> {
+        self.endpoint.get().map(|a| format!("http://{a}"))
+    }
     pub(in crate::workbench) fn command_gate(&self, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
         let mut gates = self.commands.lock().unwrap();
         gates.retain(|_, gate| gate.strong_count() > 0);
@@ -181,20 +185,22 @@ impl Registry {
             ]),
         });
         #[cfg(target_os = "macos")]
-        if dynamic_acp || matches!(
-            runtime,
-            "dsh"
-                | "devin"
-                | "cursor"
-                | "antigravity"
-                | "kiro"
-                | "fx"
-                | "opencode"
-                | "kimi"
-                | "codebuddy"
-                | "grok"
-                | "qwen"
-        ) {
+        if dynamic_acp
+            || matches!(
+                runtime,
+                "dsh"
+                    | "devin"
+                    | "cursor"
+                    | "antigravity"
+                    | "kiro"
+                    | "fx"
+                    | "opencode"
+                    | "kimi"
+                    | "codebuddy"
+                    | "grok"
+                    | "qwen"
+            )
+        {
             registration.stdio =
                 super::stdio_bridge::listen(*addr, raw, &grant, &registration).ok();
         }

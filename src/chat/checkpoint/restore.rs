@@ -404,7 +404,9 @@ impl ChatStore {
         dry_run: bool,
     ) -> Result<RollbackReport> {
         if log.state.pending_rewind.is_some() {
-            return Err(Error::Refused("retry the pending combined workspace rewind first".into()));
+            return Err(Error::Refused(
+                "retry the pending combined workspace rewind first".into(),
+            ));
         }
         if !dry_run
             && (log.state.pending_handoff().is_some()
@@ -448,7 +450,10 @@ impl ChatStore {
                 destination_base,
             )?,
         )];
-        let reservation = log.state.pending_rewind.as_ref()
+        let reservation = log
+            .state
+            .pending_rewind
+            .as_ref()
             .map(|p| self.rewind_reservation(log.state.info.id, p.receipt.id));
         let mut leases = Vec::new();
         for (key, scope) in self.restore_scopes(&log.state, target, destination_base.is_some())? {
@@ -496,7 +501,9 @@ impl ChatStore {
             return Ok(report);
         }
         if let Some(stage) = reservation.as_deref() {
-            for lease in &leases { lease.reserve_rewind(stage)?; }
+            for lease in &leases {
+                lease.reserve_rewind(stage)?;
+            }
         }
         log.start_restore(target)?;
         for (_, step) in prepared {
@@ -505,7 +512,10 @@ impl ChatStore {
         if let Some(pending) = log.state.pending_rewind.clone() {
             let mut receipt = pending.receipt;
             receipt.files.clone_from(&report.files);
-            log.commit(crate::chat::ChatUpdate::ContextRewound { rewind: Box::new(receipt), binding: pending.binding })?;
+            log.commit(crate::chat::ChatUpdate::ContextRewound {
+                rewind: Box::new(receipt),
+                binding: pending.binding,
+            })?;
         } else {
             log.finish_restore(target)?;
         }
@@ -513,6 +523,7 @@ impl ChatStore {
         Ok(report)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare_restore(
         &self,
         state: &State,

@@ -87,7 +87,7 @@ pub(in crate::workbench) async fn links(
     let (action, id, numbers) = change.unwrap();
     if numbers.is_empty()
         || numbers.len() > 100
-        || numbers.iter().any(|n| *n == 0)
+        || numbers.contains(&0)
         || numbers.iter().collect::<BTreeSet<_>>().len() != numbers.len()
     {
         return Err(ForgeError::bad("expected 1 to 100 unique positive numbers"));
@@ -126,7 +126,10 @@ pub(in crate::workbench) async fn links(
         if let Some(result) = previous(db)? {
             return Ok(result);
         }
-        if db.forge.model_publications.contains_key(&id) || db.forge.operations.contains_key(&id) || db.forge.bindings.contains_key(&id) {
+        if db.forge.model_publications.contains_key(&id)
+            || db.forge.operations.contains_key(&id)
+            || db.forge.bindings.contains_key(&id)
+        {
             return Err(Error::Refused(
                 "command ID already belongs to another forge request".into(),
             ));

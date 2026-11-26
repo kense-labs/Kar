@@ -126,9 +126,15 @@ pub(super) async fn controls(
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");
     fs::create_dir(&root).unwrap();
-    let peer_observer=tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let peer_address=peer_observer.local_addr().unwrap().to_string();
-    let (mut remote,remote_url)=server::serve_with_env(&temp.path().join("state"),&root,temp.path(),&[("KAR_TEST_MCP_OBSERVER",std::ffi::OsStr::new(&peer_address))]).await;
+    let peer_observer = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let peer_address = peer_observer.local_addr().unwrap().to_string();
+    let (mut remote, remote_url) = server::serve_with_env(
+        &temp.path().join("state"),
+        &root,
+        temp.path(),
+        &[("KAR_TEST_MCP_OBSERVER", std::ffi::OsStr::new(&peer_address))],
+    )
+    .await;
     let destination = server::json(host.get(format!("{remote_url}/environment"))).await;
     let destination_id = &destination["environment_id"];
     let req = Uuid::new_v4();
@@ -236,38 +242,83 @@ pub(super) async fn controls(
             .is_success()
     );
     // Start a fresh explicit operate pairing. The previous read-only session has been revoked.
-    let readonly=server::json(host.post(format!("{remote_url}/api/auth/pairing-token")).json(&json!({"purpose":"peer-link","access":"read-only"}))).await;
-    let anonymous=Client::new();
+    let readonly = server::json(
+        host.post(format!("{remote_url}/api/auth/pairing-token"))
+            .json(&json!({"purpose":"peer-link","access":"read-only"})),
+    )
+    .await;
+    let anonymous = Client::new();
     let readonly=server::json(anonymous.post(format!("{remote_url}/access/pair")).json(&json!({"credential":readonly["credential"],"label":"read-only peer","purpose":"peer-link"}))).await;
-    let forbidden=anonymous.put(format!("{remote_url}/peer/delegations/{}/{project}/{}",destination_id.as_str().unwrap(),Uuid::new_v4())).bearer_auth(readonly["token"].as_str().unwrap()).json(&json!({"task":"do not run"})).send().await.unwrap();
-    assert_eq!(forbidden.status(),StatusCode::FORBIDDEN);
-    let second=Uuid::new_v4();
+    let forbidden = anonymous
+        .put(format!(
+            "{remote_url}/peer/delegations/{}/{project}/{}",
+            destination_id.as_str().unwrap(),
+            Uuid::new_v4()
+        ))
+        .bearer_auth(readonly["token"].as_str().unwrap())
+        .json(&json!({"task":"do not run"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    let second = Uuid::new_v4();
     let grant=server::json(host.post(format!("{remote_url}/api/auth/pairing-token")).json(&json!({"purpose":"peer-link","access":"approval-required","peer_tasks":{(project):target}}))).await;
-    let requested=server::json(invoke("kar_environment_link",json!({"request_id":second,"environment_id":destination_id,"url":remote_url}))).await;
-    assert_eq!(requested["result"]["structuredContent"]["status"],"pending");
-    server::json(host.post(format!("{cards}/{second}")).json(&json!({"accept":true,"input":{"url":remote_url,"credential":grant["credential"]}}))).await;
-    let scoped=json!({"mode":"execute","environment_writes":true,"thread_tools":{"delegate":true,"remote_projects":{(destination_id.as_str().unwrap()):[project]}}});
+    let requested = server::json(invoke(
+        "kar_environment_link",
+        json!({"request_id":second,"environment_id":destination_id,"url":remote_url}),
+    ))
+    .await;
+    assert_eq!(
+        requested["result"]["structuredContent"]["status"],
+        "pending"
+    );
+    server::json(
+        host.post(format!("{cards}/{second}")).json(
+            &json!({"accept":true,"input":{"url":remote_url,"credential":grant["credential"]}}),
+        ),
+    )
+    .await;
+    let scoped = json!({"mode":"execute","environment_writes":true,"thread_tools":{"delegate":true,"remote_projects":{(destination_id.as_str().unwrap()):[project]}}});
     server::json(host.put(&perm).json(&scoped)).await;
-    let work=Uuid::new_v4();
-    let input=json!({"task":"write a one-line reply","command_id":work,"remote":{"environment_id":destination_id,"project_id":project}});
-    let mut outside=input.clone();outside["remote"]["project_id"]=json!(Uuid::new_v4());
-    let denied=server::json(invoke("kar_delegate_task",outside)).await;
-    assert!(denied.get("error").is_some() || denied["result"]["isError"]==true);
-    for _ in 0..2{assert_eq!(server::json(invoke("kar_delegate_task",input.clone())).await["result"]["structuredContent"]["task_id"],json!(work));}
-    let done=tokio::time::timeout(Duration::from_secs(35),async{
-        loop{
-            let data=server::json(invoke("kar_task_status",json!({"task_id":work}))).await;
-            let task=&data["result"]["structuredContent"];
-            if task["work_state"]=="result_available"{break task.clone();}
-            assert_ne!(task["work_state"],"failed","{task}");
-            assert_ne!(task["work_state"],"unconfirmed","{task}");
+    let work = Uuid::new_v4();
+    let input = json!({"task":"write a one-line reply","command_id":work,"remote":{"environment_id":destination_id,"project_id":project}});
+    let mut outside = input.clone();
+    outside["remote"]["project_id"] = json!(Uuid::new_v4());
+    let denied = server::json(invoke("kar_delegate_task", outside)).await;
+    assert!(denied.get("error").is_some() || denied["result"]["isError"] == true);
+    for _ in 0..2 {
+        assert_eq!(
+            server::json(invoke("kar_delegate_task", input.clone())).await["result"]["structuredContent"]
+                ["task_id"],
+            json!(work)
+        );
+    }
+    let done = tokio::time::timeout(Duration::from_secs(35), async {
+        loop {
+            let data = server::json(invoke("kar_task_status", json!({"task_id":work}))).await;
+            let task = &data["result"]["structuredContent"];
+            if task["work_state"] == "result_available" {
+                break task.clone();
+            }
+            assert_ne!(task["work_state"], "failed", "{task}");
+            assert_ne!(task["work_state"], "unconfirmed", "{task}");
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    }).await.unwrap();
-    let remote_chat=done["thread_id"].as_str().unwrap();assert_ne!(remote_chat,work.to_string());
-    let history=server::json(host.get(format!("{remote_url}/projects/{project}/chats/{remote_chat}/snapshot"))).await;
+    })
+    .await
+    .unwrap();
+    let remote_chat = done["thread_id"].as_str().unwrap();
+    assert_ne!(remote_chat, work.to_string());
+    let history = server::json(host.get(format!(
+        "{remote_url}/projects/{project}/chats/{remote_chat}/snapshot"
+    )))
+    .await;
     assert!(history.to_string().contains("write a one-line reply"));
-    server::json(invoke("kar_environment_unlink",json!({"environment_id":destination_id}))).await;
+    server::json(invoke(
+        "kar_environment_unlink",
+        json!({"environment_id":destination_id}),
+    ))
+    .await;
     remote.kill().await.unwrap();
     remote.wait().await.unwrap();
 }

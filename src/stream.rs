@@ -4,14 +4,14 @@ mod queue;
 mod reachability;
 pub(crate) mod retention;
 mod text;
-pub use text::MessageBoundary;
-#[cfg(not(target_arch = "wasm32"))]
-pub use text::CoalescedEvents;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+pub use text::CoalescedEvents;
+pub use text::{MessageBoundary, coalesce_events};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -373,8 +373,8 @@ pub enum Event {
         id: String,
     },
     ToolIdentity {
-        #[serde(default,skip_serializing_if="Option::is_none")]
-        mcp_app_uri:Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mcp_app_uri: Option<String>,
         id: String,
         native_type: String,
         server: Option<String>,
@@ -712,7 +712,16 @@ impl Journal {
         requested: crate::PlacementRequest,
         execution: Option<crate::Execution>,
     ) -> Result<Self> {
-        let placement = requested.resolve(execution)?;
+        Self::for_open_runtime(retained_bytes, "", requested, execution)
+    }
+
+    pub(crate) fn for_open_runtime(
+        retained_bytes: Option<usize>,
+        runtime_id: &str,
+        requested: crate::PlacementRequest,
+        execution: Option<crate::Execution>,
+    ) -> Result<Self> {
+        let placement = requested.resolve_for_runtime(runtime_id, execution)?;
         let journal = Self::new(retained_bytes)?;
         if let Some(placement) = placement {
             let id = Uuid::new_v4().to_string();
@@ -1071,7 +1080,13 @@ impl Journal {
             s.reachability
                 .observe(kind, stamp.direction, &native, &events);
         }
-        let message_boundaries = s.messages.observe(stamp.direction, session_id.as_deref(), &agent_path, &native, &events);
+        let message_boundaries = s.messages.observe(
+            stamp.direction,
+            session_id.as_deref(),
+            &agent_path,
+            &native,
+            &events,
+        );
         let record = Arc::new(Record {
             message_boundaries,
             elided: false,
@@ -1343,7 +1358,9 @@ impl Journal {
                 vec![event],
             );
             let late_chat = if s.chat.is_none() {
-                s.chat_weak.as_ref().and_then(crate::chat::WeakSink::upgrade)
+                s.chat_weak
+                    .as_ref()
+                    .and_then(crate::chat::WeakSink::upgrade)
             } else {
                 None
             };
@@ -1376,15 +1393,32 @@ impl Journal {
         ControlReceipt::from_records(&self.state.lock().unwrap().records, request_id)
     }
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn model_tool_result(&self,turn:Uuid,tool:&str,event:Event)->Result<()> {
-        let mut s=self.state.lock().unwrap();
-        let request=match s.queries.as_ref().map(|q|q.snapshot().status.clone()) {
-            Some(crate::observe::AgentStatus::Running{input_id:Some(id),request_id:Some(request),..}) if id==turn.to_string() && !s.closed=>request,
-            _=>return Err(Error::Refused("model tool no longer belongs to the active turn".into())),
+    pub(crate) fn model_tool_result(&self, turn: Uuid, tool: &str, event: Event) -> Result<()> {
+        let mut s = self.state.lock().unwrap();
+        let request = match s.queries.as_ref().map(|q| q.snapshot().status.clone()) {
+            Some(crate::observe::AgentStatus::Running {
+                input_id: Some(id),
+                request_id: Some(request),
+                ..
+            }) if id == turn.to_string() && !s.closed => request,
+            _ => {
+                return Err(Error::Refused(
+                    "model tool no longer belongs to the active turn".into(),
+                ));
+            }
         };
-        let mut stamp=RecordStamp::frame(Direction::Host,tool);
-        stamp.response_to=Some(request);
-        self.append_locked(&mut s,stamp,RecordKind::Frame,None,vec![],None,serde_json::Value::Null,vec![event]);
+        let mut stamp = RecordStamp::frame(Direction::Host, tool);
+        stamp.response_to = Some(request);
+        self.append_locked(
+            &mut s,
+            stamp,
+            RecordKind::Frame,
+            None,
+            vec![],
+            None,
+            serde_json::Value::Null,
+            vec![event],
+        );
         Ok(())
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -1449,7 +1483,11 @@ impl EventSubscription {
                     agent_path: r.agent_path.clone(),
                     span_id: r.span_id.clone(),
                     elided: r.elided,
-                    message: r.message_boundaries.get(&(self.index - 1)).cloned().unwrap_or_default(),
+                    message: r
+                        .message_boundaries
+                        .get(&(self.index - 1))
+                        .cloned()
+                        .unwrap_or_default(),
                     event: event.clone(),
                 });
             }

@@ -42,8 +42,8 @@ struct Upload {
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Download {
-    #[serde(default,skip_serializing_if="std::ops::Not::not")]
-    as_html:bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    as_html: bool,
     project: Uuid,
     chat: Uuid,
     attachment: Uuid,
@@ -106,24 +106,43 @@ pub(super) fn prepare(app: &Workbench, p: Uuid, spec: Spec, owner: Option<Uuid>)
             Ok(json!({"id":id,"upload_path":format!("/assets/upload/{id}/{secret}"),"expires_ms":at+TICKET_MS}))
         })
 }
-pub(in crate::workbench) fn expired(app: &Workbench, db:&mut super::Catalog, at:u64, apply:bool)->Result<(u64,u64)> {
-    let ids:Vec<_>=db.assets.uploads.iter().filter(|(_,u)|at>=u.created_ms.saturating_add(PENDING_MS)).map(|(id,_)|*id).collect();
-    let mut bytes=0u64;
+pub(in crate::workbench) fn expired(
+    app: &Workbench,
+    db: &mut super::Catalog,
+    at: u64,
+    apply: bool,
+) -> Result<(u64, u64)> {
+    let ids: Vec<_> = db
+        .assets
+        .uploads
+        .iter()
+        .filter(|(_, u)| at >= u.created_ms.saturating_add(PENDING_MS))
+        .map(|(id, _)| *id)
+        .collect();
+    let mut bytes = 0u64;
     for id in &ids {
-        let path=path(app,*id);
+        let path = path(app, *id);
         match fs::symlink_metadata(&path) {
             Ok(meta) => {
-                if !meta.is_file(){return Err(Error::Refused("invalid pending upload file".into()));}
-                bytes=bytes.saturating_add(meta.len());
-                if apply { fs::remove_file(&path)?; }
+                if !meta.is_file() {
+                    return Err(Error::Refused("invalid pending upload file".into()));
+                }
+                bytes = bytes.saturating_add(meta.len());
+                if apply {
+                    fs::remove_file(&path)?;
+                }
             }
-            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>(),
-            Err(e)=>return Err(e.into()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.into()),
         }
-        if apply {db.assets.uploads.remove(id);}
+        if apply {
+            db.assets.uploads.remove(id);
+        }
     }
-    if apply {db.assets.reads.retain(|_,r|r.expires_ms>at);}
-    Ok((ids.len() as u64,bytes))
+    if apply {
+        db.assets.reads.retain(|_, r| r.expires_ms > at);
+    }
+    Ok((ids.len() as u64, bytes))
 }
 
 async fn upload(
@@ -214,7 +233,7 @@ pub(super) fn claim_for(
                 if now() >= grant.created_ms.saturating_add(PENDING_MS) {
                     return Err(missing());
                 }
-                let bytes = fs::read(path(&app, attachment))?;
+                let bytes = fs::read(path(app, attachment))?;
                 if bytes.len() as u64 != grant.spec.bytes {
                     return Err(Error::Refused("staged upload changed".into()));
                 }
@@ -232,7 +251,7 @@ pub(super) fn claim_for(
         }
         app.0.chats.read_attachment(c, attachment)
     })?;
-    match fs::remove_file(path(&app, attachment)) {
+    match fs::remove_file(path(app, attachment)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
     }
@@ -260,7 +279,7 @@ pub(super) fn discard_for(
                 "attachment is already assigned to a chat".into(),
             ));
         }
-        match fs::remove_file(path(&app, id)) {
+        match fs::remove_file(path(app, id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
             _ => {}
         }
@@ -272,16 +291,21 @@ async fn sign_read(
     State(app): State<Workbench>,
     Path((p, c, id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Reply<Value> {
-    sign_view(app,p,c,id,false).await
+    sign_view(app, p, c, id, false).await
 }
-async fn sign_html(State(app):State<Workbench>,Path((p,c,id)):Path<(Uuid,Uuid,Uuid)>)->Reply<Value>{
-    sign_view(app,p,c,id,true).await
+async fn sign_html(
+    State(app): State<Workbench>,
+    Path((p, c, id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Reply<Value> {
+    sign_view(app, p, c, id, true).await
 }
-async fn sign_view(app:Workbench,p:Uuid,c:Uuid,id:Uuid,as_html:bool)->Reply<Value>{
+async fn sign_view(app: Workbench, p: Uuid, c: Uuid, id: Uuid, as_html: bool) -> Reply<Value> {
     blocking(move || {
         app.binding(p, c)?;
-        let a=app.0.chats.visible_attachment(c, id)?;
-        if as_html && (a.kind!=AttachmentKind::File || a.mime!="text/html"){return Err(missing());}
+        let a = app.0.chats.visible_attachment(c, id)?;
+        if as_html && (a.kind != AttachmentKind::File || a.mime != "text/html") {
+            return Err(missing());
+        }
         let key = credential()?;
         let ticket = Uuid::new_v4();
         let at = now();
@@ -307,7 +331,8 @@ async fn sign_view(app:Workbench,p:Uuid,c:Uuid,id:Uuid,as_html:bool)->Reply<Valu
 async fn download(
     State(app): State<Workbench>,
     Path((id, key)): Path<(Uuid, String)>,
-    method: axum::http::Method, headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    headers: axum::http::HeaderMap,
 ) -> std::result::Result<Response, ApiError> {
     let read = app
         .0
@@ -320,7 +345,7 @@ async fn download(
         .filter(|r| r.expires_ms > now() && matches_hash(&key, &r.secret_hash))
         .cloned()
         .ok_or_else(missing)?;
-    let as_html=read.as_html;
+    let as_html = read.as_html;
     let (a, data) = tokio::task::spawn_blocking(move || -> Result<_> {
         app.binding(read.project, read.chat)?;
         let a = app.0.chats.visible_attachment(read.chat, read.attachment)?;
@@ -330,13 +355,22 @@ async fn download(
     .await
     .map_err(|e| Error::Closed(e.to_string()))??;
     // File downloads share the service origin. Keep arbitrary documents outside the browser execution context.
-    let mut response=super::http_content::attachment(&method,&headers,data,&a.sha256);
-    if as_html && a.kind==AttachmentKind::File && a.mime=="text/html" {
-        for (name,value) in [
-            (header::CONTENT_TYPE,"text/html; charset=utf-8"),(header::X_CONTENT_TYPE_OPTIONS,"nosniff"),
-            (header::CACHE_CONTROL,"private, no-store"),(header::REFERRER_POLICY,"no-referrer"),
-            (header::CONTENT_SECURITY_POLICY,"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'")
-        ] {response.headers_mut().insert(name,axum::http::HeaderValue::from_static(value));}
+    let mut response = super::http_content::attachment(&method, &headers, data, &a.sha256);
+    if as_html && a.kind == AttachmentKind::File && a.mime == "text/html" {
+        for (name, value) in [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CACHE_CONTROL, "private, no-store"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'",
+            ),
+        ] {
+            response
+                .headers_mut()
+                .insert(name, axum::http::HeaderValue::from_static(value));
+        }
         return Ok(response);
     }
     let mime = if a.kind == AttachmentKind::Image {
@@ -344,9 +378,19 @@ async fn download(
     } else {
         "application/octet-stream"
     };
-    response.headers_mut().insert(header::CONTENT_TYPE, mime.parse().map_err(|_| Error::Protocol("invalid attachment MIME".into()))?);
-    response.headers_mut().insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("private, no-store"));
-    response.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, axum::http::HeaderValue::from_static("nosniff"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        mime.parse()
+            .map_err(|_| Error::Protocol("invalid attachment MIME".into()))?,
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
     Ok(response)
 }
 pub(super) fn routes() -> Router<Workbench> {
@@ -354,7 +398,10 @@ pub(super) fn routes() -> Router<Workbench> {
         .route("/projects/{p}/attachments/uploads", post(issue))
         .route("/projects/{p}/attachments/{id}", delete(discard))
         .route("/projects/{p}/chats/{c}/attachments", post(claim))
-        .route("/projects/{p}/chats/{c}/html-renders/{id}/url",post(sign_html))
+        .route(
+            "/projects/{p}/chats/{c}/html-renders/{id}/url",
+            post(sign_html),
+        )
         .route(
             "/projects/{p}/chats/{c}/attachments/{id}/url",
             post(sign_read),

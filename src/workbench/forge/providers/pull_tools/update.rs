@@ -47,6 +47,7 @@ pub(super) async fn apply(
             expected_head_sha,
             method,
             auto,
+            ..
         } => {
             if raw.pointer("/head/sha").and_then(Value::as_str) != Some(expected_head_sha) {
                 return Err(ForgeError::bad("pull head changed"));

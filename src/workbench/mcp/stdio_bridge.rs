@@ -5,7 +5,7 @@ use crate::{McpServer, WorkbenchRegistration, private_dir::PrivateDir, resources
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{Value, json};
-use std::{io, net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use std::{ffi::OsStr, io, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use tokio::{
     io::AsyncWriteExt,
     net::{UnixListener, UnixStream},
@@ -13,22 +13,124 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, LinesCodec};
 
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && (m.permissions().mode() & 0o111 != 0))
+}
+
+fn resolve_bridge_launcher_with(
+    socket: &Path,
+    bridge_env: Option<&OsStr>,
+    current_exe: Option<&Path>,
+    path_env: Option<&OsStr>,
+    nc_fallback: &Path,
+) -> crate::Result<(String, Vec<String>)> {
+    let sock = socket.to_string_lossy().into_owned();
+    let kar_bridge = |bin: &Path| {
+        let resolved = bin.canonicalize().unwrap_or_else(|_| bin.to_path_buf());
+        Ok((
+            resolved.to_string_lossy().into_owned(),
+            vec!["workbench-mcp-bridge".into(), sock.clone()],
+        ))
+    };
+
+    // 1. Explicit KAR_WORKBENCH_BRIDGE_EXE override.
+    if let Some(raw) = bridge_env.filter(|s| !s.is_empty()) {
+        let candidate = Path::new(raw);
+        if is_executable_file(candidate) {
+            return kar_bridge(candidate);
+        }
+    }
+
+    // 2. current_exe() if named "kar", or 3. sibling `kar` binary in parent / grandparent
+    // (e.g. target/debug/deps/test_bin -> target/debug/kar).
+    if let Some(exe) = current_exe {
+        let canonical = exe.canonicalize().ok();
+        let probe = canonical.as_deref().unwrap_or(exe);
+        if (exe.file_name() == Some(OsStr::new("kar"))
+            || probe.file_name() == Some(OsStr::new("kar")))
+            && is_executable_file(probe)
+        {
+            return kar_bridge(probe);
+        }
+        for ancestor in [
+            probe.parent(),
+            probe.parent().and_then(Path::parent),
+            exe.parent(),
+            exe.parent().and_then(Path::parent),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let sibling = ancestor.join("kar");
+            if is_executable_file(&sibling) {
+                return kar_bridge(&sibling);
+            }
+        }
+    }
+
+    // 4. `kar` on PATH.
+    if let Some(paths) = path_env {
+        for dir in std::env::split_paths(paths) {
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            let candidate = dir.join("kar");
+            if is_executable_file(&candidate) {
+                return kar_bridge(&candidate);
+            }
+        }
+    }
+
+    // 5. macOS /usr/bin/nc -U <socket> fallback (Host::serve speaks raw newline-delimited JSON-RPC).
+    if is_executable_file(nc_fallback) {
+        return Ok((
+            nc_fallback.to_string_lossy().into_owned(),
+            vec!["-U".into(), sock],
+        ));
+    }
+
+    Err(crate::Error::Unsupported(
+        "Kar CLI bridge is unavailable".into(),
+    ))
+}
+
+fn resolve_bridge_launcher(socket: &Path) -> crate::Result<(String, Vec<String>)> {
+    let exe = std::env::current_exe().ok();
+    resolve_bridge_launcher_with(
+        socket,
+        std::env::var_os("KAR_WORKBENCH_BRIDGE_EXE").as_deref(),
+        exe.as_deref(),
+        std::env::var_os("PATH").as_deref(),
+        Path::new("/usr/bin/nc"),
+    )
+}
+
+/// Async stdio-to-Unix-socket bridge usable directly by embedded hosts.
+#[allow(dead_code)]
+pub(crate) async fn bridge_stdio(socket: &Path) -> crate::Result<()> {
+    let stream = UnixStream::connect(socket).await?;
+    let (mut read_sock, mut write_sock) = stream.into_split();
+    tokio::spawn(async move {
+        let mut stdin = tokio::io::stdin();
+        let _ = tokio::io::copy(&mut stdin, &mut write_sock).await;
+        let _ = write_sock.shutdown().await;
+    });
+    let mut stdout = tokio::io::stdout();
+    tokio::io::copy(&mut read_sock, &mut stdout).await?;
+    stdout.flush().await?;
+    Ok(())
+}
+
 pub(super) fn listen(
     addr: SocketAddr,
     token: String,
     grant: &Arc<Grant>,
     registration: &WorkbenchRegistration,
 ) -> crate::Result<McpServer> {
-    // The CLI normal entry point can act as the stdio child. Embedded hosts can
-    // still use negotiated HTTP without executing their own application as Kar.
-    let exe = std::env::current_exe()?.canonicalize()?;
-    if exe.file_name().is_none_or(|n| n != "kar") {
-        return Err(crate::Error::Unsupported(
-            "Kar CLI bridge is unavailable".into(),
-        ));
-    }
     let dir = PrivateDir::create(Path::new("/tmp"), "kar-mcp-bridge-", b"kar-stdio-mcp-v1")?;
     let path = dir.path().join("rpc");
+    let (command, args) = resolve_bridge_launcher(&path)?;
     let listener = UnixListener::bind(&path)?;
     let http = Client::builder()
         .no_proxy()
@@ -67,8 +169,8 @@ pub(super) fn listen(
         }
     });
     Ok(McpServer::Stdio {
-        command: exe.to_string_lossy().into(),
-        args: vec!["workbench-mcp-bridge".into(), path.to_string_lossy().into()],
+        command,
+        args,
         env: Default::default(),
     })
 }
@@ -156,5 +258,77 @@ impl Host {
                 .await;
         }
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn make_exec(path: &Path) {
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::fs::write(path, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn bridge_resolution_cascades_env_sibling_path_and_nc_fallback() -> crate::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let sock = tmp.path().join("rpc");
+        let absent_nc = tmp.path().join("no-nc");
+
+        // 1. Explicit KAR_WORKBENCH_BRIDGE_EXE wins even when current_exe is an embedded host.
+        let custom = tmp.path().join("custom/my-bridge");
+        make_exec(&custom);
+        let embedded = tmp.path().join("host/embedded-app");
+        make_exec(&embedded);
+        let (cmd, args) = resolve_bridge_launcher_with(
+            &sock,
+            Some(custom.as_os_str()),
+            Some(&embedded),
+            None,
+            &absent_nc,
+        )?;
+        assert_eq!(Path::new(&cmd), custom.canonicalize()?);
+        assert_eq!(args[0], "workbench-mcp-bridge");
+
+        // 2. Test binary in target/debug/deps/test_bin finds sibling target/debug/kar!
+        let debug_kar = tmp.path().join("target/debug/kar");
+        let test_bin = tmp.path().join("target/debug/deps/workbench_test-1234");
+        make_exec(&debug_kar);
+        make_exec(&test_bin);
+        let (cmd, args) =
+            resolve_bridge_launcher_with(&sock, None, Some(&test_bin), None, &absent_nc)?;
+        assert_eq!(Path::new(&cmd), debug_kar.canonicalize()?);
+        assert_eq!(args[0], "workbench-mcp-bridge");
+
+        // 3. `kar` on PATH when current_exe has no sibling `kar`.
+        let path_dir = tmp.path().join("usr-bin");
+        let path_kar = path_dir.join("kar");
+        make_exec(&path_kar);
+        let (cmd, args) = resolve_bridge_launcher_with(
+            &sock,
+            None,
+            Some(&embedded),
+            Some(path_dir.as_os_str()),
+            &absent_nc,
+        )?;
+        assert_eq!(Path::new(&cmd), path_kar.canonicalize()?);
+        assert_eq!(args[0], "workbench-mcp-bridge");
+
+        // 4. `/usr/bin/nc -U <socket>` fallback when no `kar` binary exists anywhere.
+        let mock_nc = tmp.path().join("nc");
+        make_exec(&mock_nc);
+        let (cmd, args) =
+            resolve_bridge_launcher_with(&sock, None, Some(&embedded), None, &mock_nc)?;
+        assert_eq!(Path::new(&cmd), mock_nc);
+        assert_eq!(
+            args,
+            vec!["-U".to_owned(), sock.to_string_lossy().into_owned()]
+        );
+        Ok(())
     }
 }

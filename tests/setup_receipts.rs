@@ -23,8 +23,8 @@ mod local {
                 assert_eq!(args.last().unwrap(), "https://app.factory.ai/cli");
                 let i = args.iter().position(|x| x == "--output").unwrap();
                 fs::write(&args[i + 1], b"local fixture only").unwrap();
-                print!("download\n");
-                eprint!("download diagnostics\n");
+                println!("download");
+                eprintln!("download diagnostics");
                 0
             }
             "sh" => {
@@ -54,7 +54,7 @@ mod local {
             "droid" => {
                 if mode == "shadow"
                     && args == ["--version"]
-                    && PathBuf::from(env::args_os().next().unwrap()) == bin.join("droid")
+                    && env::args_os().next().unwrap() == bin.join("droid")
                 {
                     println!("1.60.0");
                     return 0;

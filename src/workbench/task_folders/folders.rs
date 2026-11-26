@@ -224,7 +224,7 @@ pub(super) fn list(app: &Workbench, project: &Project) -> Result<Vec<Folder>> {
         .and_then(|v| v["ignoreRepositories"].as_array().cloned())
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|v| Some(project.root.join(v.as_str()?).canonicalize().ok()?))
+        .filter_map(|v| project.root.join(v.as_str()?).canonicalize().ok())
         .collect::<Vec<_>>();
     let mut found: Vec<_> = scanned
         .folders

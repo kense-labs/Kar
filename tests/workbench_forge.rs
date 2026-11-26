@@ -440,7 +440,11 @@ async fn scenario() {
     actions::issue_pages(
         &a,
         &url,
-        &[p, fresh_project["id"].as_str().unwrap(), &second.0.to_string()],
+        &[
+            p,
+            fresh_project["id"].as_str().unwrap(),
+            &second.0.to_string(),
+        ],
     )
     .await;
     let later = publication::first(&a, &url, &root, &mock).await;

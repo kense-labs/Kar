@@ -34,10 +34,12 @@ pub(super) async fn exercise() {
     let broken = root.join("kar-test-provider");
     fs::write(&broken, b"#!/usr/bin/env kar-unavailable-interpreter\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&broken,fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&broken, fs::Permissions::from_mode(0o755)).unwrap();
     let host_runtime = Runtime::new("codex", &broken, &[], Protocol::Codex);
-    assert!(matches!(host_runtime.probe_installation(&InstallationOptions::default()).await.unwrap(),
-        InstallationSnapshot::Failed { code: InstallationIssue::DependencyMissing, reason, .. } if reason.contains("kar-unavailable-interpreter")));
+    assert!(
+        matches!(host_runtime.probe_installation(&InstallationOptions::default()).await.unwrap(),
+        InstallationSnapshot::Failed { code: InstallationIssue::DependencyMissing, reason, .. } if reason.contains("kar-unavailable-interpreter"))
+    );
     let primary = install(
         &root.join("first"),
         "claude",

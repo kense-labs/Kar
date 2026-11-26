@@ -129,10 +129,11 @@ impl Workbench {
                         .finish(true, json!({"woke_at_ms": now}), now);
                     reconcile_hierarchy(d, now);
                 } else if status == Status::Asking {
-                    d.runs
-                        .get_mut(&run_id)
-                        .unwrap()
-                        .finish(true, json!({"expired": true, "woke_at_ms": now}), now);
+                    d.runs.get_mut(&run_id).unwrap().finish(
+                        true,
+                        json!({"expired": true, "woke_at_ms": now}),
+                        now,
+                    );
                     reconcile_hierarchy(d, now);
                 }
                 let Some(step) = d
@@ -423,11 +424,81 @@ impl Workbench {
                 runtime,
                 model,
                 prompt,
+                effort,
+                service_tier,
+                workspace_strategy,
             } => {
                 let chat = a.chat.unwrap();
-                if let Some(binding)=&run.model_schedule{return self.execute_model_schedule(run,a,binding,runtime,model.as_deref(),prompt).await;}
+                let effective_effort = effort.clone().or_else(|| run.metadata.effort.clone());
+                let effective_tier = service_tier
+                    .clone()
+                    .or_else(|| run.metadata.service_tier.clone());
+                let effective_ws = workspace_strategy.unwrap_or(run.metadata.workspace_strategy);
+                if let Some(binding) = &run.model_schedule {
+                    return self
+                        .execute_model_schedule(
+                            run,
+                            a,
+                            binding,
+                            runtime,
+                            model.as_deref(),
+                            prompt,
+                            effective_effort,
+                            effective_tier,
+                            effective_ws,
+                        )
+                        .await;
+                }
+                if effective_ws == WorkspaceStrategy::Worktree {
+                    let proj = self.project(run.project)?;
+                    let wt_base = proj
+                        .root
+                        .parent()
+                        .filter(|p| self.allowed(p).is_ok())
+                        .map(|p| p.join(".kar-workflow-worktrees").join(chat.to_string()));
+                    let Some(wt_dir) = wt_base else {
+                        return Ok(Outcome::Known(
+                            false,
+                            json!({"chat":chat,"before_input":"worktree strategy requires an authorized parent directory outside the project root"}),
+                        ));
+                    };
+                    let cwd = match self.0.task_folders.delegate_worktree(
+                        self,
+                        run.project,
+                        chat,
+                        &proj.root,
+                        wt_dir,
+                        format!("kar/workflow-{chat}"),
+                    ) {
+                        Ok(task) => task.project_path,
+                        Err(e) => {
+                            return Ok(Outcome::Known(
+                                false,
+                                json!({"chat":chat,"before_input":e.to_string()}),
+                            ));
+                        }
+                    };
+                    if let Err(e) = self.bind_model_checkout(run.project, chat, &cwd) {
+                        return Ok(Outcome::Known(
+                            false,
+                            json!({"chat":chat,"before_input":e.to_string()}),
+                        ));
+                    }
+                }
+                let settings = crate::SessionSettings {
+                    effort: effective_effort,
+                    service_tier: effective_tier,
+                    ..Default::default()
+                };
                 if let Err(e) = self
-                    .create_chat(run.project, chat, runtime, model.clone())
+                    .create_chat_with_settings(
+                        run.project,
+                        chat,
+                        runtime,
+                        model.clone(),
+                        crate::ApprovalMode::Deny,
+                        settings,
+                    )
                     .await
                 {
                     return Ok(Outcome::Known(
@@ -472,33 +543,143 @@ impl Workbench {
         }
     }
 
-    async fn execute_model_schedule(&self,run:&Run,a:&Attempt,binding:&super::model_schedules::Binding,rt:&str,model:Option<&str>,prompt:&str)->Result<Outcome>{
-        let chat=a.chat.unwrap();let input=a.id;
-        let owner=self.binding(run.project,binding.owner)?;
-        let allowed=super::super::mcp::orchestrator::scheduled_execution(self,run.project,binding.owner,&owner,rt,model);
-        if !allowed || binding.bind && (owner.runtime!=rt || owner.model.as_deref()!=model) || owner.workspace!=binding.workspace || owner.approvals!=binding.approvals || owner.settings!=binding.settings {
-            return Ok(Outcome::Known(false,json!({"refused":"scheduled chat permission or execution settings changed"})));
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_model_schedule(
+        &self,
+        run: &Run,
+        a: &Attempt,
+        binding: &super::model_schedules::Binding,
+        rt: &str,
+        model: Option<&str>,
+        prompt: &str,
+        effort: Option<String>,
+        service_tier: Option<String>,
+        workspace_strategy: WorkspaceStrategy,
+    ) -> Result<Outcome> {
+        let chat = a.chat.unwrap();
+        let input = a.id;
+        let owner = self.binding(run.project, binding.owner)?;
+        let allowed = super::super::mcp::orchestrator::scheduled_execution(
+            self,
+            run.project,
+            binding.owner,
+            &owner,
+            rt,
+            model,
+        );
+        if !scheduled_owner_permitted(
+            allowed,
+            owner.runtime.as_str(),
+            owner.model.as_deref(),
+            &owner.workspace,
+            owner.approvals,
+            binding,
+            rt,
+            model,
+        ) {
+            return Ok(Outcome::Known(
+                false,
+                json!({"refused":"scheduled chat permission or execution settings changed"}),
+            ));
         }
         if !binding.bind {
-            self.bind_model_checkout(run.project,chat,&binding.workspace)?;
-            self.create_chat_with_settings(run.project,chat,rt,model.map(str::to_owned),binding.approvals,binding.settings.clone()).await?;
+            let cwd = if workspace_strategy == WorkspaceStrategy::Worktree {
+                let wt_root = {
+                    let db = self.0.catalog.lock().unwrap();
+                    super::super::mcp::Policy::current(&db, run.project, binding.owner)
+                        .and_then(|p| p.worktree_directory().map(Path::to_owned))
+                };
+                let Some(dir) = wt_root else {
+                    return Ok(Outcome::Known(
+                        false,
+                        json!({"refused":"no worktree directory granted for scheduled worktree execution"}),
+                    ));
+                };
+                match self.0.task_folders.delegate_worktree(
+                    self,
+                    run.project,
+                    chat,
+                    &binding.workspace,
+                    dir.join(format!("kar-sched-{chat}")),
+                    format!("kar/schedule-{chat}"),
+                ) {
+                    Ok(t) => t.project_path,
+                    Err(e) => {
+                        return Ok(Outcome::Known(false, json!({"refused":e.to_string()})));
+                    }
+                }
+            } else {
+                self.workspace_at(&binding.workspace)?;
+                binding.workspace.clone()
+            };
+            let mut settings = binding.settings.clone();
+            if effort.is_some() {
+                settings.effort = effort;
+            }
+            if service_tier.is_some() {
+                settings.service_tier = service_tier;
+            }
+            self.bind_model_checkout(run.project, chat, &cwd)?;
+            self.create_chat_with_settings(
+                run.project,
+                chat,
+                rt,
+                model.map(str::to_owned),
+                binding.approvals,
+                settings,
+            )
+            .await?;
         }
-        let text=if matches!(run.trigger,Trigger::Webhook(_)) && !run.webhook_rendered {
-            format!("{prompt}\n\nUntrusted webhook data (JSON):\n{}",String::from_utf8_lossy(&context(run)?))
-        } else {prompt.to_owned()};
-        self.0.chats.enqueue(chat,input,text)?;
+        let text = if matches!(run.trigger, Trigger::Webhook(_)) && !run.webhook_rendered {
+            format!(
+                "{prompt}\n\nUntrusted webhook data (JSON):\n{}",
+                String::from_utf8_lossy(&context(run)?)
+            )
+        } else {
+            prompt.to_owned()
+        };
+        self.0.chats.enqueue(chat, input, text)?;
         self.wake_queue();
         loop {
-            if let Some(t)=self.0.chats.history(chat)?.turns.iter().find(|t|t.id==input && t.status!=TurnStatus::Running){return Ok(turn_result(t));}
-            let receipt=self.0.chats.queued_inputs(chat)?.into_iter().find(|q|q.id==input).ok_or_else(missing)?;
-            if self.workflow_run(run.project,run.id)?.cancel_requested {
-                if receipt.status==crate::chat::InputStatus::Pending{self.0.chats.withdraw(chat,input)?;return Ok(Outcome::Known(false,json!({"cancelled":true})));}
-                if let Some(s)=self.active_control(run.project,chat)?{ let _=s.abort_turn(input,None).await; }
+            if let Some(t) = self
+                .0
+                .chats
+                .history(chat)?
+                .turns
+                .iter()
+                .find(|t| t.id == input && t.status != TurnStatus::Running)
+            {
+                return Ok(turn_result(t));
             }
-            match receipt.status{
-                crate::chat::InputStatus::Uncertain=>return Ok(Outcome::Unknown("scheduled input has no confirmed native receipt".into())),
-                crate::chat::InputStatus::Cancelled|crate::chat::InputStatus::Refused|crate::chat::InputStatus::TooLarge|crate::chat::InputStatus::Withdrawn=>return Ok(Outcome::Known(false,json!({"receipt":receipt.status}))),
-                _=>{}
+            let receipt = self
+                .0
+                .chats
+                .queued_inputs(chat)?
+                .into_iter()
+                .find(|q| q.id == input)
+                .ok_or_else(missing)?;
+            if self.workflow_run(run.project, run.id)?.cancel_requested {
+                if receipt.status == crate::chat::InputStatus::Pending {
+                    self.0.chats.withdraw(chat, input)?;
+                    return Ok(Outcome::Known(false, json!({"cancelled":true})));
+                }
+                if let Some(s) = self.active_control(run.project, chat)? {
+                    let _ = s.abort_turn(input, None).await;
+                }
+            }
+            match receipt.status {
+                crate::chat::InputStatus::Uncertain => {
+                    return Ok(Outcome::Unknown(
+                        "scheduled input has no confirmed native receipt".into(),
+                    ));
+                }
+                crate::chat::InputStatus::Cancelled
+                | crate::chat::InputStatus::Refused
+                | crate::chat::InputStatus::TooLarge
+                | crate::chat::InputStatus::Withdrawn => {
+                    return Ok(Outcome::Known(false, json!({"receipt":receipt.status})));
+                }
+                _ => {}
             }
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
@@ -527,7 +708,7 @@ impl Workbench {
         let path = project.root.clone();
         #[cfg(unix)]
         let mut cmd = {
-            let mut cmd = Command::new("/bin/sh");
+            let mut cmd = Command::new(resolve_posix_sh());
             cmd.arg("-c").arg(source).process_group(0);
             cmd
         };
@@ -600,4 +781,135 @@ async fn bounded(mut stream: impl AsyncRead + Unpin) -> io::Result<Value> {
         truncated |= n < count;
     }
     Ok(json!({"text":String::from_utf8_lossy(&bytes),"truncated":truncated}))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scheduled_owner_permitted(
+    allowed: bool,
+    owner_rt: &str,
+    owner_model: Option<&str>,
+    owner_ws: &Path,
+    owner_approvals: crate::ApprovalMode,
+    binding: &super::model_schedules::Binding,
+    rt: &str,
+    model: Option<&str>,
+) -> bool {
+    let approvals_revoked = binding.approvals == crate::ApprovalMode::Host
+        && owner_approvals == crate::ApprovalMode::Deny;
+    allowed
+        && !approvals_revoked
+        && (!binding.bind
+            || (owner_rt == rt && owner_model == model && owner_ws == binding.workspace))
+}
+
+#[cfg(unix)]
+fn is_executable_sh(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && (m.permissions().mode() & 0o111 != 0))
+}
+
+#[cfg(unix)]
+fn resolve_posix_sh_with(
+    bin_sh: &Path,
+    usr_bin_sh: &Path,
+    path_env: Option<&std::ffi::OsStr>,
+) -> PathBuf {
+    for candidate in [bin_sh, usr_bin_sh] {
+        if is_executable_sh(candidate) {
+            return candidate.to_path_buf();
+        }
+    }
+    if let Some(paths) = path_env {
+        for dir in std::env::split_paths(paths) {
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            let sh = dir.join("sh");
+            if is_executable_sh(&sh) {
+                return sh;
+            }
+        }
+    }
+    PathBuf::from("sh")
+}
+
+#[cfg(unix)]
+fn resolve_posix_sh() -> PathBuf {
+    resolve_posix_sh_with(
+        Path::new("/bin/sh"),
+        Path::new("/usr/bin/sh"),
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduled_owner_check_allows_parent_settings_changes_unless_approvals_revoked() {
+        let parent_settings = crate::SessionSettings {
+            effort: Some("low".into()),
+            ..Default::default()
+        };
+        let binding = super::model_schedules::Binding {
+            owner: Uuid::new_v4(),
+            workspace: PathBuf::from("/tmp/ws-a"),
+            settings: parent_settings,
+            approvals: crate::ApprovalMode::Host,
+            bind: false,
+            fresh: true,
+        };
+
+        // Unbound schedule remains permitted even if parent chat changes settings or moves checkout!
+        assert!(scheduled_owner_permitted(
+            true,
+            "codex",
+            Some("gpt-5.3-codex"),
+            Path::new("/tmp/ws-moved"),
+            crate::ApprovalMode::Host,
+            &binding,
+            "codex",
+            Some("gpt-5.3-codex"),
+        ));
+
+        // Revoking approvals on parent chat (Host -> Deny) must block execution!
+        assert!(!scheduled_owner_permitted(
+            true,
+            "codex",
+            Some("gpt-5.3-codex"),
+            Path::new("/tmp/ws-a"),
+            crate::ApprovalMode::Deny,
+            &binding,
+            "codex",
+            Some("gpt-5.3-codex"),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_sh_resolves_bin_sh_then_usr_bin_sh_then_path() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir()?;
+        let missing1 = tmp.path().join("no-bin-sh");
+        let missing2 = tmp.path().join("no-usr-bin-sh");
+        let usr_sh = tmp.path().join("usr-sh");
+        let path_dir = tmp.path().join("custom-path");
+        std::fs::create_dir_all(&path_dir)?;
+        let path_sh = path_dir.join("sh");
+        for p in [&usr_sh, &path_sh] {
+            std::fs::write(p, b"#!/bin/sh\n")?;
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755))?;
+        }
+
+        assert_eq!(
+            resolve_posix_sh_with(&missing1, &usr_sh, Some(path_dir.as_os_str())),
+            usr_sh
+        );
+        assert_eq!(
+            resolve_posix_sh_with(&missing1, &missing2, Some(path_dir.as_os_str())),
+            path_sh
+        );
+        Ok(())
+    }
 }

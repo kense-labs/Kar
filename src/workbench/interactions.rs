@@ -83,12 +83,29 @@ async fn promote(
     Path((project, chat, input)): Path<(Uuid, Uuid, Uuid)>,
     Json(req): Json<Promote>,
 ) -> std::result::Result<Json<crate::chat::QueuedInput>, ApiError> {
-    Ok(Json(steer_queued(app,project,chat,input,req.command_id,req.target).await?))
+    Ok(Json(
+        steer_queued(app, project, chat, input, req.command_id, req.target).await?,
+    ))
 }
-pub(in crate::workbench) async fn steer_queued(app:Workbench,project:Uuid,chat:Uuid,input:Uuid,command_id:Uuid,target:crate::chat::SteerTarget)->Result<crate::chat::QueuedInput> {
+pub(in crate::workbench) async fn steer_queued(
+    app: Workbench,
+    project: Uuid,
+    chat: Uuid,
+    input: Uuid,
+    command_id: Uuid,
+    target: crate::chat::SteerTarget,
+) -> Result<crate::chat::QueuedInput> {
     steer_input(app, project, chat, input, command_id, target, None).await
 }
-pub(in crate::workbench) async fn steer_input(app:Workbench, project:Uuid, chat:Uuid, input:Uuid, command_id:Uuid, target:crate::chat::SteerTarget, new_input:Option<(String, Vec<Uuid>)>)->Result<crate::chat::QueuedInput> {
+pub(in crate::workbench) async fn steer_input(
+    app: Workbench,
+    project: Uuid,
+    chat: Uuid,
+    input: Uuid,
+    command_id: Uuid,
+    target: crate::chat::SteerTarget,
+    new_input: Option<(String, Vec<Uuid>)>,
+) -> Result<crate::chat::QueuedInput> {
     let session = app.active_control(project, chat)?;
     // Once reserved, the command must finish recording its result even if the HTTP client disconnects.
     let receipt = tokio::spawn(async move {
@@ -276,8 +293,9 @@ pub(in crate::workbench) async fn answer_orphaned_question(
                         "attachments require a submitted answer".into(),
                     ));
                 }
-                take_orphaned_sync(&state, project, chat, &cursor, &id)?
-                    .ok_or_else(|| Error::Refused("request occurrence is no longer pending".into()))?;
+                take_orphaned_sync(&state, project, chat, &cursor, &id)?.ok_or_else(|| {
+                    Error::Refused("request occurrence is no longer pending".into())
+                })?;
                 Ok(())
             }
             QuestionReply::Submit { values } => {
@@ -293,8 +311,9 @@ pub(in crate::workbench) async fn answer_orphaned_question(
                 let info = state.binding(project, chat)?;
                 crate::input::check_text(&formatted, crate::input::text_limit(&info.runtime))?;
                 state.workspace(&state.project(project)?)?;
-                take_orphaned_sync(&state, project, chat, &cursor, &id)?
-                    .ok_or_else(|| Error::Refused("request occurrence is no longer pending".into()))?;
+                take_orphaned_sync(&state, project, chat, &cursor, &id)?.ok_or_else(|| {
+                    Error::Refused("request occurrence is no longer pending".into())
+                })?;
                 let id_json = serde_json::to_string(&id).unwrap_or_default();
                 let turn_id = crate::chat::stable_id([
                     b"orphaned-question-answer".as_slice(),
@@ -333,12 +352,16 @@ pub(in crate::workbench) async fn dismiss_request(
         return tokio::spawn(async move {
             match request.kind {
                 crate::RequestKind::Question => {
-                    session.answer_question(&request, QuestionReply::Cancel).await
+                    session
+                        .answer_question(&request, QuestionReply::Cancel)
+                        .await
                 }
                 crate::RequestKind::Permission => {
                     session.decide(&request, PermissionDecision::Cancel).await
                 }
-                _ => Err(Error::Unsupported("this request cannot be dismissed".into())),
+                _ => Err(Error::Unsupported(
+                    "this request cannot be dismissed".into(),
+                )),
             }
         })
         .await
@@ -363,11 +386,8 @@ pub(in crate::workbench) async fn respond_question_mcp(
     reply: QuestionReply,
 ) -> Result<()> {
     if let Some(session) = app.active_control(project, chat)?
-        && let Some(request) = session
-            .snapshot()
-            .pending_requests
-            .into_iter()
-            .find(|r| {
+        && let Some(request) =
+            session.snapshot().pending_requests.into_iter().find(|r| {
                 r.kind == crate::RequestKind::Question && r.cursor == cursor && r.id == id
             })
     {
@@ -442,10 +462,9 @@ async fn respond(
                 )?;
             }
             Answer::Policy { choice } => {
-                crate::permissions::select(&request.method, &request.body, choice.clone())
-                    .ok_or_else(|| {
-                        Error::Refused("policy option is not offered on this request".into())
-                    })?;
+                crate::permissions::select(&request.method, &request.body, *choice).ok_or_else(
+                    || Error::Refused("policy option is not offered on this request".into()),
+                )?;
             }
             Answer::Resources {
                 decision,
@@ -471,11 +490,7 @@ async fn respond(
                 Answer::Resources {
                     decision,
                     resources,
-                } => {
-                    session
-                        .grant_resources(&request, decision, resources)
-                        .await
-                }
+                } => session.grant_resources(&request, decision, resources).await,
                 Answer::Native { payload } => session.answer_request(&request, payload).await,
             }
         })

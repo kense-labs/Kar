@@ -59,17 +59,35 @@ pub(super) fn cases() -> Vec<Case> {
     );
     local.switches.insert("KAR_HANDOFF_LIVE".into(), "0".into());
     cases.push(local);
-    let mut acp = scenario("workbench_acp_registry", "official-registry-chat",
+    let mut acp = scenario(
+        "workbench_acp_registry",
+        "official-registry-chat",
         &["--test", "workbench_acp_registry", "--", "official"],
-        "official ACP catalog, existing provider account and two native model turns; optional KAR_ACP_LIVE_DISTRIBUTION");
+        "official ACP catalog, existing provider account and two native model turns; optional KAR_ACP_LIVE_DISTRIBUTION",
+    );
     acp.environment.push("KAR_ACP_LIVE_AGENT".into());
     cases.push(acp);
     for (mode, requires) in [
-        ("workbench-thread-family","two normal HTTP clients, scoped deletion, side-chat lifecycle and restart; local Codex protocol peer and real Git"),
-        ("workbench-background", "Claude protocol task roster, dual clients, controller restart and native task ID reuse"),
-        ("workbench-editors", "macOS editor discovery and literal path/position, Rust launcher fixture"),
-        ("workbench-suggestions", "two independent subscribers, Claude push and Codex sampling protocol fixtures"),
-        ("workbench-shell","two independent HTTP clients, persisted directory cursor, activity, snooze expiry and restart"),
+        (
+            "workbench-thread-family",
+            "two normal HTTP clients, scoped deletion, side-chat lifecycle and restart; local Codex protocol peer and real Git",
+        ),
+        (
+            "workbench-background",
+            "Claude protocol task roster, dual clients, controller restart and native task ID reuse",
+        ),
+        (
+            "workbench-editors",
+            "macOS editor discovery and literal path/position, Rust launcher fixture",
+        ),
+        (
+            "workbench-suggestions",
+            "two independent subscribers, Claude push and Codex sampling protocol fixtures",
+        ),
+        (
+            "workbench-shell",
+            "two independent HTTP clients, persisted directory cursor, activity, snooze expiry and restart",
+        ),
         (
             "workbench-native-child-work",
             "isolated Antigravity ACP protocol fixture, SQLite/protobuf records and detached inbox; historical forks and rejection of unrelated batches",
@@ -119,7 +137,13 @@ pub(super) fn cases() -> Vec<Case> {
     cases.push(scenario(
         "workbench_voice",
         "voice-cloud-protocol",
-        &["--test", "workbench_voice", "cloud_protocol_and_errors_through_workbench", "--", "--exact"],
+        &[
+            "--test",
+            "workbench_voice",
+            "cloud_protocol_and_errors_through_workbench",
+            "--",
+            "--exact",
+        ],
         "real Kar HTTP, loopback provider protocol fixtures, no remote account or model",
     ));
     for (target, test, requires, env) in [
@@ -127,13 +151,24 @@ pub(super) fn cases() -> Vec<Case> {
             "workbench_voice",
             "installed_local_model_transcribes_audio",
             "host-installed transcribe-cli 0.4.1, pinned GGUF and an actual mono 16 kHz PCM16 WAV with a known phrase",
-            &["KAR_VOICE_ENGINE","KAR_VOICE_TEST_MODEL","KAR_VOICE_TEST_MODEL_ID","KAR_VOICE_TEST_WAV","KAR_VOICE_TEST_EXPECT"][..],
+            &[
+                "KAR_VOICE_ENGINE",
+                "KAR_VOICE_TEST_MODEL",
+                "KAR_VOICE_TEST_MODEL_ID",
+                "KAR_VOICE_TEST_WAV",
+                "KAR_VOICE_TEST_EXPECT",
+            ][..],
         ),
         (
             "workbench_voice",
             "configured_cloud_transcribes_audio",
             "operator-selected WAV sent to the configured paid provider, plus KAR_VOICE_TEST_MODEL_ID for OpenRouter",
-            &["KAR_VOICE_TEST_PROVIDER","KAR_VOICE_TEST_KEY","KAR_VOICE_TEST_WAV","KAR_VOICE_TEST_EXPECT"][..],
+            &[
+                "KAR_VOICE_TEST_PROVIDER",
+                "KAR_VOICE_TEST_KEY",
+                "KAR_VOICE_TEST_WAV",
+                "KAR_VOICE_TEST_EXPECT",
+            ][..],
         ),
         (
             "workbench_coediting",

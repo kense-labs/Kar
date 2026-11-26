@@ -156,3 +156,144 @@ pub(super) fn sample(
     rows.sort_by_key(|r| r.pid);
     Ok((ids.len(), rows))
 }
+
+pub(super) fn parse_pmset_batt(output: &str) -> (&'static str, Option<bool>, Option<u8>) {
+    let on_ac = output.contains("AC Power");
+    let on_batt = output.contains("Battery Power");
+    let source = if on_ac {
+        "ac"
+    } else if on_batt {
+        "battery"
+    } else {
+        "unknown"
+    };
+    let on_battery = if on_ac {
+        Some(false)
+    } else if on_batt {
+        Some(true)
+    } else {
+        None
+    };
+    let percent = output.lines().find_map(|line| {
+        let idx = line.find('%')?;
+        let prefix = &line[..idx];
+        let digits: String = prefix
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        digits.parse::<u8>().ok().filter(|p| *p <= 100)
+    });
+    (source, on_battery, percent)
+}
+
+pub(super) fn power(at: i64) -> Value {
+    let batt_out = std::process::Command::new("/usr/bin/pmset")
+        .args(["-g", "batt"])
+        .env_clear()
+        .env("LC_ALL", "C")
+        .output()
+        .ok()
+        .filter(|r| r.status.success())
+        .map(|r| String::from_utf8_lossy(&r.stdout).into_owned())
+        .unwrap_or_default();
+    let (source, on_battery, battery_percent) = parse_pmset_batt(&batt_out);
+
+    let low_power = std::process::Command::new("/usr/bin/pmset")
+        .arg("-g")
+        .env_clear()
+        .env("LC_ALL", "C")
+        .output()
+        .ok()
+        .filter(|r| r.status.success())
+        .and_then(|r| {
+            let text = String::from_utf8_lossy(&r.stdout);
+            text.lines().find_map(|l| {
+                let t = l.trim();
+                let val = t.strip_prefix("lowpowermode")?.trim();
+                match val {
+                    "1" => Some("enabled"),
+                    "0" => Some("disabled"),
+                    _ => None,
+                }
+            })
+        })
+        .unwrap_or("unknown");
+
+    let idle_seconds = std::process::Command::new("/usr/sbin/ioreg")
+        .args(["-c", "IOHIDSystem", "-d", "4"])
+        .env_clear()
+        .env("LC_ALL", "C")
+        .output()
+        .ok()
+        .filter(|r| r.status.success())
+        .and_then(|r| {
+            let text = String::from_utf8_lossy(&r.stdout);
+            text.lines().find_map(|l| {
+                let (_, rhs) = l.split_once("\"HIDIdleTime\"")?;
+                let (_, num) = rhs.split_once('=')?;
+                let ns: u64 = num.trim().parse().ok()?;
+                Some(ns / 1_000_000_000)
+            })
+        });
+
+    let thermal_state = std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "kern.thermal_level"])
+        .env_clear()
+        .output()
+        .ok()
+        .filter(|r| r.status.success())
+        .and_then(|r| {
+            String::from_utf8_lossy(&r.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
+        .map(|lvl| match lvl {
+            0 => "nominal",
+            1..=39 => "fair",
+            40..=79 => "serious",
+            _ => "critical",
+        })
+        .unwrap_or("nominal");
+
+    let idle_state = match idle_seconds {
+        Some(s) if s >= 300 => "idle",
+        Some(_) => "active",
+        None => "unknown",
+    };
+
+    json!({
+        "source": source,
+        "idle": idle_state,
+        "idle_seconds": idle_seconds,
+        "locked": "unknown",
+        "suspended": false,
+        "on_battery": match on_battery {
+            Some(true) => json!(true),
+            Some(false) => json!(false),
+            None => json!("unknown"),
+        },
+        "battery_percent": battery_percent,
+        "low_power_mode": low_power,
+        "thermal_state": thermal_state,
+        "stale": source == "unknown" && idle_seconds.is_none(),
+        "updated_at": stamp(at),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_pmset_battery_and_ac_output() {
+        let ac = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=123)\t98%; charged; 0:00 remaining present: true";
+        assert_eq!(parse_pmset_batt(ac), ("ac", Some(false), Some(98)));
+        let batt = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=123)\t42%; discharging; 3:15 remaining";
+        assert_eq!(parse_pmset_batt(batt), ("battery", Some(true), Some(42)));
+    }
+}

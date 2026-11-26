@@ -60,8 +60,7 @@ pub(super) fn record(old: &Data, new: &mut Data, now: i64) {
         }
         if old_status == Some(Status::Asking)
             && let Some(a) = previous.and_then(|v| v.attempt.as_ref())
-            && (r.status != Status::Asking
-                || r.attempt.as_ref().map(|x| x.id) != Some(a.id))
+            && (r.status != Status::Asking || r.attempt.as_ref().map(|x| x.id) != Some(a.id))
         {
             let receipt = r.receipts.iter().rfind(|rc| rc.attempt.id == a.id);
             let resolution = if receipt.is_some_and(|rc| rc.result["expired"] == true) {
@@ -98,7 +97,10 @@ pub(super) fn record(old: &Data, new: &mut Data, now: i64) {
                 );
             }
         } else if old_status.is_some_and(|s| matches!(s, Status::Failed | Status::Reconcile))
-            && !matches!(r.status, Status::Cancelled | Status::Stopped | Status::Skipped)
+            && !matches!(
+                r.status,
+                Status::Cancelled | Status::Stopped | Status::Skipped
+            )
         {
             emit(
                 "workflow.run_resumed",

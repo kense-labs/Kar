@@ -211,8 +211,71 @@ impl Workspace {
         if result.is_err() {
             let _ = dir.remove_file(tmp);
         }
-        Ok(result?)
+        result?;
+        inspection::invalidate_workspace_index(&self.root);
+        Ok(())
     }
+}
+
+fn plausible_decoded_text(text: &str) -> bool {
+    let mut total = 0usize;
+    let mut bad_ctrl = 0usize;
+    for ch in text.chars() {
+        total += 1;
+        if (ch as u32) < 0x20 && !matches!(ch, '\t' | '\n' | '\r' | '\x0c' | '\x1b') {
+            bad_ctrl += 1;
+        }
+    }
+    bad_ctrl == 0 || bad_ctrl.saturating_mul(20) <= total.max(1)
+}
+
+pub(super) fn decode_text_bytes(
+    bytes: &[u8],
+    truncated: bool,
+) -> Result<(std::borrow::Cow<'_, str>, &'static str)> {
+    use std::borrow::Cow;
+    if bytes.contains(&0) {
+        return Err(Error::Refused("file contains binary data".into()));
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(s) => {
+            return Ok((
+                Cow::Borrowed(s.strip_prefix('\u{feff}').unwrap_or(s)),
+                "utf-8",
+            ));
+        }
+        Err(e) if truncated && e.error_len().is_none() => {
+            let s = std::str::from_utf8(&bytes[..e.valid_up_to()]).expect("valid prefix");
+            return Ok((
+                Cow::Borrowed(s.strip_prefix('\u{feff}').unwrap_or(s)),
+                "utf-8",
+            ));
+        }
+        Err(_) => {}
+    }
+    let max_trim = if truncated { 3 } else { 0 };
+    for trim in 0..=max_trim {
+        if bytes.len() < trim {
+            break;
+        }
+        let slice = &bytes[..bytes.len() - trim];
+        if let Some(decoded) =
+            encoding_rs::GB18030.decode_without_bom_handling_and_without_replacement(slice)
+            && plausible_decoded_text(&decoded)
+        {
+            let clean = match decoded {
+                Cow::Borrowed(s) => Cow::Borrowed(s.strip_prefix('\u{feff}').unwrap_or(s)),
+                Cow::Owned(mut s) => {
+                    if s.starts_with('\u{feff}') {
+                        s.drain(..'\u{feff}'.len_utf8());
+                    }
+                    Cow::Owned(s)
+                }
+            };
+            return Ok((clean, "gb18030"));
+        }
+    }
+    Err(Error::Refused("file is not UTF-8 text".into()))
 }
 
 pub(super) fn preview(data: Vec<u8>) -> Result<String> {
@@ -221,23 +284,46 @@ pub(super) fn preview(data: Vec<u8>) -> Result<String> {
             "file is too large or contains binary data".into(),
         ));
     }
-    String::from_utf8(data).map_err(|_| Error::Refused("file is not UTF-8 text".into()))
+    decode_text_bytes(&data, false).map(|(text, _)| text.into_owned())
 }
 
 pub(super) fn text_preview(bytes: &[u8], size: u64) -> Result<serde_json::Value> {
     let truncated = size > READ_LIMIT as u64;
     let bytes = &bytes[..bytes.len().min(READ_LIMIT)];
-    if bytes.contains(&0) {
-        return Err(Error::Refused("file contains binary data".into()));
-    }
-    let text = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(e) if truncated && e.error_len().is_none() => {
-            std::str::from_utf8(&bytes[..e.valid_up_to()]).expect("valid prefix")
-        }
-        Err(_) => return Err(Error::Refused("file is not UTF-8 text".into())),
-    };
+    let (text, encoding) = decode_text_bytes(bytes, truncated)?;
     Ok(
-        serde_json::json!({"text":text.strip_prefix('\u{feff}').unwrap_or(text),"byte_length":size,"truncated":truncated,"exists":true}),
+        serde_json::json!({"text":text,"encoding":encoding,"byte_length":size,"truncated":truncated,"exists":true}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_preview_decodes_utf8_and_gb18030_and_rejects_binary() -> Result<()> {
+        let utf8 = text_preview(b"\xef\xbb\xbfhello world", 14)?;
+        assert_eq!(utf8["text"], "hello world");
+        assert_eq!(utf8["encoding"], "utf-8");
+        assert_eq!(utf8["byte_length"], 14);
+        assert_eq!(utf8["truncated"], false);
+        assert_eq!(utf8["exists"], true);
+
+        let chinese = "// 中文注释：支持 GBK 与 GB18030 源码读取\nint main() { return 0; }\n";
+        let (gbk_bytes, _, had_errors) = encoding_rs::GB18030.encode(chinese);
+        assert!(!had_errors);
+        assert!(std::str::from_utf8(&gbk_bytes).is_err());
+
+        let gbk = text_preview(&gbk_bytes, gbk_bytes.len() as u64)?;
+        assert_eq!(gbk["text"], chinese);
+        assert_eq!(gbk["encoding"], "gb18030");
+        assert_eq!(gbk["exists"], true);
+        assert_eq!(preview(gbk_bytes.into_owned())?, chinese);
+
+        // NUL bytes must be rejected as binary data.
+        assert!(text_preview(b"abc\0def", 7).is_err());
+        // Invalid trailing high byte when not truncated must be rejected.
+        assert!(text_preview(&[0xff, 0xfe, 0xfd], 3).is_err());
+        Ok(())
+    }
 }

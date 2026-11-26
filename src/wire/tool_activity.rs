@@ -1,5 +1,6 @@
 use crate::{
-    ChangeKind, Event, FileChange, Protocol, ToolResult, ToolStatus, tool_activity::parts,
+    ChangeKind, Event, FileChange, Protocol, ToolResult, ToolStatus,
+    tool_activity::{mcp_raw_parts, parts},
 };
 use serde_json::Value;
 
@@ -95,9 +96,19 @@ fn codex(v: &Value, events: &mut Vec<Event>) {
                 _ => return,
             };
             if item["tool"].is_string() || item["server"].is_string() {
-                let mcp_app_uri=(item["type"]=="mcpToolCall").then(|| item.pointer("/mcpAppUi/resourceUri").and_then(Value::as_str)
-                    .or_else(||item["mcpAppResourceUri"].as_str()).or_else(||item.pointer("/appContext/resourceUri").and_then(Value::as_str)))
-                    .flatten().filter(|s|s.starts_with("ui://") && s.len()<=4096).map(str::to_owned);
+                let mcp_app_uri = (item["type"] == "mcpToolCall")
+                    .then(|| {
+                        item.pointer("/mcpAppUi/resourceUri")
+                            .and_then(Value::as_str)
+                            .or_else(|| item["mcpAppResourceUri"].as_str())
+                            .or_else(|| {
+                                item.pointer("/appContext/resourceUri")
+                                    .and_then(Value::as_str)
+                            })
+                    })
+                    .flatten()
+                    .filter(|s| s.starts_with("ui://") && s.len() <= 4096)
+                    .map(str::to_owned);
                 events.push(Event::ToolIdentity {
                     mcp_app_uri,
                     id: id.into(),
@@ -169,6 +180,7 @@ fn acp(v: &Value, events: &mut Vec<Event>) {
                     })
                     .collect()
             })
+            .or_else(|| mcp_raw_parts(raw, Some(&status)))
             .or_else(|| parts(raw));
         events.push(Event::ToolResult {
             id: id.into(),
@@ -267,5 +279,58 @@ pub(super) fn project(protocol: Protocol, native: &Value, events: &mut Vec<Event
         Protocol::Acp => acp(native, events),
         Protocol::Pi => pi(native, events),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod grok_mcp_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn acp_result(update: Value) -> ToolResult {
+        let mut events = Vec::new();
+        project(
+            Protocol::Acp,
+            &json!({"method": "session/update", "params": {"update": update}}),
+            &mut events,
+        );
+        events
+            .into_iter()
+            .find_map(|e| match e {
+                Event::ToolResult { result, .. } => Some(result),
+                _ => None,
+            })
+            .expect("expected ToolResult event")
+    }
+
+    #[test]
+    fn grok_mcp_raw_output_projects_text_when_content_is_absent_or_empty() {
+        let completed = acp_result(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-1",
+            "status": "completed",
+            "rawOutput": {"type": "MCP", "output": {"OkayOutput": "42 rows"}}
+        }));
+        assert_eq!(completed.status, Some(ToolStatus::Succeeded));
+        assert_eq!(completed.text().as_deref(), Some("42 rows"));
+
+        let empty_content = acp_result(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-2",
+            "status": "failed",
+            "content": [],
+            "rawOutput": {"type": "MCP", "output": {"Error": "connection refused"}}
+        }));
+        assert_eq!(empty_content.status, Some(ToolStatus::Failed));
+        assert_eq!(empty_content.text().as_deref(), Some("connection refused"));
+
+        let explicit_content = acp_result(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-3",
+            "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "explicit"}}],
+            "rawOutput": {"type": "MCP", "output": {"OkayOutput": "ignored"}}
+        }));
+        assert_eq!(explicit_content.text().as_deref(), Some("explicit"));
     }
 }

@@ -135,7 +135,12 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
             Some("thread/sample") => {
                 assert_eq!(v["params"]["threadId"], session);
                 assert_eq!(v["params"]["effort"], "low");
-                assert!(v["params"]["prompt"].as_str().unwrap().contains("Do not use tools"));
+                assert!(
+                    v["params"]["prompt"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Do not use tools")
+                );
                 let turn = v["params"]["expectedTurnId"].as_str().unwrap();
                 let mode = fs::read_to_string(database.join("sample-mode")).unwrap();
                 let mut calls = OpenOptions::new()
@@ -143,12 +148,14 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                     .create(true)
                     .open(database.join("samples"))
                     .unwrap();
-                writeln!(calls,"{turn}").unwrap();
+                writeln!(calls, "{turn}").unwrap();
                 let value = json!({"sourceTurnId":turn,"text":format!("  suggested {mode}  ")});
                 match mode.as_str() {
                     "late" => late_sample = Some(json!({"id":v["id"],"result":value})),
                     "wrong" => reply(json!({"sourceTurnId":"other","text":"unrelated"})),
-                    "unsupported" => emit(json!({"id":v["id"],"error":{"code":-32601,"message":"method not found"}})),
+                    "unsupported" => emit(
+                        json!({"id":v["id"],"error":{"code":-32601,"message":"method not found"}}),
+                    ),
                     _ => reply(value),
                 }
             }
@@ -244,62 +251,113 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                     reply(json!({"turnId":turn}));
                 }
             }
-            Some("feedback/upload")=>{
-                assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["classification"],"bug");assert_eq!(v["params"]["includeLogs"],true);
-                assert_eq!(v["params"]["reason"],"private-fixture-feedback-reason");
-                writeln!(OpenOptions::new().create(true).append(true).open(database.join("feedback-count")).unwrap(),"upload").unwrap();
+            Some("feedback/upload") => {
+                assert_eq!(v["params"]["threadId"], session);
+                assert_eq!(v["params"]["classification"], "bug");
+                assert_eq!(v["params"]["includeLogs"], true);
+                assert_eq!(v["params"]["reason"], "private-fixture-feedback-reason");
+                writeln!(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(database.join("feedback-count"))
+                        .unwrap(),
+                    "upload"
+                )
+                .unwrap();
                 reply(json!({"threadId":"provider-receipt"}));
             }
-            Some("mcpServer/oauth/login")=>{
-                assert_eq!(v["params"]["threadId"],session);
-                if v["params"]["name"]=="refused"{
-                    emit(json!({"id":v["id"],"error":{"code":-32601,"message":"fixture-private-native-error"}}));continue;
+            Some("mcpServer/oauth/login") => {
+                assert_eq!(v["params"]["threadId"], session);
+                if v["params"]["name"] == "refused" {
+                    emit(
+                        json!({"id":v["id"],"error":{"code":-32601,"message":"fixture-private-native-error"}}),
+                    );
+                    continue;
                 }
-                assert_eq!(v["params"]["name"],"vault");
-                let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                let redirect=format!("http://{}/cb",listener.local_addr().unwrap());
-                let mut target=url::Url::parse("https://id.example.org/oauth").unwrap();
-                target.query_pairs_mut().append_pair("redirect_uri",&redirect).append_pair("state","private-fixture-state");
-                let db=database.clone();let root=session.clone();
-                std::thread::spawn(move||{
-                    let(mut c,_)=listener.accept().unwrap();
-                    let mut request=String::new();std::io::BufReader::new(c.try_clone().unwrap()).read_line(&mut request).unwrap();
-                    assert!(request.starts_with("GET /cb?") && request.contains("code=private-fixture-code"));
-                    c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
-                    std::fs::write(db.join("oauth-connected"),"ok").unwrap();
-                    emit(json!({"method":"mcpServer/oauthLogin/completed","params":{"threadId":root,"name":"vault","success":true,"error":"private-fixture-code"}}));
+                assert_eq!(v["params"]["name"], "vault");
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let redirect = format!("http://{}/cb", listener.local_addr().unwrap());
+                let mut target = url::Url::parse("https://id.example.org/oauth").unwrap();
+                target
+                    .query_pairs_mut()
+                    .append_pair("redirect_uri", &redirect)
+                    .append_pair("state", "private-fixture-state");
+                let db = database.clone();
+                let root = session.clone();
+                std::thread::spawn(move || {
+                    let (mut c, _) = listener.accept().unwrap();
+                    let mut request = String::new();
+                    std::io::BufReader::new(c.try_clone().unwrap())
+                        .read_line(&mut request)
+                        .unwrap();
+                    assert!(
+                        request.starts_with("GET /cb?")
+                            && request.contains("code=private-fixture-code")
+                    );
+                    c.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .unwrap();
+                    std::fs::write(db.join("oauth-connected"), "ok").unwrap();
+                    emit(
+                        json!({"method":"mcpServer/oauthLogin/completed","params":{"threadId":root,"name":"vault","success":true,"error":"private-fixture-code"}}),
+                    );
                 });
                 reply(json!({"authorizationUrl":target.as_str()}));
             }
-            Some("mcpServerStatus/list")=>{
-                if v["params"]["serverName"]=="vault" || v["params"]["serverName"]=="refused" {
-                    assert_eq!(v["params"]["threadId"],session);
-                    reply(json!({"data":[{"name":v["params"]["serverName"],"runtimeStatus":if database.join("oauth-connected").exists(){"connected"}else{"needsAuth"}}],"nextCursor":null}));continue;
+            Some("mcpServerStatus/list") => {
+                if v["params"]["serverName"] == "vault" || v["params"]["serverName"] == "refused" {
+                    assert_eq!(v["params"]["threadId"], session);
+                    reply(
+                        json!({"data":[{"name":v["params"]["serverName"],"runtimeStatus":if database.join("oauth-connected").exists(){"connected"}else{"needsAuth"}}],"nextCursor":null}),
+                    );
+                    continue;
                 }
-                assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["serverName"],"weather");
+                assert_eq!(v["params"]["threadId"], session);
+                assert_eq!(v["params"]["serverName"], "weather");
                 reply(json!({"data":[{"name":"weather","tools":{
                     "lookup":{"name":"lookup","title":"Weather lookup","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":true}},
                     "hidden":{"name":"hidden","_meta":{"ui":{"visibility":["model"]}}}
                 }}],"nextCursor":null}));
             }
-            Some("mcpServer/resource/read")=>{
-                assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["server"],"weather");
-                let uri=&v["params"]["uri"];reply(json!({"contents":[{"uri":uri,"mimeType":"text/html;profile=mcp-app","text":"<p>weather app</p>"}]}));
+            Some("mcpServer/resource/read") => {
+                assert_eq!(v["params"]["threadId"], session);
+                assert_eq!(v["params"]["server"], "weather");
+                let uri = &v["params"]["uri"];
+                reply(
+                    json!({"contents":[{"uri":uri,"mimeType":"text/html;profile=mcp-app","text":"<p>weather app</p>"}]}),
+                );
             }
-            Some("mcpServer/tool/call")=>{
-                assert_eq!(v["params"]["threadId"],session);assert_eq!(v["params"]["server"],"weather");assert_eq!(v["params"]["tool"],"lookup");
-                writeln!(OpenOptions::new().create(true).append(true).open(database.join("mcp-user-calls")).unwrap(),"call").unwrap();
+            Some("mcpServer/tool/call") => {
+                assert_eq!(v["params"]["threadId"], session);
+                assert_eq!(v["params"]["server"], "weather");
+                assert_eq!(v["params"]["tool"], "lookup");
+                writeln!(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(database.join("mcp-user-calls"))
+                        .unwrap(),
+                    "call"
+                )
+                .unwrap();
                 reply(json!({"content":[],"structuredContent":v["params"]["arguments"]}));
             }
             Some("turn/start") => {
                 if let Some(stale) = late_sample.take() {
                     emit(stale);
                 }
-                let text = v.pointer("/params/input/0/text").and_then(Value::as_str).unwrap_or("");
+                let text = v
+                    .pointer("/params/input/0/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 if text == "edited A" {
                     assert_eq!(
                         v.pointer("/params/input/1/url").and_then(Value::as_str),
-                        Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwLIgHAAHWAQH4l8EzAAAAAElFTkSuQmCC")
+                        Some(
+                            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwLIgHAAHWAQH4l8EzAAAAAElFTkSuQmCC"
+                        )
                     );
                 }
                 match text {
@@ -372,8 +430,13 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                     .create(true)
                     .open(database.join("calls"))
                     .unwrap();
-                let images: Vec<_> = v["params"]["input"].as_array().unwrap().iter()
-                    .filter(|part| part["type"] == "image").map(|part| &part["url"]).collect();
+                let images: Vec<_> = v["params"]["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|part| part["type"] == "image")
+                    .map(|part| &part["url"])
+                    .collect();
                 writeln!(calls, "{}", json!({"id":session,"cwd":cwd,"text":text,"input":v["params"]["clientUserMessageId"],"images":images})).unwrap();
                 if text == "hold without reply" {
                     continue;
@@ -383,10 +446,14 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                 emit(
                     json!({"method":"turn/started","params":{"threadId":session,"turn":{"id":turn}}}),
                 );
-                if text.contains("KAR-MCP-APP-CONTEXT-NEXT"){fs::write(database.join("app-wire-next"),text).unwrap();}
-                if text=="KAR-MCP-APP-ITEM" {
-                    for method in ["item/started","item/completed"] {
-                        emit(json!({"method":method,"params":{"threadId":session,"turnId":turn,"item":{"type":"mcpToolCall","id":"card","server":"weather","tool":"launch","mcpAppUi":{"resourceUri":"ui://weather/main"},"arguments":{},"status":"completed","result":{"content":[]}}}}));
+                if text.contains("KAR-MCP-APP-CONTEXT-NEXT") {
+                    fs::write(database.join("app-wire-next"), text).unwrap();
+                }
+                if text == "KAR-MCP-APP-ITEM" {
+                    for method in ["item/started", "item/completed"] {
+                        emit(
+                            json!({"method":method,"params":{"threadId":session,"turnId":turn,"item":{"type":"mcpToolCall","id":"card","server":"weather","tool":"launch","mcpAppUi":{"resourceUri":"ui://weather/main"},"arguments":{},"status":"completed","result":{"content":[]}}}}),
+                        );
                     }
                 }
                 if text.starts_with("mcp collaboration run") {
@@ -398,11 +465,11 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 }
-                if text=="delegation wait in parent" {
-                    fs::write(database.join("delegation-parent-ready"),&turn).unwrap();
-                    let limit=Instant::now()+Duration::from_secs(100);
-                    while database.join("hold-delegation-parent").is_file(){
-                        assert!(Instant::now()<limit);
+                if text == "delegation wait in parent" {
+                    fs::write(database.join("delegation-parent-ready"), &turn).unwrap();
+                    let limit = Instant::now() + Duration::from_secs(100);
+                    while database.join("hold-delegation-parent").is_file() {
+                        assert!(Instant::now() < limit);
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 }
@@ -430,7 +497,9 @@ pub(crate) fn agent_with_observer(observe: impl Fn(&Value)) {
                     );
                     assert_eq!(
                         steer.pointer("/params/input/1/url").and_then(Value::as_str),
-                        Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwLIgHAAHWAQH4l8EzAAAAAElFTkSuQmCC")
+                        Some(
+                            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwLIgHAAHWAQH4l8EzAAAAAElFTkSuQmCC"
+                        )
                     );
                     fs::write(
                         database.join("steered-text"),

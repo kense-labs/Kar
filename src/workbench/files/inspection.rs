@@ -9,7 +9,148 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    ffi::OsString,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+const MAX_CACHED_WORKSPACES: usize = 16;
+const FRESHNESS_WINDOW: Duration = Duration::from_secs(15);
+const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DirFingerprint {
+    root_mtime_ns: u128,
+    root_len: u64,
+    children: Vec<(OsString, bool, u128, u64)>,
+}
+
+fn stamp(meta: &fs::Metadata) -> (u128, u64) {
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    (mtime, meta.len())
+}
+
+impl DirFingerprint {
+    fn capture(root: &Path, private: &Path) -> Option<Self> {
+        let root_meta = fs::symlink_metadata(root).ok()?;
+        let (root_mtime_ns, root_len) = stamp(&root_meta);
+        let mut children = Vec::new();
+        for entry in fs::read_dir(root).ok()? {
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            if name.eq_ignore_ascii_case(".git") {
+                continue;
+            }
+            let child_path = entry.path();
+            if child_path.starts_with(private) {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let (mtime, len) = stamp(&meta);
+            children.push((name, meta.is_dir(), mtime, len));
+        }
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        Some(Self {
+            root_mtime_ns,
+            root_len,
+            children,
+        })
+    }
+}
+
+struct CachedWorkspace {
+    entries: Arc<Vec<Entry>>,
+    truncated: bool,
+    fingerprint: Option<DirFingerprint>,
+    built_at: Instant,
+    last_accessed: Instant,
+}
+
+pub(super) struct WorkspaceSearchIndex {
+    max_workspaces: usize,
+    freshness: Duration,
+    ttl: Duration,
+    cache: Mutex<HashMap<PathBuf, CachedWorkspace>>,
+}
+
+impl WorkspaceSearchIndex {
+    fn new(max_workspaces: usize, freshness: Duration, ttl: Duration) -> Self {
+        Self {
+            max_workspaces: max_workspaces.max(1),
+            freshness,
+            ttl,
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn get_or_build(&self, ws: &Workspace) -> Result<(Arc<Vec<Entry>>, bool)> {
+        let now = Instant::now();
+        let fp = DirFingerprint::capture(&ws.root, &ws.private);
+        {
+            let mut map = self.cache.lock().unwrap();
+            map.retain(|_, v| now.duration_since(v.built_at) <= self.ttl);
+            if let Some(hit) = map.get_mut(&ws.root)
+                && now.duration_since(hit.built_at) < self.freshness
+                && fp.is_some()
+                && hit.fingerprint == fp
+            {
+                hit.last_accessed = now;
+                return Ok((hit.entries.clone(), hit.truncated));
+            }
+        }
+        let (entries, truncated) = ws.indexed()?;
+        let arc = Arc::new(entries);
+        let fresh_fp = DirFingerprint::capture(&ws.root, &ws.private).or(fp);
+        let built_now = Instant::now();
+        {
+            let mut map = self.cache.lock().unwrap();
+            map.retain(|_, v| built_now.duration_since(v.built_at) <= self.ttl);
+            if !map.contains_key(&ws.root)
+                && map.len() >= self.max_workspaces
+                && let Some(oldest_key) = map
+                    .iter()
+                    .min_by_key(|(_, v)| v.last_accessed)
+                    .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest_key);
+            }
+            map.insert(
+                ws.root.clone(),
+                CachedWorkspace {
+                    entries: arc.clone(),
+                    truncated,
+                    fingerprint: fresh_fp,
+                    built_at: built_now,
+                    last_accessed: built_now,
+                },
+            );
+        }
+        Ok((arc, truncated))
+    }
+
+    fn invalidate(&self, root: &Path) {
+        let mut map = self.cache.lock().unwrap();
+        map.retain(|cached_root, _| {
+            !cached_root.starts_with(root) && !root.starts_with(cached_root)
+        });
+    }
+}
+
+static WORKSPACE_SEARCH_INDEX: LazyLock<WorkspaceSearchIndex> =
+    LazyLock::new(|| WorkspaceSearchIndex::new(MAX_CACHED_WORKSPACES, FRESHNESS_WINDOW, CACHE_TTL));
+
+pub(super) fn invalidate_workspace_index(root: &Path) {
+    let _ = SystemTime::now();
+    WORKSPACE_SEARCH_INDEX.invalidate(root);
+}
 
 pub(in crate::workbench) fn routes() -> Router<Workbench> {
     Router::new()
@@ -21,13 +162,13 @@ pub(in crate::workbench) fn routes() -> Router<Workbench> {
         .route("/filesystem/metadata", post(metadata))
 }
 type Reply = std::result::Result<Json<Value>, ApiError>;
-#[derive(Serialize)]
-struct Entry {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct Entry {
     #[serde(with = "crate::chat::checkpoint::git_path")]
-    path: PathBuf,
-    kind: &'static str,
+    pub(super) path: PathBuf,
+    pub(super) kind: &'static str,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    ignored: bool,
+    pub(super) ignored: bool,
 }
 impl Workspace {
     fn directory(&self, relative: &Path) -> Result<(PathBuf, Dir)> {
@@ -93,6 +234,10 @@ impl Workspace {
                 .is_some_and(|n| names.contains(n.as_encoded_bytes()));
         }
         Ok(entries)
+    }
+
+    pub(super) fn cached_indexed(&self) -> Result<(Arc<Vec<Entry>>, bool)> {
+        WORKSPACE_SEARCH_INDEX.get_or_build(self)
     }
 
     fn indexed(&self) -> Result<(Vec<Entry>, bool)> {
@@ -225,11 +370,16 @@ async fn entries(
 ) -> Reply {
     blocking(move || {
         let ws = app.workspace(&app.project(id)?)?;
-        let (entries, truncated) = match q.directory {
-            Some(p) => (ws.entries_in(&p)?, false),
-            None => ws.indexed()?,
-        };
-        Ok(json!({"entries":entries,"truncated":truncated}))
+        match q.directory {
+            Some(p) => {
+                let entries = ws.entries_in(&p)?;
+                Ok(json!({"entries":entries,"truncated":false}))
+            }
+            None => {
+                let (entries, truncated) = ws.cached_indexed()?;
+                Ok(json!({"entries":entries.as_slice(),"truncated":truncated}))
+            }
+        }
     })
     .await
 }
@@ -417,4 +567,55 @@ async fn metadata(State(app): State<Workbench>, Json(q): Json<Metadata>) -> Repl
         Ok(json!({"entries":entries}))
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_search_index_caches_invalidates_and_bounds_to_sixteen_workspaces() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let allowed = temp.path().join("allowed");
+        fs::create_dir_all(&allowed)?;
+        let app = Workbench::open(
+            crate::chat::ChatStore::open(temp.path().join("store"))?,
+            std::slice::from_ref(&allowed),
+        )?;
+
+        let index =
+            WorkspaceSearchIndex::new(16, Duration::from_secs(15), Duration::from_secs(900));
+        let p0_dir = allowed.join("proj-0");
+        fs::create_dir_all(p0_dir.join("src"))?;
+        fs::write(p0_dir.join("src/main.rs"), "fn main() {}\n")?;
+        let p0 = app.register(&p0_dir, "proj-0")?;
+        let ws0 = app.workspace(&p0)?;
+
+        let (first, _) = index.get_or_build(&ws0)?;
+        let (second, _) = index.get_or_build(&ws0)?;
+        assert!(Arc::ptr_eq(&first, &second));
+
+        // Writing through Workspace::write_bytes invalidates global cache and changes top-level/dir state.
+        ws0.write_bytes(Path::new("src/new_file.rs"), b"pub fn added() {}\n")?;
+        index.invalidate(&ws0.root);
+        let (refreshed, _) = index.get_or_build(&ws0)?;
+        assert!(!Arc::ptr_eq(&first, &refreshed));
+        assert!(
+            refreshed
+                .iter()
+                .any(|e| e.path == Path::new("src/new_file.rs"))
+        );
+
+        // Populate 18 workspaces and verify bounded eviction at max 16 cached workspaces.
+        for i in 1..=18 {
+            let dir = allowed.join(format!("proj-{i}"));
+            fs::create_dir_all(&dir)?;
+            fs::write(dir.join("README.md"), "ok")?;
+            let proj = app.register(&dir, &format!("proj-{i}"))?;
+            let ws = app.workspace(&proj)?;
+            let _ = index.get_or_build(&ws)?;
+        }
+        assert!(index.cache.lock().unwrap().len() <= 16);
+        Ok(())
+    }
 }

@@ -12,18 +12,18 @@ pub(crate) mod feed;
 mod handoff;
 mod rewind;
 pub use rewind::{ContextRewind, PreparedRewind, RewindRequest};
-mod workspace_handoff;
 mod http_feed;
+mod workspace_handoff;
 pub use feed::{ChatCursor, ChatEvent, ChatFeed, ChatFeedSnapshot, ChatReplica, event_router};
-pub use queue::MergedContext;
-pub(crate) use queue::delegations::{Completion,CompletionSource,CompletionCommand,WakePolicy};
 pub use handoff::{Handoff, HandoffRequest, HandoffStatus, ProviderSession};
 pub use http_feed::HttpChatFeed;
 pub use log::ChatUpdate;
+pub use queue::MergedContext;
+pub(crate) use queue::delegations::{Completion, CompletionCommand, CompletionSource, WakePolicy};
 pub use timeline::{Edit as ChatEdit, Frame as ChatFrame, MorphProgress};
 mod fork;
-pub use fork::{ForkMode, ForkOrigin, ForkPolicy, ForkWorktreeBase};
 pub(crate) use fork::LiveFork;
+pub use fork::{ForkMode, ForkOrigin, ForkPolicy, ForkWorktreeBase};
 pub(crate) mod import;
 pub use checkpoint::{
     ChangeKind, Checkpoint, CheckpointPoint, FileChange, RollbackReport, TurnDiff,
@@ -36,8 +36,8 @@ pub(crate) use queue::Admission;
 pub(crate) use queue::Claim as SteerClaim;
 pub use queue::{InputStatus, QueueAction, QueuePromotion, QueueReceipt, QueuedInput, SteerTarget};
 mod timeline;
-pub(crate) use log::{Sink, WeakSink};
 pub use crate::OrphanedQuestion;
+pub(crate) use log::{Sink, WeakSink};
 pub use timeline::{ChatTurn, Item, RetryStatus, Role, TimelineItem, TurnStatus};
 
 use crate::{
@@ -147,7 +147,11 @@ impl ChatInfo {
         opts.approvals = self.approvals;
         opts
     }
-    pub(crate) async fn launch_runtime(&self, store: &ChatStore, opts: &mut SessionOptions) -> Result<crate::Runtime> {
+    pub(crate) async fn launch_runtime(
+        &self,
+        store: &ChatStore,
+        opts: &mut SessionOptions,
+    ) -> Result<crate::Runtime> {
         let rt = self.runtime(store, opts)?;
         if rt.program.is_absolute() {
             Ok(rt)
@@ -180,7 +184,9 @@ impl ChatInfo {
             ));
         }
         if crate::workbench::acp_registry::dynamic(&self.runtime) && rt.program != self.program {
-            return Err(Error::Refused("prepared ACP executable differs from saved chat".into()));
+            return Err(Error::Refused(
+                "prepared ACP executable differs from saved chat".into(),
+            ));
         }
         rt.program = self.program.clone();
         Ok(rt)
@@ -266,7 +272,10 @@ impl ChatStore {
     pub(crate) fn register_shared_delegate(&self, child: Uuid, parent: Uuid) {
         self.shared_delegation.register(child, parent);
     }
-    pub(crate) fn with_turn_checkpointed(mut self, observer: Arc<dyn Fn(Uuid) + Send + Sync>) -> Self {
+    pub(crate) fn with_turn_checkpointed(
+        mut self,
+        observer: Arc<dyn Fn(Uuid) + Send + Sync>,
+    ) -> Self {
         self.turn_checkpointed = Some(observer);
         self
     }
@@ -298,10 +307,16 @@ impl ChatStore {
             .ok_or_else(|| Error::Protocol("set KAR_CHAT_DIR to a writable directory".into()))?;
         Self::open(state.join("kar/chats"))
     }
-    pub(crate) fn resolve_runtime(&self, id: &str, opts: &mut SessionOptions) -> Result<crate::Runtime> {
+    pub(crate) fn resolve_runtime(
+        &self,
+        id: &str,
+        opts: &mut SessionOptions,
+    ) -> Result<crate::Runtime> {
         let binding = crate::account::binding::Key::new(id, opts);
         opts.account_admission = Some(self.accounts.admit(binding)?);
-        if id == "codex" { crate::workbench::chatgpt::configure(self, opts)?; }
+        if id == "codex" {
+            crate::workbench::chatgpt::configure(self, opts)?;
+        }
         if crate::workbench::acp_registry::dynamic(id) {
             crate::workbench::acp_registry::resolve(self, id, opts)
         } else {
@@ -309,16 +324,19 @@ impl ChatStore {
         }
     }
     pub(crate) fn run_schema_path(&self, chat: Uuid, turn: Uuid) -> std::path::PathBuf {
-        self.directory().join("workbench/run-schemas").join(chat.to_string()).join(format!("{turn}.json"))
+        self.directory()
+            .join("workbench/run-schemas")
+            .join(chat.to_string())
+            .join(format!("{turn}.json"))
     }
     pub(crate) fn run_schema(&self, chat: Uuid, turn: Uuid) -> Result<Option<serde_json::Value>> {
-        match std::fs::File::open(self.run_schema_path(chat,turn)) {
-            Ok(file)=>Ok(Some(serde_json::from_reader(file)?)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound=>Ok(None),
-            Err(e)=>Err(e.into()),
+        match std::fs::File::open(self.run_schema_path(chat, turn)) {
+            Ok(file) => Ok(Some(serde_json::from_reader(file)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
-    pub(crate) fn directory(&self) -> &Path {
+    pub fn directory(&self) -> &Path {
         &self.dir
     }
     pub(crate) fn visit_native_bindings(
@@ -353,7 +371,10 @@ impl ChatStore {
         reader.read_until(b'\n', &mut row)?;
         match serde_json::from_slice(&row)? {
             ChatUpdate::Inherited { turns } if turns.last().map(|t| t.id) == Some(origin.turn) => {
-                Ok(Some((origin.chat, turns.into_iter().map(|t| t.id).collect())))
+                Ok(Some((
+                    origin.chat,
+                    turns.into_iter().map(|t| t.id).collect(),
+                )))
             }
             _ => Err(Error::Protocol("invalid inherited turn prefix".into())),
         }
@@ -386,8 +407,7 @@ impl ChatStore {
         launch.unset_env.clone_from(&info.unset_env);
         let rt = info.runtime(self, &mut launch)?;
         options.env = launch.env;
-        rt.side_question(&info.native_id, question, &options)
-            .await
+        rt.side_question(&info.native_id, question, &options).await
     }
     /// Most recently used chats first. Reading history never changes this order.
     pub fn list(&self) -> Result<Vec<ChatInfo>> {
@@ -406,7 +426,7 @@ impl ChatStore {
                 continue;
             };
             let file = match File::open(&path) {
-                Err(e) if e.kind()==std::io::ErrorKind::NotFound => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 other => other?,
             };
             list.push((file.metadata()?.modified()?, log::info(file, id)?));
@@ -417,7 +437,10 @@ impl ChatStore {
     /// Use the same journal modification time as the chat list. Reads do not advance it.
     pub(crate) fn activity_ms(&self, id: Uuid) -> Result<u64> {
         let time = std::fs::metadata(self.path(id))?.modified()?;
-        Ok(time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64)
+        Ok(time
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64)
     }
     pub fn latest(&self) -> Result<Uuid> {
         self.list()?
@@ -450,7 +473,8 @@ impl ChatStore {
             file.try_lock()
         } else {
             file.try_lock_shared()
-        }.map_err(|e| match e {
+        }
+        .map_err(|e| match e {
             std::fs::TryLockError::WouldBlock => Error::Busy,
             std::fs::TryLockError::Error(e) => e.into(),
         })?;
@@ -463,7 +487,10 @@ impl ChatStore {
             std::fs::TryLockError::Error(e) => e.into(),
         })?;
         if matches!(self.stop_fence(id, false), Err(Error::Busy))
-            && let Ok(mut file) = OpenOptions::new().read(true).write(true).open(self.path(id))
+            && let Ok(mut file) = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(self.path(id))
         {
             let _ = log::with_lock(&mut file, true, |file| {
                 let (mut state, valid) = log::read_locked(file, id)?;
@@ -591,7 +618,10 @@ impl ChatStore {
             chat: state.info,
             turns: state.turns,
             goal: state.goal,
-            background_working: state.tasks.iter().any(crate::NativeTask::blocking_background),
+            background_working: state
+                .tasks
+                .iter()
+                .any(crate::NativeTask::blocking_background),
             tasks: state.tasks,
             notifications: state.notifications,
             context_usage: state.context_usage,
@@ -639,7 +669,9 @@ impl ChatStore {
         let _registry_pin = crate::workbench::acp_registry::pin(self, runtime_id)?;
         let mut rt = self.resolve_runtime(runtime_id, &mut opts)?;
         if crate::workbench::acp_registry::dynamic(runtime_id) && program.is_some() {
-            return Err(Error::Refused("a prepared ACP instance owns its executable".into()));
+            return Err(Error::Refused(
+                "a prepared ACP instance owns its executable".into(),
+            ));
         }
         if let Some(bin) = program {
             rt.program = bin.to_owned();
@@ -704,7 +736,11 @@ impl ChatStore {
         id: Uuid,
         configure: impl FnOnce(&mut SessionOptions),
     ) -> Result<ChatSession> {
-        self.resume_configured(id, |_, opts| { configure(opts); Ok(()) }).await
+        self.resume_configured(id, |_, opts| {
+            configure(opts);
+            Ok(())
+        })
+        .await
     }
 
     pub(crate) async fn resume_configured(
@@ -715,7 +751,9 @@ impl ChatStore {
         let mut log = self.open_controller(id).await?;
         if let Some(pending) = log.state.pending_handoff() {
             let runtime = pending.request.runtime.clone();
-            let (result, session) = self.finish_handoff(log, |opts| configure(&runtime, opts)).await?;
+            let (result, session) = self
+                .finish_handoff(log, |opts| configure(&runtime, opts))
+                .await?;
             return session.ok_or_else(|| {
                 Error::Refused(result.error.unwrap_or_else(|| "handoff failed".into()))
             });
@@ -739,7 +777,10 @@ impl ChatStore {
             profile.configure(&mut opts)?;
         }
         opts.cwd = info.workspace.clone();
-        let session = match self.open_saved(&log.state, opts.before_chat_attach()?).await {
+        let session = match self
+            .open_saved(&log.state, opts.before_chat_attach()?)
+            .await
+        {
             Ok(session) => session,
             Err(error) => self.renew_empty_target(&mut log, &opts, error).await?,
         };
@@ -871,7 +912,11 @@ impl ChatSession {
             cursor: log.state.cursor(),
             turns: log.state.turns.clone(),
             goal: log.state.goal.clone(),
-            background_working: log.state.tasks.iter().any(crate::NativeTask::blocking_background),
+            background_working: log
+                .state
+                .tasks
+                .iter()
+                .any(crate::NativeTask::blocking_background),
             tasks: log.state.tasks.clone(),
             notifications: log.state.notifications.clone(),
             context_usage: log.state.context_usage.clone(),
@@ -1062,8 +1107,10 @@ impl ChatSession {
         closed
     }
 }
-fn output_instructions(schema:&serde_json::Value)->String {
-    format!("\n\nWhen the work is complete, call kar_submit_output with JSON text matching this schema. Correct any validation error before finishing.\n{schema}")
+fn output_instructions(schema: &serde_json::Value) -> String {
+    format!(
+        "\n\nWhen the work is complete, call kar_submit_output with JSON text matching this schema. Correct any validation error before finishing.\n{schema}"
+    )
 }
 impl Sender {
     async fn run_turn(
@@ -1106,20 +1153,23 @@ impl Sender {
             if let Some(turn) = log.existing(id, &text, &attachments)? {
                 return Ok(turn);
             }
-            info.forked_from.as_ref().filter(|f| !f.context_only).and_then(|f| {
-                log.state
-                    .turns
-                    .last()
-                    .filter(|t| {
-                        t.id == f.turn
-                            && log.state.position
-                                == Some(CheckpointPoint {
-                                    turn: f.turn,
-                                    before: false,
-                                })
-                    })
-                    .and_then(|t| t.checkpoint.clone())
-            })
+            info.forked_from
+                .as_ref()
+                .filter(|f| !f.context_only)
+                .and_then(|f| {
+                    log.state
+                        .turns
+                        .last()
+                        .filter(|t| {
+                            t.id == f.turn
+                                && log.state.position
+                                    == Some(CheckpointPoint {
+                                        turn: f.turn,
+                                        before: false,
+                                    })
+                        })
+                        .and_then(|t| t.checkpoint.clone())
+                })
         };
         let (store, before) = tokio::task::spawn_blocking(move || -> Result<_> {
             let before = store.capture_with_scopes(
@@ -1148,14 +1198,16 @@ impl Sender {
             let prompt = note
                 .as_ref()
                 .map_or_else(|| text.clone(), |n| n.prompt(&text));
-            let (merge,app_context) = store.next_contexts(&log.state)?;
+            let (merge, app_context) = store.next_contexts(&log.state)?;
             let prompt = merge.as_ref().map_or(prompt.clone(), |m| m.prompt(&prompt));
-            let prompt=ChatTurn::app_prompt(app_context.as_deref(),prompt);
-            (log.state.dispatch_text(&prompt), note, merge,app_context)
+            let prompt = ChatTurn::app_prompt(app_context.as_deref(), prompt);
+            (log.state.dispatch_text(&prompt), note, merge, app_context)
         };
-        let requested_output_schema=store.run_schema(self.info.id,id)?;
-        let mut wire_text=wire_text;
-        if let Some(schema)=&requested_output_schema { wire_text.push_str(&output_instructions(schema)); }
+        let requested_output_schema = store.run_schema(self.info.id, id)?;
+        let mut wire_text = wire_text;
+        if let Some(schema) = &requested_output_schema {
+            wire_text.push_str(&output_instructions(schema));
+        }
         crate::input::check_text(&wire_text, crate::input::text_limit(&self.info.runtime))?;
         let store_for_input = store.clone();
         let chat = self.info.id;

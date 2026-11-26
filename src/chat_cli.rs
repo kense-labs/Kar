@@ -263,9 +263,11 @@ fn display(turn: &ChatTurn) -> Result<()> {
             }
             Item::Compaction { report } => writeln!(out, "Compaction{owner}> {}", report.state)?,
             Item::Diff { diff, .. } => writeln!(out, "Diff{owner}>\n{diff}")?,
-            Item::RequestError { error } => {
-                writeln!(out, "RequestError{owner} [{:?}]> {}", error.status, error.reason)?
-            }
+            Item::RequestError { error } => writeln!(
+                out,
+                "RequestError{owner} [{:?}]> {}",
+                error.status, error.reason
+            )?,
         }
     }
     if let Some(cp) = &turn.checkpoint {

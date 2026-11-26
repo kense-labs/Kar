@@ -1,6 +1,25 @@
 use super::super::{AuthStatus, profile};
 use super::*;
 
+fn bucket_label(raw: &Value) -> String {
+    let Some(s) = text(raw) else {
+        return "Limit".into();
+    };
+    if s == "Remaining" {
+        return "Limit".into();
+    }
+    let cleaned = s
+        .strip_suffix("Remaining")
+        .filter(|prefix| prefix.ends_with(char::is_whitespace))
+        .map(str::trim_end)
+        .unwrap_or(&s);
+    if cleaned.is_empty() {
+        "Limit".into()
+    } else {
+        cleaned.to_owned()
+    }
+}
+
 pub(super) fn project(root: &Value) -> Result<(AccountQuota, bool)> {
     if root["status"] != "SUCCESS" || root["command"]["name"] != "usage" {
         return Err(protocol(
@@ -23,7 +42,7 @@ pub(super) fn project(root: &Value) -> Result<(AccountQuota, bool)> {
             else {
                 continue;
             };
-            let name = text(&bucket["name"]).unwrap_or_else(|| "Limit".into());
+            let name = bucket_label(&bucket["name"]);
             exhausted |= remaining == 0.0;
             windows.push(QuotaWindow {
                 label: group_name
@@ -113,4 +132,54 @@ pub(super) async fn read(
         .await
         .or(quota.plan);
     Ok(AccountUsageSnapshot::Available(quota))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn bucket_labels_strip_trailing_remaining_without_mangling_other_names() {
+        let payload = json!({
+            "status": "SUCCESS",
+            "command": {
+                "name": "usage",
+                "data": {
+                    "groups": [
+                        {
+                            "name": "Gemini Models",
+                            "buckets": [
+                                {"name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 0.25},
+                                {"name": "  5h Limit   Remaining  ", "window": "5h", "remaining_fraction": 0.6},
+                                {"name": "Remaining", "remaining_fraction": 1.0},
+                                {"name": "   ", "remaining_fraction": 0.5}
+                            ]
+                        },
+                        {
+                            "buckets": [
+                                {"name": "Remaining Credits", "remaining_fraction": 0.4},
+                                {"name": "Weekly Limit remaining", "remaining_fraction": 0.8}
+                            ]
+                        }
+                    ]
+                }
+            }
+        });
+        let (quota, exhausted) = project(&payload).unwrap();
+        assert!(!exhausted);
+        let labels: Vec<&str> = quota.windows.iter().map(|w| w.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Gemini Models · Weekly Limit",
+                "Gemini Models · 5h Limit",
+                "Gemini Models · Limit",
+                "Gemini Models · Limit",
+                "Remaining Credits",
+                "Weekly Limit remaining",
+            ]
+        );
+        assert_eq!(quota.windows[0].used_ratio, 0.75);
+    }
 }

@@ -74,6 +74,7 @@ pub(in crate::workbench) async fn http_command(
 ) -> Result<Value, ForgeError> {
     run_command(app, p, chat, n, cmd, action, until, true, |_, _| Ok(())).await
 }
+#[allow(clippy::too_many_arguments)]
 pub(in crate::workbench) async fn command(
     app: Workbench,
     p: Uuid,

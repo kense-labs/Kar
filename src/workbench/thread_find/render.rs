@@ -401,7 +401,10 @@ mod tests {
         assert_eq!(count(msg, false, "L42-64", Some(cwd), None), 0);
         assert_eq!(count(msg, false, "L10", Some(cwd), None), 1);
         assert_eq!(count(msg, false, "src/notes.ts", Some(cwd), None), 0);
-        assert_eq!(count(msg, false, "important description", Some(cwd), None), 1);
+        assert_eq!(
+            count(msg, false, "important description", Some(cwd), None),
+            1
+        );
         assert_eq!(count(msg, false, "actual.ts", Some(cwd), None), 1);
         assert_eq!(count(msg, false, "/tmp", Some(cwd), None), 0);
         assert_eq!(count(msg, false, "hidden.example", Some(cwd), None), 0);
@@ -429,10 +432,14 @@ mod tests {
         assert_eq!(count(with_note, true, "secret", None, None), 0);
         assert_eq!(count(with_note, true, "Assistant quote", None, None), 0);
 
-        let without_note = "Please fix [Assistant quote](t3-citation://v1/e/t/m?text=secret) thanks";
+        let without_note =
+            "Please fix [Assistant quote](t3-citation://v1/e/t/m?text=secret) thanks";
         assert_eq!(count(without_note, true, "Please fix", None, None), 1);
         assert_eq!(count(without_note, true, "thanks", None, None), 1);
-        assert_eq!(count(without_note, true, "Please fix  thanks", None, None), 0);
+        assert_eq!(
+            count(without_note, true, "Please fix  thanks", None, None),
+            0
+        );
 
         let img_ctx = "before![img](kar-context://v1/image/1)after";
         assert_eq!(count(img_ctx, true, "before", None, None), 1);
@@ -443,22 +450,52 @@ mod tests {
     #[test]
     fn html_details_picture_theme_and_entities() {
         let html_msg = "<details><summary>折叠标题 &amp; 概览</summary><p>折叠正文</p><details><summary>Inner</summary><p>second</p></details></details><script>window.secret_token = 1;</script><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"/tmp/dark_spec.ts\"><source media=\"(prefers-color-scheme: light)\" srcset=\"/tmp/light_spec.ts\"><img src=\"/tmp/fallback_spec.ts\"></picture>";
-        assert_eq!(count(html_msg, false, "折叠标题 & 概览", None, Some("dark")), 1);
+        assert_eq!(
+            count(html_msg, false, "折叠标题 & 概览", None, Some("dark")),
+            1
+        );
         assert_eq!(count(html_msg, false, "折叠正文", None, Some("dark")), 1);
-        assert_eq!(count(html_msg, false, "折叠标题 & 概览折叠正文", None, Some("dark")), 0);
+        assert_eq!(
+            count(
+                html_msg,
+                false,
+                "折叠标题 & 概览折叠正文",
+                None,
+                Some("dark")
+            ),
+            0
+        );
         assert_eq!(count(html_msg, false, "Inner", None, Some("dark")), 1);
         assert_eq!(count(html_msg, false, "second", None, Some("dark")), 1);
-        assert_eq!(count(html_msg, false, "secret_token", None, Some("dark")), 0);
-        assert_eq!(count(html_msg, false, "dark_spec.ts", None, Some("dark")), 1);
-        assert_eq!(count(html_msg, false, "light_spec.ts", None, Some("dark")), 0);
-        assert_eq!(count(html_msg, false, "light_spec.ts", None, Some("light")), 1);
-        assert_eq!(count(html_msg, false, "dark_spec.ts", None, Some("light")), 0);
+        assert_eq!(
+            count(html_msg, false, "secret_token", None, Some("dark")),
+            0
+        );
+        assert_eq!(
+            count(html_msg, false, "dark_spec.ts", None, Some("dark")),
+            1
+        );
+        assert_eq!(
+            count(html_msg, false, "light_spec.ts", None, Some("dark")),
+            0
+        );
+        assert_eq!(
+            count(html_msg, false, "light_spec.ts", None, Some("light")),
+            1
+        );
+        assert_eq!(
+            count(html_msg, false, "dark_spec.ts", None, Some("light")),
+            0
+        );
     }
 
     #[test]
     fn insight_dividers_user_tildes_and_xml_context() {
         let assistant = "`★ Insight ─────────────────────────────────────`\n Searchable insight body\n`─────────────────────────────────────────────────`";
-        assert_eq!(count(assistant, false, "Searchable insight body", None, None), 1);
+        assert_eq!(
+            count(assistant, false, "Searchable insight body", None, None),
+            1
+        );
         assert_eq!(count(assistant, false, "★ Insight", None, None), 0);
 
         let user_tilde = "Install as ~/a/x, then read (~/a/guide.md)";
@@ -468,15 +505,36 @@ mod tests {
         let user_xml = "before<kar_context><review_comment file=\"src/notes.ts\" line=\"12\">hidden_diff_line</review_comment></kar_context>after";
         let cwd = Path::new("/workspace/repo");
         assert_eq!(count(user_xml, true, "notes.ts · L12", Some(cwd), None), 1);
-        assert_eq!(count(user_xml, true, "hidden_diff_line", Some(cwd), None), 0);
+        assert_eq!(
+            count(user_xml, true, "hidden_diff_line", Some(cwd), None),
+            0
+        );
         assert_eq!(count(user_xml, true, "beforeafter", Some(cwd), None), 0);
 
         assert_eq!(
-            occurrences("", false, true, false, &fold("empty response"), &[], None, None),
+            occurrences(
+                "",
+                false,
+                true,
+                false,
+                &fold("empty response"),
+                &[],
+                None,
+                None
+            ),
             1
         );
         assert_eq!(
-            occurrences("", false, true, true, &fold("empty response"), &[], None, None),
+            occurrences(
+                "",
+                false,
+                true,
+                true,
+                &fold("empty response"),
+                &[],
+                None,
+                None
+            ),
             0
         );
     }

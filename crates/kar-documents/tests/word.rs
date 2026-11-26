@@ -70,7 +70,8 @@ fn merges_disjoint_ranges_in_either_order_and_reports_conflicting_values() -> Re
         None,
     );
     doc.save_as(&file)?;
-    let extracted = kar_documents::extract::document_text("sample.docx", &std::fs::read(&file)?).unwrap();
+    let extracted =
+        kar_documents::extract::document_text("sample.docx", &std::fs::read(&file)?).unwrap();
     assert!(extracted.contains("上线日是周一，负责人是小李。"));
     let base = Document::open(&file)?;
     let day = edit(&base, 1, "周一", "下周三");

@@ -292,6 +292,7 @@ fn platform() -> Result<()> {
         ))
     }
 }
+#[allow(clippy::too_many_arguments)]
 fn args(
     e: &Editor,
     root: &Path,

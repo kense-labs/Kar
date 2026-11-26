@@ -153,7 +153,7 @@ fn launch(
     } else {
         #[cfg(not(windows))]
         let mut cmd = {
-            let mut c = Command::new("/bin/sh");
+            let mut c = Command::new(crate::process::find_sh());
             c.arg("-c");
             c
         };

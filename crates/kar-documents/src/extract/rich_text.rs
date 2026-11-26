@@ -109,7 +109,8 @@ pub(super) fn rtf(bytes: &[u8], out: &mut Text) -> Result<()> {
         fonts: false,
     };
     let mut stack = Vec::new();
-    let mut fonts: std::collections::HashMap<i32, &'static Encoding> = std::collections::HashMap::new();
+    let mut fonts: std::collections::HashMap<i32, &'static Encoding> =
+        std::collections::HashMap::new();
     let mut fallback = 0;
     let mut i = 0;
     let mut pending_high = None;

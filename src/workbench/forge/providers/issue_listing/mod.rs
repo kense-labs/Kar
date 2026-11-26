@@ -378,28 +378,57 @@ pub(in crate::workbench) async fn model_issue_read(
     }
     let scope = match ctx.kind.as_str() {
         "azure-devops" => super::azure::issue_scope(&ctx)?,
-        "linear" => ctx.repository.rsplit('/').next().unwrap_or(&ctx.repository).to_owned(),
+        "linear" => ctx
+            .repository
+            .rsplit('/')
+            .next()
+            .unwrap_or(&ctx.repository)
+            .to_owned(),
         _ => ctx.repository.clone(),
     };
-    let source = Source { project, title: app.project(project)?.name, scope, account: None, ctx };
+    let source = Source {
+        project,
+        title: app.project(project)?.name,
+        scope,
+        account: None,
+        ctx,
+    };
     if name == "kar_read_issue" {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Detail { number: u64 }
-        let a: Detail = serde_json::from_value(input).map_err(|e| ForgeError::bad(e.to_string()))?;
-        if a.number == 0 {return Err(ForgeError::bad("expected positive issue number"));}
+        struct Detail {
+            number: u64,
+        }
+        let a: Detail =
+            serde_json::from_value(input).map_err(|e| ForgeError::bad(e.to_string()))?;
+        if a.number == 0 {
+            return Err(ForgeError::bad("expected positive issue number"));
+        }
         return details::detail(&source, a.number, writable).await;
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Filters { state:Option<String>, query:Option<String>, cursor:Option<String>, limit:Option<usize> }
+    struct Filters {
+        state: Option<String>,
+        query: Option<String>,
+        cursor: Option<String>,
+        limit: Option<usize>,
+    }
     let a: Filters = serde_json::from_value(input).map_err(|e| ForgeError::bad(e.to_string()))?;
-    if a.cursor.as_ref().is_some_and(|c| c.trim().is_empty() || c.len() > 4096) || a.limit.is_some_and(|n| n>100) {
+    if a.cursor
+        .as_ref()
+        .is_some_and(|c| c.trim().is_empty() || c.len() > 4096)
+        || a.limit.is_some_and(|n| n > 100)
+    {
         return Err(ForgeError::bad("invalid issue cursor or page limit"));
     }
-    let request:Request = serde_json::from_value(json!({"state":a.state.as_deref().unwrap_or("open"),"query":a.query,"limit":a.limit}))
-        .map_err(|e| ForgeError::bad(e.to_string()))?;
+    let request: Request = serde_json::from_value(
+        json!({"state":a.state.as_deref().unwrap_or("open"),"query":a.query,"limit":a.limit}),
+    )
+    .map_err(|e| ForgeError::bad(e.to_string()))?;
     request.validate()?;
     let page = page(&source, &request, a.cursor.as_deref(), None).await?;
-    Ok(json!({"project_id":project,"scope":source.scope,"tracker":source.ctx.kind,"host":source.ctx.host,"issues":page.items,"next_cursor":page.next}))
+    Ok(
+        json!({"project_id":project,"scope":source.scope,"tracker":source.ctx.kind,"host":source.ctx.host,"issues":page.items,"next_cursor":page.next}),
+    )
 }

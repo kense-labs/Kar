@@ -342,6 +342,7 @@ fn normalize(
         ..Default::default()
     }))
 }
+#[allow(clippy::too_many_arguments)]
 async fn scope(
     client: &reqwest::Client,
     endpoint: &str,

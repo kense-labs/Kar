@@ -28,6 +28,14 @@ pub(super) struct QueuePump {
     wake: Arc<Notify>,
     errors: Mutex<HashMap<Uuid, (Instant, String)>>,
     settled_background: Mutex<HashMap<Uuid, (u64, std::time::SystemTime)>>,
+    armed_quota_windows: Mutex<HashMap<Uuid, (Uuid, Uuid, u64)>>,
+}
+
+fn epoch_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 impl Workbench {
@@ -51,6 +59,9 @@ impl Workbench {
                 continue;
             };
             if self.archived(id) {
+                continue;
+            }
+            if self.active_quota_hold_until(id).is_some() {
                 continue;
             }
             if self
@@ -132,15 +143,152 @@ impl Workbench {
         self.0.pump.wake.notify_one();
     }
 
+    pub(in crate::workbench) fn active_quota_hold_until(&self, chat: Uuid) -> Option<u64> {
+        let now = epoch_now_ms();
+        let history = self.0.chats.history(chat).ok()?;
+        let last = history.turns.last()?;
+        if last.status != crate::chat::TurnStatus::Failed {
+            return None;
+        }
+        let failure = last.failure.as_ref()?;
+        if failure.class != crate::FailureClass::Quota {
+            return None;
+        }
+        let reset_at = failure.resets_at_ms?;
+        (reset_at > now).then_some(reset_at)
+    }
+
+    fn scan_and_recover_quota_limits(&self) -> Option<Duration> {
+        let now = epoch_now_ms();
+        let projects = self.projects();
+        // 1. Discover any newly quota-blocked chats and arm their recovery window.
+        if let Ok(chats) = self.0.chats.list() {
+            for info in chats {
+                if self.archived(info.id) {
+                    continue;
+                }
+                let Ok(history) = self.0.chats.history(info.id) else {
+                    continue;
+                };
+                let Some(last) = history.turns.last() else {
+                    continue;
+                };
+                if last.status == crate::chat::TurnStatus::Failed
+                    && let Some(failure) = &last.failure
+                    && failure.class == crate::FailureClass::Quota
+                    && let Some(reset_at) = failure.resets_at_ms
+                    && reset_at > now
+                    && let Some(proj) = projects.iter().find(|p| {
+                        self.owns_chat(&self.0.catalog.lock().unwrap(), p, &info)
+                            .unwrap_or(false)
+                    })
+                {
+                    self.0
+                        .pump
+                        .armed_quota_windows
+                        .lock()
+                        .unwrap()
+                        .entry(info.id)
+                        .or_insert((proj.id, last.id, reset_at));
+                }
+            }
+        }
+
+        // 2. Resume any armed chats whose `resets_at_ms` has arrived!
+        let due: Vec<(Uuid, Uuid, Uuid)> = {
+            let mut armed = self.0.pump.armed_quota_windows.lock().unwrap();
+            let ready: Vec<Uuid> = armed
+                .iter()
+                .filter_map(|(chat, (_, _, at))| (*at <= now).then_some(*chat))
+                .collect();
+            ready
+                .into_iter()
+                .filter_map(|chat| {
+                    armed
+                        .remove(&chat)
+                        .map(|(proj, turn, _)| (proj, chat, turn))
+                })
+                .collect()
+        };
+
+        let mut woke_any = false;
+        for (project, chat, failed_turn) in due {
+            if self.archived(chat) || self.binding(project, chat).is_err() {
+                continue;
+            }
+            let Ok(history) = self.0.chats.history(chat) else {
+                continue;
+            };
+            if history.turns.last().map(|t| t.id) != Some(failed_turn) {
+                continue;
+            }
+            let has_queued = self
+                .0
+                .chats
+                .queued_inputs(chat)
+                .map(|q| q.iter().any(QueuedInput::outstanding))
+                .unwrap_or(false);
+            if !has_queued
+                && std::env::var("KAR_AUTO_CONTINUE_ON_QUOTA_RESET").as_deref() != Ok("0")
+            {
+                let resume_id = crate::chat::stable_id([
+                    chat.as_bytes().as_slice(),
+                    failed_turn.as_bytes().as_slice(),
+                    b"quota-recovery",
+                ]);
+                let _ = self
+                    .0
+                    .chats
+                    .enqueue(chat, resume_id, "Continue where you left off.");
+            }
+            self.0.pump.errors.lock().unwrap().remove(&chat);
+            woke_any = true;
+        }
+        if woke_any {
+            self.wake_queue();
+        }
+
+        self.0
+            .pump
+            .armed_quota_windows
+            .lock()
+            .unwrap()
+            .values()
+            .map(|(_, _, at)| Duration::from_millis(at.saturating_sub(epoch_now_ms()).max(50)))
+            .min()
+    }
+
+    fn try_restore_missing_worktree(
+        &self,
+        project: Uuid,
+        info: &crate::chat::ChatInfo,
+    ) -> Result<()> {
+        if info.workspace.exists() {
+            return Ok(());
+        }
+        let Ok(proj) = self.project(project) else {
+            return Ok(());
+        };
+        let Ok(repo) = Repository::open(&proj.root) else {
+            return Ok(());
+        };
+        if let Some(wt_id) = info.worktree_id {
+            let _ = repo.restore_removed_worktree(wt_id)?;
+        } else {
+            let _ = repo.restore_removed_worktree_at(&info.workspace)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn start_services(&self) -> Result<()> {
         {
-            let mut recovered=self.0.pump.recovered_workspaces.lock().unwrap();
+            let mut recovered = self.0.pump.recovered_workspaces.lock().unwrap();
             if !*recovered {
                 super::mcp::worktree::recover_queue_reservations(self)?;
                 super::forge::guides::recover(self)?;
                 super::mcp::collaboration_tools::environment::cards::recover(self)?;
                 super::mcp::collaboration_tools::environment::secrets::clean(&self.0.state)?;
-                *recovered=true;
+                *recovered = true;
             }
         }
         self.0.shell.start(self);
@@ -150,6 +298,27 @@ impl Workbench {
         self.0.pump.started.call_once(||{
             super::prepared_runs::recover(self);
             super::relay_client::tunnel::start(self);
+            super::access::start_relay_workers(self.clone());
+            super::storage::start_cleanup_worker(self.clone());
+            let quota_weak = Arc::downgrade(&self.0);
+            tokio::spawn(async move {
+                loop {
+                    let next_wait = {
+                        let Some(inner) = quota_weak.upgrade() else {
+                            return;
+                        };
+                        let app = Workbench(inner);
+                        tokio::task::spawn_blocking(move || app.scan_and_recover_quota_limits())
+                            .await
+                            .ok()
+                            .flatten()
+                    };
+                    let sleep_dur = next_wait
+                        .unwrap_or(Duration::from_secs(5))
+                        .min(Duration::from_secs(5));
+                    tokio::time::sleep(sleep_dur).await;
+                }
+            });
             let cleaner=Arc::downgrade(&self.0);
             tokio::spawn(async move {
                 loop {
@@ -197,11 +366,16 @@ impl Workbench {
         id: Uuid,
         owner: &mut MutexGuard<'_, Option<ChatSession>>,
     ) -> Result<()> {
-        if super::mcp::worktree::pending(self, id) { return Err(Error::Busy); }
-        self.attach_bound(project,id,owner).await
+        if super::mcp::worktree::pending(self, id) {
+            return Err(Error::Busy);
+        }
+        self.attach_bound(project, id, owner).await
     }
     pub(super) async fn attach_bound(
-        &self, project: Uuid, id: Uuid, owner: &mut MutexGuard<'_, Option<ChatSession>>,
+        &self,
+        project: Uuid,
+        id: Uuid,
+        owner: &mut MutexGuard<'_, Option<ChatSession>>,
     ) -> Result<()> {
         let _dispatch = self.0.chats.stop_fence(id, false)?;
         if owner.as_ref().is_some_and(ChatSession::is_closed)
@@ -211,6 +385,7 @@ impl Workbench {
         }
         if owner.is_none() {
             let info = self.0.chats.saved_info(id)?;
+            self.try_restore_missing_worktree(project, &info)?;
             self.chat_directories(&info.workspace, &info.settings)?;
             let mut tools = None;
             let mut session = self
@@ -218,7 +393,9 @@ impl Workbench {
                 .chats
                 .resume_configured(id, |runtime, opts| {
                     tools = self.0.mcp.issue(project, id, runtime)?;
-                    if let Some(lease) = &tools { lease.configure(opts); }
+                    if let Some(lease) = &tools {
+                        lease.configure(opts);
+                    }
                     opts.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
                     opts.prompt_suggestions = self.suggestion_source(id);
                     Ok(())
@@ -227,7 +404,9 @@ impl Workbench {
             self.controller(id).bind_model_tools(&mut session, tools);
             **owner = Some(session);
         }
-        if let Some(lease) = self.controller(id).model_tools.lock().unwrap().as_ref() {lease.touch();}
+        if let Some(lease) = self.controller(id).model_tools.lock().unwrap().as_ref() {
+            lease.touch();
+        }
         self.0.pump.errors.lock().unwrap().remove(&id);
         Ok(())
     }
@@ -236,6 +415,8 @@ impl Workbench {
 #[derive(Serialize)]
 struct Queue {
     held: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quota_resets_at_ms: Option<u64>,
     inputs: Vec<QueuedInput>,
     delivery_error: Option<String>,
 }
@@ -246,6 +427,7 @@ async fn list(
     blocking(move || {
         app.binding(p, c)?;
         let (held, inputs) = app.0.chats.queue_view(c)?;
+        let quota_resets_at_ms = app.active_quota_hold_until(c);
         let delivery_error = app
             .0
             .pump
@@ -255,7 +437,8 @@ async fn list(
             .get(&c)
             .map(|v| v.1.clone());
         Ok(Queue {
-            held,
+            held: held || quota_resets_at_ms.is_some(),
+            quota_resets_at_ms,
             inputs,
             delivery_error,
         })
@@ -306,7 +489,9 @@ async fn enqueue(
         if app.archived(c) {
             return Err(Error::Refused("chat is archived".into()));
         }
-        if let Some(schema)=m.requested_output_schema { app.register_run_schema(p,c,m.id,schema)?; }
+        if let Some(schema) = m.requested_output_schema {
+            app.register_run_schema(p, c, m.id, schema)?;
+        }
         let receipt = app
             .0
             .chats
@@ -367,7 +552,9 @@ async fn rewind(
             return Ok(old);
         }
         if history.chat.process_only {
-            return Err(Error::Unsupported("provider cannot resume a rewound conversation".into()));
+            return Err(Error::Unsupported(
+                "provider cannot resume a rewound conversation".into(),
+            ));
         }
         let mut owner = controller.owner.try_lock().map_err(|_| Error::Busy)?;
         if app.archived(chat) {
@@ -378,7 +565,13 @@ async fn rewind(
         {
             return Err(Error::Busy);
         }
-        if app.0.chats.queued_inputs(chat)?.iter().any(crate::chat::QueuedInput::outstanding) {
+        if app
+            .0
+            .chats
+            .queued_inputs(chat)?
+            .iter()
+            .any(crate::chat::QueuedInput::outstanding)
+        {
             return Err(Error::Busy);
         }
         if let Some(session) = owner.take() {

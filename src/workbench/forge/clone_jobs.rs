@@ -204,7 +204,11 @@ fn begin(
             return Err(Error::Refused("project ID was deleted".into()));
         }
         if let Some(old) = db.forge.clones.get(&id) {
-            if record.is_some() || old.phase == "running" || old.phase == "done" || old.input.dest != input.dest {
+            if record.is_some()
+                || old.phase == "running"
+                || old.phase == "done"
+                || old.input.dest != input.dest
+            {
                 return Err(Error::Busy);
             }
         } else if retry {
@@ -343,12 +347,18 @@ fn started(id: Uuid, input: &Prepared) -> Value {
 }
 
 pub(in crate::workbench) async fn model_start(
-    app: Workbench, id: Uuid, title: String, payload: Value,
+    app: Workbench,
+    id: Uuid,
+    title: String,
+    payload: Value,
     record: impl Fn(&mut crate::workbench::Catalog, &Value) -> crate::Result<()> + Send + Sync,
 ) -> crate::Result<Value> {
     let request = serde_json::from_value(payload)?;
-    let prepared = repository::prepare(&app, request).await.map_err(|e| Error::Refused(e.detail))?;
-    let job = begin(&app, id, title, prepared, false, Some(&record)).map_err(|e| Error::Refused(e.detail))?;
+    let prepared = repository::prepare(&app, request)
+        .await
+        .map_err(|e| Error::Refused(e.detail))?;
+    let job = begin(&app, id, title, prepared, false, Some(&record))
+        .map_err(|e| Error::Refused(e.detail))?;
     Ok(started(job.project, &job.input))
 }
 async fn start(State(app): State<Workbench>, Json(s): Json<Start>) -> Reply<Value> {

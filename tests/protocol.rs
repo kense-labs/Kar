@@ -315,20 +315,30 @@ fn peer(protocol: &str) {
                             }
                             continue;
                         }
-                        if matches!(name.as_str(), "delivery-tool-wait" | "delivery-tool-exit") && protocol == "acp" {
+                        if matches!(name.as_str(), "delivery-tool-wait" | "delivery-tool-exit")
+                            && protocol == "acp"
+                        {
                             if name == "delivery-tool-exit" {
-                                let marker = std::path::PathBuf::from(std::env::var_os("KAR_TEST_DELIVERY_EXIT").unwrap());
+                                let marker = std::path::PathBuf::from(
+                                    std::env::var_os("KAR_TEST_DELIVERY_EXIT").unwrap(),
+                                );
                                 std::thread::spawn(move || {
-                                    while !marker.exists() { std::thread::sleep(Duration::from_millis(5)); }
+                                    while !marker.exists() {
+                                        std::thread::sleep(Duration::from_millis(5));
+                                    }
                                     std::process::exit(17);
                                 });
                             }
-                            emit(json!({"method":"session/update","params":{"sessionId":"session-1","update":{
-                                "sessionUpdate":"tool_call","toolCallId":"held-tool","title":"held","status":"in_progress"
-                            }}}));
+                            emit(
+                                json!({"method":"session/update","params":{"sessionId":"session-1","update":{
+                                    "sessionUpdate":"tool_call","toolCallId":"held-tool","title":"held","status":"in_progress"
+                                }}}),
+                            );
                             continue;
                         }
-                        if name == "merged-first + interrupt-one + interrupt-two" && protocol == "acp" {
+                        if name == "merged-first + interrupt-one + interrupt-two"
+                            && protocol == "acp"
+                        {
                             rpc(json!({"stopReason":"end_turn"}));
                             continue;
                         }
@@ -1778,7 +1788,10 @@ async fn main() {
     structured_output().await.unwrap();
     manual_compaction_controls().await.unwrap();
     failures().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(12), delivery::run()).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(12), delivery::run())
+        .await
+        .unwrap()
+        .unwrap();
     acp_failures::run().await.unwrap();
     tokio::time::timeout(Duration::from_secs(20), claude_input::run())
         .await

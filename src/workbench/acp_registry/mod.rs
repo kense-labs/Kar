@@ -1,9 +1,9 @@
 //! Workbench-owned, versioned ACP installations. A saved chat resolves its pinned
 //! executable from this store without npm, uv or registry network access.
-pub(crate) mod models;
-pub(crate) mod auth;
 mod archive;
+pub(crate) mod auth;
 mod catalog;
+pub(crate) mod models;
 mod packages;
 mod profiles;
 use super::{Workbench, http::ApiError};
@@ -136,15 +136,15 @@ pub(crate) fn resolve(
     opts: &mut SessionOptions,
 ) -> Result<Runtime> {
     if runtime.starts_with("acp-profile:") {
-        let rt=profiles::resolve(store, runtime, opts)?;
-        auth::bind(store,runtime,opts)?;
+        let rt = profiles::resolve(store, runtime, opts)?;
+        auth::bind(store, runtime, opts)?;
         return Ok(rt);
     }
     let k = Key::parse(runtime)?;
     let r = Receipt::load(&k, store, runtime)?;
     let program = r.program(&k.dir(store))?;
     configure(&r.settings, opts);
-    auth::bind(store,runtime,opts)?;
+    auth::bind(store, runtime, opts)?;
     if k.kind != "binary"
         && let Some(path) = opts.env_value("PATH")
     {
@@ -518,12 +518,18 @@ async fn uninstall_binary(State(app): State<Workbench>, Param(agent): Param<Stri
 
 /// Prepare a trusted release archive with the same checked extraction as managed ACP launchers.
 pub(in crate::workbench) async fn pinned_executable(
-    dir: &Path, source: url::Url, executable: &str, checksum: &str,
+    dir: &Path,
+    source: url::Url,
+    executable: &str,
+    checksum: &str,
     stage: impl Fn(&'static str) + Send + Sync,
 ) -> Result<PathBuf> {
     let archive = catalog::Binary {
-        archive:source.to_string(), cmd:executable.into(), sha256:Some(checksum.into()), launch:Default::default()
+        archive: source.to_string(),
+        cmd: executable.into(),
+        sha256: Some(checksum.into()),
+        launch: Default::default(),
     };
-    let (relative,_) = archive::install_with_progress(dir, &source, &archive, stage).await?;
+    let (relative, _) = archive::install_with_progress(dir, &source, &archive, stage).await?;
     Ok(dir.join(relative))
 }

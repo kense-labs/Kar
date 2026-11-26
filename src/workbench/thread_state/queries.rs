@@ -231,7 +231,7 @@ struct Cursor {
     after: Option<u64>,
 }
 impl Store {
-    fn page(&self, p: Uuid, after: u64) -> (u64, VecDeque<super::Change>) {
+    pub(super) fn page(&self, p: Uuid, after: u64) -> (u64, VecDeque<super::Change>) {
         let mut read = after;
         let mut changes = VecDeque::new();
         for row in self.changes.iter().skip(after as usize) {

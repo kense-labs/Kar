@@ -160,12 +160,7 @@ struct Matches {
     count: usize,
 }
 
-fn result(
-    cursor: ChatCursor,
-    rows: &[Matches],
-    q: &Find,
-    resolved_start: Option<usize>,
-) -> Value {
+fn result(cursor: ChatCursor, rows: &[Matches], q: &Find, resolved_start: Option<usize>) -> Value {
     let total = rows.last().map_or(0, |r| r.start_index + r.count);
     let mut index = 0;
     if total > 0 {

@@ -61,24 +61,30 @@ impl Trace {
         open.open(path)?.write_all(&line)?;
         Ok(())
     }
-    pub(in crate::workbench) fn rotated(&self, before:std::time::SystemTime, apply:bool)->Result<(u64,u64)> {
-        let _guard=self.write.lock().unwrap();
-        let mut files=0;
-        let mut bytes=0u64;
+    pub(in crate::workbench) fn rotated(
+        &self,
+        before: std::time::SystemTime,
+        apply: bool,
+    ) -> Result<(u64, u64)> {
+        let _guard = self.write.lock().unwrap();
+        let mut files = 0;
+        let mut bytes = 0u64;
         for backup in 1..=BACKUPS {
-            let path=self.path(backup);
+            let path = self.path(backup);
             match std::fs::symlink_metadata(&path) {
                 Ok(meta) if meta.is_file() && meta.modified()? < before => {
-                    files+=1;
-                    bytes=bytes.saturating_add(meta.len());
-                    if apply {std::fs::remove_file(path)?;}
+                    files += 1;
+                    bytes = bytes.saturating_add(meta.len());
+                    if apply {
+                        std::fs::remove_file(path)?;
+                    }
                 }
                 Ok(_) => (),
-                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>(),
-                Err(e)=>return Err(e.into()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(e.into()),
             }
         }
-        Ok((files,bytes))
+        Ok((files, bytes))
     }
     fn files(&self) -> Vec<(PathBuf, std::io::Result<File>)> {
         let _g = self.write.lock().unwrap();
@@ -92,9 +98,41 @@ impl Trace {
             .collect()
     }
 }
+static SERVER_START_NANO: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static TOTAL_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TOTAL_ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn parse_traceparent(header: &str) -> Option<(String, String)> {
+    let mut parts = header.trim().split('-');
+    let version = parts.next()?;
+    let trace_id = parts.next()?;
+    let parent_span_id = parts.next()?;
+    let flags = parts.next()?;
+    if parts.next().is_some()
+        || version.len() != 2
+        || trace_id.len() != 32
+        || parent_span_id.len() != 16
+        || flags.len() != 2
+        || !trace_id.bytes().all(|b| b.is_ascii_hexdigit())
+        || trace_id.bytes().all(|b| b == b'0')
+        || !parent_span_id.bytes().all(|b| b.is_ascii_hexdigit())
+        || parent_span_id.bytes().all(|b| b == b'0')
+        || !flags.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some((
+        trace_id.to_ascii_lowercase(),
+        parent_span_id.to_ascii_lowercase(),
+    ))
+}
+
 struct Span {
     trace: Arc<Trace>,
     name: String,
+    trace_id: String,
+    span_id: String,
+    parent_span_id: Option<String>,
     started: jiff::Timestamp,
     clock: Instant,
     finished: bool,
@@ -102,20 +140,22 @@ struct Span {
 impl Span {
     fn record(&self, tag: &str, code: Option<u16>) -> Value {
         let ended = jiff::Timestamp::now();
-        let trace = Uuid::new_v4().simple().to_string();
-        let span = Uuid::new_v4().simple().to_string()[..16].to_owned();
         let cause = code.map(|c| format!("HTTP {c}"));
         let events = if tag == "Failure" {
             vec![
                 json!({"name":cause,"timeUnixNano":ended.as_nanosecond().to_string(),
-            "attributes":{"effect.logLevel":if code.is_some_and(|c|c>=500){"Error"}else{"Warning"}}}),
+            "attributes":{"log.severity":if code.is_some_and(|c|c>=500){"Error"}else{"Warning"},"effect.logLevel":if code.is_some_and(|c|c>=500){"Error"}else{"Warning"}}}),
             ]
         } else {
             vec![]
         };
-        json!({"name":self.name,"traceId":trace,"spanId":span,"durationMs":self.clock.elapsed().as_secs_f64()*1000.,
+        let mut rec = json!({"name":self.name,"traceId":self.trace_id,"spanId":self.span_id,"durationMs":self.clock.elapsed().as_secs_f64()*1000.,
             "startTimeUnixNano":self.started.as_nanosecond().to_string(),"endTimeUnixNano":ended.as_nanosecond().to_string(),
-            "exit":{"_tag":tag,"cause":cause},"events":events})
+            "exit":{"_tag":tag,"cause":cause},"events":events});
+        if let Some(parent) = &self.parent_span_id {
+            rec["parentSpanId"] = json!(parent);
+        }
+        rec
     }
 }
 impl Drop for Span {
@@ -144,27 +184,64 @@ pub(in crate::workbench) async fn observe(
     else {
         return next.run(req).await;
     };
-    if matches!(route, "/diagnostics/otlp" | "/diagnostics/traces" | "/telemetry/v1/traces") {
+    if matches!(
+        route,
+        "/diagnostics/otlp" | "/diagnostics/traces" | "/telemetry/v1/traces"
+    ) {
         return next.run(req).await;
     }
+    let boot_nano = SERVER_START_NANO
+        .get_or_init(|| jiff::Timestamp::now().as_nanosecond().to_string())
+        .clone();
+    let incoming_tp = req
+        .headers()
+        .get("traceparent")
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_traceparent);
+    let (trace_id, parent_span_id) = match incoming_tp {
+        Some((tid, pid)) => (tid, Some(pid)),
+        None => (Uuid::new_v4().simple().to_string(), None),
+    };
+    let span_id = Uuid::new_v4().simple().to_string()[..16].to_owned();
+    let outbound_tp = format!("00-{trace_id}-{span_id}-01");
     let mut span = Span {
         trace: app.0.observability.traces.clone(),
         name: format!("{} {route}", req.method()),
+        trace_id,
+        span_id,
+        parent_span_id,
         started: jiff::Timestamp::now(),
         clock: Instant::now(),
         finished: false,
     };
-    let response = next.run(req).await;
+    let mut response = next.run(req).await;
+    if let Ok(hv) = outbound_tp.parse() {
+        response.headers_mut().insert("traceparent", hv);
+    }
     let status = response.status();
+    let is_fail = status.is_client_error() || status.is_server_error();
+    let total_reqs = TOTAL_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let total_errs = if is_fail {
+        TOTAL_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+    } else {
+        TOTAL_ERRORS.load(std::sync::atomic::Ordering::Relaxed)
+    };
     let record = span.record(
-        if status.is_client_error() || status.is_server_error() {
-            "Failure"
-        } else {
-            "Success"
-        },
+        if is_fail { "Failure" } else { "Success" },
         Some(status.as_u16()),
     );
     span.finished = true;
+    let end_nano = record["endTimeUnixNano"]
+        .as_str()
+        .unwrap_or(&boot_nano)
+        .to_owned();
+    super::otlp::export_server_telemetry(
+        record.clone(),
+        total_reqs,
+        total_errs,
+        boot_nano,
+        end_nano,
+    );
     let trace = span.trace.clone();
     let _ = tokio::task::spawn_blocking(move || trace.append(&record)).await;
     response

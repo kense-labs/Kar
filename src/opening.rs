@@ -4,7 +4,7 @@ use crate::{
     Session, TurnFailure, UnavailableReason,
 };
 use serde_json::{Value, json};
-use std::{collections::HashSet, path::Path};
+use std::{borrow::Cow, collections::HashSet, path::Path};
 
 /// Qwen sends this root terminal result before replying to initialize. Similar
 /// text in a model response or in a child result is not an account diagnosis.
@@ -197,7 +197,91 @@ pub(crate) fn advertised(caps: &Value, name: &str) -> bool {
     caps[name].is_object() || caps[name] == true
 }
 
+fn is_rfc3986_path_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'.' | b'_'
+                | b'~'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+                | b':'
+                | b'@'
+                | b'/'
+                | b'%'
+                | b'-'
+        )
+}
+
+fn has_valid_percent_escapes(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len()
+                || !bytes[i + 1].is_ascii_hexdigit()
+                || !bytes[i + 2].is_ascii_hexdigit()
+            {
+                return false;
+            }
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    true
+}
+
+fn normalize_listed_cwd(saved: &str) -> Cow<'_, str> {
+    let stripped = if let Some(rest) = saved.strip_prefix("file://localhost") {
+        if rest.starts_with('/') { rest } else { saved }
+    } else if let Some(rest) = saved.strip_prefix("file://") {
+        if rest.starts_with('/')
+            || matches!(rest.as_bytes(), [letter, b':', b'/', ..] if letter.is_ascii_alphabetic())
+        {
+            rest
+        } else {
+            saved
+        }
+    } else {
+        saved
+    };
+    let is_abs_url_path = stripped.starts_with('/')
+        || matches!(stripped.as_bytes(), [letter, b':', b'/', ..] if letter.is_ascii_alphabetic());
+    if !is_abs_url_path || !stripped.contains('%') || !stripped.bytes().all(is_rfc3986_path_byte) {
+        return Cow::Borrowed(stripped);
+    }
+    let mut segments = Vec::new();
+    for segment in stripped.split('/') {
+        if !has_valid_percent_escapes(segment) {
+            return Cow::Borrowed(stripped);
+        }
+        let Ok(decoded) = percent_encoding::percent_decode_str(segment).decode_utf8() else {
+            return Cow::Borrowed(stripped);
+        };
+        if decoded.contains('/')
+            || decoded.contains('\0')
+            || (cfg!(windows) && decoded.contains('\\'))
+        {
+            return Cow::Borrowed(stripped);
+        }
+        segments.push(decoded);
+    }
+    Cow::Owned(segments.join("/"))
+}
+
 pub(crate) fn same_directory(saved: &str, requested: &Path) -> bool {
+    let normalized = normalize_listed_cwd(saved);
+    let saved: &str = &normalized;
     #[cfg(windows)]
     let saved = match saved.as_bytes() {
         [b'/', letter, b':', b'/', ..] if letter.is_ascii_alphabetic() => &saved[1..],
@@ -281,5 +365,54 @@ mod qwen_tests {
             other[k] = v;
             assert!(qwen_missing_auth(&other).is_none(), "nonmatching field {k}");
         }
+    }
+
+    #[test]
+    fn same_directory_decodes_file_urls_and_single_pass_percent_segments() {
+        assert!(same_directory(
+            "file:///Users/leon/My%20Project",
+            Path::new("/Users/leon/My Project"),
+        ));
+        assert!(same_directory(
+            "file://localhost/Users/leon/%E4%B8%AD%E6%96%87%20%E7%9B%AE%E5%BD%95",
+            Path::new("/Users/leon/中文 目录"),
+        ));
+        assert!(same_directory(
+            "/Users/leon/100%25%20pure",
+            Path::new("/Users/leon/100% pure"),
+        ));
+        // Single-pass decoding: %2520 becomes literal "%20", never a space.
+        assert!(same_directory(
+            "/Users/leon/literal%2520token",
+            Path::new("/Users/leon/literal%20token"),
+        ));
+        assert!(!same_directory(
+            "/Users/leon/literal%2520token",
+            Path::new("/Users/leon/literal token"),
+        ));
+        // Encoded separators or NUL bytes are rejected and left untouched.
+        assert!(!same_directory(
+            "/Users/leon/a%2Fb",
+            Path::new("/Users/leon/a/b"),
+        ));
+        assert_eq!(
+            normalize_listed_cwd("/Users/leon/bad%00seg").as_ref(),
+            "/Users/leon/bad%00seg",
+        );
+        // Raw paths that already contain non-RFC3986 bytes (like spaces or raw UTF-8) are not re-decoded.
+        assert!(same_directory(
+            "/Users/leon/中文 100%20raw",
+            Path::new("/Users/leon/中文 100%20raw"),
+        ));
+        // Remote file:// hosts are not mistaken for local paths.
+        assert!(!same_directory(
+            "file://remotehost/share",
+            Path::new("remotehost/share"),
+        ));
+        // Genuine mismatches remain false.
+        assert!(!same_directory(
+            "file:///Users/leon/Other%20Project",
+            Path::new("/Users/leon/My Project"),
+        ));
     }
 }

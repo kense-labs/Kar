@@ -170,7 +170,10 @@ impl SessionCapabilityDeclaration {
                     "the browser adapter has no output schema channel",
                 ),
                 ("pi_project_trusted", "the harness owns project resources"),
-                ("pi_allow_project_package_install", "the harness owns package installation"),
+                (
+                    "pi_allow_project_package_install",
+                    "the harness owns package installation",
+                ),
                 (
                     "service_tier",
                     "the harness has no per-conversation service tier",

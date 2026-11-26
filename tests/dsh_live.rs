@@ -71,7 +71,7 @@ async fn message(
     let messages = body["messages"].to_string();
     if messages.contains("DSH_IMAGE_ROUTE") {
         model.requests.lock().unwrap().push(body);
-        return completion("image received",None);
+        return completion("image received", None);
     }
     if messages.contains("KAR_QUEUE_CRASH") {
         let held = body["messages"]

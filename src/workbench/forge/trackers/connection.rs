@@ -4,21 +4,45 @@ pub(super) struct Probe {
     name: String,
     scopes: Vec<Value>,
 }
-pub(super) fn context(account: &Account) -> Result<Context, ForgeError> {
+pub(super) fn context(
+    state_dir: &std::path::Path,
+    handle: &str,
+    account: &Account,
+) -> Result<Context, ForgeError> {
     let api = Context::base(&account.api)?;
+    let svc = crate::workbench::secrets::SecretService::open(state_dir)?;
+    let token = svc.resolve_local_sync(&format!("tracker:{handle}"), &account.token)?;
     Ok(Context {
         kind: "linear".into(),
         host: api.authority().into(),
         repository: String::new(),
-        token: Some(account.token.clone()),
+        token: Some(token.as_str().to_owned()),
         api_base: api,
         client: Context::client()?,
         signin: None,
         cwd: PathBuf::new(),
     })
 }
-pub(super) async fn probe(account: &Account) -> Result<Probe, ForgeError> {
-    let c = context(account)?;
+pub(super) async fn probe(
+    state_dir: &std::path::Path,
+    handle: &str,
+    account: &Account,
+) -> Result<Probe, ForgeError> {
+    let api = Context::base(&account.api)?;
+    let svc = crate::workbench::secrets::SecretService::open(state_dir)?;
+    let token = svc
+        .resolve_secret_value(&format!("tracker:{handle}"), &account.token)
+        .await?;
+    let c = Context {
+        kind: "linear".into(),
+        host: api.authority().into(),
+        repository: String::new(),
+        token: Some(token.as_str().to_owned()),
+        api_base: api,
+        client: Context::client()?,
+        signin: None,
+        cwd: PathBuf::new(),
+    };
     let mut after = None;
     let mut scopes = vec![];
     let mut seen = std::collections::BTreeSet::new();

@@ -154,10 +154,18 @@ impl Sources {
             };
             let fresh;
             let moved = ownership.handoff_workspace(id);
-            let info = if let Some(entry) = self.entries.get(&id).filter(|e| moved.is_none_or(|cwd| cwd == e.info.workspace)) {
+            let info = if let Some(entry) = self
+                .entries
+                .get(&id)
+                .filter(|e| moved.is_none_or(|cwd| cwd == e.info.workspace))
+            {
                 &entry.info
             } else {
-                let header = if moved.is_some() { app.0.chats.saved_info(id) } else { app.0.chats.initial_info(id) };
+                let header = if moved.is_some() {
+                    app.0.chats.saved_info(id)
+                } else {
+                    app.0.chats.initial_info(id)
+                };
                 let Ok(header) = header else {
                     continue;
                 };

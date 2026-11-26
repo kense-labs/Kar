@@ -1,7 +1,9 @@
 //! Scoped subprocesses used for private native management operations.
 pub(crate) mod diagnostic;
 use std::{
+    ffi::OsStr,
     io,
+    path::{Path, PathBuf},
     process::{ExitStatus, Output},
 };
 use tokio::{
@@ -174,4 +176,81 @@ async fn bounded(input: impl AsyncRead + Unpin, limit: u64) -> io::Result<Vec<u8
         return Err(io::Error::other("Native output exceeded its size limit"));
     }
     Ok(bytes)
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        (meta.permissions().mode() & 0o111) != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn find_sh_with(fixed: &[&Path], path_var: Option<&OsStr>) -> PathBuf {
+    for candidate in fixed {
+        if is_executable_file(candidate) {
+            return (*candidate).to_path_buf();
+        }
+    }
+    if let Some(paths) = path_var {
+        for dir in std::env::split_paths(paths) {
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            let candidate = dir.join("sh");
+            if is_executable_file(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from("/bin/sh")
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) fn find_sh() -> PathBuf {
+    find_sh_with(
+        &[Path::new("/bin/sh"), Path::new("/usr/bin/sh")],
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn find_sh_checks_fixed_locations_then_path_for_executable_sh() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let non_exec = dir.path().join("non_exec_sh");
+        std::fs::write(&non_exec, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&non_exec, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let bin_dir = dir.path().join("custom_bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let custom_sh = bin_dir.join("sh");
+        std::fs::write(&custom_sh, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&custom_sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let missing = dir.path().join("missing_sh");
+        let path_env = std::env::join_paths([dir.path(), bin_dir.as_path()]).unwrap();
+        assert_eq!(
+            find_sh_with(&[&missing, &non_exec], Some(&path_env)),
+            custom_sh
+        );
+        assert_eq!(find_sh_with(&[&custom_sh, &missing], None), custom_sh);
+        assert!(find_sh().is_absolute());
+    }
 }

@@ -25,7 +25,7 @@ fn app(q: &Value) -> Result<&str> {
     if id.starts_with('-')
         || !id
             .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || [b'.', b'_', b'-'].contains(&c))
+            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
     {
         return Err(Error::Refused("invalid application identifier".into()));
     }

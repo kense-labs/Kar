@@ -5,8 +5,8 @@ mod update;
 pub use host::{HostInstallPlan, InstallReason, InstallRefusal, InstallStep};
 pub use receipts::{InstallResult, UpgradeReason, UpgradeResult};
 mod plan;
-pub use plan::{InstallCommand, InstallPreview};
 use crate::{Error, Result, Runtime};
+pub use plan::{InstallCommand, InstallPreview};
 use serde::Serialize;
 pub use update::UpdateCheck;
 

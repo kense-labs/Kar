@@ -11,13 +11,14 @@ struct Setting {
     supplied: fn(&SessionSettings) -> bool,
 }
 
-fn rules(protocol: Protocol, id: &str) -> [Setting; 17] {
+fn rules(protocol: Protocol, id: &str) -> [Setting; 19] {
     use Protocol::*;
     let core = matches!(protocol, Codex | Claude | Pi | Qwen | Qoder);
     let acp = protocol == Acp;
     let grok = acp && id == "grok";
     let buddy = acp && id == "codebuddy";
     let opencode = acp && id == "opencode";
+    let cursor = acp && id == "cursor";
     let dsh = id == "dsh" && matches!(protocol, Dsh | Acp);
     let rule = |name, allowed, reason, supplied| Setting {
         name,
@@ -113,9 +114,25 @@ fn rules(protocol: Protocol, id: &str) -> [Setting; 17] {
         ),
         rule(
             "service_tier",
-            matches!(protocol, Claude | Codex),
+            matches!(protocol, Claude | Codex) || cursor,
             "native service tier on this adapter",
             |s| s.service_tier.is_some(),
+        ),
+        rule(
+            "service_tier_fallback",
+            matches!(protocol, Claude | Codex),
+            if cursor {
+                "Cursor exposes no server-side applied service-tier readback, so service_tier_fallback is not supported"
+            } else {
+                "service_tier_fallback on this adapter"
+            },
+            |s| s.service_tier_fallback.is_some(),
+        ),
+        rule(
+            "native_permissions",
+            protocol == Codex,
+            "native_permissions on this adapter",
+            |s| s.native_permissions.is_some(),
         ),
         rule(
             "name",
@@ -160,15 +177,9 @@ pub(super) fn validate(settings: &SessionSettings, protocol: Protocol, id: &str)
 
 pub(crate) fn credential_refusal(protocol: Protocol, id: &str) -> Option<&'static str> {
     match protocol {
-        Protocol::Acp if matches!(id, "devin" | "antigravity" | "cursor") => {
+        Protocol::Acp if matches!(id, "devin" | "antigravity") => {
             Some("session MCP credential isolation has not been verified for this ACP adapter")
         }
-        Protocol::Dsh => Some(
-            "DSH session MCP requires a stdio command and arguments without credential environment or headers",
-        ),
-        Protocol::Acp if id == "dsh" => Some(
-            "DSH session MCP requires a stdio command and arguments without credential environment or headers",
-        ),
         _ => None,
     }
 }
@@ -176,12 +187,12 @@ pub(crate) fn credential_refusal(protocol: Protocol, id: &str) -> Option<&'stati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{McpServer, Runtime, Session, SessionOptions};
+    use crate::{McpServer, Runtime, Session, SessionOptions, options::CodexNativePermissions};
 
     #[tokio::test]
     async fn raw_http_and_stdio_credentials_are_refused_before_launch() {
         let dir = tempfile::tempdir().unwrap();
-        for id in ["antigravity", "devin", "cursor"] {
+        for id in ["antigravity", "devin"] {
             let rt = Runtime::new(id, dir.path().join("absent"), &[], Protocol::Acp);
             let secret = "private-fixture";
             for server in [
@@ -203,5 +214,59 @@ mod tests {
                 );
             }
         }
+        assert!(credential_refusal(Protocol::Acp, "cursor").is_none());
+        assert!(credential_refusal(Protocol::Acp, "dsh").is_none());
+        assert!(credential_refusal(Protocol::Dsh, "dsh").is_none());
+    }
+
+    #[test]
+    fn service_tier_fallback_cursor_service_tier_and_native_permissions_rules() {
+        let mut cursor_tier = SessionSettings {
+            service_tier: Some("fast".into()),
+            ..Default::default()
+        };
+        assert!(cursor_tier.validate(Protocol::Acp, "cursor").is_ok());
+        cursor_tier.service_tier = Some("priority".into());
+        assert!(matches!(
+            cursor_tier.validate(Protocol::Acp, "cursor"),
+            Err(Error::Refused(_))
+        ));
+
+        let cursor_fb = SessionSettings {
+            service_tier: Some("fast".into()),
+            service_tier_fallback: Some("default".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            cursor_fb.validate(Protocol::Acp, "cursor"),
+            Err(Error::Unsupported(reason)) if reason.contains("Cursor")
+        ));
+        assert!(cursor_fb.validate(Protocol::Claude, "claude").is_ok());
+        assert!(cursor_fb.validate(Protocol::Codex, "codex").is_ok());
+
+        let mut orphan_fb = SessionSettings {
+            service_tier_fallback: Some("default".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            orphan_fb.validate(Protocol::Claude, "claude"),
+            Err(Error::Refused(_))
+        ));
+        orphan_fb.service_tier = Some("fast".into());
+        orphan_fb.service_tier_fallback = Some("flex".into());
+        assert!(matches!(
+            orphan_fb.validate(Protocol::Codex, "codex"),
+            Err(Error::Refused(_))
+        ));
+
+        let perms = SessionSettings {
+            native_permissions: Some(CodexNativePermissions::Inherit),
+            ..Default::default()
+        };
+        assert!(perms.validate(Protocol::Codex, "codex").is_ok());
+        assert!(matches!(
+            perms.validate(Protocol::Claude, "claude"),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

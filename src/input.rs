@@ -219,7 +219,9 @@ impl InputImage {
     }
     fn block(&self, protocol: Protocol) -> Value {
         match protocol {
-            Protocol::Muse => json!({"type":"image","mediaType":self.mime,"base64Data":self.data.as_ref()}),
+            Protocol::Muse => {
+                json!({"type":"image","mediaType":self.mime,"base64Data":self.data.as_ref()})
+            }
             Protocol::Cybion => self.data_url().into(),
             Protocol::KimiKap => {
                 json!({"type":"image","source":{"kind":"base64","media_type":self.mime,"data":self.data.as_ref()}})

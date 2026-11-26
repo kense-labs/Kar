@@ -78,7 +78,9 @@ pub(super) fn release(raw: &str) -> Option<Version> {
     static RELEASE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"\bv?(\d+\.\d+\.\d+(?:-[\w.-]+)?)\b").expect("release version pattern")
     });
-    RELEASE.captures(raw).and_then(|c| Version::parse(c.get(1)?.as_str()).ok())
+    RELEASE
+        .captures(raw)
+        .and_then(|c| Version::parse(c.get(1)?.as_str()).ok())
 }
 
 fn compare(

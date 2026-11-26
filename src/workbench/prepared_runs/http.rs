@@ -59,7 +59,7 @@ struct Action {
 fn act(app: &Workbench, (p, c, r): Ids, cmd: Uuid, retry: bool) -> Result<Value> {
     let row = get_job(app, p, c, r)?;
     let action = if retry { "retry" } else { "release" };
-    if row.commands.get(&cmd).is_none()
+    if !row.commands.contains_key(&cmd)
         && retry
         && let Some(s) = row.script.as_ref()
         && row.stage == Stage::Failed

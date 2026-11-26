@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+#[allow(clippy::large_enum_variant)]
 enum Precheck {
     Completed(Handoff),
     Ready(Option<crate::provider_instance::HistoryInstance>),
@@ -117,7 +118,9 @@ fn prevalidate(
     }
     if history.chat.runtime == request.runtime
         && history.chat.model == request.model
-        && settings.as_ref().is_none_or(|s| s == &history.chat.settings)
+        && settings
+            .as_ref()
+            .is_none_or(|s| s == &history.chat.settings)
         && destination.as_ref().is_none_or(|instance| {
             history
                 .chat
@@ -136,7 +139,10 @@ fn prevalidate(
 async fn stop_active_session(app: &Workbench, chat: Uuid, session: Arc<Session>) {
     if matches!(session.protocol(), Protocol::Cybion | Protocol::Morph)
         && let Ok(history) = app.0.chats.history(chat)
-        && let Some(turn) = history.turns.last().filter(|t| t.status == TurnStatus::Running)
+        && let Some(turn) = history
+            .turns
+            .last()
+            .filter(|t| t.status == TurnStatus::Running)
     {
         let _ = session.abort_turn(turn.id, None).await;
     }
@@ -262,9 +268,12 @@ impl Workbench {
                     Ok(slot) => {
                         slot.as_ref()
                             .is_some_and(|s| !s.is_closed() && s.needs_controller().unwrap_or(true))
-                            || app.0.chats.queued_inputs(chat)?.iter().any(|i| {
-                                matches!(i.status, InputStatus::Sending)
-                            })
+                            || app
+                                .0
+                                .chats
+                                .queued_inputs(chat)?
+                                .iter()
+                                .any(|i| matches!(i.status, InputStatus::Sending))
                     }
                 };
                 if busy {
@@ -305,16 +314,18 @@ impl Workbench {
                     tokio::spawn(async move {
                         let _ = queued_tx.send(());
                         let mut owner = bg_controller.owner.lock().await;
-                        while owner
-                            .as_ref()
-                            .is_some_and(|s| !s.is_closed() && s.needs_controller().unwrap_or(false))
-                        {
+                        while owner.as_ref().is_some_and(|s| {
+                            !s.is_closed() && s.needs_controller().unwrap_or(false)
+                        }) {
                             tokio::time::sleep(Duration::from_millis(25)).await;
                         }
                         let Ok(Some(mut saved)) = read_deferred(&bg_app, chat) else {
                             return;
                         };
-                        if saved.project != project || saved.chat != chat || saved.request.id != req_id {
+                        if saved.project != project
+                            || saved.chat != chat
+                            || saved.request.id != req_id
+                        {
                             return;
                         }
                         let Ok(Precheck::Ready(dest)) =
@@ -395,9 +406,12 @@ impl Workbench {
             if timing != "interrupt"
                 && let Some(source) = &*owner
                 && (source.needs_controller()?
-                    || app.0.chats.queued_inputs(chat)?.iter().any(|i| {
-                        matches!(i.status, InputStatus::Pending | InputStatus::Sending)
-                    }))
+                    || app
+                        .0
+                        .chats
+                        .queued_inputs(chat)?
+                        .iter()
+                        .any(|i| matches!(i.status, InputStatus::Pending | InputStatus::Sending)))
             {
                 return Err(Error::Busy);
             }

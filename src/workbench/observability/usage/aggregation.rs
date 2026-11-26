@@ -161,8 +161,8 @@ pub(super) fn build(
             }
         }
     }
-    let mut records: BTreeMap<(String, String), (usize, &Entry, Totals, Option<f64>, u64)> =
-        BTreeMap::new();
+    type AggregatedEntry<'a> = (usize, &'a Entry, Totals, Option<f64>, u64);
+    let mut records: BTreeMap<(String, String), AggregatedEntry<'_>> = BTreeMap::new();
     let ag = databases::antigravity::merged(&s.files);
     for (path, f) in &s.files {
         let mut occurrences = BTreeMap::new();

@@ -22,9 +22,10 @@ pub(super) struct Tracker {
     shells: BTreeMap<String, Shell>,
     secrets: Vec<String>,
     seen: Option<Stamp>,
-    read: Option<oneshot::Receiver<Option<(Stamp, BTreeMap<String, jobs::Job>)>>>,
+    read: Option<oneshot::Receiver<Option<JobSnapshot>>>,
     force_read: bool,
 }
+type JobSnapshot = (Stamp, BTreeMap<String, jobs::Job>);
 struct Shell {
     work: BackgroundWork,
     process: Option<ProcessId>,
@@ -252,7 +253,7 @@ impl Tracker {
                     let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
                 }
             });
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(target_os = "macos"))]
         Err(Error::Unsupported(

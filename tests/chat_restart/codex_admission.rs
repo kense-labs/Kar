@@ -71,7 +71,7 @@ pub(super) fn reopen() {
         assert_eq!(queue()[0]["status"], "uncertain");
     }
 
-    run(&["acknowledge-uncertain",&input,"--chat",chat]);
+    run(&["acknowledge-uncertain", &input, "--chat", chat]);
     let next = run(&["resume", "later round", "--chat", chat]);
     assert_eq!(next["status"], "completed");
     write(json!([pending]));

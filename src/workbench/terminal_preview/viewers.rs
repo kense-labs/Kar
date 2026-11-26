@@ -56,10 +56,10 @@ impl Drop for Lease {
     fn drop(&mut self) {
         let mut views = self.term.viewers.lock().unwrap();
         views.release(self.viewer);
-        if let Some(grid) = views.shared() {
-            if let Err(err) = self.term.apply_grid(grid) {
-                eprintln!("Kar could not restore the shared terminal grid: {err}");
-            }
+        if let Some(grid) = views.shared()
+            && let Err(err) = self.term.apply_grid(grid)
+        {
+            eprintln!("Kar could not restore the shared terminal grid: {err}");
         }
     }
 }

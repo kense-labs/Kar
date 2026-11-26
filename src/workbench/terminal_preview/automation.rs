@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 type Ids = BTreeSet<Uuid>;
+#[allow(clippy::too_many_arguments)]
 pub(in crate::workbench) async fn call(
     app: &Workbench,
     project: Uuid,

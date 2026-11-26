@@ -3,24 +3,24 @@ mod actions;
 pub(super) mod clone_jobs;
 mod github;
 mod linked_chats;
-pub(in crate::workbench) mod model_reads;
 pub(in crate::workbench) mod model;
+pub(in crate::workbench) mod model_reads;
 mod providers;
 pub(in crate::workbench) use providers::pull_tools::Request as PullCommand;
-mod publish;
 pub(in crate::workbench) mod model_publish;
+mod publish;
 mod repository;
 mod review;
 pub(in crate::workbench) use publish::PullTarget;
 mod routes;
 pub(super) use providers::issue_listing::model_issue_read;
 pub(super) use routes::{model_issue_write, stacked_pull};
-pub(in crate::workbench) mod watches;
 pub(in crate::workbench) mod guides;
 mod routing;
 pub(in crate::workbench) mod signals;
 pub(in crate::workbench) mod signin;
 pub(super) mod trackers;
+pub(in crate::workbench) mod watches;
 pub(in crate::workbench) use providers::viewed::Gates as ViewedGates;
 fn supports_issues(driver: &str) -> bool {
     matches!(
@@ -56,7 +56,10 @@ pub(crate) enum Operation {
         number: u64,
     },
     Pulls,
-    PullCommand{number:u64, command:PullCommand},
+    PullCommand {
+        number: u64,
+        command: PullCommand,
+    },
     CreatePull {
         head: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,7 +67,7 @@ pub(crate) enum Operation {
         base: String,
         title: String,
         body: String,
-        #[serde(default,skip_serializing_if="std::ops::Not::not")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         draft: bool,
     },
     SubmitReview {
@@ -135,7 +138,9 @@ pub(crate) enum Operation {
 }
 impl Operation {
     fn mutates(&self) -> bool {
-        if let Self::PullCommand{command,..}=self{return command.mutates();}
+        if let Self::PullCommand { command, .. } = self {
+            return command.mutates();
+        }
         matches!(
             self,
             Self::CreatePull { .. }
@@ -217,20 +222,28 @@ impl IntoResponse for ForgeError {
 }
 type Reply<T> = Result<Json<T>, ForgeError>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct CustomHost {
+    pub kind: String,
+    pub api_base: String,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct ForgeState {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) custom_hosts: BTreeMap<String, CustomHost>,
     #[serde(default)]
-    guides:BTreeMap<String,guides::Saved>,
+    guides: BTreeMap<String, guides::Saved>,
     #[serde(default)]
-    guide_commands:BTreeMap<Uuid,guides::Command>,
+    guide_commands: BTreeMap<Uuid, guides::Command>,
     #[serde(default)]
-    watches:BTreeMap<Uuid,watches::Watch>,
+    watches: BTreeMap<Uuid, watches::Watch>,
     #[serde(default)]
-    watch_commands:BTreeMap<Uuid,watches::Command>,
+    watch_commands: BTreeMap<Uuid, watches::Command>,
     #[serde(default)]
-    model_link_receipts:BTreeMap<Uuid,model::LinkReceipt>,
+    model_link_receipts: BTreeMap<Uuid, model::LinkReceipt>,
     #[serde(default)]
-    model_publications:BTreeMap<Uuid,model_publish::Receipt>,
+    model_publications: BTreeMap<Uuid, model_publish::Receipt>,
     #[serde(default)]
     activity: signals::Activity,
     #[serde(default)]
@@ -252,11 +265,11 @@ impl ForgeState {
         let mut out: BTreeMap<Uuid, Vec<Value>> = BTreeMap::new();
         let mut seen: BTreeMap<Uuid, BTreeSet<(String, String, u64)>> = BTreeMap::new();
         for b in self.bindings.values() {
-            if seen
-                .entry(b.chat)
-                .or_default()
-                .insert((b.repository.clone(), b.kind.clone(), b.number))
-            {
+            if seen.entry(b.chat).or_default().insert((
+                b.repository.clone(),
+                b.kind.clone(),
+                b.number,
+            )) {
                 out.entry(b.chat).or_default().push(json!({
                     "project": b.project,
                     "chat": b.chat,
@@ -268,8 +281,16 @@ impl ForgeState {
         }
         for links in out.values_mut() {
             links.sort_by(|a, b| {
-                (a["repository"].as_str(), a["kind"].as_str(), a["number"].as_u64())
-                    .cmp(&(b["repository"].as_str(), b["kind"].as_str(), b["number"].as_u64()))
+                (
+                    a["repository"].as_str(),
+                    a["kind"].as_str(),
+                    a["number"].as_u64(),
+                )
+                    .cmp(&(
+                        b["repository"].as_str(),
+                        b["kind"].as_str(),
+                        b["number"].as_u64(),
+                    ))
             });
         }
         out
@@ -565,13 +586,24 @@ impl Context {
     }
     async fn open(app: Workbench, project: Uuid) -> Result<Self, ForgeError> {
         let service = app.clone();
-        let mut c = tokio::task::spawn_blocking(move || {
-            let repo = app.repository(project)?;
-            let (_, host, repository) = primary_remote(repo.root())?;
-            Self::located(host, repository, repo.root().into())
-        })
-        .await
-        .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))??;
+        let (host, repository, cwd, custom) =
+            tokio::task::spawn_blocking(move || -> Result<_, ForgeError> {
+                let repo = app.repository(project)?;
+                let (_, host, repository) = primary_remote(repo.root())?;
+                let custom = app
+                    .0
+                    .catalog
+                    .lock()
+                    .unwrap()
+                    .forge
+                    .custom_hosts
+                    .get(&host.to_ascii_lowercase())
+                    .cloned();
+                Ok((host, repository, PathBuf::from(repo.root()), custom))
+            })
+            .await
+            .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))??;
+        let mut c = Self::located_or_discover(&service, host, repository, cwd, custom).await?;
         signin::attach(&service, &mut c).await?;
         Ok(c)
     }
@@ -582,21 +614,34 @@ impl Context {
         preferred_remote: Option<String>,
     ) -> Result<Self, ForgeError> {
         let service = app.clone();
-        let mut c = tokio::task::spawn_blocking(move || -> Result<Self, ForgeError> {
-            app.project(project)?;
-            app.workspace_at(&cwd)?;
-            let repo = Repository::open(&cwd)?;
-            if let Some(name) = preferred_remote
-                && let Ok(url) = repo.remote_fetch_url(&name)
-                && let Ok((host, repository)) = remote_identity(url.trim())
-            {
-                return Self::located(host, repository, repo.root().into());
-            }
-            let (_, host, repository) = primary_remote(repo.root())?;
-            Self::located(host, repository, repo.root().into())
-        })
-        .await
-        .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))??;
+        let (host, repository, root, custom) =
+            tokio::task::spawn_blocking(move || -> Result<_, ForgeError> {
+                app.project(project)?;
+                app.workspace_at(&cwd)?;
+                let repo = Repository::open(&cwd)?;
+                let (host, repository) = if let Some(name) = preferred_remote
+                    && let Ok(url) = repo.remote_fetch_url(&name)
+                    && let Ok(pair) = remote_identity(url.trim())
+                {
+                    pair
+                } else {
+                    let (_, host, repository) = primary_remote(repo.root())?;
+                    (host, repository)
+                };
+                let custom = app
+                    .0
+                    .catalog
+                    .lock()
+                    .unwrap()
+                    .forge
+                    .custom_hosts
+                    .get(&host.to_ascii_lowercase())
+                    .cloned();
+                Ok((host, repository, PathBuf::from(repo.root()), custom))
+            })
+            .await
+            .map_err(|e| ForgeError::new("workbench", 500, e.to_string()))??;
+        let mut c = Self::located_or_discover(&service, host, repository, root, custom).await?;
         signin::attach(&service, &mut c).await?;
         Ok(c)
     }
@@ -613,10 +658,16 @@ impl Context {
         let state = app.clone();
         let matched = tokio::task::spawn_blocking(move || -> Result<Option<Self>, ForgeError> {
             let repo = state.repository(project)?;
+            let customs = state.0.catalog.lock().unwrap().forge.custom_hosts.clone();
             for name in repo.remote_names()? {
                 if let Ok(url) = repo.remote_fetch_url(&name)
                     && let Ok((host, repository)) = remote_identity(url.trim())
-                    && let Ok(ctx) = Self::located(host, repository, repo.root().into())
+                    && let Ok(ctx) = Self::located_with_custom(
+                        host.clone(),
+                        repository,
+                        repo.root().into(),
+                        customs.get(&host.to_ascii_lowercase()).cloned(),
+                    )
                     && ctx.identity() == target
                 {
                     return Ok(Some(ctx));
@@ -633,14 +684,45 @@ impl Context {
         Ok(primary)
     }
     pub(super) async fn default_branch(&self) -> Result<String, ForgeError> {
-        self.execute(&Operation::Identity)
-            .await?["default_branch"]
+        self.execute(&Operation::Identity).await?["default_branch"]
             .as_str()
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
             .ok_or_else(|| ForgeError::bad("forge returned no default branch"))
     }
+    async fn located_or_discover(
+        app: &Workbench,
+        host: String,
+        repository: String,
+        cwd: PathBuf,
+        custom: Option<CustomHost>,
+    ) -> Result<Self, ForgeError> {
+        match Self::located_with_custom(host.clone(), repository.clone(), cwd.clone(), custom) {
+            Ok(c) => Ok(c),
+            Err(err) if err.kind == "unsupported" => {
+                if let Some(found) = discover_self_hosted_forge(&host).await {
+                    let key = host.to_ascii_lowercase();
+                    let saved = found.clone();
+                    let _ = app.update(|db| {
+                        db.forge.custom_hosts.insert(key, saved);
+                        Ok(())
+                    });
+                    return Self::located_with_custom(host, repository, cwd, Some(found));
+                }
+                Err(err)
+            }
+            Err(err) => Err(err),
+        }
+    }
     fn located(host: String, repository: String, cwd: PathBuf) -> Result<Self, ForgeError> {
+        Self::located_with_custom(host, repository, cwd, None)
+    }
+    fn located_with_custom(
+        host: String,
+        repository: String,
+        cwd: PathBuf,
+        custom: Option<CustomHost>,
+    ) -> Result<Self, ForgeError> {
         let config = Config::load()?;
         let (kind, base, key) = if let Some(h) = config
             .hosts
@@ -648,6 +730,8 @@ impl Context {
             .find(|h| h.host.eq_ignore_ascii_case(&host))
         {
             (h.kind, h.api_base, h.token_env)
+        } else if let Some(c) = custom {
+            (c.kind, c.api_base, None)
         } else {
             let (kind, base) = default_host(&host).ok_or_else(|| {
                 ForgeError::unsupported("unknown forge host; register it in the host configuration")
@@ -706,7 +790,6 @@ impl Context {
         format!("{}://{}/{}", self.kind, self.host, self.repository)
     }
     async fn execute(&self, op: &Operation) -> Result<Value, ForgeError> {
-
         if let Operation::CreatePull {
             head_repository: Some(source),
             ..
@@ -734,4 +817,83 @@ fn checked_number(value: &Value) -> Result<u64, ForgeError> {
             "provider reply lacks a positive number",
         )
     })
+}
+
+async fn discover_self_hosted_forge(host: &str) -> Option<CustomHost> {
+    let bare_host = host
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(host)
+        .trim_matches(['[', ']']);
+    let is_loopback = bare_host == "localhost"
+        || bare_host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    // SSRF guard: do not probe non-loopback private/link-local IPs unless explicitly opted in.
+    if !is_loopback
+        && std::env::var("KAR_ALLOW_PRIVATE_FORGE_DISCOVERY").as_deref() != Ok("1")
+        && bare_host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| !crate::workbench::mcp::webhooks::is_globally_routable_ip(ip))
+    {
+        return None;
+    }
+    let scheme = if is_loopback { "http" } else { "https" };
+    let client = Client::builder()
+        .user_agent("Kar")
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_millis(1200))
+        .build()
+        .ok()?;
+
+    // 1. Forgejo / Gitea (`/api/v1/version`)
+    if let Ok(r) = client
+        .get(format!("{scheme}://{host}/api/v1/version"))
+        .send()
+        .await
+        && r.status().is_success()
+        && let Ok(v) = r.json::<Value>().await
+        && v.get("version").and_then(Value::as_str).is_some()
+    {
+        return Some(CustomHost {
+            kind: "forgejo".into(),
+            api_base: format!("{scheme}://{host}/api/v1"),
+        });
+    }
+    // 2. GitLab CE/EE (`/api/v4/version`)
+    if let Ok(r) = client
+        .get(format!("{scheme}://{host}/api/v4/version"))
+        .send()
+        .await
+    {
+        let status = r.status();
+        let is_gitlab_401 = status.as_u16() == 401
+            && (r.headers().contains_key("x-gitlab-meta")
+                || r.json::<Value>()
+                    .await
+                    .is_ok_and(|v| v["message"].as_str().is_some_and(|m| m.contains("401"))));
+        if is_gitlab_401 || status.is_success() {
+            return Some(CustomHost {
+                kind: "gitlab".into(),
+                api_base: format!("{scheme}://{host}/api/v4"),
+            });
+        }
+    }
+    // 3. GitHub Enterprise Server (`/api/v3/meta`)
+    if let Ok(r) = client
+        .get(format!("{scheme}://{host}/api/v3/meta"))
+        .send()
+        .await
+        && (r.headers().contains_key("x-github-enterprise-version")
+            || (r.status().is_success()
+                && r.json::<Value>()
+                    .await
+                    .is_ok_and(|v| v.get("verifiable_password_authentication").is_some())))
+    {
+        return Some(CustomHost {
+            kind: "github".into(),
+            api_base: format!("{scheme}://{host}/api/v3"),
+        });
+    }
+    None
 }

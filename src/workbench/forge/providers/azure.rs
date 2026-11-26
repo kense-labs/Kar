@@ -231,7 +231,9 @@ impl<'a> Location<'a> {
 pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeError> {
     let l = Location::from(c)?;
     match op {
-        Operation::PullCommand{number,command}=>crate::workbench::forge::providers::pull_tools::execute(c,*number,command).await,
+        Operation::PullCommand { number, command } => {
+            crate::workbench::forge::providers::pull_tools::execute(c, *number, command).await
+        }
         op @ (Operation::SubmitReview { .. }
         | Operation::ReplyToThread { .. }
         | Operation::SetThreadResolution { .. }
@@ -570,7 +572,10 @@ pub(super) fn issue_body_field(fields: &Value) -> &'static str {
         "System.Description"
     }
 }
-pub(in crate::workbench::forge) fn git_endpoint(c: &Context, tail: &[&str]) -> Result<Url, ForgeError> {
+pub(in crate::workbench::forge) fn git_endpoint(
+    c: &Context,
+    tail: &[&str],
+) -> Result<Url, ForgeError> {
     Location::from(c)?.git(c, tail)
 }
 pub(super) fn organization_pull(c: &Context, n: u64) -> Result<Url, ForgeError> {
@@ -594,12 +599,17 @@ pub(super) fn repository_for_issue_scope(c: &Context, scope: &str) -> Result<Str
     Err(ForgeError::bad("invalid Azure work item project scope"))
 }
 
-pub(super) fn check_pull_repository(c:&Context,raw:&Value)->Result<(),ForgeError>{
+pub(super) fn check_pull_repository(c: &Context, raw: &Value) -> Result<(), ForgeError> {
     Location::from(c)?.check_repo(&raw["repository"])
 }
 
-pub(super) fn policy_evaluations(c:&Context)->Result<Url,ForgeError>{
-    Location::from(c)?.url(c,true,"policy",&["evaluations"])
+pub(super) fn policy_evaluations(c: &Context) -> Result<Url, ForgeError> {
+    Location::from(c)?.url(c, true, "policy", &["evaluations"])
 }
 
-pub(in crate::workbench::forge) fn listed_pull(c:&Context,row:&Value)->Result<Value,ForgeError>{Location::from(c)?.pull(row)}
+pub(in crate::workbench::forge) fn listed_pull(
+    c: &Context,
+    row: &Value,
+) -> Result<Value, ForgeError> {
+    Location::from(c)?.pull(row)
+}

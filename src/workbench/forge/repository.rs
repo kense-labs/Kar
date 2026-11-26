@@ -338,7 +338,7 @@ pub(super) async fn prepare(app: &Workbench, req: CloneInput) -> Result<Prepared
         Some(request) => Some(
             resolve(
                 &request
-                    .context(&app, dest.parent().unwrap().to_owned())
+                    .context(app, dest.parent().unwrap().to_owned())
                     .await?,
             )
             .await?,

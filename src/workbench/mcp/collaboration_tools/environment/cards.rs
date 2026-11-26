@@ -30,6 +30,7 @@ fn current_turn(app: &Workbench, g: &Grant) -> Result<Uuid> {
 fn changed(app: &Workbench) {
     app.0.card_updates.send_modify(|n| *n = n.wrapping_add(1));
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) fn create(
     app: &Workbench,
     c: &Caller,

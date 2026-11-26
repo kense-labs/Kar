@@ -494,7 +494,10 @@ impl Actor {
                 let pending_req = self.journal.pending_request(&id, result.cursor());
                 let result =
                     match result.payload(&self.journal, &id, "morph/approval", &Value::Null) {
-                        Ok(value) => self.decide(id.as_str().unwrap_or(""), &value, pending_req).await,
+                        Ok(value) => {
+                            self.decide(id.as_str().unwrap_or(""), &value, pending_req)
+                                .await
+                        }
                         Err(err) => Err(err),
                     };
                 let _ = ack.send(result);
@@ -524,7 +527,9 @@ impl Actor {
             Command::Send(_, ack) => {
                 let _ = ack.send(Err(Error::Unsupported("raw stdio on Morph".into())));
             }
-            Command::WorkbenchMcpReply(_) | Command::Close(_) => unreachable!("close is handled by run"),
+            Command::WorkbenchMcpReply(_) | Command::Close(_) => {
+                unreachable!("close is handled by run")
+            }
         }
     }
     async fn settle(&mut self) {
@@ -591,21 +596,41 @@ impl Actor {
             let _ = done.send(Err(Error::Closed(reason.clone())));
         }
         let stopped = self.lease.release().await;
-        let exited = matches!(stopped,Ok(Some(_))) || exit.as_ref().is_some_and(|s|s.borrow().as_ref().is_some_and(|r|r.is_ok()));
-        let event = if exited {Event::Exited{reason}} else {Event::Released};
-        let release = crate::SessionRelease::new(if settle {crate::ReleaseReason::Dispose} else {crate::ReleaseReason::ConnectionLost});
+        let exited = matches!(stopped, Ok(Some(_)))
+            || exit
+                .as_ref()
+                .is_some_and(|s| s.borrow().as_ref().is_some_and(|r| r.is_ok()));
+        let event = if exited {
+            Event::Exited { reason }
+        } else {
+            Event::Released
+        };
+        let release = crate::SessionRelease::new(if settle {
+            crate::ReleaseReason::Dispose
+        } else {
+            crate::ReleaseReason::ConnectionLost
+        });
         if let Some((id, _)) = &ack {
             let mut outcome = match &stopped {
                 Ok(Some(status)) => json!({"type":"exited", "code":status.code()}),
                 Ok(None) => json!({"type":"accepted"}),
                 Err(err) => json!({"type":"rejected", "code":"error", "reason":err.to_string()}),
             };
-            if !exited {outcome["release"]=json!(release);}
+            if !exited {
+                outcome["release"] = json!(release);
+            }
             self.journal.control_outcome(*id, outcome, event);
         } else if exited {
             self.journal.host_event(event);
         } else {
-            self.journal.push(Direction::Host,RecordKind::Response,None,vec![],json!({"type":"released","release":release}),vec![event]);
+            self.journal.push(
+                Direction::Host,
+                RecordKind::Response,
+                None,
+                vec![],
+                json!({"type":"released","release":release}),
+                vec![event],
+            );
         }
         self.journal.close();
         crate::session::reachability::reject_pending(

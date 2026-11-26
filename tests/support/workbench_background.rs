@@ -516,9 +516,8 @@ fn cursor_peer() {
             Some("session/prompt") => {
                 let text = v["params"]["prompt"][0]["text"].as_str().unwrap();
                 if let Some(rest) = text.strip_prefix("spawn:") {
-                    let mut parts = rest.splitn(2, ':');
-                    let shell_id = parts.next().unwrap();
-                    let tag = parts.next().unwrap();
+                    let (shell_id, tag) = rest.split_once(':').unwrap();
+
                     let call_id = format!("call-{tag}");
 
                     emit(json!({
@@ -581,9 +580,7 @@ fn cursor_peer() {
                     let receipt_text = if tag == "s2_first" {
                         format!("Command was sent to the background.\nShell ID: {shell_id}")
                     } else {
-                        format!(
-                            "Background command started.\nShell ID: {shell_id}\nPID: {pid}"
-                        )
+                        format!("Background command started.\nShell ID: {shell_id}\nPID: {pid}")
                     };
                     emit(json!({
                         "jsonrpc": "2.0",
@@ -699,14 +696,8 @@ async fn cursor_scenario() {
     let row2 = row(&tasks2, "1");
     assert_eq!(row1["background_work"]["turn_id"], turn1.to_string());
     assert_eq!(row2["background_work"]["turn_id"], turn2.to_string());
-    assert_eq!(
-        row1["background_work"]["command"],
-        "trap '' HUP; sleep 30"
-    );
-    assert_eq!(
-        row2["background_work"]["command"],
-        "trap '' HUP; sleep 30"
-    );
+    assert_eq!(row1["background_work"]["command"], "trap '' HUP; sleep 30");
+    assert_eq!(row2["background_work"]["command"], "trap '' HUP; sleep 30");
     let start1 = row1["started_at"].clone();
     let start2 = row2["started_at"].clone();
 
@@ -798,7 +789,11 @@ async fn cursor_scenario() {
 
     // Clean up both live background shells (Session 1 reused + Session 2).
     for (url, cursor, pid) in [
-        (format!("{chat1}/background-tasks/1/stop"), start1_reused, pid1_reused),
+        (
+            format!("{chat1}/background-tasks/1/stop"),
+            start1_reused,
+            pid1_reused,
+        ),
         (format!("{chat2}/background-tasks/1/stop"), start2, pid2),
     ] {
         let resp = a

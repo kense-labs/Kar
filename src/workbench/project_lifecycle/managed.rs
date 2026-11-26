@@ -69,7 +69,12 @@ impl Workbench {
     pub(super) fn create_named(&self, name: &str) -> Result<Created> {
         self.create_named_at(name, self.managed_root("projects")?, None)
     }
-    pub(in crate::workbench) fn create_named_at(&self, name: &str, parent: PathBuf, requested: Option<Uuid>) -> Result<Created> {
+    pub(in crate::workbench) fn create_named_at(
+        &self,
+        name: &str,
+        parent: PathBuf,
+        requested: Option<Uuid>,
+    ) -> Result<Created> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 200 || name.contains(['\r', '\n', '\0']) {
             return Err(Error::Refused("invalid project name".into()));
@@ -87,8 +92,13 @@ impl Workbench {
         if let Some(id) = requested {
             slug = format!("{slug}-{id}");
             if let Ok(p) = self.project(id) {
-                if p.root != parent.join(&slug) || p.metadata.deleted { return Err(denied()); }
-                return Ok(Created { project:p, commit_error:None });
+                if p.root != parent.join(&slug) || p.metadata.deleted {
+                    return Err(denied());
+                }
+                return Ok(Created {
+                    project: p,
+                    commit_error: None,
+                });
             }
         }
         let stage = tempfile::Builder::new()
@@ -145,7 +155,7 @@ impl Workbench {
                 }
             });
         if let Some(id) = requested {
-            git(&root, &["config","kar.projectRequest",&id.to_string()])?;
+            git(&root, &["config", "kar.projectRequest", &id.to_string()])?;
         }
         let project = self.publish_named(stage, &parent, &slug, name, requested)?;
         Ok(Created {
@@ -167,13 +177,17 @@ impl Workbench {
         let src = stage.path().file_name().ok_or_else(denied)?.to_owned();
         self.update(|catalog| {
             if let Some(id) = requested {
-                if catalog.lifecycle.is_deleted(id) { return Err(denied()); }
+                if catalog.lifecycle.is_deleted(id) {
+                    return Err(denied());
+                }
                 if let Some(p) = catalog.projects.get(&id) {
-                    if p.root != parent.join(slug) || p.metadata.deleted { return Err(denied()); }
+                    if p.root != parent.join(slug) || p.metadata.deleted {
+                        return Err(denied());
+                    }
                     return Ok(p.clone());
                 }
             }
-            for i in 1..=if requested.is_some() {1} else {100} {
+            for i in 1..=if requested.is_some() { 1 } else { 100 } {
                 let dest = if i == 1 {
                     slug.to_owned()
                 } else {
@@ -181,7 +195,9 @@ impl Workbench {
                 };
                 let root = parent.join(&dest);
                 if let Some(project) = catalog.projects.values().find(|p| p.root == root) {
-                    if requested == Some(project.id) && !project.metadata.deleted { return Ok(project.clone()); }
+                    if requested == Some(project.id) && !project.metadata.deleted {
+                        return Ok(project.clone());
+                    }
                     continue;
                 }
                 // Publish the fully prepared repo without overwriting even an empty existing folder.
@@ -203,11 +219,19 @@ impl Workbench {
                 match publish {
                     Ok(()) => {}
                     Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                        let ours = requested.is_some_and(|id| root.canonicalize().ok().as_ref() == Some(&root)
-                            && root.join(".git").is_dir() && git(&root,&["config","--local","--get","kar.projectRequest"]).ok()
-                                .is_some_and(|s| String::from_utf8_lossy(&s).trim() == id.to_string()));
-                        if !ours { continue; }
-                    },
+                        let ours = requested.is_some_and(|id| {
+                            root.canonicalize().ok().as_ref() == Some(&root)
+                                && root.join(".git").is_dir()
+                                && git(&root, &["config", "--local", "--get", "kar.projectRequest"])
+                                    .ok()
+                                    .is_some_and(|s| {
+                                        String::from_utf8_lossy(&s).trim() == id.to_string()
+                                    })
+                        });
+                        if !ours {
+                            continue;
+                        }
+                    }
                     Err(e) => return Err(e.into()),
                 }
                 let project = Project {
@@ -223,7 +247,6 @@ impl Workbench {
                 "all managed project folder names are in use".into(),
             ))
         })
-
     }
 
     pub(super) fn promote_scratch_chat(&self, chat: Uuid) -> Result<Project> {
@@ -280,7 +303,12 @@ impl Workbench {
                     || !h.pending_requests.is_empty()
                     || h.pending_rollback.is_some()
                     || h.pending_fork.is_some()
-                    || self.0.chats.queued_inputs(*id)?.iter().any(|q| q.outstanding())
+                    || self
+                        .0
+                        .chats
+                        .queued_inputs(*id)?
+                        .iter()
+                        .any(|q| q.outstanding())
                 {
                     return Err(Error::Busy);
                 }

@@ -44,7 +44,7 @@ impl ForkPolicy {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ForkOrigin {
     /// A chat-only fork preserves the live shared worktree.
-    #[serde(default, skip_serializing_if="std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub context_only: bool,
     #[serde(default)]
     pub mode: ForkMode,
@@ -212,11 +212,11 @@ impl CutPlan {
             && policy == ForkPolicy::PreferNative
             && (opencode || matches!(rt.protocol, Protocol::Codex | Protocol::Claude))
         {
-            let reported = rt.launch_version(&opts).await?;
+            let reported = rt.launch_version(opts).await?;
             native = if opencode {
                 crate::account::release(&reported).is_some_and(|v| v.0 == 2)
             } else {
-                rt.check_turn_fork_version(&reported, &opts).is_ok()
+                rt.check_turn_fork_version(&reported, opts).is_ok()
             };
             version = Some(reported);
         }
@@ -431,6 +431,7 @@ impl ChatStore {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn fork_request(
         &self,
         source: Uuid,
@@ -814,7 +815,8 @@ impl ChatStore {
                 self.fork_restore(&source, target, true).await?;
                 None
             };
-            let plan = CutPlan::prepare(self, &parent, &mut opts, cut, native_route, policy).await?;
+            let plan =
+                CutPlan::prepare(self, &parent, &mut opts, cut, native_route, policy).await?;
             if let Some(r) = &request {
                 r.begin(parent.id, turn, destination.as_deref())?;
             }
@@ -853,7 +855,7 @@ impl ChatStore {
                 ForkMode::PortableContext
             };
             let origin = ForkOrigin {
-                context_only:false,
+                context_only: false,
                 mode,
                 chat: parent.id,
                 turn,
@@ -942,7 +944,10 @@ impl ChatStore {
             return Err(error);
         }
         // Launch in the restored checkout so workspace-derived instructions are loaded there.
-        let session = match self.open_saved(&log.state, opts.before_chat_attach()?).await {
+        let session = match self
+            .open_saved(&log.state, opts.before_chat_attach()?)
+            .await
+        {
             Ok(s) => s,
             Err(e) => self.renew_empty_target(&mut log, &opts, e).await?,
         };
@@ -1119,7 +1124,7 @@ mod staged_route_tests {
         child.model = Some("selected-turn-model".into());
         child.settings.system_prompt = Some("original instructions".into());
         child.forked_from = Some(ForkOrigin {
-            context_only:false,
+            context_only: false,
             mode: ForkMode::Native,
             chat: parent.id,
             turn: Uuid::new_v4(),

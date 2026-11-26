@@ -572,17 +572,33 @@ impl Repository {
     }
 
     /// Remove only the registered checkout. Branches and their commits are retained.
-    pub(crate) fn managed_candidates(&self) -> Result<Vec<(ManagedWorktree,std::time::SystemTime)>> {
-        if !self.common.join("kar-worktrees").try_exists()? {return Ok(Vec::new());}
-        let records=Registry::open(self)?;
-        let mut candidates=Vec::new();
+    pub(crate) fn managed_candidates(
+        &self,
+    ) -> Result<Vec<(ManagedWorktree, std::time::SystemTime)>> {
+        if !self.common.join("kar-worktrees").try_exists()? {
+            return Ok(Vec::new());
+        }
+        let records = Registry::open(self)?;
+        let mut candidates = Vec::new();
         for item in fs::read_dir(&records.dir)? {
-            let entry=item?;
-            let path=entry.path();
-            if !entry.file_type()?.is_file() || path.extension().and_then(|x|x.to_str())!=Some("json"){continue;}
-            let Some(id)=path.file_stem().and_then(|x|x.to_str()).and_then(|s|s.parse().ok()) else {continue;};
-            if let Some(record)=records.load(id)? && record.phase==Phase::Ready {
-                candidates.push((record.tree,entry.metadata()?.modified()?));
+            let entry = item?;
+            let path = entry.path();
+            if !entry.file_type()?.is_file()
+                || path.extension().and_then(|x| x.to_str()) != Some("json")
+            {
+                continue;
+            }
+            let Some(id) = path
+                .file_stem()
+                .and_then(|x| x.to_str())
+                .and_then(|s| s.parse().ok())
+            else {
+                continue;
+            };
+            if let Some(record) = records.load(id)?
+                && record.phase == Phase::Ready
+            {
+                candidates.push((record.tree, entry.metadata()?.modified()?));
             }
         }
         Ok(candidates)
@@ -672,5 +688,97 @@ impl Repository {
         }
         r.phase = Phase::Removed;
         registry.save(&r)
+    }
+
+    /// Transparently re-materialize a previously pruned (`Phase::Removed`) managed worktree
+    /// when a chat bound to it is reopened.
+    pub fn restore_removed_worktree(&self, id: Uuid) -> Result<Option<ManagedWorktree>> {
+        let _pin = pin_saved_checkout(&self.root, self.worktree_id)?;
+        let registry = Registry::open(self)?;
+        let Some(mut r) = registry.load(id)? else {
+            return Ok(None);
+        };
+        if r.phase != Phase::Removed {
+            return Ok(None);
+        }
+        let dir = &r.tree.path;
+        if exists(dir)? {
+            return Ok(None);
+        }
+        let branch_ref = format!("refs/heads/{}", r.tree.branch);
+        if !self.ref_exists(&branch_ref)? {
+            return Ok(None);
+        }
+        if let Some(parent) = dir.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        checked(
+            command(&self.root)
+                .args([
+                    "-c",
+                    "worktree.useRelativePaths=false",
+                    "worktree",
+                    "add",
+                    "--lock",
+                    "--reason",
+                    &reason(id),
+                    "--",
+                ])
+                .arg(dir)
+                .arg(&r.tree.branch)
+                .output()?,
+        )?;
+        let entry = self
+            .registrations()?
+            .into_iter()
+            .find(|e| &e.path == dir)
+            .ok_or_else(|| refused("Git did not register the restored checkout"))?;
+        r.current_head = Some(branch_ref);
+        r.pending_head = None;
+        let admin = self.verify_worktree(&r, &entry, false)?;
+        install_marker(&admin, id)?;
+        r.phase = Phase::Ready;
+        registry.save(&r)?;
+        Ok(Some(r.tree))
+    }
+
+    /// Find and re-materialize a removed managed worktree whose checkout root contained `target_dir`.
+    pub fn restore_removed_worktree_at(
+        &self,
+        target_dir: &Path,
+    ) -> Result<Option<ManagedWorktree>> {
+        if !self.common.join("kar-worktrees").try_exists()? {
+            return Ok(None);
+        }
+        let matched = {
+            let registry = Registry::open(self)?;
+            let mut found = None;
+            for item in fs::read_dir(&registry.dir)? {
+                let entry = item?;
+                let p = entry.path();
+                if p.extension() != Some(OsStr::new("json")) {
+                    continue;
+                }
+                let Some(id) = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.parse::<Uuid>().ok())
+                else {
+                    continue;
+                };
+                if let Some(rec) = registry.load(id)?
+                    && rec.phase == Phase::Removed
+                    && target_dir.starts_with(&rec.tree.path)
+                {
+                    found = Some(id);
+                    break;
+                }
+            }
+            found
+        };
+        match matched {
+            Some(id) => self.restore_removed_worktree(id),
+            None => Ok(None),
+        }
     }
 }

@@ -255,7 +255,11 @@ impl Tracker {
         let resolved_proc = receipt
             .pid
             .and_then(|pid| owned_leader(self.process, pid))
-            .or_else(|| raw_terminal.pid.and_then(|pid| owned_leader(self.process, pid)))
+            .or_else(|| {
+                raw_terminal
+                    .pid
+                    .and_then(|pid| owned_leader(self.process, pid))
+            })
             .or_else(|| {
                 let current = detached_leaders(self.process);
                 let mut candidates = current
@@ -396,9 +400,8 @@ impl Tracker {
         let mut matched = self.shells.iter().filter(|(_, s)| {
             !s.ended
                 && (s.tool_call_id.as_deref() == Some(id)
-                    || s.process.is_some_and(|p| {
-                        id.parse::<u32>() == Ok(p.pid) && shell_alive(p)
-                    }))
+                    || s.process
+                        .is_some_and(|p| id.parse::<u32>() == Ok(p.pid) && shell_alive(p)))
         });
         let (k, _) = matched.next()?;
         matched.next().is_none().then_some(k)
@@ -455,7 +458,9 @@ impl Tracker {
     pub(super) fn stop(&mut self, id: &str) -> Result<()> {
         let key = self
             .resolve_alias(id)
-            .ok_or_else(|| Error::Refused("unknown Cursor background shell in this session".into()))?
+            .ok_or_else(|| {
+                Error::Refused("unknown Cursor background shell in this session".into())
+            })?
             .to_owned();
         let shell = &self.shells[&key];
         if shell.ended {
@@ -513,7 +518,7 @@ impl Tracker {
                     let _ = killpg(pgid, Signal::SIGKILL);
                 }
             });
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -575,7 +580,10 @@ fn valid_single_name(name: &str) -> bool {
         && name != "."
         && name != ".."
         && !name.contains(['/', '\\', '\0'])
-        && matches!(Path::new(name).components().next(), Some(Component::Normal(_)))
+        && matches!(
+            Path::new(name).components().next(),
+            Some(Component::Normal(_))
+        )
 }
 
 fn read_terminal_file_safe(
@@ -733,10 +741,8 @@ fn parse_terminal_frontmatter(contents: &str) -> TerminalMeta {
                     meta.started_at = Some(val.to_owned());
                 }
             }
-            "command" => {
-                if !val.is_empty() {
-                    meta.command = Some(val.to_owned());
-                }
+            "command" if !val.is_empty() => {
+                meta.command = Some(val.to_owned());
             }
             _ => {}
         }
@@ -882,9 +888,8 @@ fn parse_text_receipt(text: &str) -> Option<Receipt> {
         }
         if terminal_path.is_none() {
             for token in trimmed.split_whitespace() {
-                let clean = token.trim_matches(|c: char| {
-                    matches!(c, '`' | '"' | '\'' | ',' | ')' | '(')
-                });
+                let clean =
+                    token.trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | ')' | '('));
                 if clean.starts_with('/') && clean.ends_with(".txt") {
                     terminal_path = Some(PathBuf::from(clean));
                     break;
@@ -936,7 +941,10 @@ fn live_proc_row(pid: u32) -> Option<(u32, u32, u64)> {
         return Some((
             info.kp_eproc.e_ppid.try_into().ok()?,
             info.kp_eproc.e_pgid.try_into().ok()?,
-            stamp(birth.tv_sec.try_into().ok()?, birth.tv_usec.try_into().ok()?)?,
+            stamp(
+                birth.tv_sec.try_into().ok()?,
+                birth.tv_usec.try_into().ok()?,
+            )?,
         ));
     }
     None
@@ -954,7 +962,8 @@ fn detached_leaders(root: Option<ProcessId>) -> BTreeSet<ProcessId> {
             p.pid > 1
                 && p.pid != root.pid
                 && p.pid != self_pid
-                && live_proc_row(p.pid).is_some_and(|(_, pgid, born)| pgid == p.pid && born == p.born)
+                && live_proc_row(p.pid)
+                    .is_some_and(|(_, pgid, born)| pgid == p.pid && born == p.born)
         })
         .collect()
 }
@@ -1000,9 +1009,8 @@ fn group_verified_for_signal(proc_id: ProcessId, root: Option<ProcessId>) -> boo
     {
         return false;
     }
-    match live_proc_row(proc_id.pid) {
-        Some((_, pgid, born)) => return born == proc_id.born && pgid == proc_id.pid,
-        None => {}
+    if let Some((_, pgid, born)) = live_proc_row(proc_id.pid) {
+        return born == proc_id.born && pgid == proc_id.pid;
     }
     let Ok(pids) = pids_by_type(ProcFilter::All) else {
         return false;

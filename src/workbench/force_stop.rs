@@ -81,8 +81,7 @@ async fn stop(
                 return Err(crate::transport::AbortRequest::stale());
             }
             let running = last.is_some_and(|t| t.status == TurnStatus::Running);
-            let interrupted = running
-                || last.is_some_and(|t| t.status == TurnStatus::Interrupted);
+            let interrupted = running || last.is_some_and(|t| t.status == TurnStatus::Interrupted);
             Ok((
                 fence,
                 target,
@@ -110,7 +109,9 @@ async fn stop(
                 interrupted,
             )?;
             drop(fence);
-            super::mcp::orchestrator::Task::finish_force_stop_unfenced(&state, chat, is_child, &sync_ids);
+            super::mcp::orchestrator::Task::finish_force_stop_unfenced(
+                &state, chat, is_child, &sync_ids,
+            );
             state.wake_queue();
             Ok(())
         })
@@ -216,10 +217,7 @@ async fn stop(
             )?;
             drop(fence);
             super::mcp::orchestrator::Task::finish_force_stop_unfenced(
-                &state,
-                chat,
-                is_child,
-                &sync_ids,
+                &state, chat, is_child, &sync_ids,
             );
             Ok(())
         })

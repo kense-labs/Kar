@@ -1,12 +1,12 @@
 //! Producers can add inputs while another process owns the native session. The queue
 //! stores admission order. The chat journal is authoritative about dispatch attempts.
+mod app_context;
 mod commands;
 pub(crate) mod delegations;
 mod merge;
-mod app_context;
 pub use merge::MergedContext;
-mod workspace_move;
 mod promotion;
+mod workspace_move;
 use super::{ChatInfo, ChatSession, ChatStore, Sender, Sink, TurnStatus};
 use crate::{Error, Result};
 pub use commands::{QueueAction, QueueReceipt};
@@ -182,11 +182,11 @@ impl Entry {
 struct Inbox {
     #[serde(default)]
     delegations: delegations::Ledger,
-    #[serde(default,skip_serializing_if="std::collections::BTreeMap::is_empty")]
-    app_context:std::collections::BTreeMap<String,app_context::Entry>,
-    #[serde(default,skip_serializing_if="std::collections::BTreeMap::is_empty")]
-    context_transfers:std::collections::BTreeMap<Uuid,merge::Transfer>,
-    #[serde(default,skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    app_context: std::collections::BTreeMap<String, app_context::Entry>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    context_transfers: std::collections::BTreeMap<Uuid, merge::Transfer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     workspace_gate: Option<workspace_move::WorkspaceGate>,
     chat: Uuid,
     native_id: String,
@@ -217,9 +217,9 @@ impl ChatStore {
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 return Ok(Inbox {
                     delegations: Default::default(),
-                    workspace_gate:None,
-                    context_transfers:Default::default(),
-                    app_context:Default::default(),
+                    workspace_gate: None,
+                    context_transfers: Default::default(),
+                    app_context: Default::default(),
                     chat: chat.id,
                     native_id: self.initial_info(chat.id)?.native_id,
                     entries: vec![],
@@ -286,11 +286,20 @@ impl ChatStore {
     ) -> Result<()> {
         let _lock = self.inbox_lock(log.state.info.id)?;
         let inbox = self.read_inbox(&log.state.info)?;
-        let rewinding = matches!(&update, super::ChatUpdate::ContextRewound { .. } | super::ChatUpdate::RewindPrepared { .. });
-        if inbox.workspace_gate.is_some() || inbox.entries.iter().any(|e| {
-            (rewinding && e.outstanding(&log.state)) || e.blocks_delivery(&log.state)
-                || matches!(e.status(&log.state), InputStatus::Pending | InputStatus::Sending)
-        }) {
+        let rewinding = matches!(
+            &update,
+            super::ChatUpdate::ContextRewound { .. } | super::ChatUpdate::RewindPrepared { .. }
+        );
+        if inbox.workspace_gate.is_some()
+            || inbox.entries.iter().any(|e| {
+                (rewinding && e.outstanding(&log.state))
+                    || e.blocks_delivery(&log.state)
+                    || matches!(
+                        e.status(&log.state),
+                        InputStatus::Pending | InputStatus::Sending
+                    )
+            })
+        {
             return Err(Error::Busy);
         }
         let rewind = match &mut update {
@@ -408,49 +417,53 @@ impl ChatStore {
     }
 }
 impl Inbox {
-    fn admit(&mut self, state: &super::log::State, id: Uuid, text: String, attachments: Vec<super::Attachment>) -> Result<QueuedInput> {
+    fn admit(
+        &mut self,
+        state: &super::log::State,
+        id: Uuid,
+        text: String,
+        attachments: Vec<super::Attachment>,
+    ) -> Result<QueuedInput> {
         let turn = state.find(id);
-            if let Some(entry) = self.entries.iter().find(|e| e.id == id) {
-                let same = entry.text == text && entry.attachments == attachments;
-                let original = entry.initial_text.as_ref().unwrap_or(&entry.text) == &text
-                    && entry
-                        .initial_attachments
-                        .as_ref()
-                        .unwrap_or(&entry.attachments)
-                        == &attachments;
-                if !same && !original {
-                    return Err(different_prompt());
-                }
-                return Ok(entry.receipt(state));
-            }
-            if turn.is_none() {
-                state.check_new_prompt_id(id)?;
-            }
-            if turn
-                .is_some_and(|t| t.prompt() != Some(text.as_str()) || t.attachments != attachments)
-            {
+        if let Some(entry) = self.entries.iter().find(|e| e.id == id) {
+            let same = entry.text == text && entry.attachments == attachments;
+            let original = entry.initial_text.as_ref().unwrap_or(&entry.text) == &text
+                && entry
+                    .initial_attachments
+                    .as_ref()
+                    .unwrap_or(&entry.attachments)
+                    == &attachments;
+            if !same && !original {
                 return Err(different_prompt());
             }
-            if turn.is_none() {
-                if state.pending_handoff().is_some() {
-                    return Err(Error::Busy);
-                }
-                crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
+            return Ok(entry.receipt(state));
+        }
+        if turn.is_none() {
+            state.check_new_prompt_id(id)?;
+        }
+        if turn.is_some_and(|t| t.prompt() != Some(text.as_str()) || t.attachments != attachments) {
+            return Err(different_prompt());
+        }
+        if turn.is_none() {
+            if state.pending_handoff().is_some() {
+                return Err(Error::Busy);
             }
-            let entry = Entry {
-                uncertainty_acknowledged: false,
-                refusal: None,
-                attachments,
-                initial_attachments: None,
-                initial_text: None,
-                promotion: None,
-                id,
-                text,
-                withdrawn: false,
-            };
-            let receipt = entry.receipt(state);
-            self.entries.push(entry);
-            Ok(receipt)
+            crate::input::check_text(&text, crate::input::text_limit(&state.info.runtime))?;
+        }
+        let entry = Entry {
+            uncertainty_acknowledged: false,
+            refusal: None,
+            attachments,
+            initial_attachments: None,
+            initial_text: None,
+            promotion: None,
+            id,
+            text,
+            withdrawn: false,
+        };
+        let receipt = entry.receipt(state);
+        self.entries.push(entry);
+        Ok(receipt)
     }
 }
 fn different_prompt() -> Error {
@@ -460,7 +473,7 @@ fn different_prompt() -> Error {
 /// Executed by the actor after its busy check and before its first native prompt write.
 /// A durable Begin consumes the input even if the process dies before a receipt arrives.
 pub(crate) struct Admission {
-    pub(super) app_context:Option<String>,
+    pub(super) app_context: Option<String>,
     pub(super) merged_context: Option<MergedContext>,
     pub(super) requested_output_schema: Option<serde_json::Value>,
     pub(super) background_note: Option<super::BackgroundNote>,
@@ -492,7 +505,9 @@ impl Admission {
             return Err(Error::Refused("input dispatch has already started".into()));
         }
         let mut inbox = self.store.read_inbox(&log.state.info)?;
-        if inbox.workspace_gate.is_some() {return Err(Error::Busy);}
+        if inbox.workspace_gate.is_some() {
+            return Err(Error::Busy);
+        }
         if let Some(entry) = inbox.entries.iter().find(|e| e.id == self.id) {
             if entry.text != self.text || entry.attachments != self.attachments {
                 return Err(different_prompt());
@@ -532,10 +547,12 @@ impl Admission {
         if self.background_note != expected || automatic && !inbox.allows_background(&log.state) {
             return Err(Error::Busy);
         }
-        if inbox.next_merge(&log.state) != self.merged_context.as_ref() || inbox.app_snapshot(&log.state)? != self.app_context {
+        if inbox.next_merge(&log.state) != self.merged_context.as_ref()
+            || inbox.app_snapshot(&log.state)? != self.app_context
+        {
             return Err(Error::Busy);
         }
-        let transfer_id = self.merged_context.as_ref().map(|m|m.id);
+        let transfer_id = self.merged_context.as_ref().map(|m| m.id);
         log.begin(
             self.id,
             &self.text,
@@ -546,8 +563,8 @@ impl Admission {
             self.merged_context,
             self.requested_output_schema,
         )?;
-        if let Some(id)=transfer_id {
-            inbox.context_transfers.get_mut(&id).unwrap().bound=Some(self.id);
+        if let Some(id) = transfer_id {
+            inbox.context_transfers.get_mut(&id).unwrap().bound = Some(self.id);
             self.store.save_inbox(&inbox)?;
         }
         log.checkpoint = Some(self.checkpoint);
@@ -607,7 +624,9 @@ impl Sender {
         let next = {
             let log = self.sink.0.lock().unwrap();
             log.healthy()?;
-            if inbox.workspace_gate.is_some() {return Ok(false);}
+            if inbox.workspace_gate.is_some() {
+                return Ok(false);
+            }
             inbox
                 .next(&log.state)
                 .map(|e| (e.id, e.text.clone(), e.attachments.clone()))

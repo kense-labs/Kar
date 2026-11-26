@@ -62,10 +62,8 @@ impl Repository {
                 .filter(|s| !s.is_empty())
                 .unwrap_or(branch)
         };
-        let set_upstream = own.is_none()
-            || self
-                .resolve(&format!("{branch}@{{upstream}}"))
-                .is_err();
+        let set_upstream =
+            own.is_none() || self.resolve(&format!("{branch}@{{upstream}}")).is_err();
         let independent = own.is_some_and(|(r, _)| r != &remote);
         let comparison = if own.is_none() {
             tracking.clone()
@@ -128,7 +126,11 @@ impl Repository {
             .config(&format!("branch.{local}.remote"))?
             .filter(|r| r != "."))
     }
-    pub(crate) fn comparison_branch(&self, local: &str, target: &PublishTarget) -> Result<Option<String>> {
+    pub(crate) fn comparison_branch(
+        &self,
+        local: &str,
+        target: &PublishTarget,
+    ) -> Result<Option<String>> {
         if let Some(reference) = self.config(&format!("branch.{local}.kar-merge-base-ref"))?
             && self.resolve(&reference).is_ok()
         {
@@ -157,10 +159,7 @@ impl Repository {
     }
     /// A non-network push URL can serve as the local transport for a registered hosted remote.
     pub(crate) fn publish_urls(&self, target: &PublishTarget) -> Result<(String, Vec<String>)> {
-        let fetch = git(
-            self.root(),
-            &["remote", "get-url", "--", &target.remote],
-        )?;
+        let fetch = git(self.root(), &["remote", "get-url", "--", &target.remote])?;
         let push = git(
             self.root(),
             &["remote", "get-url", "--push", "--all", "--", &target.remote],
@@ -171,12 +170,27 @@ impl Repository {
         ))
     }
     /// Publish exactly the admitted commit without touching the active checkout or its upstream.
-    pub(crate) fn publish_commit(&self, commit:&str, branch:&str, url:&str)->Result<()> {
+    pub(crate) fn publish_commit(&self, commit: &str, branch: &str, url: &str) -> Result<()> {
         self.check_branch(branch)?;
-        if commit.len()!=40 && commit.len()!=64 || !commit.bytes().all(|c|c.is_ascii_hexdigit()){
+        if commit.len() != 40 && commit.len() != 64
+            || !commit.bytes().all(|c| c.is_ascii_hexdigit())
+        {
             return Err(Error::Refused("invalid publication commit".into()));
         }
-        checked(command(self.root()).args(["-c","core.hooksPath=/dev/null","push","--porcelain","--",url,&format!("{commit}:refs/heads/{branch}")]).output()?).map(drop)
+        checked(
+            command(self.root())
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "push",
+                    "--porcelain",
+                    "--",
+                    url,
+                    &format!("{commit}:refs/heads/{branch}"),
+                ])
+                .output()?,
+        )
+        .map(drop)
     }
 }
 impl StackCheckout {
@@ -241,9 +255,16 @@ impl StackCheckout {
         )?;
         let unchanged = utf8(&out)?.lines().any(|s| s.starts_with("=\t"));
         let recorded = target.set_upstream
-            && self.repo.config(&format!("branch.{local}.remote"))?.as_deref()
+            && self
+                .repo
+                .config(&format!("branch.{local}.remote"))?
+                .as_deref()
                 == Some(target.remote.as_str())
-            && self.repo.config(&format!("branch.{local}.merge"))?.as_deref() == Some(refname.as_str());
+            && self
+                .repo
+                .config(&format!("branch.{local}.merge"))?
+                .as_deref()
+                == Some(refname.as_str());
         Ok((
             if unchanged {
                 "skipped_up_to_date"

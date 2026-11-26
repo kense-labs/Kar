@@ -4,7 +4,7 @@ use super::{
     http::{ApiError, blocking},
     missing,
 };
-use crate::{Error, Result, SessionOptions, workbench_git::StackCheckout};
+use crate::{Error, Result, workbench_git::StackCheckout};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -105,25 +105,22 @@ impl Operation {
             return Ok(message.clone());
         }
         let context = snapshot.summary(files)?;
-        let rt = crate::runtime(self.input.writer_runtime.as_deref().unwrap_or("codex"))?;
-        // The writer receives the diff as input. It has no task files to modify.
-        let cwd = tempfile::tempdir()?;
-        let mut opts = SessionOptions::new(cwd.path());
-        opts.model = self.input.writer_model.clone();
-        opts.unset_env.insert("KAR_WORKBENCH_TOKEN".into());
-        let session = rt.open(opts).await?;
-        let result=async {
-            let report=session.prompt(format!("Write a Git commit message for this change. Return just a concise subject and optional body.\n\n{context}")).await?.report().await?;
-            let text=report.text.trim();
-            if report.outcome!=crate::Outcome::Completed || text.is_empty() || text.len()>10000 {
-                return Err(Error::Refused("native writer returned no usable commit message".into()));
-            }
-            Ok(text.to_owned())
-        }.await;
-        let closed = session.close().await;
-        let text = result?;
-        closed?;
-        Ok(text)
+        let text = super::text_generation::generate_commit_message(
+            &self.app,
+            snapshot.repo.root(),
+            &context,
+            self.input.writer_runtime.as_deref(),
+            self.input.writer_model.as_deref(),
+        )
+        .await
+        .map_err(|_| Error::Refused("native writer returned no usable commit message".into()))?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed.len() > 10000 {
+            return Err(Error::Refused(
+                "native writer returned no usable commit message".into(),
+            ));
+        }
+        Ok(trimmed.to_owned())
     }
     async fn run(self: &Arc<Self>) -> Result<Value> {
         let app = self.app.clone();
@@ -259,16 +256,49 @@ impl Operation {
         if let Some(pull) = pull {
             self.phase("pr")?;
             let head = pull.head.clone();
-            let title = input
-                .title
-                .clone()
-                .or_else(|| {
-                    message
-                        .as_deref()
-                        .and_then(|s| s.lines().next())
-                        .map(str::to_owned)
-                })
-                .unwrap_or_else(|| head.clone());
+            let (title, body) = if input.title.is_none()
+                && input.body.is_empty()
+                && (input.writer_runtime.is_some()
+                    || std::env::var_os("KAR_TEXT_GENERATION_API_KEY").is_some()
+                    || std::env::var_os("OPENAI_API_KEY").is_some()
+                    || std::env::var_os("ANTHROPIC_API_KEY").is_some())
+            {
+                let generated = super::text_generation::generate_pr_content(
+                    &self.app,
+                    checkout.repo.root(),
+                    input.base.as_deref(),
+                    message.as_deref().unwrap_or(&head),
+                    "",
+                    input.writer_runtime.as_deref(),
+                    input.writer_model.as_deref(),
+                )
+                .await;
+                (generated.title, generated.body)
+            } else {
+                let title = input
+                    .title
+                    .clone()
+                    .or_else(|| {
+                        message
+                            .as_deref()
+                            .and_then(|s| s.lines().next())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| head.clone());
+                let body = if input.body.is_empty() {
+                    let style =
+                        super::text_generation::writing_style(&self.app.0.catalog.lock().unwrap());
+                    if style.follow_change_request_templates {
+                        super::text_generation::read_pr_template(checkout.repo.root())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    input.body.clone()
+                };
+                (title, body)
+            };
             result["pr"] = forge::stacked_pull(
                 self.app.clone(),
                 project,
@@ -276,7 +306,7 @@ impl Operation {
                 input.chat,
                 pull,
                 title,
-                input.body.clone(),
+                body,
             )
             .await
             .map_err(|e| Error::Refused(format!("{}: {}", e.kind, e.detail)))?;

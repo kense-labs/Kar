@@ -8,7 +8,7 @@ pub(super) struct Peer {
     pub(super) request_id: Uuid,
     label: String,
     origin: String,
-    token: String,
+    token: crate::workbench::secrets::SecretValue,
 }
 fn origin(v: &str) -> Result<url::Url> {
     let url = url::Url::parse(v).map_err(|_| bad("invalid remote environment address"))?;
@@ -43,20 +43,35 @@ pub(in crate::workbench) fn peer_request(
     method: reqwest::Method,
     segments: &[&str],
 ) -> Result<reqwest::RequestBuilder> {
-    bound_peer_request(app,id,None,method,segments)
+    bound_peer_request(app, id, None, method, segments)
 }
-pub(in crate::workbench) fn peer_identity(db:&Catalog,id:Uuid)->Result<Uuid>{
-    db.environment.links.get(&id).map(|p|p.request_id).ok_or_else(||bad("unknown environment link"))
-}
-pub(in crate::workbench) fn bound_peer_request(app:&Workbench,id:Uuid,expected:Option<Uuid>,method:reqwest::Method,segments:&[&str])->Result<reqwest::RequestBuilder>{
-    let db = app.0.catalog.lock().unwrap();
-    let p = db
-        .environment
+pub(in crate::workbench) fn peer_identity(db: &Catalog, id: Uuid) -> Result<Uuid> {
+    db.environment
         .links
         .get(&id)
-        .ok_or_else(|| bad("unknown environment link"))?;
-    if expected.is_some_and(|id|p.request_id!=id){return Err(bad("remote environment pairing changed"));}
-    let mut url = origin(&p.origin)?;
+        .map(|p| p.request_id)
+        .ok_or_else(|| bad("unknown environment link"))
+}
+pub(in crate::workbench) fn bound_peer_request(
+    app: &Workbench,
+    id: Uuid,
+    expected: Option<Uuid>,
+    method: reqwest::Method,
+    segments: &[&str],
+) -> Result<reqwest::RequestBuilder> {
+    let (peer_id, peer_origin, peer_secret) = {
+        let db = app.0.catalog.lock().unwrap();
+        let p = db
+            .environment
+            .links
+            .get(&id)
+            .ok_or_else(|| bad("unknown environment link"))?;
+        if expected.is_some_and(|id| p.request_id != id) {
+            return Err(bad("remote environment pairing changed"));
+        }
+        (p.id, p.origin.clone(), p.token.clone())
+    };
+    let mut url = origin(&peer_origin)?;
     if segments
         .iter()
         .any(|s| matches!(*s, "" | "." | "..") || s.contains(['/', '\\', '\0']))
@@ -67,20 +82,30 @@ pub(in crate::workbench) fn bound_peer_request(app:&Workbench,id:Uuid,expected:O
         .map_err(|_| bad("invalid linked environment origin"))?
         .clear()
         .extend(segments);
+    let bearer = crate::workbench::secrets::SecretService::for_workbench(app)?
+        .resolve_local_sync(&format!("peer:{peer_id}"), &peer_secret)?;
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(8))
         .read_timeout(std::time::Duration::from_secs(75))
         .build()?;
-    Ok(http.request(method, url).bearer_auth(&p.token))
+    Ok(http.request(method, url).bearer_auth(bearer.as_str()))
 }
-async fn request(peer: &Peer, method: reqwest::Method, path: &str) -> Result<Value> {
+async fn request(
+    state_dir: &std::path::Path,
+    peer: &Peer,
+    method: reqwest::Method,
+    path: &str,
+) -> Result<Value> {
     let url = origin(&peer.origin)?
         .join(path)
         .map_err(|_| bad("invalid environment route"))?;
+    let bearer = crate::workbench::secrets::SecretService::open(state_dir)?
+        .resolve_secret_value(&format!("peer:{}", peer.id), &peer.token)
+        .await?;
     let r = client()?
         .request(method, url)
-        .bearer_auth(&peer.token)
+        .bearer_auth(bearer.as_str())
         .send()
         .await
         .map_err(|_| bad("remote environment is unreachable"))?;
@@ -111,7 +136,7 @@ pub(super) async fn read(app: &Workbench, id: Uuid) -> Result<Value> {
         .get(&id)
         .cloned()
         .ok_or_else(|| bad("unknown environment link"))?;
-    let info = request(&peer, reqwest::Method::GET, "environment").await?;
+    let info = request(&app.0.state, &peer, reqwest::Method::GET, "environment").await?;
     if info["environment_id"] != id.to_string() {
         return Err(bad("linked endpoint identity changed"));
     }
@@ -131,8 +156,9 @@ pub(super) async fn list(app: &Workbench) -> Result<Value> {
         .collect();
     let mut tasks = tokio::task::JoinSet::new();
     for peer in peers {
+        let state_dir = app.0.state.clone();
         tasks.spawn(async move {
-            let ok = match request(&peer, reqwest::Method::GET, "environment").await {
+            let ok = match request(&state_dir, &peer, reqwest::Method::GET, "environment").await {
                 Ok(v) => v["environment_id"] == peer.id.to_string(),
                 Err(_) => false,
             };
@@ -232,11 +258,11 @@ pub(super) async fn approve(app: &Workbench, card: &cards::Card, input: Value) -
         id: Uuid::nil(),
         request_id: card.id,
         origin: address.to_string(),
-        token: token.into(),
+        token: crate::workbench::secrets::SecretValue::parse_input(token)?,
         label: String::new(),
     };
     let done = async {
-        let info = request(&peer, reqwest::Method::GET, "environment").await?;
+        let info = request(&app.0.state, &peer, reqwest::Method::GET, "environment").await?;
         let remote: Uuid = serde_json::from_value(info["environment_id"].clone())?;
         if remote == local
             || card.details["environment_id"]
@@ -248,6 +274,8 @@ pub(super) async fn approve(app: &Workbench, card: &cards::Card, input: Value) -
             ));
         }
         peer.id = remote;
+        peer.token = crate::workbench::secrets::SecretService::for_workbench(app)?
+            .seal_input(&format!("peer:{remote}"), token)?;
         peer.label = info["label"]
             .as_str()
             .unwrap_or("Kar")
@@ -265,14 +293,25 @@ pub(super) async fn approve(app: &Workbench, card: &cards::Card, input: Value) -
     }
     .await;
     if done.is_err() {
-        let _ = request(&peer, reqwest::Method::DELETE, "access/current-device").await;
+        let _ = request(
+            &app.0.state,
+            &peer,
+            reqwest::Method::DELETE,
+            "access/current-device",
+        )
+        .await;
     }
     done
 }
-async fn revoke_remote(peer: &Peer) -> bool {
-    if request(peer, reqwest::Method::DELETE, "access/current-device")
-        .await
-        .is_ok()
+async fn revoke_remote(state_dir: &std::path::Path, peer: &Peer) -> bool {
+    if request(
+        state_dir,
+        peer,
+        reqwest::Method::DELETE,
+        "access/current-device",
+    )
+    .await
+    .is_ok()
     {
         return true;
     }
@@ -281,7 +320,14 @@ async fn revoke_remote(peer: &Peer) -> bool {
         let url = origin(&peer.origin)?
             .join("environment")
             .map_err(|_| bad("invalid environment route"))?;
-        let response = client()?.get(url).bearer_auth(&peer.token).send().await?;
+        let bearer = crate::workbench::secrets::SecretService::open(state_dir)?
+            .resolve_secret_value(&format!("peer:{}", peer.id), &peer.token)
+            .await?;
+        let response = client()?
+            .get(url)
+            .bearer_auth(bearer.as_str())
+            .send()
+            .await?;
         Ok::<_, Error>(response.status() == reqwest::StatusCode::UNAUTHORIZED)
     }
     .await;
@@ -299,7 +345,7 @@ pub(super) async fn unlink(app: &Workbench, c: &Caller, g: &Grant, input: Value)
         Ok(db.environment.links.remove(&m.environment_id))
     })?;
     let revoked = if let Some(peer) = peer {
-        revoke_remote(&peer).await
+        revoke_remote(&app.0.state, &peer).await
     } else {
         false
     };
@@ -314,6 +360,108 @@ async fn revoke_device(
     app.0.access.revoke_device(device.id)?;
     Ok(Json(json!({"revoked":true})))
 }
+async fn list_owner_links(State(app): State<Workbench>) -> Reply {
+    Ok(Json(list(&app).await?))
+}
+async fn create_owner_link(State(app): State<Workbench>, Json(input): Json<Value>) -> Reply {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct DirectLink {
+        url: String,
+        credential: String,
+        environment_id: Option<Uuid>,
+    }
+    let req: DirectLink = serde_json::from_value(input).map_err(Error::from)?;
+    let address = origin(&req.url)?;
+    if req.credential.len() > 4096 || req.credential.trim().is_empty() {
+        return Err(bad("invalid pairing credential").into());
+    }
+    let local = id(&app)?;
+    let r = client()?
+        .post(address.join("access/pair").unwrap())
+        .json(&json!({"credential":req.credential,"label":format!("Kar {local}"),"purpose":"peer-link"}))
+        .send()
+        .await
+        .map_err(|_| bad("remote pairing outcome unknown; inspect the remote device list"))?;
+    if !r.status().is_success() {
+        return Err(bad("remote environment refused pairing").into());
+    }
+    let auth: Value = r.json().await.map_err(Error::from)?;
+    let token = auth["token"]
+        .as_str()
+        .filter(|s| s.len() <= 4096 && !s.trim().is_empty())
+        .ok_or_else(|| bad("remote pairing returned no device credential"))?;
+    let mut peer = Peer {
+        id: Uuid::nil(),
+        request_id: Uuid::new_v4(),
+        origin: address.to_string(),
+        token: crate::workbench::secrets::SecretValue::parse_input(token)?,
+        label: String::new(),
+    };
+    let done: Result<Value> = async {
+        let info = request(&app.0.state, &peer, reqwest::Method::GET, "environment").await?;
+        let remote: Uuid = serde_json::from_value(info["environment_id"].clone())?;
+        if remote == local
+            || req
+                .environment_id
+                .is_some_and(|expected| expected != remote)
+        {
+            return Err(bad(
+                "remote identity does not match the requested environment",
+            ));
+        }
+        peer.id = remote;
+        peer.token = crate::workbench::secrets::SecretService::for_workbench(&app)?
+            .seal_input(&format!("peer:{remote}"), token)?;
+        peer.label = info["label"]
+            .as_str()
+            .unwrap_or("Kar")
+            .chars()
+            .take(160)
+            .collect();
+        app.update(|db| {
+            let env = &mut db.environment;
+            if env.links.len() >= 32 && !env.links.contains_key(&remote) {
+                return Err(bad("environment link limit reached"));
+            }
+            env.links.insert(remote, peer.clone());
+            Ok(json!({"status":"linked","environment_id":remote,"label":peer.label}))
+        })
+    }
+    .await;
+    if done.is_err() {
+        let _ = request(
+            &app.0.state,
+            &peer,
+            reqwest::Method::DELETE,
+            "access/current-device",
+        )
+        .await;
+    }
+    Ok(Json(done?))
+}
+async fn remove_owner_link(
+    State(app): State<Workbench>,
+    axum::extract::Path(env_id): axum::extract::Path<Uuid>,
+) -> Reply {
+    let peer = app.update(|db| Ok(db.environment.links.remove(&env_id)))?;
+    let revoked = if let Some(peer) = peer {
+        revoke_remote(&app.0.state, &peer).await
+    } else {
+        false
+    };
+    Ok(Json(
+        json!({"environment_id":env_id,"linked":false,"remote_revocation_confirmed":revoked}),
+    ))
+}
 pub(in crate::workbench) fn session_routes() -> Router<Workbench> {
     Router::new().route("/access/current-device", delete(revoke_device))
+}
+pub(super) fn owner_routes() -> Router<Workbench> {
+    Router::new()
+        .route(
+            "/environment/links",
+            get(list_owner_links).post(create_owner_link),
+        )
+        .route("/environment/links/{id}", delete(remove_owner_link))
 }

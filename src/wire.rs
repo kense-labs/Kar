@@ -176,6 +176,26 @@ pub(crate) fn answer(p: Protocol, id: &Value, method: &str, answer: Option<Value
         }
     }
 }
+pub(crate) fn allow_answer(p: Protocol, method: &str, body: &Value) -> Option<Value> {
+    match p {
+        Protocol::Claude | Protocol::Qoder | Protocol::Qwen if method == "can_use_tool" => {
+            if body["tool_name"] == "AskUserQuestion" {
+                Some(json!({"behavior":"deny","message":"Denied by host"}))
+            } else {
+                let input = body
+                    .get("input")
+                    .filter(|v| v.is_object())
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                Some(json!({"behavior":"allow","updatedInput":input}))
+            }
+        }
+        _ => {
+            crate::interaction::decision_payload(method, body, crate::PermissionDecision::AllowOnce)
+        }
+    }
+}
+
 pub(crate) fn classify(p: Protocol, v: &Value) -> RecordKind {
     if response_id(p, v).is_some() {
         RecordKind::Response
@@ -221,11 +241,28 @@ fn acp_settings(body: &Value, cursor: bool) -> Vec<Event> {
         });
     let effort =
         crate::options::acp_effort_option(body, cursor).and_then(|v| v["currentValue"].as_str());
-    settings(model, effort, None)
+    let tier = cursor
+        .then(|| crate::cursor_models::fast(body))
+        .flatten()
+        .and_then(|opt| crate::cursor_models::fast_flag(&opt["currentValue"]))
+        .map(|is_fast| Value::String(if is_fast { "fast" } else { "default" }.into()));
+    settings(model, effort, tier.as_ref())
 }
 pub(crate) fn reply_settings(p: Protocol, method: &str, body: &Value, cursor: bool) -> Vec<Event> {
     match (p, method) {
-        (Protocol::Muse, "session/start" | "session/resume") => settings(body.pointer("/session/modelId").and_then(Value::as_str), None, None),
+        (Protocol::Muse, "session/start" | "session/resume") => settings(
+            body.pointer("/session/modelId").and_then(Value::as_str),
+            None,
+            None,
+        ),
+        (Protocol::Claude, "initialize") => {
+            let tier = match body["fast_mode_state"].as_str() {
+                Some("on") => Some(Value::String("fast".into())),
+                Some("off" | "cooldown") => Some(Value::String("default".into())),
+                _ => None,
+            };
+            settings(None, None, tier.as_ref())
+        }
         (Protocol::Codex, "thread/start" | "thread/resume" | "thread/fork") => settings(
             body["model"].as_str(),
             body["reasoningEffort"].as_str(),
@@ -581,6 +618,310 @@ pub(crate) fn session_id(p: Protocol, v: &Value) -> Option<String> {
     }
 }
 
+pub(crate) fn opencode_skill_mentions(text: &str) -> Vec<String> {
+    fn is_numeric_currency(s: &str) -> bool {
+        let bytes = s.as_bytes();
+        if bytes.first().is_none_or(|b| !b.is_ascii_digit()) {
+            return false;
+        }
+        let mut i = 1;
+        while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
+            i += 1;
+        }
+        if i == bytes.len() {
+            return true;
+        }
+        if i + 1 == bytes.len()
+            && matches!(
+                bytes[i],
+                b'k' | b'K' | b'm' | b'M' | b'b' | b'B' | b't' | b'T'
+            )
+        {
+            return true;
+        }
+        if matches!(bytes[i], b'e' | b'E') && i + 1 < bytes.len() {
+            return bytes[i + 1..].iter().all(u8::is_ascii_digit);
+        }
+        false
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut skills = Vec::new();
+    for token in text.split_whitespace() {
+        let Some(raw_name) = token.strip_prefix('$') else {
+            continue;
+        };
+        let name = raw_name.trim_end_matches([',', '.', ';', '!', '?', ')', ']', '}', '"', '\'']);
+        let bytes = name.as_bytes();
+        if bytes.first().is_none_or(|b| !b.is_ascii_alphanumeric())
+            || !bytes
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b':' | b'_' | b'-'))
+            || !bytes.iter().any(u8::is_ascii_alphabetic)
+            || is_numeric_currency(name)
+        {
+            continue;
+        }
+        if seen.insert(name.to_owned()) {
+            skills.push(name.to_owned());
+        }
+    }
+    skills
+}
+
+pub(crate) fn fx_subagent_outcome(text: &str) -> Option<(bool, Option<String>)> {
+    if let Ok(whole) = serde_json::from_str::<Value>(text)
+        && let Some(ok) = whole["ok"].as_bool()
+        && whole
+            .get("result")
+            .is_some_and(|r| r.is_null() || r.is_string())
+    {
+        return Some((ok, whole["result"].as_str().map(str::to_owned)));
+    }
+    static CLIPPED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"^\{"ok":(true|false),"result":"((?:[^"\\]|\\.)*)"#).unwrap()
+    });
+    static TRAILING_UNICODE_ESCAPE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r#"\\u[0-9a-fA-F]{0,3}$"#).unwrap());
+    let caps = CLIPPED.captures(text)?;
+    let ok = &caps[1] == "true";
+    let fragment = &caps[2];
+    let cut = text.as_bytes().get(caps.get(0)?.end()) != Some(&b'"');
+    let decoded = serde_json::from_str::<String>(&format!("\"{fragment}\""))
+        .ok()
+        .or_else(|| {
+            let cleaned = TRAILING_UNICODE_ESCAPE.replace(fragment, "");
+            let cleaned = cleaned.strip_suffix('\\').unwrap_or(&cleaned);
+            serde_json::from_str::<String>(&format!("\"{cleaned}\"")).ok()
+        });
+    Some((
+        ok,
+        decoded.map(|mut s| {
+            if cut {
+                s.push('…');
+            }
+            s
+        }),
+    ))
+}
+
+#[derive(Default)]
+struct FxSubagentCall {
+    named_subagent: bool,
+    started: bool,
+    ended: bool,
+    input: Option<Value>,
+    content_text: Option<String>,
+}
+
+#[derive(Default)]
+pub(crate) struct FxChildren {
+    calls: std::collections::HashMap<String, FxSubagentCall>,
+}
+
+fn decode_fx_subagent_input(raw: &Value) -> Option<(String, Option<String>, Option<String>)> {
+    let req = raw.get("request").filter(|v| v.is_object()).unwrap_or(raw);
+    let model = req["model"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    match req["action"].as_str()? {
+        "run" => {
+            let task = req["task"].as_str()?.to_owned();
+            Some((task, None, model))
+        }
+        "message" => {
+            let agent = req["agent"].as_str()?.to_owned();
+            let message = req["message"].as_str()?.to_owned();
+            Some((message, Some(agent), model))
+        }
+        _ => None,
+    }
+}
+
+fn extract_fx_tool_text(update: &Value) -> Option<String> {
+    if let Some(items) = update["content"].as_array() {
+        for item in items {
+            if let Some(t) = item
+                .pointer("/content/text")
+                .and_then(Value::as_str)
+                .or_else(|| item["text"].as_str())
+            {
+                return Some(t.to_owned());
+            }
+        }
+    }
+    update["rawOutput"].as_str().map(str::to_owned)
+}
+
+fn extract_explicit_fx_outcome(update: &Value) -> Option<(bool, Option<String>)> {
+    for candidate in [
+        update.get("fxSubagentOutcome"),
+        update.pointer("/_meta/fxSubagentOutcome"),
+        update.pointer("/rawOutput/fxSubagentOutcome"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(ok) = candidate["ok"].as_bool() {
+            return Some((ok, candidate["result"].as_str().map(str::to_owned)));
+        }
+        if let Some(s) = candidate.as_str()
+            && let Some(parsed) = fx_subagent_outcome(s)
+        {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn extract_fx_error_text(text: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(text).ok()?;
+    let err = parsed.get("error")?.as_object()?;
+    err.get("details")
+        .and_then(|d| d["error"].as_str())
+        .or_else(|| err.get("message").and_then(Value::as_str))
+        .or_else(|| err.get("code").and_then(Value::as_str))
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+impl FxChildren {
+    pub(crate) fn observe(&mut self, root: Option<&str>, v: &Value, events: &mut Vec<Event>) {
+        if v["method"] != "session/update" {
+            return;
+        }
+        let params = &v["params"];
+        if root.is_none() || params["sessionId"].as_str() != root {
+            return;
+        }
+        let update = &params["update"];
+        if !matches!(
+            update["sessionUpdate"].as_str(),
+            Some("tool_call" | "tool_call_update")
+        ) {
+            return;
+        }
+        let Some(call_id) = update["toolCallId"].as_str().filter(|s| !s.is_empty()) else {
+            return;
+        };
+        let explicit_outcome = extract_explicit_fx_outcome(update);
+        let named = [
+            update["name"].as_str(),
+            update["toolName"].as_str(),
+            update["title"].as_str(),
+            update.pointer("/_meta/toolName").and_then(Value::as_str),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|n| n == "subagent")
+            || explicit_outcome.is_some();
+
+        let state = self.calls.entry(call_id.to_owned()).or_default();
+        state.named_subagent |= named;
+        if let Some(raw_in) = update.get("rawInput").filter(|v| !v.is_null()) {
+            state.input = Some(raw_in.clone());
+        }
+        if let Some(text) = extract_fx_tool_text(update) {
+            state.content_text = Some(text);
+        }
+        if !state.named_subagent {
+            return;
+        }
+        let parsed_input = state.input.as_ref().and_then(decode_fx_subagent_input);
+        if parsed_input.is_none() && explicit_outcome.is_none() {
+            return;
+        }
+        let child_session_id = update["subagentSessionId"]
+            .as_str()
+            .or_else(|| {
+                update
+                    .pointer("/_meta/subagentSessionId")
+                    .and_then(Value::as_str)
+            })
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        if !state.started {
+            state.started = true;
+            let (description, agent_title, model) = match &parsed_input {
+                Some((prompt, agent, model)) => {
+                    (Some(prompt.clone()), agent.clone(), model.clone())
+                }
+                None => (None, None, None),
+            };
+            events.push(Event::Task {
+                id: call_id.to_owned(),
+                change: crate::TaskChange::Started {
+                    task_type: crate::TaskType::Agent,
+                    details: crate::TaskDetails {
+                        native_type: Some(agent_title.unwrap_or_else(|| "subagent".into())),
+                        description,
+                        tool_call_id: Some(call_id.to_owned()),
+                        child_session_id,
+                        model,
+                        ..Default::default()
+                    },
+                },
+            });
+        }
+        let Some(raw_status) = update["status"].as_str() else {
+            return;
+        };
+        if state.ended
+            || !matches!(
+                raw_status,
+                "completed" | "failed" | "declined" | "cancelled" | "canceled"
+            )
+        {
+            return;
+        }
+        state.ended = true;
+        let outcome = explicit_outcome
+            .or_else(|| state.content_text.as_deref().and_then(fx_subagent_outcome));
+        let task_status = match raw_status {
+            "completed" if outcome.as_ref().is_some_and(|(ok, _)| !*ok) => {
+                crate::TaskStatus::Failed
+            }
+            "completed" => crate::TaskStatus::Completed,
+            "failed" | "declined" => crate::TaskStatus::Failed,
+            _ => crate::TaskStatus::Stopped,
+        };
+        let output = outcome
+            .as_ref()
+            .and_then(|(_, r)| r.clone())
+            .or_else(|| {
+                state
+                    .content_text
+                    .as_deref()
+                    .and_then(extract_fx_error_text)
+            })
+            .or_else(|| state.content_text.clone());
+        if let Some((ok, ref text_opt)) = outcome {
+            for ev in events.iter_mut() {
+                if let Event::ToolResult { id, result } = ev
+                    && id == call_id
+                {
+                    if !ok {
+                        result.status = Some(crate::ToolStatus::Failed);
+                    }
+                    if let Some(text) = text_opt {
+                        result.content = Some(vec![crate::OutputPart::Text { text: text.clone() }]);
+                    }
+                }
+            }
+        }
+        events.push(Event::Task {
+            id: call_id.to_owned(),
+            change: crate::TaskChange::Ended {
+                status: task_status,
+                summary: None,
+                output,
+                output_file: None,
+            },
+        });
+    }
+}
+
 #[cfg(test)]
 mod host_refusals {
     use super::*;
@@ -600,5 +941,113 @@ mod host_refusals {
             answer(Protocol::Factory, &id, "droid.request_permission", None)["error"]["code"],
             -32602
         );
+    }
+
+    #[test]
+    fn allow_answer_approves_tools_while_denying_unattended_ask_user_question() {
+        let bash = allow_answer(
+            Protocol::Claude,
+            "can_use_tool",
+            &json!({"tool_name": "Bash", "input": {"command": "ls"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            bash,
+            json!({"behavior": "allow", "updatedInput": {"command": "ls"}})
+        );
+        let ask = allow_answer(
+            Protocol::Claude,
+            "can_use_tool",
+            &json!({"tool_name": "AskUserQuestion", "input": {"questions": []}}),
+        )
+        .unwrap();
+        assert_eq!(ask["behavior"], "deny");
+    }
+
+    #[test]
+    fn fx_subagent_outcome_handles_complete_failed_and_199_byte_clipped_json() {
+        assert_eq!(
+            fx_subagent_outcome(r#"{"ok":true,"result":"done"}"#),
+            Some((true, Some("done".into())))
+        );
+        assert_eq!(
+            fx_subagent_outcome(r#"{"ok":false,"result":"subagent crashed"}"#),
+            Some((false, Some("subagent crashed".into())))
+        );
+        // 199-byte style clipped JSON and incomplete trailing \u escape.
+        assert_eq!(
+            fx_subagent_outcome(r#"{"ok":true,"result":"long output cut mid-stream"#),
+            Some((true, Some("long output cut mid-stream…".into())))
+        );
+        assert_eq!(
+            fx_subagent_outcome(r#"{"ok":false,"result":"unicode cut \u00"#),
+            Some((false, Some("unicode cut …".into())))
+        );
+
+        let mut fx = FxChildren::default();
+        let start_frame = json!({
+            "method": "session/update",
+            "params": {
+                "sessionId": "root-1",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "sub-1",
+                    "name": "subagent",
+                    "title": "subagent",
+                    "rawInput": {"request": {"action": "run", "task": "audit repo", "model": "claude-sonnet-4-5"}}
+                }
+            }
+        });
+        let mut start_events = project(Protocol::Acp, &start_frame, false);
+        fx.observe(Some("root-1"), &start_frame, &mut start_events);
+        assert!(start_events.iter().any(|e| matches!(
+            e,
+            Event::Task {
+                id,
+                change: crate::TaskChange::Started {
+                    task_type: crate::TaskType::Agent,
+                    details,
+                }
+            } if id == "sub-1"
+                && details.description.as_deref() == Some("audit repo")
+                && details.model.as_deref() == Some("claude-sonnet-4-5")
+        )));
+
+        let end_frame = json!({
+            "method": "session/update",
+            "params": {
+                "sessionId": "root-1",
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "sub-1",
+                    "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": r#"{"ok":false,"result":"checks failed"#}}]
+                }
+            }
+        });
+        let mut end_events = project(Protocol::Acp, &end_frame, false);
+        fx.observe(Some("root-1"), &end_frame, &mut end_events);
+        assert!(end_events.iter().any(|e| matches!(
+            e,
+            Event::Task {
+                id,
+                change: crate::TaskChange::Ended {
+                    status: crate::TaskStatus::Failed,
+                    output: Some(out),
+                    ..
+                }
+            } if id == "sub-1" && out == "checks failed…"
+        )));
+    }
+
+    #[test]
+    fn opencode_skill_mentions_extracts_unique_skills_and_skips_currency_amounts() {
+        assert_eq!(
+            opencode_skill_mentions(
+                "Use $lint:fix and $my_skill-2, ignore $100 $50k $1e5, repeat $lint:fix"
+            ),
+            vec!["lint:fix".to_owned(), "my_skill-2".to_owned()]
+        );
+        assert!(opencode_skill_mentions("plain text without skills or $99").is_empty());
     }
 }

@@ -131,7 +131,11 @@ pub(super) async fn call(app: &Workbench, c: &Caller, id: Uuid, row: &Record) ->
                         .ok_or_else(|| {
                             Error::Refused("thread has no user message for its title".into())
                         })?;
-                    value = json!({"action":"rename","title":text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect::<String>()});
+                    let title = crate::workbench::text_generation::generate_thread_title_fast(
+                        app, text, None,
+                    )
+                    .await;
+                    value = json!({"action":"rename","title":title});
                 } else if action != "rename" {
                     return Err(denied());
                 }

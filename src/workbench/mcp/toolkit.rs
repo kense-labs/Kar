@@ -13,18 +13,122 @@ pub(super) struct Tool {
     pub(super) required: &'static [&'static str],
 }
 impl Tool {
+    fn annotations(&self) -> Value {
+        let read_only = matches!(
+            self.name,
+            "orchestrator_capabilities"
+                | "tool_search"
+                | "kar_project_list"
+                | "kar_project_read"
+                | "kar_thread_list"
+                | "kar_thread_read"
+                | "kar_thread_search"
+                | "kar_thread_wait"
+                | "kar_list_issues"
+                | "kar_read_issue"
+                | "kar_worktree_list"
+                | "kar_worktree_status"
+                | "kar_task_status"
+                | "kar_list_scheduled_tasks"
+                | "kar_environment_read"
+                | "kar_theme_read"
+                | "kar_environment_links"
+                | "kar_preview_list"
+                | "kar_preview_status"
+                | "kar_preview_snapshot"
+                | "kar_preview_wait_for"
+                | "kar_device_list"
+                | "kar_device_status"
+                | "kar_device_screenshot"
+        );
+        let destructive = matches!(
+            self.name,
+            "kar_project_delete"
+                | "kar_delete_scheduled_task"
+                | "kar_task_cancel"
+                | "kar_attachment_discard"
+                | "kar_environment_unlink"
+                | "kar_preview_close"
+                | "kar_thread_interrupt"
+                | "kar_workflow_stop"
+        );
+        let idempotent = read_only
+            || destructive
+            || self
+                .properties
+                .as_object()
+                .is_some_and(|m| m.contains_key("command_id") || m.contains_key("request_id"));
+        let open_world = matches!(
+            self.name,
+            "kar_list_issues"
+                | "kar_read_issue"
+                | "kar_set_issue_state"
+                | "kar_create_issue"
+                | "kar_comment_on_issue"
+                | "kar_pull_request"
+                | "kar_pull_request_links"
+                | "kar_issue_links"
+                | "kar_ci"
+                | "kar_project_clone"
+                | "kar_environment_read"
+                | "kar_environment_links"
+                | "kar_environment_link"
+                | "kar_environment_unlink"
+                | "kar_preview_open"
+                | "kar_preview_navigate"
+                | "kar_preview_evaluate"
+        );
+        json!({
+            "readOnlyHint": read_only,
+            "destructiveHint": destructive,
+            "idempotentHint": idempotent,
+            "openWorldHint": open_world,
+        })
+    }
+
     fn public(&self) -> Value {
-        json!({"name":self.name,"description":self.description,"inputSchema":{"type":"object",
-            "additionalProperties":false,"properties":self.properties,"required":self.required}})
+        let mut out = json!({
+            "name": self.name,
+            "description": self.description,
+            "annotations": self.annotations(),
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": self.properties,
+                "required": self.required,
+            }
+        });
+        if matches!(
+            self.name,
+            "kar_request_secret" | "tool_search" | "orchestrator_capabilities"
+        ) {
+            out["_meta"] = json!({"anthropic/alwaysLoad": true});
+        }
+        out
     }
 }
 fn tools(caller: &Caller) -> Vec<Tool> {
     let id = json!({"type":"string","format":"uuid"});
     let cursor = json!({"type":"integer","minimum":0});
     let limit = json!({"type":"integer","minimum":1,"maximum":100});
-    let queue_write = !caller.plan && (caller.grant.is_none() || caller.policy.as_ref()
-        .is_some_and(|p| p.executes() && p.thread_tools.as_ref().is_some_and(|s| s.write)));
-    let queue_actions = if queue_write {vec!["list","read","edit","cancel","reorder","promote_to_steer"]} else {vec!["list","read"]};
+    let queue_write = !caller.plan
+        && (caller.grant.is_none()
+            || caller
+                .policy
+                .as_ref()
+                .is_some_and(|p| p.executes() && p.thread_tools.as_ref().is_some_and(|s| s.write)));
+    let queue_actions = if queue_write {
+        vec![
+            "list",
+            "read",
+            "edit",
+            "cancel",
+            "reorder",
+            "promote_to_steer",
+        ]
+    } else {
+        vec!["list", "read"]
+    };
     let mut tools = vec![
         Tool {
             name: "orchestrator_capabilities",
@@ -35,25 +139,25 @@ fn tools(caller: &Caller) -> Vec<Tool> {
         Tool {
             name: "kar_project_list",
             description: "List visible projects with their workspace settings, in pages.",
-            properties: json!({"cursor":cursor,"limit":limit}),
+            properties: json!({"environment_id":id,"cursor":cursor,"limit":limit}),
             required: &[],
         },
         Tool {
             name: "kar_project_read",
             description: "Read a project's workspace and saved scripts.",
-            properties: json!({"project_id":id}),
+            properties: json!({"environment_id":id,"project_id":id}),
             required: &["project_id"],
         },
         Tool {
             name: "kar_thread_list",
             description: "List chats with titles, latest run, status and snooze state.",
-            properties: json!({"project_id":id,"title_contains":{"type":"string"},"settled":{"type":"boolean"},"snoozed":{"type":"boolean"},"include_archived":{"type":"boolean"},"cursor":cursor,"limit":limit}),
+            properties: json!({"environment_id":id,"project_id":id,"title_contains":{"type":"string"},"settled":{"type":"boolean"},"snoozed":{"type":"boolean"},"include_archived":{"type":"boolean"},"cursor":cursor,"limit":limit}),
             required: &[],
         },
         Tool {
             name: "kar_thread_read",
             description: "Read a chat's messages or timeline activities by stable item ID or position.",
-            properties: json!({"project_id":id,"thread_id":id,"view":{"enum":["messages","activity"]},"item_id":{"type":"string"},"after_position":{"type":"integer","minimum":-1},"before_position":cursor,"text_offset":cursor,"max_chars_per_item":{"type":"integer","minimum":1,"maximum":20000},"limit":limit}),
+            properties: json!({"environment_id":id,"project_id":id,"thread_id":id,"view":{"enum":["messages","activity"]},"item_id":{"type":"string"},"after_position":{"type":"integer","minimum":-1},"before_position":cursor,"text_offset":cursor,"max_chars_per_item":{"type":"integer","minimum":1,"maximum":20000},"limit":limit}),
             required: &[],
         },
         Tool {
@@ -106,22 +210,48 @@ fn tools(caller: &Caller) -> Vec<Tool> {
     if caller.grant.is_some() {
         tools.push(Tool{name:"kar_worktree_list",description:"List the local and remote Git refs visible from this chat's checkout, including checkout paths.",properties:json!({"project_id":id,"thread_id":id,"query":{"type":"string"},"kind":{"enum":["all","local","remote"]},"include_matching_remote_refs":{"type":"boolean"},"cursor":cursor,"limit":limit}),required:&[]});
         tools.push(Tool{name:"kar_worktree_status",description:"Read this chat's current workspace attachment and its last managed handoff.",properties:json!({"project_id":id,"thread_id":id}),required:&[]});
-        if !caller.plan && caller.policy.as_ref().and_then(Policy::worktree_directory).is_some(){
+        if !caller.plan
+            && caller
+                .policy
+                .as_ref()
+                .and_then(Policy::worktree_directory)
+                .is_some()
+        {
             tools.push(Tool{name:"kar_worktree_handoff",description:"Move this chat to a new branch in its granted worktree directory after its current turn. Reuse command_id on retries. A continuation is admitted once in the new workspace.",
                 properties:json!({"project_id":id,"thread_id":id,"command_id":id,"branch":{"type":"string"},"base_ref":{"type":"string"},"start_from_origin":{"type":"boolean"},"run_setup_script":{"type":"boolean"},"continuation_prompt":{"type":"string"}}),required:&["command_id","branch"]});
         }
     }
-    if let Some(policy) = caller.policy.as_ref().filter(|p| p.reads_workflows()) {
-        let mut actions = vec!["definitions","list","read","questions","hooks","store"];
-        if !caller.plan && policy.writes_workflows() { actions.extend(["start","resume","cancel","stop","skip","signal","reconcile","store_set","store_delete"]); }
+    if caller.grant.is_none() || caller.policy.as_ref().is_some_and(Policy::reads_workflows) {
+        let mut actions = vec!["definitions", "list", "read", "questions", "hooks", "store"];
+        if !caller.plan
+            && (caller.grant.is_none()
+                || caller.policy.as_ref().is_some_and(Policy::writes_workflows))
+        {
+            actions.extend([
+                "start",
+                "resume",
+                "cancel",
+                "stop",
+                "skip",
+                "withdraw",
+                "signal",
+                "reconcile",
+                "store_set",
+                "store_delete",
+            ]);
+        }
         tools.push(Tool {
             name:"kar_workflow",
-            description:"Inspect durable project workflows and runs. Start a saved workflow, retry a failed step, answer a question, reconcile an interrupted attempt, stop, skip or cancel. Reuse command_id on retries.",
-            properties:json!({"project_id":id,"thread_id":id,"action":{"enum":actions},"workflow_id":id,"run_id":id,"parent_run_id":id,"reason":{"type":"string"},"key":{"type":"string"},"channel":{"type":"string"},"command_id":id,"attempt_id":id,"input":{},"value":{},"succeeded":{"type":"boolean"},"evidence":{"type":"string"},"status":{"enum":["ready","running","asking","waiting","reconcile","failed","cancelled","stopped","skipped","completed"]},"cursor":cursor,"limit":limit}),
+            description:"Inspect durable project workflows and runs. Start a saved workflow, retry a failed step, answer or withdraw a question, reconcile an interrupted attempt, stop, skip or cancel. Reuse command_id on retries.",
+            properties:json!({"project_id":id,"thread_id":id,"action":{"enum":actions},"workflow_id":id,"run_id":id,"parent_run_id":id,"reason":{"type":"string"},"key":{"type":"string"},"channel":{"type":"string"},"tag":{"type":"string"},"subject":{"type":"string"},"kind":{"type":"string"},"command_id":id,"attempt_id":id,"input":{},"value":{},"succeeded":{"type":"boolean"},"evidence":{"type":"string"},"status":{"enum":["ready","running","asking","waiting","reconcile","failed","cancelled","stopped","skipped","completed"]},"cursor":cursor,"limit":limit}),
             required:&["action"],
         });
     }
-    if caller.grant.as_ref().is_some_and(|g| g.supports_background_wait()) {
+    if caller
+        .grant
+        .as_ref()
+        .is_some_and(|g| g.supports_background_wait())
+    {
         tools.push(Tool {
             name:"kar_background_wait",
             description:"Mark or clear waits for a live background task in this chat. Antigravity holds its running command or scheduled wake.",
@@ -231,7 +361,12 @@ fn project_scope(c: &Caller, asked: Option<Uuid>) -> Result<Option<Uuid>> {
     }
     Ok(asked)
 }
-pub(super) fn target(app: &Workbench, c: &Caller, p: Option<Uuid>, t: Option<Uuid>) -> Result<(Uuid, Uuid)> {
+pub(super) fn target(
+    app: &Workbench,
+    c: &Caller,
+    p: Option<Uuid>,
+    t: Option<Uuid>,
+) -> Result<(Uuid, Uuid)> {
     let thread = t
         .or_else(|| c.grant.as_ref().map(|g| g.chat))
         .ok_or_else(|| bad("thread_id is required"))?;
@@ -260,33 +395,177 @@ pub(super) fn target(app: &Workbench, c: &Caller, p: Option<Uuid>, t: Option<Uui
     app.binding(project, thread)?;
     Ok((project, thread))
 }
+pub(super) async fn forward_remote_mcp(
+    app: &Workbench,
+    caller: &Caller,
+    env_id: Uuid,
+    name: &str,
+    cleaned_args: Value,
+    write: bool,
+) -> Result<Value> {
+    if let Some(grant) = &caller.grant {
+        let db = app.0.catalog.lock().unwrap();
+        if !grant.active()
+            || Policy::current(&db, grant.project, grant.chat) != caller.policy.as_ref()
+        {
+            return Err(bad("inactive model grant"));
+        }
+        let Some(policy) = &caller.policy else {
+            return Err(bad("remote environment access denied"));
+        };
+        if write && (caller.plan || !policy.executes()) {
+            return Err(bad("remote write requires an execute grant"));
+        }
+        let Some(scope) = &policy.thread_tools else {
+            return Err(bad("remote environment is outside this model grant"));
+        };
+        if write && !scope.write {
+            return Err(bad("remote thread write is outside this model grant"));
+        }
+        let Some(allowed_projects) = scope.remote_projects.get(&env_id) else {
+            return Err(bad("remote environment is not granted to this chat"));
+        };
+        if let Some(pid) = cleaned_args
+            .get("project_id")
+            .and_then(|v| serde_json::from_value::<Uuid>(v.clone()).ok())
+            && !allowed_projects.contains(&pid)
+        {
+            return Err(bad("remote project is not granted to this chat"));
+        }
+    } else if write && caller.plan {
+        return Err(bad("remote write requires execute mode"));
+    }
+
+    let req = super::collaboration_tools::environment::peer_request(
+        app,
+        env_id,
+        reqwest::Method::POST,
+        &["peer", "mcp"],
+    )?;
+    let resp = req
+        .header("accept", "application/json")
+        .json(&json!({
+            "name": name,
+            "arguments": cleaned_args,
+        }))
+        .send()
+        .await
+        .map_err(|_| bad("linked remote environment is unreachable"))?;
+    if !resp.status().is_success() {
+        return Err(bad(&format!(
+            "linked remote environment returned HTTP {}",
+            resp.status().as_u16()
+        )));
+    }
+    let body: Value = resp.json().await?;
+    let mut out = body.get("structuredContent").cloned().unwrap_or(body);
+    if caller.grant.is_some()
+        && name == "kar_project_list"
+        && let Some(allowed) = caller
+            .policy
+            .as_ref()
+            .and_then(|p| p.thread_tools.as_ref())
+            .and_then(|s| s.remote_projects.get(&env_id))
+        && let Some(arr) = out["projects"].as_array_mut()
+    {
+        arr.retain(|p| {
+            serde_json::from_value::<Uuid>(p["id"].clone()).is_ok_and(|pid| allowed.contains(&pid))
+        });
+        out["total"] = json!(arr.len());
+    }
+    Ok(out)
+}
+
 pub(super) async fn call(
     app: Workbench,
     caller: Caller,
     name: &str,
-    input: Value,
+    mut input: Value,
 ) -> Result<Value> {
-    if super::project_tools::handles(name) { return super::project_tools::call(&app,&caller,name,input).await; }
-    if name.starts_with("kar_preview_") || name.starts_with("kar_device_") || name.starts_with("kar_html_"){return preview_tools::call(&app,&caller,name,input).await;}
-    if super::collaboration_tools::handles(name) { return super::collaboration_tools::call(&app,&caller,name,input).await; }
-    if matches!(name, "kar_create_issue" | "kar_comment_on_issue" | "kar_set_issue_state" | "kar_list_issues" | "kar_read_issue") {
+    if matches!(
+        name,
+        "kar_project_list" | "kar_project_read" | "kar_thread_list" | "kar_thread_read"
+    ) && let Some(raw_env) = input
+        .as_object_mut()
+        .and_then(|m| m.remove("environment_id"))
+        && !raw_env.is_null()
+    {
+        let env_id: Uuid = args(raw_env)?;
+        let local_id = super::collaboration_tools::environment::id(&app)?;
+        if env_id != local_id {
+            return forward_remote_mcp(&app, &caller, env_id, name, input, false).await;
+        }
+    }
+    if super::project_tools::handles(name) {
+        return super::project_tools::call(&app, &caller, name, input).await;
+    }
+    if name.starts_with("kar_preview_")
+        || name.starts_with("kar_device_")
+        || name.starts_with("kar_html_")
+    {
+        return preview_tools::call(&app, &caller, name, input).await;
+    }
+    if super::collaboration_tools::handles(name) {
+        return super::collaboration_tools::call(&app, &caller, name, input).await;
+    }
+    if matches!(
+        name,
+        "kar_create_issue"
+            | "kar_comment_on_issue"
+            | "kar_set_issue_state"
+            | "kar_list_issues"
+            | "kar_read_issue"
+    ) {
         return issues::call(app, caller, name, input).await;
     }
-    if name=="kar_queue" && input["action"]=="promote_to_steer" {
-        if caller.plan {return Err(bad("Queue promotion requires an execute grant"));}
+    if name == "kar_queue" && input["action"] == "promote_to_steer" {
+        if caller.plan {
+            return Err(bad("Queue promotion requires an execute grant"));
+        }
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Promotion { project_id:Option<Uuid>, thread_id:Option<Uuid>, action:String, turn_id:Uuid, request_id:Option<Uuid>, input_id:Uuid, command_id:Uuid }
-        let q:Promotion=args(input)?;
-        debug_assert_eq!(q.action,"promote_to_steer");
-        let (p,t)=super::operations::target(&app,&caller,q.project_id,q.thread_id,true)?;
-        if let Some(g)=&caller.grant {super::operations::may_run(&app,p,g.project,g.chat,t)?;}
-        return Ok(json!(super::super::interactions::steer_queued(app,p,t,q.input_id,q.command_id,crate::chat::SteerTarget{turn:q.turn_id,request_id:q.request_id}).await?));
+        struct Promotion {
+            project_id: Option<Uuid>,
+            thread_id: Option<Uuid>,
+            action: String,
+            turn_id: Uuid,
+            request_id: Option<Uuid>,
+            input_id: Uuid,
+            command_id: Uuid,
+        }
+        let q: Promotion = args(input)?;
+        debug_assert_eq!(q.action, "promote_to_steer");
+        let (p, t) = super::operations::target(&app, &caller, q.project_id, q.thread_id, true)?;
+        if let Some(g) = &caller.grant {
+            super::operations::may_run(&app, p, g.project, g.chat, t)?;
+        }
+        return Ok(json!(
+            super::super::interactions::steer_queued(
+                app,
+                p,
+                t,
+                q.input_id,
+                q.command_id,
+                crate::chat::SteerTarget {
+                    turn: q.turn_id,
+                    request_id: q.request_id
+                }
+            )
+            .await?
+        ));
     }
-    if super::orchestrator::handles(name){return super::orchestrator::call(app,caller,name,input).await;}
-    if super::operations::handles(name) {return super::operations::call(app,caller,name,input).await;}
-    if super::forge_tools::handles(name) {return super::forge_tools::call(app,caller,name,input).await;}
-    if name.starts_with("kar_worktree_") {return super::worktree::call(app,caller,name,input).await;}
+    if super::orchestrator::handles(name) {
+        return super::orchestrator::call(app, caller, name, input).await;
+    }
+    if super::operations::handles(name) {
+        return super::operations::call(app, caller, name, input).await;
+    }
+    if super::forge_tools::handles(name) {
+        return super::forge_tools::call(app, caller, name, input).await;
+    }
+    if name.starts_with("kar_worktree_") {
+        return super::worktree::call(app, caller, name, input).await;
+    }
     if name == "kar_background_wait" {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -375,7 +654,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
             Ok(
                 json!({"server":"Kar","tools":tools(c).iter().filter(|t|t.name!="tool_search").map(|t|t.name).collect::<Vec<_>>(),
                 "provider_session":c.grant.as_ref().map(|g|json!({"id":g.id,"project_id":g.project,"thread_id":g.chat,"runtime":g.runtime})),
-                "write_access":!c.plan && (c.grant.is_none() || c.policy.as_ref().is_some_and(|p| p.writes_issues() || p.writes_pulls() || p.thread_tools.as_ref().is_some_and(|s|s.write) && p.executes() || p.writes_workflows() || p.worktree_directory().is_some())),"issue_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.policy.as_ref().is_some_and(Policy::reads_issues), "workflow_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_workflows)}),
+                "write_access":!c.plan && (c.grant.is_none() || c.policy.as_ref().is_some_and(|p| p.writes_issues() || p.writes_pulls() || p.thread_tools.as_ref().is_some_and(|s|s.write) && p.executes() || p.writes_workflows() || p.worktree_directory().is_some())),"issue_write_access":!c.plan && c.policy.as_ref().is_some_and(Policy::writes_issues), "issue_read_access":c.policy.as_ref().is_some_and(Policy::reads_issues), "workflow_write_access":!c.plan && (c.grant.is_none() || c.policy.as_ref().is_some_and(Policy::writes_workflows))}),
             )
         }
         "kar_project_list" => {
@@ -398,7 +677,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
         }
         "kar_thread_list" => {
             let a: Threads = args(input)?;
-            let project = super::operations::list_project(app,c,a.project_id)?;
+            let project = super::operations::list_project(app, c, a.project_id)?;
             if let Some(p) = project {
                 app.project(p)?;
             }
@@ -413,7 +692,20 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
                     item["kind"] == "chat"
                         && row["unavailable"] != true
                         && project.is_none_or(|p| row["project"] == json!(p))
-                        && c.grant.as_ref().is_none_or(|_| serde_json::from_value::<Uuid>(item["id"].clone()).is_ok_and(|t| serde_json::from_value::<Uuid>(row["project"].clone()).is_ok_and(|p|super::operations::visible(&app.0.catalog.lock().unwrap(),c,p,t))))
+                        && c.grant.as_ref().is_none_or(|_| {
+                            serde_json::from_value::<Uuid>(item["id"].clone()).is_ok_and(|t| {
+                                serde_json::from_value::<Uuid>(row["project"].clone()).is_ok_and(
+                                    |p| {
+                                        super::operations::visible(
+                                            &app.0.catalog.lock().unwrap(),
+                                            c,
+                                            p,
+                                            t,
+                                        )
+                                    },
+                                )
+                            })
+                        })
                         && (a.include_archived || row["archived"] == false)
                         && a.snoozed.is_none_or(|s| row["snoozed"] == s)
                         && a.settled
@@ -437,7 +729,7 @@ fn dispatch(app: &Workbench, c: &Caller, name: &str, input: Value) -> Result<Val
     }
 }
 fn read(app: &Workbench, c: &Caller, a: Read) -> Result<Value> {
-    let (p, t) = super::operations::target(app,c,a.project_id,a.thread_id,false)?;
+    let (p, t) = super::operations::target(app, c, a.project_id, a.thread_id, false)?;
     let view = a.view.as_deref().unwrap_or("messages");
     if !matches!(view, "messages" | "activity") || a.after_position.is_some_and(|n| n < -1) {
         return Err(bad("Invalid view or position"));
@@ -447,9 +739,19 @@ fn read(app: &Workbench, c: &Caller, a: Read) -> Result<Value> {
     if max == 0 || limit == 0 {
         return Err(bad("Text and page limits must be positive"));
     }
-    let observing=if let Some(grant)=&c.grant && grant.chat!=t {
-        app.0.chats.history(grant.chat)?.turns.last().filter(|run|run.status==crate::chat::TurnStatus::Running).map(|run|run.id)
-    }else{None};
+    let observing = if let Some(grant) = &c.grant
+        && grant.chat != t
+    {
+        app.0
+            .chats
+            .history(grant.chat)?
+            .turns
+            .last()
+            .filter(|run| run.status == crate::chat::TurnStatus::Running)
+            .map(|run| run.id)
+    } else {
+        None
+    };
     let history = app.0.chats.history(t)?;
     let mut out = vec![];
     let mut has_more = false;
@@ -482,7 +784,7 @@ fn read(app: &Workbench, c: &Caller, a: Read) -> Result<Value> {
         let (text, next) = window(&text, a.text_offset, max);
         out.push(json!({"item_id":row.entry_id,"run_id":row.turn,"position":n,"kind":kind,"text":text,"next_text_offset":next}));
     }
-    super::orchestrator::observe_read(app,c,t,observing,&out)?;
+    super::orchestrator::observe_read(app, c, t, observing, &out)?;
     Ok(json!({"project_id":p,"thread_id":t,"items":out,"has_more":has_more}))
 }
 fn window(text: &str, offset: usize, max: usize) -> (String, Option<usize>) {
@@ -501,8 +803,8 @@ fn window(text: &str, offset: usize, max: usize) -> (String, Option<usize>) {
     (projected, None)
 }
 fn queue(app: &Workbench, c: &Caller, q: Queue) -> Result<Value> {
-    let write=!matches!(q.action.as_str(),"list"|"read");
-    let (_,t)=super::operations::target(app,c,q.project_id,q.thread_id,write)?;
+    let write = !matches!(q.action.as_str(), "list" | "read");
+    let (_, t) = super::operations::target(app, c, q.project_id, q.thread_id, write)?;
     if matches!(q.action.as_str(), "list" | "read") {
         let (held, entries) = app.0.chats.queue_view(t)?;
         let waiting = entries.into_iter().filter(|e| e.outstanding());

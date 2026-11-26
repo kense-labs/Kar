@@ -1,27 +1,23 @@
 //! A local workbench that shares Kar's saved chats, their native sessions and event cursors.
 mod access;
-mod relay_client;
-mod storage;
 pub(crate) mod acp_registry;
 mod agent_sessions;
 mod assets;
-mod http_content;
 mod background;
+mod http_content;
+mod relay_client;
+mod storage;
 pub use background::BackgroundTasks;
 mod chat_controls;
 pub(crate) mod chatgpt;
-#[doc(hidden)] pub use chatgpt::write_managed_chatgpt_token;
-mod configuration;
-pub(crate) mod managed_providers;
-mod devices;
+#[doc(hidden)]
+pub use chatgpt::write_managed_chatgpt_token;
 mod antigravity_proto;
-pub(crate) mod native_sqlite;
-mod native_child_work;
-mod observability;
-mod mcp;
+mod configuration;
+mod devices;
 mod documents;
-mod files;
 mod editors;
+mod files;
 mod force_stop;
 mod forge;
 mod git;
@@ -29,22 +25,34 @@ mod git_actions;
 mod handoff;
 mod http;
 mod interactions;
+pub(crate) mod managed_providers;
+mod mcp;
 mod mcp_apps;
-mod provider_controls;
+mod native_child_work;
+pub(crate) mod native_sqlite;
+mod observability;
 mod prepared_runs;
-mod suggestions;
 mod project_lifecycle;
+mod provider_controls;
 mod public_web;
 mod search;
 mod shell;
+mod suggestions;
 mod task_folders;
 mod terminal_preview;
 mod thread_family;
 mod thread_find;
 mod thread_state;
 pub use thread_state::Metadata as ChatMetadata;
-pub mod workflows;
+pub mod persistence;
+pub mod policy;
+pub mod secrets;
+pub mod service;
+pub mod ssh;
+pub mod tailscale;
+pub mod text_generation;
 mod voice;
+pub mod workflows;
 pub use search::{Hit, SearchKind};
 
 use crate::{
@@ -74,13 +82,14 @@ pub struct Project {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Catalog {
-    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
-    prepared_runs: BTreeMap<Uuid,prepared_runs::Job>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    prepared_runs: BTreeMap<Uuid, prepared_runs::Job>,
     #[serde(default)]
-    desktop_jobs: BTreeMap<Uuid,configuration::desktop::Job>,
+    desktop_jobs: BTreeMap<Uuid, configuration::desktop::Job>,
     #[serde(default)]
     family: thread_family::Family,
-    #[serde(default)] server:configuration::Config,
+    #[serde(default)]
+    server: configuration::Config,
     #[serde(default)]
     environment: mcp::collaboration_tools::environment::Environment,
     #[serde(default)]
@@ -89,12 +98,12 @@ struct Catalog {
     model_tool_permissions: BTreeMap<Uuid, BTreeMap<Uuid, mcp::Policy>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     model_worktree_moves: BTreeMap<Uuid, mcp::worktree::Move>,
-    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
-    model_thread_commands:BTreeMap<Uuid,mcp::operations::Record>,
-    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
-    model_tasks:BTreeMap<Uuid,mcp::orchestrator::Task>,
-    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]
-    model_thread_batches:BTreeMap<Uuid,(Uuid,Uuid,serde_json::Value)>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    model_thread_commands: BTreeMap<Uuid, mcp::operations::Record>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    model_tasks: BTreeMap<Uuid, mcp::orchestrator::Task>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    model_thread_batches: BTreeMap<Uuid, (Uuid, Uuid, serde_json::Value)>,
     #[serde(default)]
     model_project_commands: BTreeMap<Uuid, mcp::project_tools::Receipt>,
     #[serde(default)]
@@ -107,7 +116,8 @@ struct Catalog {
     git_actions: BTreeMap<Uuid, git_actions::Record>,
     #[serde(default)]
     imported_transcripts: BTreeMap<Uuid, BTreeMap<PathBuf, (String, Uuid)>>,
-    #[serde(default)] milestone_watches:mcp::milestones::Log,
+    #[serde(default)]
+    milestone_watches: mcp::milestones::Log,
     projects: BTreeMap<Uuid, Project>,
     #[serde(default)]
     lifecycle: project_lifecycle::State,
@@ -132,7 +142,9 @@ struct Controller {
 
 impl Controller {
     fn bind_model_tools(&self, session: &mut ChatSession, lease: Option<mcp::Lease>) {
-        if let Some(tools) = &lease { tools.attach(session); }
+        if let Some(tools) = &lease {
+            tools.attach(session);
+        }
         *self.model_tools.lock().unwrap() = lease;
         self.publish(session);
     }
@@ -145,31 +157,32 @@ impl Controller {
 struct Inner {
     run_workers: Mutex<BTreeSet<Uuid>>,
     run_events: tokio::sync::watch::Sender<u64>,
-    desktop_updates:configuration::desktop::Service,
+    desktop_updates: configuration::desktop::Service,
     family_gate: AsyncMutex<()>,
-    managed_providers:managed_providers::Manager,
-    config_changes:tokio::sync::watch::Sender<u64>,
-    keybindings_lock:Mutex<()>,
+    managed_providers: managed_providers::Manager,
+    config_changes: tokio::sync::watch::Sender<u64>,
+    keybindings_lock: Mutex<()>,
     relay: relay_client::tunnel::Service,
     acp_registry: acp_registry::Catalog,
     acp_auth: acp_registry::auth::Jobs,
     chatgpt: chatgpt::Jobs,
     mcp: mcp::Registry,
-    milestone_hub:mcp::milestones::Hub,
+    milestone_hub: mcp::milestones::Hub,
     shell: shell::Service,
     suggestions: crate::PromptSuggestions,
     observability: observability::Service,
     chats: ChatStore,
     roots: Vec<Root>,
+    catalog_wal: persistence::WalStore<Catalog>,
     catalog: Mutex<Catalog>,
     viewed_gates: forge::ViewedGates,
     forge_updates: tokio::sync::watch::Sender<forge::signals::Epochs>,
     thread_updates: tokio::sync::watch::Sender<u64>,
     card_updates: tokio::sync::watch::Sender<u64>,
     clones: forge::clone_jobs::Tracker,
-    tracker_accounts:forge::trackers::Store,
+    tracker_accounts: forge::trackers::Store,
     signin: forge::signin::Service,
-    provider_oauth:provider_controls::Flows,
+    provider_oauth: provider_controls::Flows,
     state: PathBuf,
     pump: chat_controls::QueuePump,
     access: access::AccessStore,
@@ -232,17 +245,14 @@ impl Workbench {
                 "specify at least one authorized workbench root".into(),
             ));
         }
-        let catalog = match File::open(state.join("projects.json")) {
-            Ok(file) => serde_json::from_reader(file)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Catalog::default(),
-            Err(e) => return Err(e.into()),
-        };
+        let (catalog, catalog_wal) =
+            persistence::WalStore::<Catalog>::open(&state.join("projects.json"))?;
         let task_folders = task_folders::Store::new(state.join("task-folders"));
         let terminal_preview = terminal_preview::TerminalPreview::open(&state)?;
         let workflows = workflows::Engine::open(&state, clock)?;
-        let tracker_accounts=forge::trackers::Store::open(&state)?;
-        let milestone_hub=mcp::milestones::Hub::open(&state)?;
-        let shell = shell::Service::open(&state,&allowed)?;
+        let tracker_accounts = forge::trackers::Store::open(&state)?;
+        let milestone_hub = mcp::milestones::Hub::open(&state)?;
+        let shell = shell::Service::open(&state, &allowed)?;
         let access = access::AccessStore::open(&state)?;
         let devices = devices::Service::open(&state)?;
         let (checkpoints, completed) = std::sync::mpsc::channel();
@@ -255,16 +265,22 @@ impl Workbench {
                     .ok_or_else(|| Error::Closed("workbench stopped".into()))?;
                 task_folders::checkpoints::repositories(&Workbench(inner), chat)
             }));
-            let chats = chats.with_turn_checkpointed(Arc::new(move |chat| { let _ = checkpoints.send(chat); }));
+            let milestone_wake = weak.clone();
+            let chats = chats.with_turn_checkpointed(Arc::new(move |chat| {
+                let _ = checkpoints.send(chat);
+                if let Some(inner) = milestone_wake.upgrade() {
+                    inner.milestone_hub.notify();
+                }
+            }));
             Inner {
-                run_workers:Default::default(),
-                run_events:Default::default(),
+                run_workers: Default::default(),
+                run_events: Default::default(),
                 family_gate: Default::default(),
                 relay: Default::default(),
-                managed_providers:Default::default(),
-                desktop_updates:Default::default(),
-                config_changes:tokio::sync::watch::channel(catalog.server.revision).0,
-                keybindings_lock:Default::default(),
+                managed_providers: Default::default(),
+                desktop_updates: Default::default(),
+                config_changes: tokio::sync::watch::channel(catalog.server.revision).0,
+                keybindings_lock: Default::default(),
                 acp_registry: Default::default(),
                 acp_auth: Default::default(),
                 chatgpt: Default::default(),
@@ -282,11 +298,12 @@ impl Workbench {
                 forge_updates: tokio::sync::watch::channel(catalog.forge.epochs()).0,
                 card_updates: tokio::sync::watch::channel(0).0,
                 thread_updates: tokio::sync::watch::channel(catalog.thread_state.sequence()).0,
+                catalog_wal,
                 catalog: Mutex::new(catalog),
                 tracker_accounts,
                 clones: Default::default(),
                 signin: Default::default(),
-                provider_oauth:Default::default(),
+                provider_oauth: Default::default(),
                 pump: Default::default(),
                 access,
                 state,
@@ -350,24 +367,26 @@ impl Workbench {
         let mut saved = self.0.catalog.lock().unwrap();
         let mut next = saved.clone();
         let result = f(&mut next)?;
-        configuration::next_revision(&saved,&mut next);
-        let mut tmp = tempfile::NamedTempFile::new_in(&self.0.state)?;
-        serde_json::to_writer(&mut tmp, &next)?;
-        tmp.as_file().sync_all()?;
-        tmp.persist(self.0.state.join("projects.json"))
-            .map_err(|e| e.error)?;
+        configuration::next_revision(&saved, &mut next);
+        next.thread_state.compact();
+        self.0.catalog_wal.record(&next)?;
         if saved.prompt_suggestions != next.prompt_suggestions {
             self.0.suggestions.set_enabled(next.prompt_suggestions);
         }
         for chat in next.archived.difference(&saved.archived) {
             self.0.suggestions.detach(*chat);
         }
-        let revision=next.server.revision;
+        let revision = next.server.revision;
         *saved = next;
-        self.0.config_changes.send_if_modified(|n|if *n==revision{false}else{*n=revision;true});
+        self.0.config_changes.send_if_modified(|n| {
+            if *n == revision {
+                false
+            } else {
+                *n = revision;
+                true
+            }
+        });
         self.0.shell.changed();
-        #[cfg(unix)]
-        File::open(&self.0.state)?.sync_all()?;
         forge::signals::notify(&self.0.forge_updates, saved.forge.epochs());
         Ok(result)
     }
@@ -492,9 +511,11 @@ impl Workbench {
         approvals: crate::ApprovalMode,
         settings: crate::SessionSettings,
     ) -> Result<ProjectChat> {
-        self.create_chat_as(project, id, runtime, model, approvals, settings, None, None).await
+        self.create_chat_as(project, id, runtime, model, approvals, settings, None, None)
+            .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn create_chat_as(
         &self,
         project: Uuid,
@@ -510,12 +531,14 @@ impl Workbench {
         let slot = self.controller(id);
         let mut owner = slot.owner.lock().await;
         let reserved = {
-            let catalog=self.0.catalog.lock().unwrap();
-            prepared_runs::reservation(&catalog,id) != prepared_run ||
-                (prepared_run.is_none() && mcp::pending_launch(&catalog,id) != launching_chat)
+            let catalog = self.0.catalog.lock().unwrap();
+            prepared_runs::reservation(&catalog, id) != prepared_run
+                || (prepared_run.is_none() && mcp::pending_launch(&catalog, id) != launching_chat)
         };
         if reserved {
-            return Err(Error::Refused("chat ID is reserved for another launch".into()));
+            return Err(Error::Refused(
+                "chat ID is reserved for another launch".into(),
+            ));
         }
         let cwd = self.reserve_chat_directory(project, id)?;
         settings.additional_directories = self.chat_directories(&cwd, &settings)?;
@@ -550,7 +573,9 @@ impl Workbench {
         opts.approvals = approvals;
         opts.settings = settings;
         let tools = self.0.mcp.issue(project, id, runtime)?;
-        if let Some(lease) = &tools { lease.configure(&mut opts); }
+        if let Some(lease) = &tools {
+            lease.configure(&mut opts);
+        }
         let mut session = self.0.chats.create_with_id(id, runtime, None, opts).await?;
         let info = session.info().clone();
         slot.bind_model_tools(&mut session, tools);
@@ -591,10 +616,60 @@ impl Workbench {
                 return Err(Error::Refused("chat is archived".into()));
             }
             app.attach(project, chat, &mut owner).await?;
-            let result = owner.as_ref().expect("open session")
-                .send_attached(input, text, attachments).await;
+            let needs_auto_title = !text.trim().is_empty()
+                && app
+                    .0
+                    .catalog
+                    .lock()
+                    .unwrap()
+                    .thread_state
+                    .rows
+                    .get(&chat)
+                    .and_then(|m| m.title.as_deref())
+                    .is_none()
+                && app
+                    .0
+                    .chats
+                    .history(chat)
+                    .map(|h| h.turns.is_empty())
+                    .unwrap_or(false);
+            let prompt_copy = needs_auto_title.then(|| text.clone());
+            let result = owner
+                .as_ref()
+                .expect("open session")
+                .send_attached(input, text, attachments)
+                .await;
             drop(owner);
-            if mcp::worktree::pending(&app,chat) {app.wake_queue();}
+            if let Some(first_msg) = prompt_copy {
+                let linked_ctx = app
+                    .0
+                    .catalog
+                    .lock()
+                    .unwrap()
+                    .forge
+                    .chat_links()
+                    .remove(&chat)
+                    .and_then(|v| {
+                        v.first().map(|item| {
+                            format!(
+                                "{} {}#{}",
+                                item["kind"].as_str().unwrap_or("link"),
+                                item["repository"].as_str().unwrap_or(""),
+                                item["number"].as_u64().unwrap_or(0)
+                            )
+                        })
+                    });
+                let generated = text_generation::generate_thread_title_fast(
+                    &app,
+                    &first_msg,
+                    linked_ctx.as_deref(),
+                )
+                .await;
+                let _ = thread_state::set_auto_title_if_empty(&app, project, chat, generated);
+            }
+            if mcp::worktree::pending(&app, chat) {
+                app.wake_queue();
+            }
             result
         })
         .await

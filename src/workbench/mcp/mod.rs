@@ -1,20 +1,21 @@
 //! Workbench tools use a caller-scoped transport independent of the runtime's stdio MCP server.
 mod forge_tools;
-pub(in crate::workbench) mod milestones;
-pub(in crate::workbench) mod orchestrator;
-pub(in crate::workbench) mod operations;
 mod issues;
+pub(in crate::workbench) mod milestones;
+pub(in crate::workbench) mod operations;
+pub(in crate::workbench) mod orchestrator;
 pub(super) use issues::{Policy, permission_routes};
-mod registry;
 pub(in crate::workbench) mod collaboration_tools;
+mod html;
+mod preview_tools;
+mod registry;
 #[cfg(target_os = "macos")]
 mod stdio_bridge;
-mod preview_tools;
-mod html;
 pub(in crate::workbench) use preview_tools::DevicePermission;
-mod toolkit;
 pub(super) mod project_tools;
+mod toolkit;
 pub(in crate::workbench) use project_tools::pending_launch;
+pub(in crate::workbench) mod webhooks;
 mod workflow;
 pub(in crate::workbench) mod worktree;
 use super::{Workbench, access};
@@ -98,15 +99,15 @@ async fn admit(
         req.extensions_mut().insert(grant.clone());
         return access::restrict(req, next, grant.expired()).await;
     }
-    if let Some(external)=access::oauth::resolve(&app,access::bearer(req.headers())){
+    if let Some(external) = access::oauth::resolve(&app, access::bearer(req.headers())) {
         req.extensions_mut().insert(external.clone());
-        return access::restrict(req,next,external.revoked()).await;
+        return access::restrict(req, next, external.revoked()).await;
     }
-    access::oauth::challenge(&app,access::authorize(State(auth), req, next).await)
+    access::oauth::challenge(&app, access::authorize(State(auth), req, next).await)
 }
 async fn scope(State(app): State<Workbench>, mut req: Request, next: Next) -> Response {
     let grant = req.extensions().get::<Arc<Grant>>().cloned();
-    let external=req.extensions().get::<access::oauth::Lease>();
+    let external = req.extensions().get::<access::oauth::Lease>();
     let identity = match (&grant, req.extensions().get::<access::DeviceLease>()) {
         (Some(g), _) => Identity::Provider(g.id),
         (_, Some(d)) => Identity::Device(d.id),
@@ -125,8 +126,9 @@ async fn scope(State(app): State<Workbench>, mut req: Request, next: Next) -> Re
         false
     };
     // An owner may grant scoped file reads; a narrower provider limit still wins.
-    let files_allowed=hdr(req.headers(),"kar-mode-limit").is_none_or(|m|m.starts_with("full-access/"));
-    let plan = plan || external.is_some_and(|lease|lease.mode=="read-only");
+    let files_allowed =
+        hdr(req.headers(), "kar-mode-limit").is_none_or(|m| m.starts_with("full-access/"));
+    let plan = plan || external.is_some_and(|lease| lease.mode == "read-only");
     let policy = grant.as_ref().and_then(|g| issues::authorized(&app, g));
     req.extensions_mut().insert(Caller {
         policy,
@@ -293,7 +295,7 @@ async fn rpc(
         };
     }
     if method.starts_with("events/") {
-        return milestones::rpc(app,&caller,&h,method,p,id,stateless,session).await;
+        return milestones::rpc(app, &caller, &h, method, p, id, stateless, session).await;
     }
     let deferred = hdr(&h, "kar-tool-exposure") == Some("deferred") && caller.grant.is_some();
     let result = match method {
@@ -331,7 +333,7 @@ async fn rpc(
                 call.await
             };
             match result {
-                Ok(value) => preview_tools::result(name,value),
+                Ok(value) => preview_tools::result(name, value),
                 Err(e) => json!({"isError":true,"content":[{"type":"text","text":e.to_string()}]}),
             }
         }

@@ -7,7 +7,6 @@ mod codex_steering;
 mod interrupt_timeout;
 mod muse;
 mod suggestions;
-use suggestions::private_suggestion;
 use crate::grok::turns::{INTERJECT, Turns as GrokTurns};
 use crate::interaction::sensitive_field;
 use crate::stream::RecordStamp;
@@ -22,6 +21,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use suggestions::private_suggestion;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{ChildStdin, ChildStdout},
@@ -30,11 +30,16 @@ use tokio::{
 
 pub(crate) const CLAUDE_COMPACT_CATALOG: &str = "kar/claudeCompactCatalog";
 const GROK_COMPACT: &str = "_x.ai/compact_conversation";
-fn private_provider_request(protocol:Protocol,method:&str)->bool{
+const KIRO_COMPACT: &str = "_kiro/session/compact";
+const KIRO_STEER: &str = "_session/steer";
+fn private_provider_request(protocol: Protocol, method: &str) -> bool {
     match protocol {
-        Protocol::Claude=>matches!(method,"mcp_authenticate"|"mcp_oauth_callback_url"|"mcp_reconnect"),
-        Protocol::Codex=>matches!(method,"mcpServer/oauth/login"|"feedback/upload"),
-        _=>false
+        Protocol::Claude => matches!(
+            method,
+            "mcp_authenticate" | "mcp_oauth_callback_url" | "mcp_reconnect"
+        ),
+        Protocol::Codex => matches!(method, "mcpServer/oauth/login" | "feedback/upload"),
+        _ => false,
     }
 }
 fn claude_private(method: &str) -> bool {
@@ -66,7 +71,11 @@ pub(crate) enum HostAnswer {
     Native(Value),
     Checked(crate::Cursor, Value),
     Permission(crate::Cursor, crate::PermissionDecision),
-    Question(crate::Cursor, crate::QuestionReply, std::collections::BTreeMap<String,String>),
+    Question(
+        crate::Cursor,
+        crate::QuestionReply,
+        std::collections::BTreeMap<String, String>,
+    ),
     Policy(crate::Cursor, crate::PolicyChoice),
     Resources(
         crate::Cursor,
@@ -202,6 +211,7 @@ impl AbortRequest {
         Some(self.reply)
     }
 }
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
     Compact(uuid::Uuid, Option<u64>, Reply<crate::ManualCompaction>),
     Rpc(
@@ -243,6 +253,8 @@ pub(crate) struct Identity {
     pub session: Option<String>,
     pub claude_open_refusal: Option<Error>,
     pub acp_steering: Option<Steering>,
+    pub kiro_steering: bool,
+    pub kiro_compact: bool,
 }
 struct Queued {
     id: uuid::Uuid,
@@ -261,6 +273,8 @@ struct Turn {
     pi_inputs: Vec<u64>,
     pi_assistant: Option<u64>,
     pi_anchor: Option<String>,
+    kiro_anchor: Option<String>,
+    codex_user_message_seen: bool,
     structured_output: Option<Value>,
     failure: Option<crate::TurnFailure>,
     messages: Vec<String>,
@@ -293,7 +307,7 @@ impl SteeringReceipt {
             });
         }
         let mut text = match method {
-            "steer" if matches!(intent, RpcIntent::Steer { .. }) => {
+            "steer" | KIRO_STEER if matches!(intent, RpcIntent::Steer { .. }) => {
                 params["message"].as_str()?.to_owned()
             }
             "turn/steer" if matches!(intent, RpcIntent::Steer { .. }) => {
@@ -353,7 +367,7 @@ struct Pending {
 }
 
 pub(crate) struct Launch {
-    pub claude_mcp_apps:Arc<std::sync::atomic::AtomicBool>,
+    pub claude_mcp_apps: Arc<std::sync::atomic::AtomicBool>,
     pub registry_installation: Option<std::fs::File>,
     pub opencode_v2: bool,
     pub opencode_shells: bool,
@@ -386,8 +400,11 @@ pub(crate) struct Actor {
     usage: wire::usage::Projection,
     opencode: Option<wire::opencode::Children>,
     cursor_children: Option<wire::cursor_children::Children>,
+    fx_children: Option<wire::FxChildren>,
+    kiro_steers: HashMap<String, SteeringReceipt>,
     protocol: Protocol,
     mode: ApprovalMode,
+    user_questions: Option<crate::runtime::UserQuestionsMode>,
     child: crate::process::OwnedProcess,
     stdin: Option<ChildStdin>,
     close_ack: Option<(uuid::Uuid, Reply<()>)>,
@@ -456,10 +473,23 @@ impl Actor {
             startup_stderr.spawn(crate::process::diagnostic::startup_tail(stderr, sensitive));
         }
         let actor = Self {
-            acp_mcp: (runtime.protocol == Protocol::Acp).then(||
-                options.workbench_registration.as_ref().and_then(|r|acp_mcp::Proxy::new(r,tx.downgrade()))).flatten(),
+            acp_mcp: (runtime.protocol == Protocol::Acp)
+                .then(|| {
+                    options
+                        .workbench_registration
+                        .as_ref()
+                        .and_then(|r| acp_mcp::Proxy::new(r, tx.downgrade()))
+                })
+                .flatten(),
             muse: (runtime.protocol == Protocol::Muse).then(|| muse::Projection::new(options)),
-            background: background::ClaudeBackground::for_runtime(runtime.protocol, &runtime.id, files.opencode_shells, child.id().and_then(crate::resources::tree::identity), options, &secrets),
+            background: background::ClaudeBackground::for_runtime(
+                runtime.protocol,
+                &runtime.id,
+                files.opencode_shells,
+                child.id().and_then(crate::resources::tree::identity),
+                options,
+                &secrets,
+            ),
             close_ack: None,
             protocol: runtime.protocol,
             usage: wire::usage::Projection::new(
@@ -494,11 +524,15 @@ impl Actor {
                 .then(|| codex_processes::Guard::new(child.id(), journal.clone())),
             cursor_children: (runtime.protocol == Protocol::Acp && runtime.id == "cursor")
                 .then(Default::default),
+            fx_children: (runtime.protocol == Protocol::Acp && runtime.id == "fx")
+                .then(Default::default),
+            kiro_steers: HashMap::new(),
             opencode: (runtime.protocol == Protocol::Acp && runtime.id == "opencode")
                 .then(|| wire::opencode::Children::new(files.opencode_v2)),
             output_schema: options.settings.output_schema.clone(),
             files,
             mode: options.approvals,
+            user_questions: options.user_questions,
             child,
             stdin: Some(stdin),
             journal,
@@ -506,7 +540,7 @@ impl Actor {
             next: 0,
             pending: HashMap::new(),
             private_list_ids: HashSet::new(),
-            private_provider_ids:HashSet::new(),
+            private_provider_ids: HashSet::new(),
             requests: HashMap::new(),
             pi_deadlines: HashMap::new(),
             pi_pending_end: None,
@@ -572,6 +606,9 @@ impl Actor {
     }
     fn session(&self) -> Option<String> {
         self.identity.lock().unwrap().session.clone()
+    }
+    fn parks_for_host(&self, method: &str, body: &Value) -> bool {
+        parks_request_for_host(self.protocol, self.mode, self.user_questions, method, body)
     }
     fn source(&self, packet: &Value) -> Option<String> {
         if self.opencode.is_some()
@@ -777,8 +814,12 @@ impl Actor {
         intent: RpcIntent,
     ) -> Result<()> {
         let mut params = params;
-        if self.protocol == Protocol::Claude && method == "initialize"
-            && self.suggestions.as_mut().is_some_and(|s| s.initialize_claude())
+        if self.protocol == Protocol::Claude
+            && method == "initialize"
+            && self
+                .suggestions
+                .as_mut()
+                .is_some_and(|s| s.initialize_claude())
         {
             params["promptSuggestions"] = true.into();
         }
@@ -862,7 +903,8 @@ impl Actor {
                 prompt_ack: None,
                 muse_decision: None,
                 muse_turn: (starts_turn && self.protocol == Protocol::Muse)
-                    .then(|| params["commandId"].as_str().map(str::to_owned)).flatten(),
+                    .then(|| params["commandId"].as_str().map(str::to_owned))
+                    .flatten(),
                 codex_prompt_input: (starts_turn && self.protocol == Protocol::Codex)
                     .then(|| self.turn.as_ref()?.chat_input)
                     .flatten(),
@@ -894,7 +936,7 @@ impl Actor {
             _ => method,
         };
         let mut packet = wire::request(self.protocol, id, wire_method, params);
-        if private_provider_request(self.protocol,method){
+        if private_provider_request(self.protocol, method) {
             self.private_provider_ids.insert(id);
             return self.write_private(&packet).await;
         }
@@ -929,7 +971,9 @@ impl Actor {
             },
             if matches!(
                 (self.protocol, method),
-                (Protocol::Pi, "steer") | (Protocol::Codex, "turn/steer")
+                (Protocol::Pi, "steer")
+                    | (Protocol::Codex, "turn/steer")
+                    | (Protocol::Acp, KIRO_STEER)
             ) {
                 self.pending
                     .get(&id)
@@ -942,6 +986,7 @@ impl Actor {
                         | "compact"
                         | "droid.compact_session"
                         | GROK_COMPACT
+                        | KIRO_COMPACT
                         | OPENCODE_COMPACT
                 )
                 .then(|| vec![Event::ManualCompactionRequested])
@@ -1000,6 +1045,8 @@ impl Actor {
             pi_inputs: Vec::new(),
             pi_assistant: None,
             pi_anchor: None,
+            kiro_anchor: None,
+            codex_user_message_seen: false,
             structured_output: None,
             failure: None,
             messages: Vec::new(),
@@ -1016,7 +1063,8 @@ impl Actor {
                 let state = self.muse.as_mut().expect("MSP state");
                 let (native, args) = state.prompt(id.as_deref(), &prompt);
                 self.turn.as_mut().expect("dispatched turn").native = Some(native);
-                self.rpc("turn/start", args, None, RpcIntent::Prompt).await?;
+                self.rpc("turn/start", args, None, RpcIntent::Prompt)
+                    .await?;
             }
             Protocol::Factory => {
                 self.turn.as_mut().expect("dispatch started a turn").native =
@@ -1138,6 +1186,9 @@ impl Actor {
                     {
                         (GROK_COMPACT, json!({"sessionId":id}))
                     }
+                    Protocol::Acp if self.identity.lock().unwrap().kiro_compact => {
+                        (KIRO_COMPACT, json!({"sessionId":id}))
+                    }
                     Protocol::Acp if self.opencode.is_some() => (
                         OPENCODE_COMPACT,
                         json!({"sessionId":id,"prompt":[{"type":"text","text":"/compact"}]}),
@@ -1181,7 +1232,8 @@ impl Actor {
             }
             Command::Rpc(method, params, _, tx) if method == background::WAIT => {
                 if !tx.is_closed() {
-                    let result = serde_json::from_value(params).map_err(Error::from)
+                    let result = serde_json::from_value(params)
+                        .map_err(Error::from)
                         .and_then(|req| self.background_wait(req))
                         .and_then(|receipt| serde_json::to_value(receipt).map_err(Error::from));
                     let _ = tx.send(result);
@@ -1205,21 +1257,30 @@ impl Actor {
                     .open = open;
             }
             Command::StopTask(task, expected, tx) => match self.protocol {
-                Protocol::Claude if expected.as_ref().is_some_and(|occurrence| {
-                    let snapshot = self.journal.snapshot();
-                    !snapshot.tasks.iter().any(|row| {
-                        row.id == task
-                            && row.source.path.is_empty()
-                            && row.source.session_id.as_deref() == Some(snapshot.id.as_str())
-                            && row.task_type == crate::TaskType::Workflow
-                            && row.status == crate::TaskStatus::Running
-                            && row.started_at.as_ref() == Some(occurrence)
-                    })
-                }) => {
-                    let _ = tx.send(Err(Error::Refused("workflow occurrence is no longer running".into())));
+                Protocol::Claude
+                    if expected.as_ref().is_some_and(|occurrence| {
+                        let snapshot = self.journal.snapshot();
+                        !snapshot.tasks.iter().any(|row| {
+                            row.id == task
+                                && row.source.path.is_empty()
+                                && row.source.session_id.as_deref() == Some(snapshot.id.as_str())
+                                && row.task_type == crate::TaskType::Workflow
+                                && row.status == crate::TaskStatus::Running
+                                && row.started_at.as_ref() == Some(occurrence)
+                        })
+                    }) =>
+                {
+                    let _ = tx.send(Err(Error::Refused(
+                        "workflow occurrence is no longer running".into(),
+                    )));
                 }
-                _ if tx.is_closed() => {},
-                Protocol::Acp if self.has_background_shells() => {let _=tx.send(self.stop_shell(&task, expected.as_ref()).map(|_|Value::Null));}
+                _ if tx.is_closed() => {}
+                Protocol::Acp if self.has_background_shells() => {
+                    let _ = tx.send(
+                        self.stop_shell(&task, expected.as_ref())
+                            .map(|_| Value::Null),
+                    );
+                }
                 Protocol::Codex => match id
                     .as_deref()
                     .ok_or_else(|| Error::Closed("session identity unavailable".into()))
@@ -1504,7 +1565,9 @@ impl Actor {
                         .zip(self.muse_autonomous())
                         .is_none_or(|(session, turn)| muse::continuation_id(&session, turn) != id)
                 });
-                if stale_continuation || (request.target_request.is_some() && self.pi_independent.is_some()) {
+                if stale_continuation
+                    || (request.target_request.is_some() && self.pi_independent.is_some())
+                {
                     let _ = request.reply.send(Err(AbortRequest::stale()));
                 } else if let Some(reply) = request.for_current(&self.journal) {
                     self.abort(reply).await?;
@@ -1657,7 +1720,9 @@ impl Actor {
         Ok(())
     }
     async fn cancel_acp(&mut self) -> Result<()> {
-        if let Some(proxy) = &mut self.acp_mcp { proxy.stop_calls(); }
+        if let Some(proxy) = &mut self.acp_mcp {
+            proxy.stop_calls();
+        }
         let cancel = json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.session()}});
         if self.end_turn_processes
             && self.manual_compaction.is_none()
@@ -1740,8 +1805,11 @@ impl Actor {
                     }
                 }
                 Protocol::Acp => {
-                    let mode = self.identity.lock().unwrap().acp_steering;
-                    let params = json!({"sessionId":id,"prompt":message.blocks(Protocol::Acp)});
+                    let (mode, kiro_steering) = {
+                        let ident = self.identity.lock().unwrap();
+                        (ident.acp_steering, ident.kiro_steering)
+                    };
+                    let mut params = json!({"sessionId":id,"prompt":message.blocks(Protocol::Acp)});
                     match mode {
                         Some(Steering::GrokInterject)
                             if self.grok.as_ref().is_some_and(GrokTurns::aborting)
@@ -1757,6 +1825,15 @@ impl Actor {
                             return self.rpc(INTERJECT, packet, Some(tx), intent).await;
                         }
                         Some(Steering::OpenCodeExtension) => {
+                            let skills = wire::opencode_skill_mentions(&message.text);
+                            if !skills.is_empty() {
+                                params["_meta"]["skills"] = json!(
+                                    skills
+                                        .into_iter()
+                                        .map(|skill| json!({ "id": skill }))
+                                        .collect::<Vec<_>>()
+                                );
+                            }
                             return self
                                 .rpc(wire::opencode::STEER, params, Some(tx), intent)
                                 .await;
@@ -1775,6 +1852,22 @@ impl Actor {
                             self.rpc(method, params, None, intent)
                                 .await
                                 .map(|()| Value::Null)
+                        }
+                        None if kiro_steering => {
+                            if self.turn.as_ref().is_some_and(|t| t.aborted) {
+                                Err(Error::Refused("no active turn".into()))
+                            } else if !message.images.is_empty() {
+                                Err(Error::Unsupported("Kiro steers with text only".into()))
+                            } else {
+                                return self
+                                    .rpc(
+                                        KIRO_STEER,
+                                        json!({"sessionId":id,"message":message.text}),
+                                        Some(tx),
+                                        intent,
+                                    )
+                                    .await;
+                            }
                         }
                         None => Err(Error::Unsupported("steering on this transport".into())),
                     }
@@ -1832,24 +1925,30 @@ impl Actor {
         transport
     }
     async fn receive(&mut self, mut v: Value, context: Option<crate::ContextUsage>) -> Result<()> {
-        if let Some(id)=wire::response_id(self.protocol,&v)
-            .and_then(|v|v.as_u64().or_else(||v.as_str()?.parse().ok()))
-            && self.private_provider_ids.contains(&id){
-            if let Some(p)=self.pending.remove(&id) && let Some(tx)=p.reply {
-                let result=wire::result(self.protocol,&v).map_err(|_|{
-                    if v.pointer("/error/code").and_then(Value::as_i64)==Some(-32601){
-                        Error::Unsupported(format!("the native provider does not implement {}",p.method))
-                    }else{
-                        Error::Refused(format!("the native provider rejected {}",p.method))
+        if let Some(id) = wire::response_id(self.protocol, &v)
+            .and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()))
+            && self.private_provider_ids.contains(&id)
+        {
+            if let Some(p) = self.pending.remove(&id)
+                && let Some(tx) = p.reply
+            {
+                let result = wire::result(self.protocol, &v).map_err(|_| {
+                    if v.pointer("/error/code").and_then(Value::as_i64) == Some(-32601) {
+                        Error::Unsupported(format!(
+                            "the native provider does not implement {}",
+                            p.method
+                        ))
+                    } else {
+                        Error::Refused(format!("the native provider rejected {}", p.method))
                     }
                 });
-                let _=tx.send(result);
+                let _ = tx.send(result);
             }
             return Ok(());
         }
-        if self.protocol==Protocol::Codex && v["method"]=="mcpServer/oauthLogin/completed"{
+        if self.protocol == Protocol::Codex && v["method"] == "mcpServer/oauthLogin/completed" {
             // Provider diagnostics in this notification may echo the OAuth callback.
-            v=serde_json::json!({"method":"mcpServer/oauthLogin/completed","params":{"name":v["params"]["name"],"success":v["params"]["success"],"threadId":v["params"]["threadId"]}});
+            v = serde_json::json!({"method":"mcpServer/oauthLogin/completed","params":{"name":v["params"]["name"],"success":v["params"]["success"],"threadId":v["params"]["threadId"]}});
         }
         if let Some(muse) = &mut self.muse {
             if muse.hold_before_open(&v)? {
@@ -1872,7 +1971,9 @@ impl Actor {
         if let Some(proxy) = &mut self.acp_mcp
             && let Some(reply) = proxy.dispatch(&v)
         {
-            if let Some(packet) = reply {self.write_private(&packet).await?;}
+            if let Some(packet) = reply {
+                self.write_private(&packet).await?;
+            }
             return Ok(());
         }
         if self.protocol == Protocol::Qwen
@@ -2250,7 +2351,7 @@ impl Actor {
         });
         let original_request = if muse_control.is_some() {
             Some(v["params"].clone())
-        } else if self.mode == ApprovalMode::Host {
+        } else if self.mode != ApprovalMode::Deny || self.user_questions.is_some() {
             wire::host_request(self.protocol, &v)
                 .map(|(_, m)| crate::interaction::request_body(&m, &v).clone())
         } else {
@@ -2349,12 +2450,13 @@ impl Actor {
         let mut request = wire::host_request(self.protocol, &v);
         // Cursor uses JSON-RPC requests for these post-tool notifications and ignores the result.
         let cursor_notice = request.take_if(|(_, method)| {
-            (self.protocol == Protocol::Muse && matches!(method.as_str(), "approval/request" | "userInput/request"))
-            || self.cursor_children.is_some()
-                && matches!(
-                    method.as_str(),
-                    "cursor/task" | "cursor/update_todos" | "cursor/generate_image"
-                )
+            (self.protocol == Protocol::Muse
+                && matches!(method.as_str(), "approval/request" | "userInput/request"))
+                || self.cursor_children.is_some()
+                    && matches!(
+                        method.as_str(),
+                        "cursor/task" | "cursor/update_todos" | "cursor/generate_image"
+                    )
         });
         if let Some(grok) = &mut self.grok
             && let Some(p) = &response
@@ -2380,10 +2482,15 @@ impl Actor {
             }
         }
         let root = self.session();
-        if self.protocol == Protocol::Muse && v["method"] == "view/gap"
-            && root.as_deref().is_some_and(|id| v["params"]["sessionId"] == id)
+        if self.protocol == Protocol::Muse
+            && v["method"] == "view/gap"
+            && root
+                .as_deref()
+                .is_some_and(|id| v["params"]["sessionId"] == id)
         {
-            return Err(Error::Closed("Muse reported an event delivery gap; reopen the saved session".into()));
+            return Err(Error::Closed(
+                "Muse reported an event delivery gap; reopen the saved session".into(),
+            ));
         }
         let mut events = self
             .opencode
@@ -2407,8 +2514,14 @@ impl Actor {
                 events.extend(self.compactions.observe(self.protocol, &v));
                 events
             });
-        if matches!(self.acp_failures, wire::failure::AcpFailures::Antigravity(_)) {
+        if matches!(
+            self.acp_failures,
+            wire::failure::AcpFailures::Antigravity(_)
+        ) {
             wire::antigravity_children::project(root.as_deref(), &v, &mut events);
+        }
+        if let Some(fx) = &mut self.fx_children {
+            fx.observe(root.as_deref(), &v, &mut events);
         }
         let mut independent = None;
         if self.protocol == Protocol::Pi {
@@ -2583,8 +2696,27 @@ impl Actor {
                 events.push(receipt.event(crate::SteerStatus::Received));
             }
         }
-        if self.protocol == Protocol::Acp && is_root && self.turn.is_some() {
-            self.acp_failures.observe(&v, received.timestamp_ms);
+        if self.protocol == Protocol::Acp && is_root {
+            if v["method"] == "session/update"
+                && v["params"]["update"]["sessionUpdate"] == "session_info_update"
+            {
+                let kiro = &v["params"]["update"]["_meta"]["kiro"];
+                if kiro["kind"] == "steering_injected"
+                    && let Some(msg_id) = kiro["messageId"].as_str()
+                    && let Some(receipt) = self.kiro_steers.remove(msg_id)
+                {
+                    events.push(receipt.event(crate::SteerStatus::Accepted));
+                } else if kiro["kind"] == "user_message_id_assigned"
+                    && let Some(user_msg_id) =
+                        kiro["userMessageId"].as_str().filter(|s| !s.is_empty())
+                    && let Some(turn) = &mut self.turn
+                {
+                    turn.kiro_anchor = Some(user_msg_id.to_owned());
+                }
+            }
+            if self.turn.is_some() {
+                self.acp_failures.observe(&v, received.timestamp_ms);
+            }
         }
         if let Some(report) = self.usage.notice(&v, &path, root.as_deref()) {
             let at = events
@@ -2664,7 +2796,17 @@ impl Actor {
                         .to_owned(),
                 ))
             } else {
-                open_error.map_or_else(|| wire::result(self.protocol, &v), Err)
+                open_error.map_or_else(
+                    || {
+                        if let Some(err) = v.get("error")
+                            && let Some(mapped) = self.acp_failures.normalize_opencode_error(err)
+                        {
+                            return Err(Error::Refused(mapped.into()));
+                        }
+                        wire::result(self.protocol, &v)
+                    },
+                    Err,
+                )
             };
             if result.is_err()
                 && let Some(id) = &p.muse_turn
@@ -2802,6 +2944,23 @@ impl Actor {
                             ))
                         }
                     },
+                    (Ok(body), KIRO_STEER) => {
+                        if body["queued"] == true
+                            && let Some(msg_id) =
+                                body["messageId"].as_str().filter(|s| !s.is_empty())
+                        {
+                            self.kiro_steers.insert(msg_id.to_owned(), steer.clone());
+                            events.push(steer.event(crate::SteerStatus::Queued));
+                        } else {
+                            result = Err(Error::Refused(
+                                "Kiro did not queue the steering message.".into(),
+                            ));
+                            events.push(steer.event(crate::SteerStatus::Refused));
+                        }
+                    }
+                    (Err(_), KIRO_STEER) => {
+                        events.push(steer.event(crate::SteerStatus::Refused));
+                    }
                     (Ok(body), OPENCODE_V1_STEER)
                         if matches!(
                             body["stopReason"].as_str(),
@@ -2857,13 +3016,25 @@ impl Actor {
                     invalid_codex_admission = true;
                 }
             } else if let Some(request) = p.prompt_request {
-                if let Some(expected) = &p.muse_turn && result.is_ok() {
+                if let Some(expected) = &p.muse_turn
+                    && result.is_ok()
+                {
                     if !muse::accepts(expected, &v["result"]) {
-                        return Err(Error::Closed("Muse did not confirm the submitted native turn identity".into()));
+                        return Err(Error::Closed(
+                            "Muse did not confirm the submitted native turn identity".into(),
+                        ));
                     }
-                    self.muse.as_mut().expect("Muse projection").admitted(expected);
+                    self.muse
+                        .as_mut()
+                        .expect("Muse projection")
+                        .admitted(expected);
                 }
                 let refusal = result.as_ref().err().map(|error| {
+                    if let Some(err_val) = v.get("error")
+                        && let Some(mapped) = self.acp_failures.normalize_opencode_error(err_val)
+                    {
+                        return mapped.to_owned();
+                    }
                     let mut reason = v["error"]
                         .as_str()
                         .or_else(|| v.pointer("/error/message").and_then(Value::as_str))
@@ -2934,6 +3105,20 @@ impl Actor {
                         state: state.into(),
                     });
                 }
+            } else if p.method == KIRO_COMPACT {
+                let state = match &result {
+                    Ok(value) if value["success"] == true => "completed",
+                    Ok(_) => {
+                        result = Err(Error::Refused(
+                            "Kiro could not compact the conversation.".into(),
+                        ));
+                        "failed"
+                    }
+                    Err(_) => "failed",
+                };
+                events.push(Event::Compaction {
+                    state: state.into(),
+                });
             }
             if self.protocol == Protocol::Codex
                 && matches!(
@@ -3113,13 +3298,51 @@ impl Actor {
         {
             t.native = reported_turn.map(str::to_owned);
         }
+        if current_turn && self.protocol == Protocol::Codex {
+            if codex_item_is_user_message(&v)
+                && let Some(t) = &mut self.turn
+            {
+                t.codex_user_message_seen = true;
+            }
+            if let Some(t) = &mut self.turn
+                && codex_early_stop_dropped(t.codex_user_message_seen, &v)
+                && let Some(input_id) = t.chat_input
+            {
+                let pos = events
+                    .iter()
+                    .position(|e| matches!(e, Event::TurnEnded { .. }))
+                    .unwrap_or(events.len());
+                events.insert(
+                    pos,
+                    Event::NativeInput {
+                        input_id,
+                        receipt: crate::InputReceipt::Cancelled,
+                    },
+                );
+                events.insert(
+                    pos + 1,
+                    Event::InputDropped {
+                        input_id: input_id.to_string(),
+                    },
+                );
+            }
+        }
         if self.protocol == Protocol::Claude {
             if is_root {
                 if v["type"] == "system"
                     && v["subtype"] == "init"
                     && let Some(capabilities) = v["capabilities"].as_array()
                 {
-                    self.files.claude_mcp_apps.store(["mcp_tool_ui_meta_v1","mcp_read_resource_v1","mcp_call_result_not_for_model_v1"].iter().all(|required|capabilities.iter().any(|v|v.as_str()==Some(*required))),std::sync::atomic::Ordering::Release);
+                    self.files.claude_mcp_apps.store(
+                        [
+                            "mcp_tool_ui_meta_v1",
+                            "mcp_read_resource_v1",
+                            "mcp_call_result_not_for_model_v1",
+                        ]
+                        .iter()
+                        .all(|required| capabilities.iter().any(|v| v.as_str() == Some(*required))),
+                        std::sync::atomic::Ordering::Release,
+                    );
                     self.claude_cancel_queued = capabilities
                         .iter()
                         .any(|c| c == "interrupt_cancel_queued_v1");
@@ -3294,6 +3517,11 @@ impl Actor {
                 Protocol::Pi if current_turn && outcome == Some(Outcome::Completed) => {
                     self.turn.as_mut().and_then(|t| t.pi_anchor.take())
                 }
+                Protocol::Acp
+                    if current_turn && outcome.as_ref().is_some_and(|o| *o != Outcome::Aborted) =>
+                {
+                    self.turn.as_mut().and_then(|t| t.kiro_anchor.take())
+                }
                 Protocol::Codex if outcome.is_some() => v
                     .pointer("/params/turn/id")
                     .and_then(Value::as_str)
@@ -3322,6 +3550,13 @@ impl Actor {
             };
             if let (Some(anchor), Some(i)) = (anchor, terminal) {
                 events.insert(i, Event::ForkAnchor { anchor });
+            }
+            if self.protocol == Protocol::Acp && outcome.is_some() && !self.kiro_steers.is_empty() {
+                for (_, receipt) in self.kiro_steers.drain() {
+                    if outcome == Some(Outcome::Aborted) {
+                        events.push(receipt.event(crate::SteerStatus::Cancelled));
+                    }
+                }
             }
         }
         if current_turn
@@ -3353,7 +3588,7 @@ impl Actor {
         let mut kind = wire::classify(self.protocol, &v);
         if kind == RecordKind::Response && (received.response_to.is_some() || terminal.is_some()) {
             kind = RecordKind::Frame;
-            if let Some(method) = native_method
+            if let Some(method) = native_method.clone()
                 && crate::Record::wire_frame_type(&v).is_none()
             {
                 received = received.with_frame_type(method);
@@ -3363,7 +3598,10 @@ impl Actor {
             let active = if queued_turn {
                 self.codex_queue.active(reported_turn).map(|(id, _)| id)
             } else {
-                self.turn.as_ref().filter(|_| current_turn).and_then(|t| t.chat_input)
+                self.turn
+                    .as_ref()
+                    .filter(|_| current_turn)
+                    .and_then(|t| t.chat_input)
             };
             self.next_prompt_sample(
                 &v,
@@ -3420,6 +3658,20 @@ impl Actor {
             && let Some(frame) = self.journal.latest_record()
             && op.observe(&frame)
         {
+            if native_method.as_deref() == Some(KIRO_COMPACT) && frame.native.get("error").is_none()
+            {
+                op.report.status = if frame.native["result"]["success"] == true {
+                    crate::CompactionStatus::Completed {
+                        frame: frame.cursor(),
+                    }
+                } else {
+                    crate::CompactionStatus::Failed {
+                        code: crate::CompactionFailure::NativeFailed,
+                        reason: "Kiro could not compact the conversation.".into(),
+                        frame: frame.cursor(),
+                    }
+                };
+            }
             op.publish(&self.journal);
             if !op.report.status.is_pending() {
                 self.manual_compaction = None;
@@ -3487,18 +3739,36 @@ impl Actor {
         if let Some((id, method)) = request {
             if self.protocol == Protocol::Muse && muse_control.is_some() {
                 let body = original_request.unwrap_or(Value::Null);
-                self.requests.insert(id.to_string(), (method.clone(), body.clone()));
+                self.requests
+                    .insert(id.to_string(), (method.clone(), body.clone()));
                 if self.mode != ApprovalMode::Host {
-                    let deny = crate::interaction::decision_payload(
-                        &method,
-                        &body,
-                        crate::PermissionDecision::Deny,
-                    );
+                    let choice = if self.mode == ApprovalMode::Allow
+                        && matches!(method.as_str(), "approval/requested" | "approval/updated")
+                    {
+                        crate::interaction::decision_payload(
+                            &method,
+                            &body,
+                            crate::PermissionDecision::AllowOnce,
+                        )
+                        .or_else(|| {
+                            crate::interaction::decision_payload(
+                                &method,
+                                &body,
+                                crate::PermissionDecision::Deny,
+                            )
+                        })
+                    } else {
+                        crate::interaction::decision_payload(
+                            &method,
+                            &body,
+                            crate::PermissionDecision::Deny,
+                        )
+                    };
                     // A child belongs to its own run. With no native refusal choice,
                     // leave it pending for the host instead of stopping an unrelated run.
-                    if deny.is_some() || body["subagentOrigin"].is_null() {
-                        let deny = deny.unwrap_or_else(|| json!({"cancelled":true}));
-                        let (command, params) = muse::answer_command(&method, &body, &deny)?;
+                    if choice.is_some() || body["subagentOrigin"].is_null() {
+                        let choice = choice.unwrap_or_else(|| json!({"cancelled":true}));
+                        let (command, params) = muse::answer_command(&method, &body, &choice)?;
                         let key = id.to_string();
                         if let Ok(revision) = self
                             .muse
@@ -3514,7 +3784,11 @@ impl Actor {
                         }
                     }
                 }
-            } else if self.mode == ApprovalMode::Host {
+            } else if original_request
+                .as_ref()
+                .is_some_and(|raw| self.parks_for_host(&method, raw))
+                || self.mode == ApprovalMode::Host
+            {
                 if self.protocol == Protocol::Pi {
                     let key = id.to_string();
                     self.pi_deadlines.remove(&key);
@@ -3530,22 +3804,24 @@ impl Actor {
                     (method, original_request.unwrap_or(Value::Null)),
                 );
             } else {
-                self.write(
-                    wire::answer(
+                let auto_answer = if self.mode == ApprovalMode::Allow {
+                    wire::allow_answer(
                         self.protocol,
-                        &id,
                         &method,
-                        (self.protocol == Protocol::Factory
-                            && method == "droid.request_permission")
-                            .then(|| {
-                                crate::interaction::decision_payload(
-                                    &method,
-                                    &v["params"],
-                                    crate::PermissionDecision::Cancel,
-                                )
-                            })
-                            .flatten(),
-                    ),
+                        original_request.as_ref().unwrap_or(&Value::Null),
+                    )
+                } else if self.protocol == Protocol::Factory && method == "droid.request_permission"
+                {
+                    crate::interaction::decision_payload(
+                        &method,
+                        &v["params"],
+                        crate::PermissionDecision::Cancel,
+                    )
+                } else {
+                    None
+                };
+                self.write(
+                    wire::answer(self.protocol, &id, &method, auto_answer),
                     RecordKind::Response,
                 )
                 .await?;
@@ -4143,5 +4419,147 @@ fn redact_value(v: &mut Value, secrets: &[String], error_fields: bool) {
             }
         }
         _ => {}
+    }
+}
+
+fn parks_request_for_host(
+    protocol: Protocol,
+    mode: ApprovalMode,
+    user_questions: Option<crate::runtime::UserQuestionsMode>,
+    method: &str,
+    body: &Value,
+) -> bool {
+    if mode == ApprovalMode::Host {
+        return true;
+    }
+    if user_questions == Some(crate::runtime::UserQuestionsMode::Host) {
+        return match protocol {
+            Protocol::Codex => method == "item/tool/requestUserInput",
+            Protocol::Claude => method == "can_use_tool" && body["tool_name"] == "AskUserQuestion",
+            _ => false,
+        };
+    }
+    false
+}
+
+fn codex_item_is_user_message(v: &Value) -> bool {
+    matches!(
+        v["method"].as_str(),
+        Some("item/started" | "item/completed")
+    ) && v["params"]["item"]["type"] == "userMessage"
+}
+
+fn codex_early_stop_dropped(user_message_seen: bool, v: &Value) -> bool {
+    if user_message_seen
+        || v["method"] != "turn/completed"
+        || v["params"]["turn"]["status"] != "interrupted"
+    {
+        return false;
+    }
+    !v["params"]["turn"]["items"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["type"] == "userMessage"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::UserQuestionsMode;
+
+    #[test]
+    fn decoupled_user_questions_park_only_codex_and_claude_questions_outside_host_mode() {
+        let ask = json!({"tool_name": "AskUserQuestion", "input": {"questions": []}});
+        let bash = json!({"tool_name": "Bash", "input": {"command": "pwd"}});
+        let codex_q = json!({"questions": [{"id": "q", "question": "Pick"}]});
+        let codex_perm = json!({"command": "ls"});
+
+        for mode in [ApprovalMode::Deny, ApprovalMode::Allow] {
+            assert!(!parks_request_for_host(
+                Protocol::Claude,
+                mode,
+                None,
+                "can_use_tool",
+                &ask
+            ));
+            assert!(parks_request_for_host(
+                Protocol::Claude,
+                mode,
+                Some(UserQuestionsMode::Host),
+                "can_use_tool",
+                &ask
+            ));
+            assert!(!parks_request_for_host(
+                Protocol::Claude,
+                mode,
+                Some(UserQuestionsMode::Host),
+                "can_use_tool",
+                &bash
+            ));
+            assert!(parks_request_for_host(
+                Protocol::Codex,
+                mode,
+                Some(UserQuestionsMode::Host),
+                "item/tool/requestUserInput",
+                &codex_q
+            ));
+            assert!(!parks_request_for_host(
+                Protocol::Codex,
+                mode,
+                Some(UserQuestionsMode::Host),
+                "item/commandExecution/requestApproval",
+                &codex_perm
+            ));
+        }
+        assert!(parks_request_for_host(
+            Protocol::Claude,
+            ApprovalMode::Host,
+            None,
+            "can_use_tool",
+            &bash
+        ));
+    }
+
+    #[test]
+    fn codex_early_stop_detects_interrupted_turns_with_zero_recorded_user_messages() {
+        let started_user = json!({
+            "method": "item/started",
+            "params": {"item": {"id": "u1", "type": "userMessage"}}
+        });
+        assert!(codex_item_is_user_message(&started_user));
+
+        let interrupted_empty = json!({
+            "method": "turn/completed",
+            "params": {"turn": {"id": "t1", "status": "interrupted", "items": []}}
+        });
+        assert!(codex_early_stop_dropped(false, &interrupted_empty));
+        assert!(!codex_early_stop_dropped(true, &interrupted_empty));
+
+        let interrupted_with_user = json!({
+            "method": "turn/completed",
+            "params": {"turn": {"id": "t1", "status": "interrupted", "items": [{"type": "userMessage"}]}}
+        });
+        assert!(!codex_early_stop_dropped(false, &interrupted_with_user));
+
+        let completed_empty = json!({
+            "method": "turn/completed",
+            "params": {"turn": {"id": "t1", "status": "completed", "items": []}}
+        });
+        assert!(!codex_early_stop_dropped(false, &completed_empty));
+    }
+
+    #[test]
+    fn kiro_steering_receipt_extracts_message_text() {
+        let input_id = uuid::Uuid::new_v4();
+        let request = uuid::Uuid::new_v4();
+        let receipt = SteeringReceipt::for_request(
+            KIRO_STEER,
+            &json!({"sessionId": "k1", "message": "focus on tests"}),
+            None,
+            RpcIntent::Steer { input_id, request },
+            &[],
+        )
+        .expect("kiro steer receipt");
+        assert_eq!(receipt.id, input_id);
+        assert_eq!(receipt.text, "focus on tests");
     }
 }

@@ -253,7 +253,13 @@ async fn worktree_links_and_archive_boundaries(
         .status();
     git(
         repo,
-        &["remote", "set-url", "--push", "origin", bare.to_str().unwrap()],
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            bare.to_str().unwrap(),
+        ],
     );
     git(
         repo,
@@ -264,26 +270,27 @@ async fn worktree_links_and_archive_boundaries(
         ],
     );
     git(repo, &["checkout", "-f", "stacked-topic"]);
-    git(repo, &["reset", "--hard", "refs/remotes/origin/stacked-topic"]);
+    git(
+        repo,
+        &["reset", "--hard", "refs/remotes/origin/stacked-topic"],
+    );
 
     // 1. Chat bound to its own worktree executes git_actions in that worktree, not project root.
     let wt_chat = Uuid::new_v4();
     let wt_run = Uuid::new_v4();
     let wt_dir = root.join("wt-git-action");
     let prep_url = format!("{project}/chats/{wt_chat}/prepared-runs/{wt_run}");
-    ok(client
-        .put(&prep_url)
-        .json(&json!({
-            "launch": { "runtime": "codex" },
-            "title": "wt-chat",
-            "message": "seed worktree",
-            "workspace": {
-                "type": "worktree",
-                "directory": wt_dir,
-                "branch": "wt-stacked-branch",
-                "base": "main"
-            }
-        })))
+    ok(client.put(&prep_url).json(&json!({
+        "launch": { "runtime": "codex" },
+        "title": "wt-chat",
+        "message": "seed worktree",
+        "workspace": {
+            "type": "worktree",
+            "directory": wt_dir,
+            "branch": "wt-stacked-branch",
+            "base": "main"
+        }
+    })))
     .await;
     for _ in 0..200 {
         let state = ok(client.get(&prep_url)).await;
@@ -300,9 +307,8 @@ async fn worktree_links_and_archive_boundaries(
             .as_array()
             .is_some_and(|t| t.first().is_some_and(|r| r["status"] == "completed"))
         {
-            wt_path = std::path::PathBuf::from(
-                snap["history"]["chat"]["workspace"].as_str().unwrap(),
-            );
+            wt_path =
+                std::path::PathBuf::from(snap["history"]["chat"]["workspace"].as_str().unwrap());
             break;
         }
         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -397,13 +403,11 @@ async fn worktree_links_and_archive_boundaries(
     assert_eq!(unlinked["changes"][0]["previously_linked"], true);
     assert_eq!(unlinked["changes"][0]["linked"], false);
     let after_unlink = ok(client.get(&links_url)).await;
-    assert!(
-        !after_unlink.as_array().unwrap().iter().any(|row| {
-            row["binding"]["chat"] == second_chat.to_string()
-                && row["binding"]["kind"] == "issue"
-                && row["binding"]["number"] == 7
-        })
-    );
+    assert!(!after_unlink.as_array().unwrap().iter().any(|row| {
+        row["binding"]["chat"] == second_chat.to_string()
+            && row["binding"]["kind"] == "issue"
+            && row["binding"]["number"] == 7
+    }));
 
     // 4. Cross-remote fork origin + upstream base PR resolution.
     let base_url = project.rsplit_once("/projects/").unwrap().0;
@@ -412,23 +416,55 @@ async fn worktree_links_and_archive_boundaries(
     let fork_checkout = root.join("fork-upstream-repo");
     fs::create_dir(&fork_checkout).unwrap();
     git(&fork_checkout, &["init", "-b", "main"]);
-    git(&fork_checkout, &["fetch", bare.to_str().unwrap(), "main:refs/remotes/upstream/main"]);
-    git(&fork_checkout, &["reset", "--hard", "refs/remotes/upstream/main"]);
     git(
         &fork_checkout,
-        &["remote", "add", "origin", "https://review.example/contributor/forked.git"],
+        &[
+            "fetch",
+            bare.to_str().unwrap(),
+            "main:refs/remotes/upstream/main",
+        ],
     );
     git(
         &fork_checkout,
-        &["remote", "set-url", "--push", "origin", fork_bare.path().to_str().unwrap()],
+        &["reset", "--hard", "refs/remotes/upstream/main"],
     );
     git(
         &fork_checkout,
-        &["remote", "add", "upstream", "https://review.example/team/repo.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://review.example/contributor/forked.git",
+        ],
     );
     git(
         &fork_checkout,
-        &["switch", "--track", "-c", "fork-topic", "refs/remotes/upstream/main"],
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            fork_bare.path().to_str().unwrap(),
+        ],
+    );
+    git(
+        &fork_checkout,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://review.example/team/repo.git",
+        ],
+    );
+    git(
+        &fork_checkout,
+        &[
+            "switch",
+            "--track",
+            "-c",
+            "fork-topic",
+            "refs/remotes/upstream/main",
+        ],
     );
     git(&fork_checkout, &["config", "remote.pushDefault", "origin"]);
     fs::write(fork_checkout.join("upstream_pr.txt"), "cross-owner").unwrap();
@@ -448,7 +484,10 @@ async fn worktree_links_and_archive_boundaries(
     .await;
     let fork_res = result(&fork_action);
     assert_eq!(fork_res["pr"]["status"], "created");
-    assert_eq!(fork_res["pr"]["pull"]["head_repository"], "contributor/forked");
+    assert_eq!(
+        fork_res["pr"]["pull"]["head_repository"],
+        "contributor/forked"
+    );
     assert_eq!(fork_res["pr"]["pull"]["head_ref"], "fork-topic");
     assert_eq!(fork_res["pr"]["pull"]["base_ref"], "main");
     ok(client

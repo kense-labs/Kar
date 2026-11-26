@@ -3,6 +3,8 @@ mod actor;
 mod compaction;
 mod goals;
 mod images;
+pub(crate) mod mcp_bridge;
+pub use mcp_bridge::run_dsh_mcp_bridge;
 pub(crate) mod profile;
 mod projection;
 pub(crate) mod recovery;

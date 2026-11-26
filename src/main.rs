@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 mod account_cli;
 mod chat_cli;
-mod git_cli;
 mod device_agent_cli;
+mod git_cli;
 mod inventory_cli;
 use inventory_cli::WorkspaceInventory;
 mod mcp;
@@ -43,8 +43,33 @@ enum Action {
     #[cfg(target_os = "macos")]
     #[command(hide = true)]
     WorkbenchMcpBridge { socket: PathBuf },
+    #[cfg(unix)]
     #[command(hide = true)]
-    ManagedChatgptToken { directory: PathBuf, revision: String },
+    DshMcpBridge { socket: PathBuf },
+    /// Multi-agent soak channel and live SDK contract auditor.
+    Harbor(kar::harbor::HarborCli),
+    /// Manage the macOS launchd background workbench service.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+    /// Run host, toolchain, runtime, and service health checks.
+    Doctor {
+        #[arg(long)]
+        state: Option<PathBuf>,
+    },
+    /// Inspect active ManagedPolicy host restrictions.
+    Policy,
+    /// Generate a diagnostic triage bundle with local traces and pinned source metadata.
+    Triage {
+        #[arg(long)]
+        state: Option<PathBuf>,
+    },
+    #[command(hide = true)]
+    ManagedChatgptToken {
+        directory: PathBuf,
+        revision: String,
+    },
     /// Manage repositories and independent chat worktrees.
     Git(git_cli::Git),
     /// Report installed executables, versions and pre-open session capabilities.
@@ -83,7 +108,7 @@ enum Action {
         #[arg(long)]
         line: Option<String>,
         /// Bound installer execution in milliseconds.
-        #[arg(long, visible_alias="timeout", default_value = "600000")]
+        #[arg(long, visible_alias = "timeout", default_value = "600000")]
         timeout_ms: std::num::NonZeroU64,
     },
     /// Query or update installed CLIs. Omit the runtime to select all installed runtimes.
@@ -96,7 +121,7 @@ enum Action {
         #[arg(long)]
         check: bool,
         /// Set the per-runtime deadline in milliseconds.
-        #[arg(long, visible_alias="timeout")]
+        #[arg(long, visible_alias = "timeout")]
         timeout_ms: Option<std::num::NonZeroU64>,
     },
     /// Serve a group of local agents to an MCP client over stdio.
@@ -165,12 +190,15 @@ enum Action {
         /// Create a new JSONL recording (existing files are never overwritten).
         #[arg(long)]
         record: Option<PathBuf>,
+        /// Create a crash-safe kar-voyage/3 session recording.
+        #[arg(long)]
+        voyage: Option<PathBuf>,
         #[arg(long, default_value_t = 600)]
         timeout: u64,
     },
-    /// Import a kar-voyage/3 recording into a Kar JSONL file for replay.
+    /// Import a kar-voyage/3 or oar-voyage/3 recording into a Kar JSONL file for replay.
     Import { input: PathBuf, output: PathBuf },
-    /// Print previously recorded records, optionally after a stream-specific cursor.
+    /// Print previously recorded records or voyage files, optionally after a stream-specific cursor.
     Replay {
         path: PathBuf,
         #[arg(long, requires = "stream")]
@@ -181,6 +209,30 @@ enum Action {
         #[arg(long, conflicts_with_all = ["after", "stream"])]
         conversation: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ServiceAction {
+    /// Write ~/Library/LaunchAgents/dev.kar.workbench.plist and optionally load via launchctl.
+    Install {
+        #[arg(long = "root", required = true)]
+        roots: Vec<PathBuf>,
+        #[arg(long)]
+        state: Option<PathBuf>,
+        #[arg(long, default_value_t = 4777)]
+        port: u16,
+        #[arg(long)]
+        no_load: bool,
+    },
+    /// Unload and remove ~/Library/LaunchAgents/dev.kar.workbench.plist.
+    Uninstall {
+        #[arg(long)]
+        no_unload: bool,
+    },
+    /// Print current launchd service installation and load status.
+    Status,
+    /// Kickstart the launchd service.
+    Restart,
 }
 #[derive(Subcommand)]
 enum Account {
@@ -352,6 +404,7 @@ impl NativeSettings {
             acp_mode: self.acp_mode,
             service_tier: self.service_tier,
             additional_directories: self.additional_directories,
+            ..Default::default()
         };
         opts
     }
@@ -445,7 +498,10 @@ fn json_line(value: &impl serde::Serialize, mut out: impl Write) -> Result<()> {
 async fn execute(command: Action) -> Result<()> {
     match command {
         Action::Chat(chat) => chat.run().await?,
-        Action::ManagedChatgptToken { directory, revision } => kar::workbench::write_managed_chatgpt_token(&directory, &revision).await?,
+        Action::ManagedChatgptToken {
+            directory,
+            revision,
+        } => kar::workbench::write_managed_chatgpt_token(&directory, &revision).await?,
         #[cfg(target_os = "macos")]
         Action::WorkbenchMcpBridge { socket } => {
             use std::{io, net::Shutdown, os::unix::net::UnixStream};
@@ -457,6 +513,80 @@ async fn execute(command: Action) -> Result<()> {
                 let _ = writer.shutdown(Shutdown::Write);
             });
             io::copy(&mut reader, &mut io::stdout().lock())?;
+        }
+        #[cfg(unix)]
+        Action::DshMcpBridge { socket } => kar::run_dsh_mcp_bridge(&socket).await?,
+        Action::Harbor(harbor_cli) => kar::harbor::run(harbor_cli).await?,
+        Action::Service { action } => {
+            let value = match action {
+                ServiceAction::Install {
+                    roots,
+                    state,
+                    port,
+                    no_load,
+                } => {
+                    let exe = std::env::current_exe()?.canonicalize()?;
+                    let store = match state {
+                        Some(p) => kar::chat::ChatStore::open(p)?,
+                        None => kar::chat::ChatStore::local()?,
+                    };
+                    let state_dir = store.directory().to_path_buf();
+                    let log_dir = state_dir.join("logs");
+                    let canonical_roots = roots
+                        .into_iter()
+                        .map(|r| r.canonicalize().map_err(Error::from))
+                        .collect::<Result<Vec<_>>>()?;
+                    kar::workbench::service::install_service(
+                        &kar::workbench::service::LaunchdConfig {
+                            executable: exe,
+                            roots: canonical_roots,
+                            state_dir,
+                            port,
+                            log_dir,
+                        },
+                        !no_load,
+                    )?
+                }
+                ServiceAction::Uninstall { no_unload } => {
+                    kar::workbench::service::uninstall_service(!no_unload)?
+                }
+                ServiceAction::Status => kar::workbench::service::service_status()?,
+                ServiceAction::Restart => kar::workbench::service::restart_service()?,
+            };
+            json_line(&value, std::io::stdout())?;
+        }
+        Action::Doctor { state } => {
+            let report = kar::workbench::service::run_doctor(state.as_deref()).await?;
+            json_line(&report, std::io::stdout())?;
+        }
+        Action::Policy => {
+            let snap = kar::workbench::policy::ManagedPolicy::load()?;
+            json_line(&snap, std::io::stdout())?;
+        }
+        Action::Triage { state } => {
+            let store = match state {
+                Some(p) => kar::chat::ChatStore::open(p)?,
+                None => kar::chat::ChatStore::local()?,
+            };
+            let state_dir = store.directory().join("workbench");
+            let traces_dir = state_dir.join("traces");
+            let out_dir = state_dir
+                .join("triage")
+                .join(uuid::Uuid::new_v4().to_string());
+            std::fs::create_dir_all(&out_dir)?;
+            let summary = json!({
+                "created_at": jiff::Timestamp::now().to_string(),
+                "kar_version": env!("CARGO_PKG_VERSION"),
+                "platform": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "traces_dir": traces_dir,
+                "triage_dir": out_dir,
+            });
+            std::fs::write(
+                out_dir.join("context.json"),
+                serde_json::to_vec_pretty(&summary)?,
+            )?;
+            json_line(&summary, std::io::stdout())?;
         }
         Action::Workbench { roots, state, port } => {
             let store = match state {
@@ -888,10 +1018,20 @@ async fn execute(command: Action) -> Result<()> {
             images,
             json,
             record,
+            voyage,
             timeout,
         } => {
             let mut file = record.as_deref().map(create_record).transpose()?;
+            let runtime_name = open.runtime.clone();
             let session = open.session().await?;
+            let mut voyage_rec = match voyage.as_deref() {
+                Some(p) => Some(kar::voyage::VoyageRecorder::for_session(
+                    p,
+                    &runtime_name,
+                    &session,
+                )?),
+                None => None,
+            };
             eprintln!("session {} (stream {})", session.id(), session.stream_id());
             let mut records = session.subscribe(None)?;
             let output = tokio::spawn(async move {
@@ -899,6 +1039,9 @@ async fn execute(command: Action) -> Result<()> {
                 while let Some(r) = records.next().await {
                     if let Some(f) = &mut file {
                         json_line(&*r, f)?;
+                    }
+                    if let Some(vr) = &mut voyage_rec {
+                        vr.record(&r)?;
                     }
                     let mut out = std::io::stdout().lock();
                     if json {
@@ -919,6 +1062,9 @@ async fn execute(command: Action) -> Result<()> {
                         }
                         out.flush()?;
                     }
+                }
+                if let Some(vr) = voyage_rec {
+                    let _ = vr.finish();
                 }
                 Result::Ok(())
             });
@@ -969,15 +1115,62 @@ async fn execute(command: Action) -> Result<()> {
                 stream_id,
                 after_seq,
             });
-            replay(&path, cursor.as_ref(), conversation, std::io::stdout().lock())?;
+            replay(
+                &path,
+                cursor.as_ref(),
+                conversation,
+                std::io::stdout().lock(),
+            )?;
         }
     }
     Ok(())
 }
-fn replay(path: &Path, cursor: Option<&Cursor>, conversation: bool, mut out: impl Write) -> Result<()> {
+fn replay(
+    path: &Path,
+    cursor: Option<&Cursor>,
+    conversation: bool,
+    mut out: impl Write,
+) -> Result<()> {
     let mut history = conversation.then(kar::observe::Conversation::default);
     let mut stream = None;
     let mut seen = cursor.is_none();
+    let first_line = std::io::BufReader::new(std::fs::File::open(path)?)
+        .lines()
+        .next()
+        .transpose()?;
+    let is_voyage = first_line
+        .as_deref()
+        .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .is_some_and(|v| v["kind"] == "header");
+    if is_voyage {
+        let reader = std::io::BufReader::new(std::fs::File::open(path)?);
+        kar::voyage::import(reader, |r| {
+            if let Some(c) = cursor {
+                if c.stream_id != r.stream_id {
+                    return Err(Error::InvalidCursor);
+                }
+                if r.seq == c.after_seq {
+                    seen = true;
+                }
+                if r.seq <= c.after_seq {
+                    return Ok(());
+                }
+            }
+            if let Some(history) = &mut history {
+                history.apply(&std::sync::Arc::new(r));
+            } else {
+                json_line(&r, &mut out)?;
+            }
+            Ok(())
+        })?;
+        if !seen {
+            return Err(Error::InvalidCursor);
+        }
+        if let Some(history) = history {
+            json_line(&history, &mut out)?;
+        }
+        return Ok(());
+    }
     for (seq, line) in std::io::BufReader::new(std::fs::File::open(path)?)
         .lines()
         .enumerate()

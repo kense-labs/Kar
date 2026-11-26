@@ -38,8 +38,9 @@ impl PiDurable {
     /// Known composer and tool capabilities. Does not call into the host harness.
     #[wasm_bindgen(js_name = sessionCapabilities)]
     pub fn session_capabilities(&self) -> JsResult<JsValue> {
-        let mut capabilities = serde_json::to_value(crate::SessionCapabilityDeclaration::pi_durable())
-            .map_err(|e| error(e.to_string()))?;
+        let mut capabilities =
+            serde_json::to_value(crate::SessionCapabilityDeclaration::pi_durable())
+                .map_err(|e| error(e.to_string()))?;
         capabilities["attribution"] = serde_json::json!("opaque");
         capabilities["durable_native_queue"] = true.into();
         js(&capabilities)

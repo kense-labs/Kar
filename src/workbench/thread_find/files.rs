@@ -177,9 +177,7 @@ pub(super) fn is_media_basename(basename: &str) -> bool {
     let Some((_, ext)) = basename.rsplit_once('.') else {
         return false;
     };
-    MEDIA_EXTENSIONS
-        .iter()
-        .any(|m| ext.eq_ignore_ascii_case(m))
+    MEDIA_EXTENSIONS.iter().any(|m| ext.eq_ignore_ascii_case(m))
 }
 
 fn parse_positive_u64(s: &str) -> Option<u64> {
@@ -195,9 +193,7 @@ fn take_leading_digits(s: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_hash_position(frag: &str) -> Option<FilePosition> {
-    let rest = frag
-        .strip_prefix('L')
-        .or_else(|| frag.strip_prefix('l'))?;
+    let rest = frag.strip_prefix('L').or_else(|| frag.strip_prefix('l'))?;
     let (line_s, after_line) = take_leading_digits(rest)?;
     let line = parse_positive_u64(line_s)?;
     if after_line.is_empty() {
@@ -231,9 +227,7 @@ fn parse_hash_position(frag: &str) -> Option<FilePosition> {
             let (end_s, tail) = take_leading_digits(range_rest)?;
             let end_line = parse_positive_u64(end_s)?;
             if !tail.is_empty() {
-                let tail = tail
-                    .strip_prefix('C')
-                    .or_else(|| tail.strip_prefix('c'))?;
+                let tail = tail.strip_prefix('C').or_else(|| tail.strip_prefix('c'))?;
                 let (end_col_s, rem) = take_leading_digits(tail)?;
                 parse_positive_u64(end_col_s)?;
                 if !rem.is_empty() {
@@ -256,9 +250,7 @@ fn parse_hash_position(frag: &str) -> Option<FilePosition> {
         let (end_s, tail) = take_leading_digits(range_rest)?;
         let end_line = parse_positive_u64(end_s)?;
         if !tail.is_empty() {
-            let tail = tail
-                .strip_prefix('C')
-                .or_else(|| tail.strip_prefix('c'))?;
+            let tail = tail.strip_prefix('C').or_else(|| tail.strip_prefix('c'))?;
             let (end_col_s, rem) = take_leading_digits(tail)?;
             parse_positive_u64(end_col_s)?;
             if !rem.is_empty() {
@@ -326,7 +318,9 @@ fn split_colon_position(raw: &str) -> (&str, Option<FilePosition>) {
     )
 }
 
-pub(super) fn split_position_suffix(raw: &str) -> std::result::Result<(&str, Option<FilePosition>), ()> {
+pub(super) fn split_position_suffix(
+    raw: &str,
+) -> std::result::Result<(&str, Option<FilePosition>), ()> {
     if let Some((before_hash, frag)) = raw.split_once('#') {
         let pos = parse_hash_position(frag).ok_or(())?;
         return Ok((before_hash, Some(pos)));
@@ -699,7 +693,10 @@ fn starts_bare_candidate(rest: &str, cwd: Option<&Path>) -> bool {
     if !rest.starts_with('/') || rest.starts_with("//") {
         return false;
     }
-    if ALLOWED_POSIX_ROOTS.iter().any(|root| rest.starts_with(root)) {
+    if ALLOWED_POSIX_ROOTS
+        .iter()
+        .any(|root| rest.starts_with(root))
+    {
         return true;
     }
     if let Some(cwd_str) = cwd.and_then(Path::to_str)

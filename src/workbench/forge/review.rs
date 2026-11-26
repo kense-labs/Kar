@@ -54,7 +54,11 @@ fn oid(pull: &Value, name: &str) -> Result<String, ForgeError> {
             ))
         })
 }
-pub(super) fn fetch(c: &Context, number: u64, pull: &Value) -> Result<(String, String), ForgeError> {
+pub(super) fn fetch(
+    c: &Context,
+    number: u64,
+    pull: &Value,
+) -> Result<(String, String), ForgeError> {
     let base = oid(pull, "base_sha")?;
     let head = oid(pull, "head_sha")?;
     for (is_head, sha) in [(false, &base), (true, &head)] {

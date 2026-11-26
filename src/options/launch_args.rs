@@ -152,6 +152,35 @@ pub(crate) fn refusal(protocol: Protocol, id: &str) -> Option<&'static str> {
     }
 }
 
+pub(crate) fn claude_allow_permission_args(options: &SessionOptions) -> &'static [&'static str] {
+    if options.approvals != crate::ApprovalMode::Allow {
+        return &[];
+    }
+    let has_mode = options
+        .launch_args
+        .iter()
+        .any(|arg| flag(arg, false) == "--permission-mode");
+    if has_mode {
+        if options
+            .launch_args
+            .iter()
+            .any(|arg| flag(arg, false) == "--permission-prompts")
+        {
+            &[]
+        } else {
+            &["--permission-prompts", "none"]
+        }
+    } else if options
+        .launch_args
+        .iter()
+        .any(|arg| flag(arg, false) == "--dangerously-skip-permissions")
+    {
+        &[]
+    } else {
+        &["--dangerously-skip-permissions"]
+    }
+}
+
 pub(crate) fn validate(runtime: &Runtime, options: &SessionOptions, fork: bool) -> Result<()> {
     use crate::UserConfigurationCategory::{Instructions, Mcp, Settings};
     let args = &options.launch_args;
@@ -161,6 +190,9 @@ pub(crate) fn validate(runtime: &Runtime, options: &SessionOptions, fork: bool) 
     if let Some(reason) = refusal(runtime.protocol, &runtime.id) {
         return Err(Error::Unsupported(reason.into()));
     }
+    let allow = options.approvals == crate::ApprovalMode::Allow;
+    let host_questions = options.user_questions == Some(crate::runtime::UserQuestionsMode::Host)
+        && options.approvals != crate::ApprovalMode::Host;
     let (managed, camel): (&[&str], bool) = match (runtime.protocol, runtime.id.as_str()) {
         (Protocol::Qwen, _) => (QWEN_MANAGED, true),
         (Protocol::Codex, _) => (&["--listen", "--"], false),
@@ -173,7 +205,18 @@ pub(crate) fn validate(runtime: &Runtime, options: &SessionOptions, fork: bool) 
                 .try_for_each(|arg| crate::qoder::validate_arg(arg));
         }
         (Protocol::Acp, "codebuddy") => (CODEBUDDY_MANAGED, true),
-        (Protocol::Acp, "antigravity") => (&["--process-per-session", "--"], false),
+        (Protocol::Acp, "antigravity") => (
+            if allow {
+                &["--process-per-session", "--"]
+            } else {
+                &[
+                    "--process-per-session",
+                    "--dangerously-skip-permissions",
+                    "--",
+                ]
+            },
+            false,
+        ),
         (Protocol::Acp, id) if id != "dsh" => (&["--"], false),
         _ => {
             return Err(Error::Unsupported(format!(
@@ -184,8 +227,23 @@ pub(crate) fn validate(runtime: &Runtime, options: &SessionOptions, fork: bool) 
     };
     let settings = &options.settings;
     let excluded = &settings.exclude_user_configuration;
+    let has_claude_mode = runtime.protocol == Protocol::Claude
+        && args.iter().any(|a| flag(a, false) == "--permission-mode");
     for (i, arg) in args.iter().enumerate() {
         let name = flag(arg, camel);
+        let value = || {
+            arg.split_once('=')
+                .map(|(_, v)| v)
+                .or_else(|| args.get(i + 1).map(String::as_str))
+        };
+        let claude_allow_override = runtime.protocol == Protocol::Claude
+            && allow
+            && !host_questions
+            && match name.as_str() {
+                "--dangerously-skip-permissions" => !has_claude_mode,
+                "--permission-prompts" => value() == Some("none"),
+                _ => false,
+            };
         let claude_conflict = runtime.protocol == Protocol::Claude
             && match name.as_str() {
                 "--resume-session-at" => fork,
@@ -196,17 +254,20 @@ pub(crate) fn validate(runtime: &Runtime, options: &SessionOptions, fork: bool) 
                         || settings.service_tier.is_some()
                         || settings.model_requests.is_some()
                 }
+                "--permission-mode" if host_questions => true,
                 "--permission-mode" => {
-                    // These native modes can only restrict the host-controlled prompt path.
-                    let value = arg
-                        .split_once('=')
-                        .map(|(_, v)| v)
-                        .or_else(|| args.get(i + 1).map(String::as_str));
-                    !matches!(value, Some("default" | "plan" | "dontAsk"))
+                    if allow {
+                        !matches!(
+                            value(),
+                            Some("default" | "plan" | "dontAsk" | "acceptEdits")
+                        )
+                    } else {
+                        !matches!(value(), Some("default" | "plan" | "dontAsk"))
+                    }
                 }
                 _ => false,
             };
-        if claude_conflict || managed.contains(&name.as_str()) {
+        if claude_conflict || (!claude_allow_override && managed.contains(&name.as_str())) {
             return Err(Error::Unsupported(format!(
                 "Kar manages the {name} argument for {}",
                 runtime.id
@@ -214,4 +275,31 @@ pub(crate) fn validate(runtime: &Runtime, options: &SessionOptions, fork: bool) 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ApprovalMode, runtime::UserQuestionsMode};
+
+    #[test]
+    fn claude_managed_flags_stay_protected_under_deny_and_host_and_respect_questions() {
+        let rt = Runtime::new("claude", "claude", &[], Protocol::Claude);
+        let mut opts = SessionOptions::new("/tmp");
+        opts.launch_args = vec!["--dangerously-skip-permissions".into()];
+        assert!(validate(&rt, &opts, false).is_err());
+        opts.approvals = ApprovalMode::Host;
+        assert!(validate(&rt, &opts, false).is_err());
+
+        opts.approvals = ApprovalMode::Allow;
+        opts.launch_args.clear();
+        assert_eq!(
+            claude_allow_permission_args(&opts),
+            &["--dangerously-skip-permissions"]
+        );
+
+        opts.user_questions = Some(UserQuestionsMode::Host);
+        opts.launch_args = vec!["--permission-mode".into(), "dontAsk".into()];
+        assert!(validate(&rt, &opts, false).is_err());
+    }
 }

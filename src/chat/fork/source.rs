@@ -162,7 +162,12 @@ impl Launch {
                     selected_route = Some(&handoff.from);
                 }
             }
-            if let Some(workspace) = current.handoffs.iter().filter(|h| h.through_turn > index).find_map(|h| h.source_workspace.as_ref()) {
+            if let Some(workspace) = current
+                .handoffs
+                .iter()
+                .filter(|h| h.through_turn > index)
+                .find_map(|h| h.source_workspace.as_ref())
+            {
                 owner.workspace = workspace.clone();
                 owner.worktree_id = None;
             }
@@ -225,7 +230,7 @@ mod tests {
                 requested_output_schema: None,
                 background_note: None,
                 merged_context: None,
-                app_context:None,
+                app_context: None,
                 attachments: Vec::new(),
                 id: turn,
                 at: 2,
@@ -243,7 +248,7 @@ mod tests {
         };
         assert!(check(&state).contains("does not match"));
         state.info.forked_from = Some(ForkOrigin {
-            context_only:false,
+            context_only: false,
             mode: ForkMode::Native,
             chat: Uuid::new_v4(),
             turn,

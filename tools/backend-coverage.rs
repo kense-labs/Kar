@@ -237,7 +237,9 @@ fn run() -> Result<(), String> {
         check_sources(Path::new(&repo), &index)?;
     }
     let unique: BTreeSet<_> = evidence.iter().collect();
-    let mut joins: BTreeMap<(&str, &str, usize), Vec<(&Row, &Row, usize)>> = BTreeMap::new();
+    type JoinKey<'a> = (&'a str, &'a str, usize);
+    type JoinHit<'a> = (&'a Row, &'a Row, usize);
+    let mut joins: BTreeMap<JoinKey<'_>, Vec<JoinHit<'_>>> = BTreeMap::new();
     let mut texts = BTreeMap::new();
     for link in &links {
         let [source, lines, commit, runtimes, _, file, needle, _] = link.as_slice() else {

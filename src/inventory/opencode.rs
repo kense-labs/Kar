@@ -172,6 +172,30 @@ async fn legacy(
     ))
 }
 
+fn unsupported_version(
+    version: &Version,
+    installed: Option<&str>,
+) -> Option<InventoryResult<SkillEntry>> {
+    if version.major == 1 {
+        return None;
+    }
+    let tuple = (version.major, version.minor, version.patch);
+    if ((2, 2, 7)..(2, 4, 0)).contains(&tuple) {
+        return None;
+    }
+    let reason = if tuple >= (2, 4, 0) {
+        "This OpenCode release has no verified way to wait for skill and plugin discovery to finish"
+    } else {
+        "OpenCode 2 workspace skills require the plugin activation barrier"
+    };
+    Some(InventoryResult::Unsupported {
+        code: UnsupportedCode::VersionUnsupported,
+        reason: reason.into(),
+        installed_version: installed.map(str::to_owned),
+        required_version: Some(">=2.2.7 <2.4.0".into()),
+    })
+}
+
 pub(super) async fn skills(
     probe: &Probe,
     path: &Path,
@@ -184,13 +208,8 @@ pub(super) async fn skills(
     if version.major == 1 {
         return legacy(probe, path, &version).await;
     }
-    if (version.minor, version.patch) < (2, 7) {
-        return Ok(InventoryResult::Unsupported {
-            code: UnsupportedCode::VersionUnsupported,
-            reason: "OpenCode 2 workspace skills require the plugin activation barrier".into(),
-            installed_version: installed.map(str::to_owned),
-            required_version: Some("2.2.7".into()),
-        });
+    if let Some(unsupported) = unsupported_version(&version, installed) {
+        return Ok(unsupported);
     }
     let (raw, partial) = crate::providers::opencode_workspace_skills(
         probe,
@@ -204,4 +223,37 @@ pub(super) async fn skills(
         partial,
         View::Discovered,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_discovery_version_gate_enforces_activation_barrier_window() {
+        for ok in ["1.19.6", "2.2.7", "2.2.7-rc.1", "2.3.0+custom", "2.3.9"] {
+            let v = crate::installation::read_version("opencode", ok).unwrap();
+            assert!(
+                unsupported_version(&v, Some(ok)).is_none(),
+                "expected {ok} to pass version gate"
+            );
+        }
+        for bad in [
+            "0.9.9", "2.0.0", "2.1.9", "2.2.6", "2.4.0", "2.4.1", "3.0.0",
+        ] {
+            let v = crate::installation::read_version("opencode", bad).unwrap();
+            let Some(InventoryResult::Unsupported {
+                code,
+                installed_version,
+                required_version,
+                ..
+            }) = unsupported_version(&v, Some(bad))
+            else {
+                panic!("expected {bad} to be rejected by version gate");
+            };
+            assert_eq!(code, UnsupportedCode::VersionUnsupported);
+            assert_eq!(installed_version.as_deref(), Some(bad));
+            assert_eq!(required_version.as_deref(), Some(">=2.2.7 <2.4.0"));
+        }
+    }
 }

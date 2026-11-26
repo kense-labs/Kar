@@ -1,5 +1,4 @@
 //! REST and native CLI drivers for non-GitHub hosts in the fixed workbench contract.
-pub(in crate::workbench::forge) mod pull_tools;
 pub(super) mod azure;
 pub(in crate::workbench::forge) mod create_repo;
 pub(super) mod credentials;
@@ -10,6 +9,7 @@ pub(super) mod issue;
 pub(super) mod issue_directory;
 pub(in crate::workbench::forge) mod issue_listing;
 pub(super) mod linear;
+pub(in crate::workbench::forge) mod pull_tools;
 pub(in crate::workbench::forge) mod reactions;
 pub(super) mod rest;
 pub(super) mod reviews;

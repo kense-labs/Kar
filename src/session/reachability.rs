@@ -53,7 +53,9 @@ impl Command {
                 }
                 Self::Withdraw(id, _) => (Uuid::new_v4(), json!({"type":"withdraw","inputId":id})),
                 Self::Abort(_) => (Uuid::new_v4(), json!({"type":"abort"})),
-                Self::StopTask(id, _, _) => (Uuid::new_v4(), json!({"type":"stop_task","taskId":id})),
+                Self::StopTask(id, _, _) => {
+                    (Uuid::new_v4(), json!({"type":"stop_task","taskId":id}))
+                }
                 Self::Compact(request, ..) => (*request, json!({"type":"compact"})),
                 Self::Rpc(method, params, ..)
                     if matches!(
@@ -68,7 +70,11 @@ impl Command {
                 {
                     (Uuid::new_v4(), json!({"type":method,"params":params}))
                 }
-                Self::Close(_) | Self::Send(..) | Self::WorkbenchMcpReply(_) | Self::Respond(..) | Self::Rpc(..) => return None,
+                Self::Close(_)
+                | Self::Send(..)
+                | Self::WorkbenchMcpReply(_)
+                | Self::Respond(..)
+                | Self::Rpc(..) => return None,
             };
             body["id"] = Value::String(request.to_string());
             redact(&mut body, secrets);

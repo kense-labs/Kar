@@ -44,6 +44,7 @@ struct Index {
 pub(in crate::workbench) struct Hub {
     file: PathBuf,
     index: Mutex<Index>,
+    updates: tokio::sync::watch::Sender<u64>,
 }
 impl Hub {
     pub(in crate::workbench) fn open(dir: &Path) -> crate::Result<Self> {
@@ -62,11 +63,18 @@ impl Hub {
         let hub = Self {
             file,
             index: Mutex::new(i),
+            updates: tokio::sync::watch::channel(0).0,
         };
         if !hub.file.exists() {
             hub.save(&hub.index.lock().unwrap())?;
         }
         Ok(hub)
+    }
+    pub(in crate::workbench) fn notify(&self) {
+        self.updates.send_modify(|n| *n = n.wrapping_add(1));
+    }
+    pub(in crate::workbench) fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.updates.subscribe()
     }
     fn save(&self, i: &Index) -> crate::Result<()> {
         let dir = self.file.parent().unwrap();
@@ -173,6 +181,7 @@ impl Hub {
         if changed {
             self.save(&next)?;
             *lock = next;
+            self.notify();
         }
         let curr = &*lock;
         let fmt = |n: u64| format!("{}.{n}", curr.epoch);
@@ -238,5 +247,25 @@ impl Hub {
             truncated,
             has_more: more,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hub_notify_wakes_subscribers_immediately() -> crate::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let hub = Hub::open(dir.path())?;
+        let mut rx = hub.subscribe();
+        assert_eq!(*rx.borrow_and_update(), 0);
+        hub.notify();
+        tokio::time::timeout(Duration::from_millis(50), rx.changed())
+            .await
+            .expect("hub notification must wake immediately")
+            .unwrap();
+        assert_eq!(*rx.borrow(), 1);
+        Ok(())
     }
 }

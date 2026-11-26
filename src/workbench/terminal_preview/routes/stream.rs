@@ -93,7 +93,7 @@ pub(super) async fn upload(
     let mut paths = vec![];
     for (i, f) in input.files.into_iter().enumerate() {
         if f.name.is_empty()
-            || f.name.as_bytes().len() > 255
+            || f.name.len() > 255
             || f.name.contains(['\\', '/', '\0'])
             || !matches!(
                 std::path::Path::new(&f.name).components().next(),

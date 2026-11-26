@@ -12,9 +12,9 @@ use toolkit::Tool;
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Scope {
     pub(super) write: bool,
-    pub(super) delegate:bool,
-    pub(super) remote_projects:BTreeMap<Uuid,BTreeSet<Uuid>>,
-    pub(super) schedule:bool,
+    pub(super) delegate: bool,
+    pub(super) remote_projects: BTreeMap<Uuid, BTreeSet<Uuid>>,
+    pub(super) schedule: bool,
     project_wide: bool,
     targets: BTreeSet<Uuid>,
     /// Only listed native providers/models can be selected for an existing chat.
@@ -22,8 +22,17 @@ pub(super) struct Scope {
 }
 impl Scope {
     pub(super) fn validate(&self, app: &Workbench, p: Uuid) -> Result<()> {
-        if !self.remote_projects.is_empty() && (!self.delegate || self.remote_projects.len()>32 || self.remote_projects.values().any(|set|set.is_empty()||set.len()>64)){
-            return Err(Error::Refused("remote projects must be explicitly scoped to a delegation grant".into()));
+        if !self.remote_projects.is_empty()
+            && (!self.delegate
+                || self.remote_projects.len() > 32
+                || self
+                    .remote_projects
+                    .values()
+                    .any(|set| set.is_empty() || set.len() > 64))
+        {
+            return Err(Error::Refused(
+                "remote projects must be explicitly scoped to a delegation grant".into(),
+            ));
         }
         for target in &self.targets {
             app.binding(p, *target)?;
@@ -33,7 +42,8 @@ impl Scope {
 }
 fn child_project(db: &Catalog, caller: Uuid, chat: Uuid) -> Option<Uuid> {
     super::project_tools::launched_project(db, caller, chat)
-        .or_else(|| transfer::fork_project(db, caller, chat)).or_else(||super::orchestrator::owned(db,caller,chat))
+        .or_else(|| transfer::fork_project(db, caller, chat))
+        .or_else(|| super::orchestrator::owned(db, caller, chat))
 }
 pub(super) fn list_project(
     app: &Workbench,
@@ -180,6 +190,19 @@ pub(in crate::workbench) fn handles(name: &str) -> bool {
     )
 }
 pub(super) fn tools(c: &Caller) -> Vec<Tool> {
+    if c.grant.is_none() {
+        if c.plan {
+            return vec![];
+        }
+        let id = json!({"type":"string","format":"uuid"});
+        let s = json!({"type":"string"});
+        return vec![Tool {
+            name: "kar_thread_send",
+            description: "Send text and saved attachments through the target thread's FIFO. Steer or restart a specific active turn.",
+            properties: json!({"project_id":id,"thread_id":id,"environment_id":id,"command_id":id,"text":s,"mode":{"enum":["auto","queue","steer","restart"]},"turn_id":id,"request_id":id,"attachments":{"type":"array","items":id}}),
+            required: &["command_id", "text"],
+        }];
+    }
     let Some(p) = &c.policy else {
         return vec![];
     };
@@ -202,6 +225,31 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
             required,
         });
     };
+    let cursor_schema = json!({
+        "type": ["object", "string"],
+        "properties": {
+            "stream_id": id,
+            "seq": {"type": "integer", "minimum": 0},
+            "after_seq": {"type": "integer", "minimum": 0}
+        }
+    });
+    let source_point_schema = json!({
+        "type": "object",
+        "properties": {
+            "type": {"enum": ["latest_stable", "run", "checkpoint"]},
+            "turn_id": id
+        },
+        "required": ["type"],
+        "additionalProperties": false
+    });
+    let reply_schema = json!({
+        "type": "object",
+        "properties": {
+            "kind": {"enum": ["answers", "decline", "cancel"]},
+            "answers": {"type": "object", "additionalProperties": {"type": "array", "items": s}},
+            "notes": {"type": "object", "additionalProperties": s}
+        }
+    });
     tool(
         "kar_thread_search",
         "Find matching threads within the granted project and thread scope.",
@@ -211,20 +259,20 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
     tool(
         "kar_thread_wait",
         "Wait for a change from the given saved chat cursor, returning its current turn and cursor.",
-        json!({"after":{},"timeout_ms":{"type":"integer","maximum":30000}}),
+        json!({"after":cursor_schema,"timeout_ms":{"type":"integer","maximum":30000}}),
         &[],
     );
     let write = !c.plan && p.executes() && scope.write;
     tool(
         "kar_thread_transfer",
         "Fork a conversation through a completed run or checkpoint, without changing files. Merge a fork's contributions into its parent on its next message.",
-        json!({"action":{"enum":if write {vec!["fork","merge_back","status"]}else{vec!["status"]}},"source_point":{"type":"object"},"target_thread_id":id,"title":s,"policy":{"enum":["native","prefer_native"]},"command_id":id}),
+        json!({"action":{"enum":if write {vec!["fork","merge_back","status"]}else{vec!["status"]}},"source_point":source_point_schema,"target_thread_id":id,"title":s,"policy":{"enum":["native","prefer_native"]},"command_id":id}),
         &["action"],
     );
     tool(
         "kar_pending_request",
         "Read outstanding user questions or answer an exact question occurrence.",
-        json!({"action":{"enum":if write{vec!["list","read","respond"]}else{vec!["list","read"]}},"id":{},"cursor":{"type":"object"},"reply":{},"command_id":id}),
+        json!({"action":{"enum":if write{vec!["list","read","respond"]}else{vec!["list","read"]}},"id":{"type":["string","integer"]},"cursor":cursor_schema,"reply":reply_schema,"command_id":id}),
         &["action"],
     );
     tool(
@@ -249,7 +297,7 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         tool(
             "kar_thread_send",
             "Send text and saved attachments through the target thread's FIFO. Steer or restart a specific active turn.",
-            json!({"command_id":id,"text":s,"mode":{"enum":["auto","queue","steer","restart"]},"turn_id":id,"request_id":id,"attachments":{"type":"array","items":id}}),
+            json!({"environment_id":id,"command_id":id,"text":s,"mode":{"enum":["auto","queue","steer","restart"]},"turn_id":id,"request_id":id,"attachments":{"type":"array","items":id}}),
             &["command_id", "text"],
         );
         tool(
@@ -261,7 +309,7 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         tool(
             "kar_workflow_stop",
             "Stop the exact native Claude workflow occurrence shown in thread activity.",
-            json!({"task_id":s,"started_at":{"type":"object"},"command_id":id}),
+            json!({"task_id":s,"started_at":cursor_schema,"command_id":id}),
             &["task_id", "started_at", "command_id"],
         );
     }
@@ -283,6 +331,51 @@ pub(in crate::workbench) struct Record {
     result: Option<std::result::Result<Value, String>>,
 }
 pub(super) async fn call(app: Workbench, c: Caller, name: &str, mut input: Value) -> Result<Value> {
+    if name == "kar_thread_send"
+        && let Some(raw_env) = input
+            .as_object_mut()
+            .and_then(|m| m.remove("environment_id"))
+        && !raw_env.is_null()
+    {
+        let env_id: Uuid = parse(raw_env)?;
+        let local_id = super::collaboration_tools::environment::id(&app)?;
+        if env_id != local_id {
+            return toolkit::forward_remote_mcp(&app, &c, env_id, name, input, true).await;
+        }
+    }
+    // External owner callers (`c.grant.is_none()`) can invoke `kar_thread_send` directly
+    // (including when forwarded from a linked peer Kar environment!).
+    if name == "kar_thread_send" && c.grant.is_none() {
+        if c.plan {
+            return Err(denied());
+        }
+        let fields = input.as_object_mut().ok_or_else(denied)?;
+        let project: Option<Uuid> = parse(fields.remove("project_id").unwrap_or_default())?;
+        let thread: Option<Uuid> = parse(fields.remove("thread_id").unwrap_or_default())?;
+        let cmd: Uuid = parse(fields.remove("command_id").unwrap_or_default())?;
+        let (p, t) = toolkit::target(&app, &c, project, thread)?;
+        let text = fields
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or_else(denied)?
+            .to_owned();
+        let attachments: Vec<Uuid> = fields
+            .get("attachments")
+            .cloned()
+            .map(parse)
+            .transpose()?
+            .unwrap_or_default();
+        let receipt = app.0.chats.enqueue_attached(t, cmd, text, &attachments)?;
+        app.wake_queue();
+        return Ok(json!({
+            "project_id": p,
+            "thread_id": t,
+            "input_id": cmd,
+            "command_id": cmd,
+            "delivery": "queued",
+            "receipt": receipt,
+        }));
+    }
     let name = name.to_owned();
     let fields = input.as_object_mut().ok_or_else(denied)?;
     let project = parse(fields.remove("project_id").unwrap_or_default())?;

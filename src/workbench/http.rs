@@ -93,6 +93,12 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .merge(super::chat_controls::routes())
         .merge(super::thread_family::routes())
         .merge(super::configuration::routes())
+        .merge(super::policy::routes())
+        .merge(super::secrets::routes())
+        .merge(super::service::routes())
+        .merge(super::ssh::routes())
+        .merge(super::tailscale::routes())
+        .merge(super::text_generation::routes())
         .merge(super::managed_providers::routes())
         .merge(super::background::routes())
         .merge(super::thread_find::routes())
@@ -122,7 +128,10 @@ pub(super) fn router(app: Workbench, token: String) -> Result<Router> {
         .route("/search/chats", get(search_chats))
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .merge(super::voice::routes())
-        .layer(middleware::from_fn_with_state(app.clone(),super::observability::observe))
+        .layer(middleware::from_fn_with_state(
+            app.clone(),
+            super::observability::observe,
+        ))
         .with_state(app)
         .layer(middleware::from_fn_with_state(
             auth,
@@ -228,7 +237,9 @@ async fn send(
     Path((p, c)): Path<(Uuid, Uuid)>,
     Json(m): Json<Message>,
 ) -> Reply<ChatTurn> {
-    if let Some(schema)=m.requested_output_schema {app.register_run_schema(p,c,m.id,schema)?;}
+    if let Some(schema) = m.requested_output_schema {
+        app.register_run_schema(p, c, m.id, schema)?;
+    }
     Ok(Json(
         app.send_attached(p, c, m.id, m.text, m.attachments).await?,
     ))

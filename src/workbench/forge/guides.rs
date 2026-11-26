@@ -112,7 +112,7 @@ pub(in crate::workbench) async fn write(
 ) -> Result<Value, ForgeError> {
     if numbers.is_empty()
         || numbers.len() > 20
-        || numbers.iter().any(|n| *n == 0)
+        || numbers.contains(&0)
         || numbers.iter().collect::<BTreeSet<_>>().len() != numbers.len()
     {
         return Err(ForgeError::bad(

@@ -20,7 +20,7 @@ pub(in crate::workbench) fn repositories(
         if !seen_chats.insert(owner.id) {
             return Err(crate::Error::Protocol("cyclic chat lineage".into()));
         }
-        let task_id=super::super::mcp::worktree::task_for(app,&owner).unwrap_or(owner.id);
+        let task_id = super::super::mcp::worktree::task_for(app, &owner).unwrap_or(owner.id);
         if let Some(row) = app.0.task_folders.read(task_id)?
             && app
                 .0

@@ -192,8 +192,10 @@ async fn scenario() {
         .json(&json!({"id": parent_chat, "runtime": "codex"})))
     .await;
     let side_chat = Uuid::new_v4();
-    ok(a.post(format!("{url}/projects/{p2_id}/chats/{parent_chat}/forks"))
-        .json(&json!({"id": side_chat, "side_chat": true})))
+    ok(
+        a.post(format!("{url}/projects/{p2_id}/chats/{parent_chat}/forks"))
+            .json(&json!({"id": side_chat, "side_chat": true})),
+    )
     .await;
 
     let query = format!("{url}/chat-state/query");
@@ -214,17 +216,19 @@ async fn scenario() {
     }
 
     for (cid, ms) in [(parent_chat, 500u64), (side_chat, 400u64)] {
-        ok(a.post(format!("{url}/projects/{p2_id}/chats/{cid}/metadata"))
-            .json(&json!({
-                "command_id": Uuid::new_v4(),
-                "action": "settle",
-                "settled_ms": ms
-            })))
+        ok(
+            a.post(format!("{url}/projects/{p2_id}/chats/{cid}/metadata"))
+                .json(&json!({
+                    "command_id": Uuid::new_v4(),
+                    "action": "settle",
+                    "settled_ms": ms
+                })),
+        )
         .await;
     }
-    let settled = ok(a
-        .post(&query)
-        .json(&json!({"query": "older_settled", "before_ms": 1000, "project_ids": [p2_id], "limit": 10})))
+    let settled = ok(a.post(&query).json(
+        &json!({"query": "older_settled", "before_ms": 1000, "project_ids": [p2_id], "limit": 10}),
+    ))
     .await;
     let settled_ids: Vec<String> = settled["chats"]
         .as_array()
@@ -241,9 +245,9 @@ async fn scenario() {
         "archived": true
     })))
     .await;
-    let after_archive = ok(a
-        .post(&query)
-        .json(&json!({"query": "older_settled", "before_ms": 1000, "project_ids": [p2_id], "limit": 10})))
+    let after_archive = ok(a.post(&query).json(
+        &json!({"query": "older_settled", "before_ms": 1000, "project_ids": [p2_id], "limit": 10}),
+    ))
     .await;
     assert_eq!(after_archive["chats"], json!([]));
 

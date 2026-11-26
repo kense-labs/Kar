@@ -123,7 +123,9 @@ impl ChatStore {
         }
         let state = self.read_state(File::open(self.path(chat))?, chat)?;
         if state.turns[..state.inherited_len].iter().any(|turn| {
-            turn.attachments.iter().chain(turn.steered_attachments.values().flatten())
+            turn.attachments
+                .iter()
+                .chain(turn.steered_attachments.values().flatten())
                 .any(|attachment| *attachment == saved.attachment)
         }) {
             return Ok(saved.attachment);

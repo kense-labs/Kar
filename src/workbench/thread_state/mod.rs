@@ -111,26 +111,141 @@ struct Change {
     chat: Uuid,
     metadata: Metadata,
 }
+const MAX_CHANGES: usize = 4_096;
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+struct Changes(std::collections::VecDeque<Change>);
+
+struct ChangesIter<'a> {
+    base_offset: usize,
+    offset_consumed: bool,
+    inner: std::collections::vec_deque::Iter<'a, Change>,
+}
+
+impl<'a> Iterator for ChangesIter<'a> {
+    type Item = &'a Change;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.offset_consumed = true;
+        self.inner.next()
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        if !self.offset_consumed {
+            self.offset_consumed = true;
+            if n < self.base_offset {
+                return self.inner.next();
+            }
+            return self.inner.nth(n - self.base_offset);
+        }
+        self.inner.nth(n)
+    }
+}
+
+impl Changes {
+    pub(super) fn iter(&self) -> ChangesIter<'_> {
+        let base_offset = self
+            .0
+            .front()
+            .map_or(0, |c| c.sequence.saturating_sub(1) as usize);
+        ChangesIter {
+            base_offset,
+            offset_consumed: false,
+            inner: self.0.iter(),
+        }
+    }
+
+    fn get_by_sequence(&self, seq: u64) -> Option<&Change> {
+        let first = self.0.front()?.sequence;
+        if seq < first {
+            return None;
+        }
+        let offset = usize::try_from(seq - first).ok()?;
+        self.0.get(offset).filter(|c| c.sequence == seq)
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct Store {
     pub(super) rows: BTreeMap<Uuid, Metadata>,
-    changes: Vec<Change>,
-    commands: BTreeMap<Uuid, (Action, usize)>,
+    changes: Changes,
+    commands: BTreeMap<Uuid, (Action, u64)>,
 }
 impl Store {
+    fn push_change(&mut self, change: Change) {
+        self.changes.0.push_back(change);
+        self.compact();
+    }
+
+    pub(super) fn compact(&mut self) {
+        while self.changes.0.len() > MAX_CHANGES {
+            self.changes.0.pop_front();
+        }
+        if let Some(oldest_seq) = self.changes.0.front().map(|c| c.sequence) {
+            self.commands
+                .retain(|_, (_, zero_based)| zero_based.saturating_add(1) >= oldest_seq);
+        }
+    }
+
     pub(super) fn record_lifecycle(&mut self, project: Uuid, chat: Uuid, deleted: bool) {
-        self.changes.push(Change {
+        let sequence = self.sequence() + 1;
+        let metadata = self.rows.get(&chat).cloned().unwrap_or_default();
+        self.push_change(Change {
             deleted,
-            sequence: self.sequence() + 1,
+            sequence,
             project,
             chat,
-            metadata: self.rows.get(&chat).cloned().unwrap_or_default(),
+            metadata,
         });
     }
 
     pub(super) fn sequence(&self) -> u64 {
-        self.changes.len() as u64
+        self.changes.0.back().map_or(0, |c| c.sequence)
     }
+}
+
+pub(in crate::workbench) fn set_auto_title_if_empty(
+    app: &Workbench,
+    project: Uuid,
+    chat: Uuid,
+    title: String,
+) -> Result<()> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let clean = trimmed.to_owned();
+    let seq = app.update(|db| {
+        if db.archived.contains(&chat) {
+            return Ok(None);
+        }
+        let s = &mut db.thread_state;
+        if s.rows.get(&chat).and_then(|m| m.title.as_deref()).is_some() {
+            return Ok(None);
+        }
+        let metadata = {
+            let m = s.rows.entry(chat).or_default();
+            m.title = Some(clean);
+            m.clone()
+        };
+        let sequence = s.sequence() + 1;
+        s.push_change(Change {
+            deleted: false,
+            sequence,
+            project,
+            chat,
+            metadata,
+        });
+        db.forge.linked_chat_changed(chat)?;
+        Ok(Some(sequence))
+    })?;
+    if let Some(sequence) = seq {
+        app.0
+            .thread_updates
+            .send_modify(|seen| *seen = (*seen).max(sequence));
+    }
+    Ok(())
 }
 fn bad(s: &str) -> Error {
     Error::Refused(s.into())
@@ -197,7 +312,10 @@ impl Metadata {
         let latest = history.turns.last();
         let active = latest.is_some_and(|t| t.status == TurnStatus::Running)
             || !history.pending_requests.is_empty()
-            || history.tasks.iter().any(crate::NativeTask::blocking_background);
+            || history
+                .tasks
+                .iter()
+                .any(crate::NativeTask::blocking_background);
         match action {
             Action::Rename { title } => self.title = Some(nonempty(title)?.to_owned()),
             Action::Tag { tag, tagged } => {
@@ -366,66 +484,104 @@ impl Metadata {
     }
 }
 
-pub(in crate::workbench) async fn model_rename(app:Workbench, project:Uuid,chat:Uuid,command_id:Uuid,title:String)->Result<()> {
-    change(State(app),Path((project,chat)),Json(Command{command_id,action:Action::Rename{title}})).await.map(|_|()).map_err(|e|e.0)
+pub(in crate::workbench) async fn model_rename(
+    app: Workbench,
+    project: Uuid,
+    chat: Uuid,
+    command_id: Uuid,
+    title: String,
+) -> Result<()> {
+    change(
+        State(app),
+        Path((project, chat)),
+        Json(Command {
+            command_id,
+            action: Action::Rename { title },
+        }),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| e.0)
 }
 async fn change(
     State(app): State<Workbench>,
     Path((p, c)): Path<(Uuid, Uuid)>,
     Json(req): Json<Command>,
 ) -> std::result::Result<Json<Change>, ApiError> {
-    blocking(move||apply(&app,p,c,req,|_|Ok(()))).await
+    blocking(move || apply(&app, p, c, req, |_| Ok(()))).await
 }
-pub(in crate::workbench) fn model_change(app:&Workbench,p:Uuid,c:Uuid,value:serde_json::Value,authorize:impl FnOnce(&super::Catalog)->Result<()>)->Result<serde_json::Value>{
-    Ok(serde_json::to_value(apply(app,p,c,serde_json::from_value(value)?,authorize)?)?)
+pub(in crate::workbench) fn model_change(
+    app: &Workbench,
+    p: Uuid,
+    c: Uuid,
+    value: serde_json::Value,
+    authorize: impl FnOnce(&super::Catalog) -> Result<()>,
+) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(apply(
+        app,
+        p,
+        c,
+        serde_json::from_value(value)?,
+        authorize,
+    )?)?)
 }
-fn apply(app:&Workbench,p:Uuid,c:Uuid,req:Command,authorize:impl FnOnce(&super::Catalog)->Result<()>)->Result<Change>{
-        let info = app.binding(p, c)?;
-        let out = app.update(|db| {
-            authorize(db)?;
-            if let Some((action, index)) = db.thread_state.commands.get(&req.command_id) {
-                let prior = db
-                    .thread_state
-                    .changes
-                    .get(*index)
-                    .ok_or_else(|| Error::Protocol("missing chat change receipt".into()))?;
-                return if *action == req.action && prior.project == p && prior.chat == c {
-                    Ok(prior.clone())
-                } else {
-                    Err(bad("command ID belongs to a different chat change"))
-                };
-            }
-            let project = db.projects.get(&p).ok_or_else(super::missing)?;
-            if !app.owns_chat(db, project, &info)? {
-                return Err(super::missing());
-            }
-            if db.archived.contains(&c)
-                && !matches!(req.action, Action::Visit { .. } | Action::Rename { .. })
-            {
-                return Err(bad("chat is archived"));
-            }
-            let s = &mut db.thread_state;
+fn apply(
+    app: &Workbench,
+    p: Uuid,
+    c: Uuid,
+    req: Command,
+    authorize: impl FnOnce(&super::Catalog) -> Result<()>,
+) -> Result<Change> {
+    let info = app.binding(p, c)?;
+    let out = app.update(|db| {
+        authorize(db)?;
+        if let Some((action, zero_based)) = db.thread_state.commands.get(&req.command_id)
+            && let Some(prior) = db
+                .thread_state
+                .changes
+                .get_by_sequence(zero_based.saturating_add(1))
+        {
+            return if *action == req.action && prior.project == p && prior.chat == c {
+                Ok(prior.clone())
+            } else {
+                Err(bad("command ID belongs to a different chat change"))
+            };
+        }
+        let project = db.projects.get(&p).ok_or_else(super::missing)?;
+        if !app.owns_chat(db, project, &info)? {
+            return Err(super::missing());
+        }
+        if db.archived.contains(&c)
+            && !matches!(req.action, Action::Visit { .. } | Action::Rename { .. })
+        {
+            return Err(bad("chat is archived"));
+        }
+        let s = &mut db.thread_state;
+        let metadata = {
             let m = s.rows.entry(c).or_default();
             app.0.chats.with_admission_state(c, |history, queued| {
                 m.mutate(req.command_id, &req.action, &history, queued, now())
             })?;
-            let idx = s.changes.len();
-            let change = Change {
-                deleted: false,
-                sequence: idx as u64 + 1,
-                project: p,
-                chat: c,
-                metadata: m.clone(),
-            };
-            s.commands.insert(req.command_id, (req.action, idx));
-            s.changes.push(change.clone());
-            db.forge.linked_chat_changed(c)?;
-            Ok(change)
-        })?;
-        app.0
-            .thread_updates
-            .send_modify(|seen| *seen = (*seen).max(out.sequence));
-        Ok(out)
+            m.clone()
+        };
+        let sequence = s.sequence() + 1;
+        let change = Change {
+            deleted: false,
+            sequence,
+            project: p,
+            chat: c,
+            metadata,
+        };
+        s.commands
+            .insert(req.command_id, (req.action, sequence - 1));
+        s.push_change(change.clone());
+        db.forge.linked_chat_changed(c)?;
+        Ok(change)
+    })?;
+    app.0
+        .thread_updates
+        .send_modify(|seen| *seen = (*seen).max(out.sequence));
+    Ok(out)
 }
 async fn metadata(
     State(app): State<Workbench>,
@@ -462,7 +618,7 @@ impl Workbench {
             row.updated_ms = row.updated_ms.max(at);
             let metadata = row.clone();
             let sequence = store.sequence() + 1;
-            store.changes.push(Change {
+            store.push_change(Change {
                 deleted: false,
                 sequence,
                 project,
@@ -497,4 +653,60 @@ pub(super) fn routes() -> Router<Workbench> {
             get(metadata).post(change),
         )
         .merge(queries::routes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_bounds_changes_to_4096_and_preserves_monotonic_cursors() -> Result<()> {
+        let mut store = Store::default();
+        let project = Uuid::new_v4();
+        let chat = Uuid::new_v4();
+        let first_cmd = Uuid::new_v4();
+        let late_cmd = Uuid::new_v4();
+
+        for i in 1..=5_000u64 {
+            if i == 1 {
+                store.commands.insert(first_cmd, (Action::Unpin, 0));
+            }
+            if i == 5_000 {
+                store.commands.insert(late_cmd, (Action::Unpin, 4_999));
+            }
+            store.record_lifecycle(project, chat, false);
+            assert_eq!(store.sequence(), i);
+        }
+
+        assert_eq!(store.changes.0.len(), MAX_CHANGES);
+        assert_eq!(store.sequence(), 5_000);
+        // Compacted prefix is 1..=904; retained window is 905..=5000.
+        assert_eq!(store.changes.0.front().unwrap().sequence, 905);
+        assert!(!store.commands.contains_key(&first_cmd));
+        assert!(store.commands.contains_key(&late_cmd));
+
+        // Verify queries.rs `self.changes.iter().skip(after as usize)` across all cursor regimes!
+        let (end_live, tail) = store.page(project, 4_998);
+        assert_eq!(end_live, 5_000);
+        assert_eq!(tail.len(), 2);
+        assert_eq!(tail[0].sequence, 4_999);
+        assert_eq!(tail[1].sequence, 5_000);
+
+        let (end_caught_up, empty) = store.page(project, 5_000);
+        assert_eq!(end_caught_up, 5_000);
+        assert!(empty.is_empty());
+
+        let (_, from_zero) = store.page(project, 0);
+        assert_eq!(from_zero.front().unwrap().sequence, 905);
+
+        let (_, behind_window) = store.page(project, 100);
+        assert_eq!(behind_window.front().unwrap().sequence, 905);
+
+        // JSON wire round-trip preserves exact sequence and array layout.
+        let json = serde_json::to_vec(&store)?;
+        let reloaded: Store = serde_json::from_slice(&json)?;
+        assert_eq!(reloaded.sequence(), 5_000);
+        assert_eq!(reloaded.changes.0.len(), MAX_CHANGES);
+        Ok(())
+    }
 }

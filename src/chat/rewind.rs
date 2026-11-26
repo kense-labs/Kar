@@ -151,7 +151,10 @@ impl State {
             if pending.receipt.id != receipt.id || pending.receipt.turn != receipt.turn {
                 return Err(Error::Protocol("workspace rewind identity changed".into()));
             }
-            self.position = Some(super::CheckpointPoint { turn: receipt.turn, before: false });
+            self.position = Some(super::CheckpointPoint {
+                turn: receipt.turn,
+                before: false,
+            });
             self.restoring = None;
             self.pending_rewind = None;
         }
@@ -179,7 +182,10 @@ impl ChatStore {
         }
         if let Some(pending) = state.pending_rewind.clone() {
             if pending.receipt.id != request.id {
-                return Err(Error::Refused(format!("retry workspace rewind {}", pending.receipt.id)));
+                return Err(Error::Refused(format!(
+                    "retry workspace rewind {}",
+                    pending.receipt.id
+                )));
             }
             pending.receipt.check(&request)?;
             return self.finish_workspace_rewind(&mut log, pending);
@@ -326,9 +332,14 @@ impl ChatStore {
             Some(Box::new(h))
         };
         let update = if request.restore_files {
-            ChatUpdate::RewindPrepared { pending: Box::new(PreparedRewind { receipt, binding }) }
+            ChatUpdate::RewindPrepared {
+                pending: Box::new(PreparedRewind { receipt, binding }),
+            }
         } else {
-            ChatUpdate::ContextRewound { rewind: Box::new(receipt), binding }
+            ChatUpdate::ContextRewound {
+                rewind: Box::new(receipt),
+                binding,
+            }
         };
         let outcome = self.commit_idle_transition(&mut log, update);
         // A lost connection while closing this disposable process cannot undo the durable decision.

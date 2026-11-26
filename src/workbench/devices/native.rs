@@ -79,8 +79,7 @@ async fn run_limited(
         let err = String::from_utf8_lossy(&out.stderr);
         let last = err
             .lines()
-            .filter(|s| !s.trim().is_empty())
-            .next_back()
+            .rfind(|s| !s.trim().is_empty())
             .unwrap_or("native operation failed");
         return Err(Error::Refused(format!(
             "{program} {}: {}",

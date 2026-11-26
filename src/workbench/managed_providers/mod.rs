@@ -452,13 +452,15 @@ async fn remove(State(app): State<Workbench>, RoutePath(id): RoutePath<String>) 
     Ok(Json(remove_managed(&app, &id)?))
 }
 fn remove_managed(app: &Workbench, id: &str) -> Result<Value> {
-    let d = driver(&id)?;
+    let d = driver(id)?;
     let root = dir(&app.0.chats, &d);
     let s = slot(app, &d)?;
     let _g = lock(&root, "operation.lock", true)?;
     let _use = lock(&root, "in-use.lock", true)?;
     if external(&d) || !managed(&root, &d)? {
-        return Err(bad("External provider installations are owned by their installer").into());
+        return Err(bad(
+            "External provider installations are owned by their installer",
+        ));
     }
     let active = root.join("active.json");
     let releases = root.join("releases");
@@ -489,10 +491,10 @@ fn remove_managed(app: &Workbench, id: &str) -> Result<Value> {
             owned.push(entry.path())
         }
     }
-    if let Some(record) = read::<Record>(&active)? {
-        if !owned.contains(&releases.join(record.digest)) {
-            return Err(bad("Active release does not have a matching owned receipt"));
-        }
+    if let Some(record) = read::<Record>(&active)?
+        && !owned.contains(&releases.join(record.digest))
+    {
+        return Err(bad("Active release does not have a matching owned receipt"));
     }
     for instance in crate::provider_instance::configured()? {
         if let Some(custom) = instance.program {

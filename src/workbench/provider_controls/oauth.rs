@@ -35,6 +35,7 @@ struct Flow {
     prior_attempt: bool,
     phase: AsyncMutex<Phase>,
 }
+#[allow(clippy::large_enum_variant)]
 #[derive(Default)]
 enum Phase {
     #[default]

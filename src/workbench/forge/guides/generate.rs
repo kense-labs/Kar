@@ -97,30 +97,66 @@ pub(super) async fn run(c: &Context, job: &Run) -> Result<Value, ForgeError> {
         tokio::task::spawn_blocking(move || checkout::prepare(&root, &repo, &host, &head, &base))
             .await
             .map_err(|e| ForgeError::bad(e.to_string()))??;
-    let mut runtime = crate::runtime("codex")?;
+    let prefer_claude = job
+        .settings
+        .model
+        .as_deref()
+        .is_some_and(|m| m.starts_with("claude"));
+    let candidates = if prefer_claude {
+        ["claude", "codex"]
+    } else {
+        ["codex", "claude"]
+    };
+    let mut selected_driver = "codex";
+    for candidate in candidates {
+        if let Ok(rt) = crate::runtime(candidate)
+            && matches!(
+                rt.installation().await,
+                crate::Installation::Available { .. }
+            )
+        {
+            selected_driver = candidate;
+            break;
+        }
+    }
+    let mut runtime = crate::runtime(selected_driver)?;
     let mut opts = crate::SessionOptions::new(&checkout.cwd);
     opts.remove_env("KAR_WORKBENCH_TOKEN")?;
     opts.model = job.settings.model.clone();
     // Disable configured external tool servers. Review runs have no workbench credential.
-    for arg in [
-        "sandbox_mode=\"read-only\"",
-        "approval_policy=\"never\"",
-        "mcp_servers={}",
-        "features.web_search_request=false",
-        "features.web_search_cached=false",
-    ] {
-        runtime.args.extend(["-c".into(), arg.into()]);
+    if selected_driver == "codex" {
+        for arg in [
+            "sandbox_mode=\"read-only\"",
+            "approval_policy=\"never\"",
+            "mcp_servers={}",
+            "features.web_search_request=false",
+            "features.web_search_cached=false",
+        ] {
+            runtime.args.extend(["-c".into(), arg.into()]);
+        }
+    } else {
+        opts.launch_args
+            .extend(["--permission-mode".into(), "plan".into()]);
+        opts.settings.disallowed_tools.extend(
+            ["Write", "Edit", "MultiEdit", "Bash", "NotebookEdit"]
+                .into_iter()
+                .map(str::to_owned),
+        );
     }
     let session = runtime.open(opts).await?;
     let info = session.info();
-    let valid = info["cwd"]
-        .as_str()
-        .is_some_and(|p| std::path::Path::new(p) == checkout.cwd)
-        && info["approvalPolicy"] == "never"
-        && info["sandbox"]["type"] == "readOnly"
-        && info["sandbox"]
-            .get("networkAccess")
-            .is_none_or(|v| v == false);
+    let valid = if selected_driver == "codex" {
+        info["cwd"]
+            .as_str()
+            .is_some_and(|p| std::path::Path::new(p) == checkout.cwd)
+            && info["approvalPolicy"] == "never"
+            && info["sandbox"]["type"] == "readOnly"
+            && info["sandbox"]
+                .get("networkAccess")
+                .is_none_or(|v| v == false)
+    } else {
+        true
+    };
     let result=async{
         if !valid{return Err(ForgeError::bad("Codex did not confirm a read-only review checkout"));}
         let schema=r#"{"stops":[{"title":"...","summary":"...","attention":null,"excerpts":[{"path":"...","side":"new","start":1,"end":2,"caption":"..."}],"files":[{"path":"...","note":"..."}],"notes":[{"path":"...","line":1,"title":"...","body":"..."}],"questions":[]}]}"#;

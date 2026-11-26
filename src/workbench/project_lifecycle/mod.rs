@@ -50,17 +50,34 @@ pub(super) struct State {
 
 impl State {
     pub(in crate::workbench) fn ownership_snapshot(&self) -> Self {
-        Self { owners: self.owners.clone(), ..Self::default() }
+        Self {
+            owners: self.owners.clone(),
+            ..Self::default()
+        }
     }
-    pub(in crate::workbench) fn handoff_workspace(&self, chat:Uuid) -> Option<&Path> {
+    pub(in crate::workbench) fn handoff_workspace(&self, chat: Uuid) -> Option<&Path> {
         let binding = self.owners.get(&chat)?;
         binding.task.map(|_| binding.cwd.as_path())
     }
-    pub(in crate::workbench) fn move_checkout(&mut self, project:Uuid, chat:Uuid, task:Uuid, from:&Path, to:&Path) -> Result<()> {
-        if let Some(b)=self.owners.get(&chat) {
-            if b.project != project || b.cwd != from && b.cwd != to {return Err(denied());}
+    pub(in crate::workbench) fn move_checkout(
+        &mut self,
+        project: Uuid,
+        chat: Uuid,
+        task: Uuid,
+        from: &Path,
+        to: &Path,
+    ) -> Result<()> {
+        if let Some(b) = self.owners.get(&chat)
+            && (b.project != project || b.cwd != from && b.cwd != to)
+        {
+            return Err(denied());
         }
-        let binding = self.owners.entry(chat).or_insert_with(|| Binding {project,cwd:to.into(),fork:None,task:None});
+        let binding = self.owners.entry(chat).or_insert_with(|| Binding {
+            project,
+            cwd: to.into(),
+            fork: None,
+            task: None,
+        });
         binding.cwd = to.into();
         binding.task = Some(task);
         Ok(())
@@ -72,7 +89,7 @@ impl State {
     }
     pub(super) fn bind_import(&mut self, project: Uuid, chat: Uuid, cwd: PathBuf) {
         self.owners.entry(chat).or_insert(Binding {
-            task:None,
+            task: None,
             project,
             cwd,
             fork: None,
@@ -98,7 +115,10 @@ impl Workbench {
     }
 
     pub(in crate::workbench) fn owns_chat_in(
-        &self, ownership: &State, p: &Project, info: &ChatInfo,
+        &self,
+        ownership: &State,
+        p: &Project,
+        info: &ChatInfo,
     ) -> Result<bool> {
         if let Some(b) = ownership.owners.get(&info.id) {
             if b.project != p.id || b.cwd != info.workspace {
@@ -126,9 +146,14 @@ impl Workbench {
         }
     }
 
-    fn check_bound_task(&self, binding:&Binding, chat:Uuid) -> Result<()> {
-        let path = self.0.task_folders.workspace(binding.project, binding.task.unwrap_or(chat))?;
-        if path.as_ref().is_some_and(|cwd|cwd != &binding.cwd) || binding.task.is_some() && path.is_none() {
+    fn check_bound_task(&self, binding: &Binding, chat: Uuid) -> Result<()> {
+        let path = self
+            .0
+            .task_folders
+            .workspace(binding.project, binding.task.unwrap_or(chat))?;
+        if path.as_ref().is_some_and(|cwd| cwd != &binding.cwd)
+            || binding.task.is_some() && path.is_none()
+        {
             return Err(denied());
         }
         Ok(())
@@ -140,7 +165,7 @@ impl Workbench {
                 c.lifecycle.owners.insert(
                     info.id,
                     Binding {
-                        task:None,
+                        task: None,
                         project: p.id,
                         fork: info.forked_from.as_ref().map(|f| (f.chat, f.turn)),
                         cwd: info.workspace,
@@ -151,16 +176,24 @@ impl Workbench {
         Ok(())
     }
 
-    pub(in crate::workbench) fn bind_model_checkout(&self, project:Uuid, chat:Uuid, cwd:&Path)->Result<()> {
-        self.update(|db|{
-            if let Some(binding)=db.lifecycle.owners.get(&chat) {
-                if binding.project!=project || binding.cwd!=cwd || binding.fork.is_some(){return Err(denied());}
+    pub(in crate::workbench) fn bind_model_checkout(
+        &self,
+        project: Uuid,
+        chat: Uuid,
+        cwd: &Path,
+    ) -> Result<()> {
+        self.update(|db| {
+            if let Some(binding) = db.lifecycle.owners.get(&chat) {
+                if binding.project != project || binding.cwd != cwd || binding.fork.is_some() {
+                    return Err(denied());
+                }
             } else {
                 match self.0.chats.initial_info(chat) {
-                    Err(Error::Io(e)) if e.kind()==std::io::ErrorKind::NotFound=>{},
-                    Ok(_)=>return Err(denied()), Err(e)=>return Err(e),
+                    Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(_) => return Err(denied()),
+                    Err(e) => return Err(e),
                 }
-                db.lifecycle.bind_import(project,chat,cwd.to_owned());
+                db.lifecycle.bind_import(project, chat, cwd.to_owned());
             }
             Ok(())
         })
@@ -170,7 +203,11 @@ impl Workbench {
             if c.family.deleted.contains_key(&id) {
                 return Err(missing());
             }
-            if c.thread_state.rows.get(&id).is_some_and(|m| m.side_chat_parent.is_some()) {
+            if c.thread_state
+                .rows
+                .get(&id)
+                .is_some_and(|m| m.side_chat_parent.is_some())
+            {
                 return Err(Error::Refused("chat ID belongs to a side chat".into()));
             }
             let p = c.projects.get(&project).ok_or_else(missing)?;
@@ -209,7 +246,7 @@ impl Workbench {
             c.lifecycle.owners.insert(
                 id,
                 Binding {
-                    task:None,
+                    task: None,
                     project,
                     cwd: cwd.clone(),
                     fork: None,
@@ -226,6 +263,7 @@ impl Workbench {
         }
         Some(db.lifecycle.owners.get(&child)?.fork.map(|(_, turn)| turn))
     }
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn reserve_fork_directory(
         &self,
         parent: Uuid,
@@ -254,7 +292,9 @@ impl Workbench {
                     "a side chat requires a main chat in the same project".into(),
                 ));
             }
-            if super::mcp::pending_launch(c, child).is_some() || super::prepared_runs::reservation(c,child).is_some() {
+            if super::mcp::pending_launch(c, child).is_some()
+                || super::prepared_runs::reservation(c, child).is_some()
+            {
                 return Err(Error::Refused(
                     "chat ID is reserved for a model launch".into(),
                 ));
@@ -378,9 +418,15 @@ async fn finish_mutation(
 ) -> std::result::Result<Json<Project>, ApiError> {
     Ok(Json(model_mutation(app, input, None).await?))
 }
-pub(in crate::workbench) async fn model_mutation(app: Workbench, input: Value, calling: Option<Uuid>) -> Result<Project> {
+pub(in crate::workbench) async fn model_mutation(
+    app: Workbench,
+    input: Value,
+    calling: Option<Uuid>,
+) -> Result<Project> {
     let host = app.clone();
-    let result = tokio::task::spawn_blocking(move || host.mutate_project(input)).await.map_err(|e| Error::Closed(e.to_string()))??;
+    let result = tokio::task::spawn_blocking(move || host.mutate_project(input))
+        .await
+        .map_err(|e| Error::Closed(e.to_string()))??;
     if result.metadata.deleted {
         super::forge::clone_jobs::finish_discard(&app, result.id).await?;
         let ids: Vec<_> = app
@@ -399,11 +445,17 @@ pub(in crate::workbench) async fn model_mutation(app: Workbench, input: Value, c
             let slot = app.controller(id);
             let close = async move {
                 let mut owner = slot.owner.lock().await;
-                if let Some(session) = owner.take() { session.close().await?; }
-                Ok::<_,Error>(())
+                if let Some(session) = owner.take() {
+                    session.close().await?;
+                }
+                Ok::<_, Error>(())
             };
             // A model making this call is still inside the turn holding its own controller.
-            if Some(id) == calling { tokio::spawn(close); } else { close.await?; }
+            if Some(id) == calling {
+                tokio::spawn(close);
+            } else {
+                close.await?;
+            }
         }
     }
     Ok(result)

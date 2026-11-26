@@ -67,24 +67,24 @@ flowchart LR
 
     subgraph L1["第一层 · 统一运行时 SDK (kar)"]
         direction TB
-        S1["统一会话控制 · Steer 插话 · Deliver 策略"]
-        S2["开聊前探测：技能 / 工具 / 登录 / 额度"]
-        S3["进程内 Rust 函数转 MCP (serve_mcp_tools)"]
+        S1["统一会话控制 · Allow 无人值守 · Host 独立提问"]
+        S2["开聊前探测 · Shared 共享池 · PiDurable 原生引擎"]
+        S3["VoyageRecorder 录制 · Scripted 测试桩 · Harbor 审计"]
     end
 
     subgraph L2["第二层 · 持久聊天与 Git 时光机"]
         direction TB
-        C1[".karchat 账本 + UUID 幂等 FIFO 队列"]
-        C2["逐回合 Git 树快照 (gix) 与冲突预演回滚"]
-        C3["原生按轮分叉 · 仅回退上下文 · 多端 SSE"]
+        C1[".karchat 账本 + CRC32 增量 WAL 存储"]
+        C2["逐回合 Git 树快照 (gix) · 缺失工作树自动重建"]
+        C3["额度耗尽自动挂起与到点唤醒 (UsageLimitRecovery)"]
     end
 
     subgraph L3["第三层 · 自治工作台服务 (Workbench)"]
         direction TB
-        W1["95 项会话级授权模型 MCP 工具"]
-        W2["多端共享 PTY 终端 · 端口与模拟器预览"]
-        W3["Stacked Git · 跨库 PR / Issue / CI 唤醒"]
-        W4["多步工作流 · 签名 Webhook · Office 双写"]
+        W1["会话级授权 MCP · 跨环境转发 · 出站事件 Webhook"]
+        W2["SSH 远程工作区 · Tailscale 发现 · macOS 实时遥测"]
+        W3["TextGeneration 六合一 · 整栈 PR 合并 · 自建托管探测"]
+        W4["Keychain / 1Password 机密库 · GB18030 · 流式语音"]
     end
 
     Fleet <--> L1 --> L2 --> L3
@@ -156,7 +156,11 @@ Kar 拒绝脆弱的终端字符刮取，始终对接各家供应商**最高保�
 
 通过 `kar workbench` 启动服务后，人类客户端与模型会话将在同一套权限边界内协同工作：
 
-- **🧰 95 项会话级授权模型 MCP 工具（16 大业务组 + `tool_search`）** — 模型可在权限允许时按需发现并调用子任务委派（`kar_delegate_task`，支持共享工作区并发锁或独立工作树隔离、`settled_only`/`always` 唤醒合并与确认处置）、跨线程 `fork` / `merge_back`、带初始化脚本的工作树迁移、跨 8 种托管驱动的 Issue/PR 操作、浏览器与移动设备预览及工作流编排；切回 `Plan` 模式即刻收回写权限。
+- **🧰 会话级授权模型 MCP 工具（16 大业务组 + `tool_search` + 标准 `annotations`/`_meta`）** — 全量强类型 JSON Schema，支持子任务委派（`kar_delegate_task`，自动继承父聊天当前工作树分支并支持最多 64 个子仓库的多仓库工作区）、跨配对环境 `environment_id` 远程项目/线程读写转发、跨线程 `fork` / `merge_back`、带初始化脚本的工作树迁移、跨 8 种托管驱动的 Issue/PR 操作及工作流编排；切回 `Plan` 模式即刻收回写权限。
+- **🔐 统一纯 Rust 机密保险库（AES-256-GCM + macOS Keychain + 1Password `op inject` 批量解锁）** — `/server/secrets` 与对等环境令牌、Issue 追踪器凭据、中继凭据及每主机 Git 托管 PAT 全程加密落盘（彻底告别明文 JSON），且多条 `op://` 引用按账号合并为单次 `op inject` 调用，仅触发一次 Touch ID 解锁。
+- **⚡ 纯 Rust 帧校验 WAL 存储、内存模糊搜索索引与策略化自动 GC** — `projects.wal` / `workflows.wal` 采用 CRC32 帧校验增量日志与阈值原子快照压缩，配合带缓存失效的 `WorkspaceSearchIndex`、GBK/GB18030 中文源码自动解码，以及支持 `WorktreeCleanupRules` 自动清理与聊天重开自动重建缺失工作树的 `/storage` 引擎。
+- **✍️ 内置轻量级 `TextGeneration` 与 Stacked Git 整栈合并** — 原生支持 OpenAI 兼容与 Anthropic HTTP 驱动及本地编程 Agent 自动降级，驱动首轮自动会话命名、按 `sourceControlWritingStyle` 生成 Commit 消息、模板化 PR 描述、语义分支名、Claude/Codex 双引擎 PR 审阅导览及流式 VAD `/ws/voice` 口癖清洗；支持 `kar_pull_request` `stack: true` 整栈按序合并与自建 Forgejo/GitLab/GHES 自动探测。
+- **🌐 SEP-3415 出站 MCP 事件 Webhook、SSH 远程工作区与 macOS 生产运维** — 支持带全网段私网/回环 IP 拦截与防 DNS 重绑定 SSRF 保护的 `events/subscribe` 出站 `whsec_` HMAC-SHA256 Webhook（含密钥轮换双签宽限期）、OpenSSH `ControlMaster` 远程工作区挂载、Tailscale Serve HTTPS 端点发现（自动过滤 `169.254.169.254` 云主机假内网）、额度耗尽自动挂起与到点唤醒（`UsageLimitRecoveryWorker`）、W3C OTLP 追踪与 macOS 电池/热状态采集，以及 `kar service`（`launchd`）、`kar up`、`kar doctor`、`kar triage`、`kar policy` 与 `kar harbor` 守护命令。
 - **🔎 所见即所得富文本查找（`thread-find`）** — 两阶段查找精确索引渲染后的可见文本、自动带父目录消歧的本地文件芯片（`src/mod.rs` vs `tests/mod.rs`）、行号区间（`L42–64`）、`(kar|t3)-citation://v1/` 引用批注、`<details>` 折叠段与 `<picture>` 深浅色图片变体，绝不误命中隐藏 URL 与被引用原文。
 - **🖥️ 多观看者共享 PTY 终端与开发预览** — 基于 `portable-pty` + `vt100` 的真实终端支持多客户端按最小行列数自动协商网格、唯一设备查询应答端选举，并打通本地开发服务端口预览与 iOS Simulator / Android Emulator 画面及操控。
 - **🌿 Stacked Git 组合流与 PR / CI 自动唤醒** — 一键串联暂存、实时流式展示本地 `pre-commit` Hook 输出、推送至独立发布远端、创建或复用 `fork -> upstream` 跨仓库 PR、按不可变头提交记录已审文件（`reviewed`），并在 CI 挂掉或收到新审阅意见时自动唤醒原聊天处理。
@@ -181,6 +185,9 @@ Kar 拒绝脆弱的终端字符刮取，始终对接各家供应商**最高保�
 | `kar chat new \| resume \| fork \| compact \| watch` | 跨目录、跨重启的 `.karchat` 持久聊天完整生命周期管理 |
 | `kar mcp --runtimes codex,claude --max-running 4` | 通过 stdio 向任意 MCP 宿主暴露受并发数与嵌套深度约束的本地子代理池 |
 | `kar workbench --root "$PWD" --port 4777` | 启动完整的本地鉴权工作台 HTTP / SSE / WebSocket / MCP 服务 |
+| `kar up` / `kar service install --root "$PWD"` | 前台监督运行工作台，或注册/管理 macOS `~/Library/LaunchAgents` `launchd` 服务 |
+| `kar doctor` / `kar policy` / `kar triage` | 一键体检 macOS 环境依赖、检查企业级 `ManagedPolicy` 管控策略或导出故障诊断包 |
+| `kar harbor init \| run \| status \| audit` | 启动多 Agent 持久预算驻留、实时契约审计与自动会话回收守护服务 |
 
 </details>
 

@@ -67,24 +67,24 @@ flowchart LR
 
     subgraph L1["1 · Runtime SDK (kar)"]
         direction TB
-        S1["Unified Session & Steer / Deliver"]
-        S2["Pre-Chat Inventory, Auth & Quota"]
-        S3["Host MCP Server (serve_mcp_tools)"]
+        S1["Unified Session · Allow & Host Questions"]
+        S2["Pre-Chat Inventory · Shared Pool · PiDurable"]
+        S3["VoyageRecorder · ScriptedRuntime · Harbor"]
     end
 
     subgraph L2["2 · Durable Chat & Git Time-Machine"]
         direction TB
-        C1[".karchat Journal + UUID FIFO Queue"]
-        C2["Per-Turn Git Trees (gix) & Rollback"]
-        C3["Native Fork, Context Rewind & SSE"]
+        C1[".karchat Journal + CRC32 WAL Store"]
+        C2["Per-Turn Git Trees (gix) & Worktree Restore"]
+        C3["Quota Hold & Auto-Resume (UsageLimitRecovery)"]
     end
 
     subgraph L3["3 · Autonomous Workbench"]
         direction TB
-        W1["95 Scoped Model MCP Tools"]
-        W2["Shared PTY · Preview · Mobile Devices"]
-        W3["Stacked Git · PR / Issue / CI Watches"]
-        W4["Workflows · Webhooks · Office Co-Edit"]
+        W1["Scoped MCP Tools · Cross-Env · Outbound Webhooks"]
+        W2["SSH Workspaces · Tailscale · macOS Telemetry"]
+        W3["TextGeneration · Stack Merge · Self-Hosted Forge"]
+        W4["Keychain / 1Password Vault · GB18030 · Voice VAD"]
     end
 
     Fleet <--> L1 --> L2 --> L3
@@ -156,7 +156,11 @@ Kar speaks each agent's **highest-fidelity native protocol** rather than scrapin
 
 When running `kar workbench`, models and human clients collaborate through a tightly permissioned control plane:
 
-- **🧰 95 Scoped Model MCP Tools (`16` Toolkits + `tool_search`)** — Working models dynamically discover and invoke tools for child delegation (`kar_delegate_task` with `shared` or `worktree` isolation & batched `completion_wake`), cross-thread `fork` / `merge_back`, worktree handoffs with setup scripts, GitHub/GitLab/Forgejo/Bitbucket/Azure/Linear issues & PRs, previews, devices, and durable workflows—all gated by live `Plan` vs `Execute` chat grants.
+- **🧰 Scoped Model MCP Tools (`16` Toolkits + `tool_search` + Standard `annotations`/`_meta`)** — Complete typed JSON Schemas across all tools, including child delegation (`kar_delegate_task` inheriting the parent chat's active checkout branch and supporting up to 64 sub-repositories), cross-environment `environment_id` forwarding, cross-thread `fork` / `merge_back`, worktree handoffs, GitHub/GitLab/Forgejo/Bitbucket/Azure/Linear issues & PRs, previews, devices, and durable workflows—gated by live `Plan` vs `Execute` chat grants.
+- **🔐 Unified Pure-Rust Secret Vault (AES-256-GCM + macOS Keychain + Batched 1Password `op inject`)** — Encrypts `/server/secrets`, peer environment tokens, issue tracker credentials, relay tokens, and per-host Git Forge PATs on disk, while batching multiple `op://` references into a single `op inject` invocation per account so Touch ID only unlocks once.
+- **⚡ Framed CRC32 WAL Persistence, Cached Fuzzy Search Index & Automated Storage GC** — `projects.wal` / `workflows.wal` incremental write-ahead logs with automatic checkpoint compaction, invalidation-aware `WorkspaceSearchIndex`, GBK/GB18030 Chinese source file fallback decoding, and policy-driven `WorktreeCleanupRules` with transparent missing-worktree re-materialization on reopen.
+- **✍️ Built-In `TextGeneration` & Stacked PR Merges** — Native OpenAI-compatible and Anthropic HTTP drivers with multi-agent fallback power first-turn auto thread titles, `sourceControlWritingStyle`-aware commit messages, PR template descriptions, semantic branch names, Claude/Codex review guides, and streaming VAD `/ws/voice` filler cleanup; `kar_pull_request` `stack: true` merges entire PR stacks in order alongside automatic self-hosted Forgejo/GitLab/GHES discovery.
+- **🌐 SEP-3415 Outbound MCP Event Webhooks, SSH Remote Workspaces & macOS Operations** — `events/subscribe` outbound `whsec_` HMAC-SHA256 webhooks with full private/loopback IP blocklist and DNS-rebinding-safe resolution (plus secret rotation dual-signing), OpenSSH `ControlMaster` remote workspace tunnels, Tailscale Serve HTTPS discovery (filtering cloud `169.254.169.254` fake-LAN IPs), `UsageLimitRecoveryWorker` quota hold & auto-resume, W3C OTLP traces & macOS battery/thermal telemetry, and `kar service` (`launchd`), `kar up`, `kar doctor`, `kar triage`, `kar policy`, and `kar harbor`.
 - **🔎 What-You-See Thread Find (`thread-find`)** — Two-phase thread search indexes rendered Markdown, workspace-disambiguated file chips (`src/mod.rs` vs `tests/mod.rs`), line ranges (`L42–64`), `(kar|t3)-citation://v1/` quote annotations, `<details>` blocks, and `<picture>` theme variants—without false-matching hidden raw URLs.
 - **🖥️ Multi-Viewer PTY & Dev Previews** — Real `portable-pty` + `vt100` terminal sessions negotiate minimum grid dimensions across active viewers, elect a single device-query responder, and pair with authenticated localhost/Chromium/Simulator/Emulator previews.
 - **🌿 Stacked Git & Forge Watches** — Stage, run local Git hooks with live SSE output, push to `origin` or fork `publication` remotes, open/reuse cross-repo `fork -> upstream` PRs, track per-commit `reviewed` files, and auto-wake the owning chat when CI fails or new review comments land.
@@ -181,6 +185,9 @@ When running `kar workbench`, models and human clients collaborate through a tig
 | `kar chat new \| resume \| fork \| compact \| watch` | Full durable `.karchat` lifecycle from any directory |
 | `kar mcp --runtimes codex,claude --max-running 4` | Expose a bounded pool of local coding agents as an MCP server over stdio |
 | `kar workbench --root "$PWD" --port 4777` | Start the full authenticated HTTP / SSE / WebSocket / MCP workbench server |
+| `kar up` / `kar service install --root "$PWD"` | Run supervised workbench in foreground or manage macOS `~/Library/LaunchAgents` `launchd` service |
+| `kar doctor` / `kar policy` / `kar triage` | Run macOS environment health diagnostics, inspect enterprise `ManagedPolicy`, or export triage bundles |
+| `kar harbor init \| run \| status \| audit` | Run multi-agent budget-capped soak supervisor, live contract auditor, and automatic session reaper |
 
 </details>
 

@@ -11,8 +11,8 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, convert::Infallible};
-mod keys;
 pub(in crate::workbench) mod desktop;
+mod keys;
 type Reply = std::result::Result<Json<Value>, ApiError>;
 fn bad(s: &str) -> Error {
     Error::Refused(s.into())
@@ -26,6 +26,11 @@ pub(super) struct Config {
     #[serde(default)]
     keys_file_seen: bool,
     pub revision: u64,
+}
+impl Config {
+    pub(in crate::workbench) fn value(&self, key: &str) -> Option<&Value> {
+        self.values.get(key)
+    }
 }
 const SHARED: &[(&str, &str)] = &[
     (
@@ -104,6 +109,10 @@ fn valid(k: &str, v: &Value) -> bool {
                                 })
                         })
                 })
+        }
+        "worktreeCleanup" => {
+            v.is_null()
+                || serde_json::from_value::<super::storage::WorktreeCleanupRules>(v.clone()).is_ok()
         }
         _ => false,
     }

@@ -25,23 +25,23 @@ pub(super) fn capabilities(c: &Caller, mut base: Value) -> Value {
 }
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
-struct Args {
-    project_ids: Option<BTreeSet<Uuid>>,
-    thread_ids: Option<BTreeSet<Uuid>>,
-    workflow_run_ids: Option<BTreeSet<Uuid>>,
-    workflows: Option<BTreeSet<String>>,
-    include_subagent_children: bool,
+pub(super) struct Args {
+    pub(super) project_ids: Option<BTreeSet<Uuid>>,
+    pub(super) thread_ids: Option<BTreeSet<Uuid>>,
+    pub(super) workflow_run_ids: Option<BTreeSet<Uuid>>,
+    pub(super) workflows: Option<BTreeSet<String>>,
+    pub(super) include_subagent_children: bool,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Params {
-    name: String,
-    cursor: Option<String>,
-    max_age_ms: Option<u64>,
-    max_events: Option<usize>,
-    heartbeat_ms: Option<u64>,
+pub(super) struct Params {
+    pub(super) name: String,
+    pub(super) cursor: Option<String>,
+    pub(super) max_age_ms: Option<u64>,
+    pub(super) max_events: Option<usize>,
+    pub(super) heartbeat_ms: Option<u64>,
     #[serde(default)]
-    arguments: Args,
+    pub(super) arguments: Args,
 }
 impl Params {
     fn limit(&self) -> usize {
@@ -68,14 +68,14 @@ impl Params {
                 .is_none_or(|ws| v["workflow"].as_str().is_some_and(|s| ws.contains(s)))
     }
 }
-struct Page {
-    cursor: String,
-    events: Vec<(String, Value)>,
-    truncated: bool,
-    has_more: bool,
+pub(super) struct Page {
+    pub(super) cursor: String,
+    pub(super) events: Vec<(String, Value)>,
+    pub(super) truncated: bool,
+    pub(super) has_more: bool,
 }
 impl Page {
-    fn replay_start(&self) -> String {
+    pub(super) fn replay_start(&self) -> String {
         self.events
             .first()
             .and_then(|(c, _)| c.rsplit_once('.'))
@@ -98,6 +98,9 @@ async fn read(app: Workbench, p: Params) -> crate::Result<Page> {
     tokio::task::spawn_blocking(move || app.0.milestone_hub.read(&app, &p))
         .await
         .map_err(|e| crate::Error::Closed(e.to_string()))?
+}
+pub(super) async fn read_page_for_webhook(app: Workbench, p: Params) -> crate::Result<Page> {
+    read(app, p).await
 }
 fn description(name: &str) -> Value {
     let s = json!({"type":"string"});
@@ -163,8 +166,9 @@ fn description(name: &str) -> Value {
         fields["watchEnded"] = json!({"type":"boolean"});
         fields["pullRequests"] = json!({"type":"array","items":{"type":"object"}});
     }
-    json!({"name":name,"description":desc,"delivery":["poll","push"],"inputSchema":{"type":"object","properties":args,"additionalProperties":false},"payloadSchema":{"type":"object","properties":fields}})
+    json!({"name":name,"description":desc,"delivery":["poll","push","webhook"],"inputSchema":{"type":"object","properties":args,"additionalProperties":false},"payloadSchema":{"type":"object","properties":fields}})
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn rpc(
     app: Workbench,
     c: &Caller,
@@ -204,13 +208,10 @@ pub(super) async fn rpc(
         );
     }
     if method == "events/subscribe" {
-        return typed(
-            StatusCode::OK,
-            id,
-            -32026,
-            "Unsupported delivery mode",
-            json!({"feature":"deliveryMode","value":p.pointer("/delivery/mode")}),
-        );
+        return super::webhooks::handle_subscribe(app, c, p, id, stateless).await;
+    }
+    if method == "events/unsubscribe" {
+        return super::webhooks::handle_unsubscribe(p, id, stateless).await;
     }
     if !matches!(method, "events/poll" | "events/stream") {
         return error(StatusCode::OK, id, -32601, "Unknown events method");
@@ -261,6 +262,10 @@ pub(super) async fn rpc(
     let lifetime = session.as_ref().map(|s| s.closed.clone());
     let (tx, rx) = tokio::sync::mpsc::channel(16);
     tokio::spawn(async move {
+        let mut hub_rx = app.0.milestone_hub.subscribe();
+        let mut wf_rx = app.0.workflows.subscribe();
+        let mut thread_rx = app.0.thread_updates.subscribe();
+        let mut forge_rx = app.0.forge_updates.subscribe();
         let mut args = args;
         let mut page = first;
         let mut announce = true;
@@ -313,7 +318,16 @@ pub(super) async fn rpc(
                 last = tokio::time::Instant::now();
             }
             if !page.has_more {
-                tokio::select! {_=tokio::time::sleep(Duration::from_millis(400))=>{},_=tx.closed()=>break}
+                let hb_due = Duration::from_millis(hb).saturating_sub(last.elapsed());
+                let poll_wait = Duration::from_secs(2).min(hb_due.max(Duration::from_millis(10)));
+                tokio::select! {
+                    _ = hub_rx.changed() => {},
+                    _ = wf_rx.changed() => {},
+                    _ = thread_rx.changed() => {},
+                    _ = forge_rx.changed() => {},
+                    _ = tokio::time::sleep(poll_wait) => {},
+                    _ = tx.closed() => break,
+                }
             }
             page = match read(app.clone(), args.clone()).await {
                 Ok(v) => v,

@@ -179,3 +179,95 @@ pub(super) async fn browser_traces(
         },
     )
 }
+
+pub(super) fn export_server_telemetry(
+    span: Value,
+    total_requests: u64,
+    total_errors: u64,
+    started_unix_nano: String,
+    now_unix_nano: String,
+) {
+    if let Ok(snap) = crate::workbench::policy::ManagedPolicy::load()
+        && snap.policy.telemetry_mode == "disabled"
+    {
+        return;
+    }
+    let trace_url = configured(&Signal::Traces);
+    let metric_url = configured(&Signal::Metrics);
+    if trace_url.is_none() && metric_url.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        let resource = json!({
+            "attributes": [
+                {"key": "service.name", "value": {"stringValue": "kar-workbench"}},
+                {"key": "service.version", "value": {"stringValue": env!("CARGO_PKG_VERSION")}},
+            ]
+        });
+        if let Some(url) = trace_url
+            && let Ok(req) = exporter(&Signal::Traces, &url)
+        {
+            let otlp_span = json!({
+                "traceId": span["traceId"],
+                "spanId": span["spanId"],
+                "parentSpanId": span.get("parentSpanId").cloned().unwrap_or(json!("")),
+                "name": span["name"],
+                "kind": 2,
+                "startTimeUnixNano": span["startTimeUnixNano"],
+                "endTimeUnixNano": span["endTimeUnixNano"],
+                "status": {
+                    "code": if span["exit"]["_tag"] == "Failure" { 2 } else { 1 }
+                }
+            });
+            let body = json!({
+                "resourceSpans": [{
+                    "resource": resource.clone(),
+                    "scopeSpans": [{
+                        "scope": {"name": "kar.workbench.http"},
+                        "spans": [otlp_span]
+                    }]
+                }]
+            });
+            let _ = tokio::time::timeout(Duration::from_secs(4), req.json(&body).send()).await;
+        }
+        if let Some(url) = metric_url
+            && let Ok(req) = exporter(&Signal::Metrics, &url)
+        {
+            let body = json!({
+                "resourceMetrics": [{
+                    "resource": resource,
+                    "scopeMetrics": [{
+                        "scope": {"name": "kar.workbench.metrics"},
+                        "metrics": [
+                            {
+                                "name": "kar.http.server.requests",
+                                "sum": {
+                                    "aggregationTemporality": 2,
+                                    "isMonotonic": true,
+                                    "dataPoints": [{
+                                        "startTimeUnixNano": started_unix_nano,
+                                        "timeUnixNano": now_unix_nano,
+                                        "asInt": total_requests.to_string(),
+                                    }]
+                                }
+                            },
+                            {
+                                "name": "kar.http.server.errors",
+                                "sum": {
+                                    "aggregationTemporality": 2,
+                                    "isMonotonic": true,
+                                    "dataPoints": [{
+                                        "startTimeUnixNano": started_unix_nano,
+                                        "timeUnixNano": now_unix_nano,
+                                        "asInt": total_errors.to_string(),
+                                    }]
+                                }
+                            }
+                        ]
+                    }]
+                }]
+            });
+            let _ = tokio::time::timeout(Duration::from_secs(4), req.json(&body).send()).await;
+        }
+    });
+}

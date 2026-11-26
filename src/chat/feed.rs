@@ -147,7 +147,10 @@ impl ChatReplica {
         &self.state.notifications
     }
     pub fn background_working(&self) -> bool {
-        self.state.tasks.iter().any(crate::NativeTask::blocking_background)
+        self.state
+            .tasks
+            .iter()
+            .any(crate::NativeTask::blocking_background)
     }
     pub fn tasks(&self) -> &[crate::NativeTask] {
         &self.state.tasks
@@ -325,11 +328,16 @@ impl ChatStore {
                 }
             }
             if !state.pending_requests.is_empty() {
-                log::milestones::orphan(file,&mut state,ChatUpdate::RequestsChanged { requests: vec![] })?;
+                log::milestones::orphan(
+                    file,
+                    &mut state,
+                    ChatUpdate::RequestsChanged { requests: vec![] },
+                )?;
             }
             if let Some(id) = state.active() {
                 log::milestones::orphan(
-                    file, &mut state,
+                    file,
+                    &mut state,
                     ChatUpdate::End {
                         id,
                         status: super::TurnStatus::Interrupted,
@@ -381,7 +389,8 @@ impl ChatFeed {
                         self.may_have_requests = true;
                     }
                     ChatUpdate::TasksChanged { tasks } => {
-                        self.may_have_background |= tasks.iter().any(crate::NativeTask::pending_background);
+                        self.may_have_background |=
+                            tasks.iter().any(crate::NativeTask::pending_background);
                     }
                     ChatUpdate::ManualCompaction { report } => {
                         self.may_have_compaction = report.status.is_pending()
@@ -399,8 +408,14 @@ impl ChatFeed {
                     ChatUpdate::NotificationsInterrupted => self.may_have_notification = false,
                     ChatUpdate::SteeringUnconfirmed => self.may_have_steering = false,
                     ChatUpdate::Opened { .. } | ChatUpdate::MorphReattached { .. } => {
-                        if let ChatUpdate::Opened { antigravity_profile, .. } = &event.update {
-                            self.info.antigravity_profile.clone_from(antigravity_profile);
+                        if let ChatUpdate::Opened {
+                            antigravity_profile,
+                            ..
+                        } = &event.update
+                        {
+                            self.info
+                                .antigravity_profile
+                                .clone_from(antigravity_profile);
                         }
                         self.may_be_running =
                             matches!(event.update, ChatUpdate::MorphReattached { .. });

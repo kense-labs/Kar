@@ -106,6 +106,8 @@ enum Command {
 async fn session(app: Workbench, mut ws: WebSocket) {
     let mut state: Option<(Recording, Options)> = None;
     let mut data = Vec::new();
+    let mut last_decoded_len = 0usize;
+    let mut last_partial: Option<String> = None;
     let mut revision = 0;
     loop {
         let Ok(Some(Ok(frame))) = tokio::time::timeout(Duration::from_secs(15), ws.recv()).await
@@ -135,7 +137,10 @@ async fn session(app: Workbench, mut ws: WebSocket) {
                                     "Start speech transcription before finishing.".into(),
                                 )
                             })?;
-                            let text = if data.is_empty() {
+                            let text = if data.is_empty()
+                                || (opts.speech_silence_filtering
+                                    && !audio::has_voiced_audio(&data))
+                            {
                                 String::new()
                             } else {
                                 s.decode(opts, &data).await?
@@ -145,19 +150,29 @@ async fn session(app: Workbench, mut ws: WebSocket) {
                     }
                 }
                 Message::Binary(chunk) => {
-                    if state.is_none() {
+                    let Some((rec, opts)) = state.as_ref() else {
                         return Err(Error::Refused(
                             "Start speech transcription before sending audio.".into(),
                         ));
-                    }
+                    };
                     if chunk.len() > audio::CHUNK || data.len() + chunk.len() > audio::PCM_MAX {
                         return Err(Error::Refused("Speech audio chunk is too large.".into()));
                     }
                     audio::validate(&chunk)?;
+                    let chunk_voiced =
+                        !opts.speech_silence_filtering || audio::has_voiced_audio(&chunk);
                     data.extend_from_slice(&chunk);
                     revision += 1;
+                    // Run incremental streaming recognition every ~0.5s (32,000 bytes of f32 @ 16kHz) of voiced speech.
+                    if chunk_voiced
+                        && data.len().saturating_sub(last_decoded_len) >= 32_000
+                        && let Ok(partial) = rec.decode(opts, &data).await
+                    {
+                        last_decoded_len = data.len();
+                        last_partial = Some(partial);
+                    }
                     Ok((
-                        json!({"type":"update","revision":revision,"text":null}),
+                        json!({"type":"update","revision":revision,"text":last_partial}),
                         false,
                     ))
                 }

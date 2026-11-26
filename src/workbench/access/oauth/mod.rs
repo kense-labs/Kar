@@ -203,15 +203,15 @@ async fn resource(State(auth): State<Auth>) -> OResult<Json<Value>> {
     ))
 }
 pub(in crate::workbench) fn challenge(app: &Workbench, mut r: Response) -> Response {
-    if r.status() == StatusCode::UNAUTHORIZED {
-        if let Some(v) = origin(app).and_then(|u| {
+    if r.status() == StatusCode::UNAUTHORIZED
+        && let Some(v) = origin(app).and_then(|u| {
             HeaderValue::from_str(&format!(
                 "Bearer resource_metadata=\"{u}/.well-known/oauth-protected-resource/mcp\""
             ))
             .ok()
-        }) {
-            r.headers_mut().insert(header::WWW_AUTHENTICATE, v);
-        }
+        })
+    {
+        r.headers_mut().insert(header::WWW_AUTHENTICATE, v);
     }
     r
 }

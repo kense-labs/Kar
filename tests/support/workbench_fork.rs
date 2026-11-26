@@ -149,7 +149,8 @@ async fn scenario() {
     let third = tokio::spawn(async move {
         ok(client.post(format!("{chat_url}/messages")).json(&json!({
             "id": Uuid::new_v4(), "text": "shared-next", "attachments": [after_cut]
-        }))).await
+        })))
+        .await
     });
     tokio::time::timeout(Duration::from_secs(10), async {
         while !native.join("parent-turn-running").exists() {
@@ -860,7 +861,10 @@ async fn verify_rich_thread_find(
         "/Users/alice",
     ] {
         let miss = query_find(json!({"query": hidden})).await;
-        assert_eq!(miss["total_matches"], 0, "expected 0 matches for {hidden:?}");
+        assert_eq!(
+            miss["total_matches"], 0,
+            "expected 0 matches for {hidden:?}"
+        );
     }
 
     // 2. Quote / citation annotation & kar-context:// image boundary & user single-tilde preservation.

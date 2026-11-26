@@ -19,6 +19,8 @@ use std::{
 };
 use uuid::Uuid;
 
+pub(super) const MAX_AUTO_REPOS: usize = 64;
+
 #[derive(Clone, Deserialize, Serialize, PartialEq)]
 pub(super) struct Create {
     directory: PathBuf,
@@ -28,6 +30,8 @@ pub(super) struct Create {
     repositories: Option<Vec<PathBuf>>,
     #[serde(default)]
     single_checkout: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_workspace: Option<PathBuf>,
 }
 fn head() -> String {
     "HEAD".into()
@@ -37,9 +41,9 @@ pub(super) struct Member {
     pub name: String,
     pub repository_path: PathBuf,
     pub worktree_path: PathBuf,
-    #[serde(default,skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     base_commit: Option<String>,
-    #[serde(default,skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     remote_base: Option<String>,
     worktree_id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -277,7 +281,8 @@ fn member(task: &Task, path: &Path, name: String) -> Result<Member> {
         Error::Refused("repository lies outside the task's original common directory".into())
     })?;
     Ok(Member {
-        base_commit: None, remote_base:None,
+        base_commit: None,
+        remote_base: None,
         name,
         repository_path: path.into(),
         worktree_path: task.root.join(rel),
@@ -287,7 +292,13 @@ fn member(task: &Task, path: &Path, name: String) -> Result<Member> {
         ready: false,
     })
 }
-fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, from_origin: Option<bool>) -> Result<Record> {
+fn plan(
+    app: &Workbench,
+    id: Uuid,
+    project: Project,
+    q: Create,
+    from_origin: Option<bool>,
+) -> Result<Record> {
     if !q.single_checkout && app.0.chats.saved_info(id).is_ok() {
         return Err(Error::Refused("a chat already owns this ID".into()));
     }
@@ -310,7 +321,8 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, from_origin: Opt
             project_path: dir.clone(),
             project_is_worktree: true,
             repositories: vec![Member {
-                base_commit: None, remote_base:None,
+                base_commit: None,
+                remote_base: None,
                 name: project.name,
                 repository_path: project.root,
                 worktree_path: dir.clone(),
@@ -370,12 +382,24 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, from_origin: Opt
             .push(member(&task, &project.root, project.name)?);
     }
     let requested: HashSet<PathBuf> = match &q.repositories {
-        Some(paths) => paths
-            .iter()
-            .map(|p| p.canonicalize())
-            .collect::<std::io::Result<_>>()?,
-        None if repos.len() <= 8 => repos.iter().map(|f| f.path.clone()).collect(),
-        None => HashSet::new(),
+        Some(paths) => {
+            if paths.len() > MAX_AUTO_REPOS {
+                return Err(Error::Refused(format!(
+                    "at most {MAX_AUTO_REPOS} repositories may be selected for a task workspace"
+                )));
+            }
+            paths
+                .iter()
+                .map(|p| p.canonicalize())
+                .collect::<std::io::Result<_>>()?
+        }
+        None if repos.len() <= MAX_AUTO_REPOS => repos.iter().map(|f| f.path.clone()).collect(),
+        None => {
+            return Err(Error::Refused(format!(
+                "project tracks {} Git repositories, exceeding the {MAX_AUTO_REPOS}-repository limit; select repositories explicitly",
+                repos.len()
+            )));
+        }
     };
     if requested
         .iter()
@@ -426,14 +450,34 @@ fn plan(app: &Workbench, id: Uuid, project: Project, q: Create, from_origin: Opt
             }
         }
     }
-    if let Some(from_origin)=from_origin {
-        if taken.iter().any(|s|collides(s,&q.branch)) {
-            return Err(Error::Refused("requested branch conflicts with an existing or pending branch".into()));
+    if let Some(from_origin) = from_origin {
+        if taken.iter().any(|s| collides(s, &q.branch)) {
+            return Err(Error::Refused(
+                "requested branch conflicts with an existing or pending branch".into(),
+            ));
         }
+        let parent_task = match &q.source_workspace {
+            Some(src_ws) => app.0.task_folders.find(project.id, src_ws)?,
+            None => None,
+        };
         for member in &mut task.repositories {
-            let (sha,remote)=Repository::open(&member.repository_path)?.handoff_base(&q.base,from_origin && member.repository_path==project.root)?;
-            member.base_commit=Some(sha);
-            member.remote_base=remote;
+            if let Some(src_ws) = &q.source_workspace {
+                member.base_commit = resolve_member_source_commit(
+                    &project.root,
+                    src_ws,
+                    parent_task.as_ref(),
+                    &member.repository_path,
+                    &q.base,
+                )?;
+                member.remote_base = None;
+            } else {
+                let (sha, remote) = Repository::open(&member.repository_path)?.handoff_base(
+                    &q.base,
+                    from_origin && member.repository_path == project.root,
+                )?;
+                member.base_commit = Some(sha);
+                member.remote_base = remote;
+            }
         }
     }
     let actual = if project_collision {
@@ -569,7 +613,7 @@ fn checkout(
         .trim_start_matches("origin/");
     let local = format!("refs/heads/{from}");
     let remote = format!("refs/remotes/origin/{from}");
-    let start = if let Some(commit)=entry.base_commit.as_deref() {
+    let start = if let Some(commit) = entry.base_commit.as_deref() {
         commit
     } else if q.single_checkout {
         q.base.as_str()
@@ -611,7 +655,7 @@ fn apply(app: &Workbench, r: &mut Record, l: &Lifecycle, cancel: &AtomicBool) ->
         let m = &r.task.repositories[i];
         r.progress.advance(
             format!("Checking out {}", m.name),
-            (i * 100 / names.len()) as u8,
+            (i * 100 / names.len().max(1)) as u8,
         );
         store.save(r, l)?;
         checkout(app, m, &r.request, Some(cancel))?;
@@ -676,9 +720,15 @@ fn rollback(app: &Workbench, r: &Record) -> Result<()> {
     Ok(())
 }
 pub(super) fn create(app: &Workbench, p: Uuid, id: Uuid, q: Create) -> Result<Task> {
-    create_managed(app,p,id,q,None)
+    create_managed(app, p, id, q, None)
 }
-fn create_managed(app: &Workbench, p: Uuid, id: Uuid, q: Create, from_origin: Option<bool>) -> Result<Task> {
+fn create_managed(
+    app: &Workbench,
+    p: Uuid,
+    id: Uuid,
+    q: Create,
+    from_origin: Option<bool>,
+) -> Result<Task> {
     let store = &app.0.task_folders;
     let life = store.lifecycle(p, id)?;
     let cancel = life.begin()?;
@@ -863,6 +913,104 @@ pub(super) fn add(app: &Workbench, p: Uuid, id: Uuid, src: PathBuf) -> Result<Ta
     Ok(r.task)
 }
 
+fn resolve_member_source_commit(
+    project_root: &Path,
+    source_ws: &Path,
+    parent_task: Option<&Task>,
+    repo_path: &Path,
+    fallback_base: &str,
+) -> Result<Option<String>> {
+    // 1. If the parent chat is inside an existing multi-repo task folder, use that member's active HEAD.
+    if let Some(pt) = parent_task
+        && let Some(pm) = pt
+            .repositories
+            .iter()
+            .find(|m| m.ready && m.repository_path == repo_path)
+        && let Ok(repo) = Repository::open(&pm.worktree_path)
+    {
+        return Ok(repo.resolve("HEAD").ok());
+    }
+    // 2. If this member is the project root repository, resolve HEAD from the parent chat's active checkout!
+    if repo_path == project_root
+        && let Ok(src_repo) = Repository::open(source_ws)
+        && let Ok(root_repo) = Repository::open(project_root)
+        && root_repo.same_repository(&src_repo)
+    {
+        return Ok(src_repo.resolve("HEAD").ok());
+    }
+    // 3. Non-Git multi-repo project folder: check relative path inside `source_ws`.
+    if let Ok(rel) = repo_path.strip_prefix(project_root) {
+        let candidate = if rel.as_os_str().is_empty() {
+            source_ws.to_path_buf()
+        } else {
+            source_ws.join(rel)
+        };
+        if let Ok(src_repo) = Repository::open(&candidate)
+            && let Ok(base_repo) = Repository::open(repo_path)
+            && base_repo.same_repository(&src_repo)
+        {
+            return Ok(src_repo.resolve("HEAD").ok());
+        }
+    }
+    // 4. Fallback to repository's local base ref / HEAD.
+    let (sha, _) = Repository::open(repo_path)?.handoff_base(fallback_base, false)?;
+    Ok(Some(sha))
+}
+
+impl Store {
+    pub(in crate::workbench) fn delegate_worktree(
+        &self,
+        app: &Workbench,
+        project: Uuid,
+        command: Uuid,
+        source_workspace: &Path,
+        directory: PathBuf,
+        branch: String,
+    ) -> Result<Task> {
+        let proj = app.project(project)?;
+        let source_ws = source_workspace.canonicalize()?;
+        app.allowed(&source_ws)?;
+        if !proj.root.join(".git").exists()
+            && folders::list(app, &proj)?.iter().all(|f| f.state != "git")
+        {
+            return Err(Error::Refused(
+                "worktree isolation requires at least one Git repository in the project".into(),
+            ));
+        }
+        let base = if let Ok(src_repo) = Repository::open(&source_ws) {
+            src_repo
+                .status()
+                .ok()
+                .and_then(|s| s.branch)
+                .or_else(|| src_repo.resolve("HEAD").ok())
+                .unwrap_or_else(head)
+        } else if let Some(parent_task) = self.find(project, &source_ws)? {
+            parent_task
+                .repositories
+                .iter()
+                .find(|m| m.ready)
+                .and_then(|m| m.selected_branch.clone())
+                .unwrap_or_else(head)
+        } else {
+            head()
+        };
+        create_managed(
+            app,
+            project,
+            command,
+            Create {
+                directory,
+                branch,
+                base,
+                repositories: None,
+                single_checkout: false,
+                source_workspace: Some(source_ws),
+            },
+            Some(false),
+        )
+    }
+}
+
 pub(in super::super) fn single(
     app: &Workbench,
     p: Uuid,
@@ -877,6 +1025,7 @@ pub(in super::super) fn single(
         base: start.clone(),
         repositories: None,
         single_checkout: true,
+        source_workspace: None,
     };
     let task = create(app, p, id, q)?;
     // Run the registry's ordinary readback. It also recognizes older worktrees,
@@ -885,8 +1034,176 @@ pub(in super::super) fn single(
         .create_worktree(id, &task.project_path, &branch, &start)
 }
 
-pub(in super::super) fn handoff_task(app:&Workbench, project:Uuid, command:Uuid, directory:PathBuf, branch:String, base:String, from_origin:bool)->Result<(Task,Option<String>)>{
-    let task=create_managed(app,project,command,Create { directory, branch, base, repositories:None, single_checkout:false },Some(from_origin))?;
-    let remote=task.repositories.iter().find(|r|r.repository_path==task.project_root).and_then(|r|r.remote_base.clone());
-    Ok((task,remote))
+pub(in super::super) fn handoff_task(
+    app: &Workbench,
+    project: Uuid,
+    command: Uuid,
+    directory: PathBuf,
+    branch: String,
+    base: String,
+    from_origin: bool,
+) -> Result<(Task, Option<String>)> {
+    let task = create_managed(
+        app,
+        project,
+        command,
+        Create {
+            directory,
+            branch,
+            base,
+            repositories: None,
+            single_checkout: false,
+            source_workspace: None,
+        },
+        Some(from_origin),
+    )?;
+    let remote = task
+        .repositories
+        .iter()
+        .find(|r| r.repository_path == task.project_root)
+        .and_then(|r| r.remote_base.clone());
+    Ok((task, remote))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn init_git_repo(dir: &Path, file_name: &str, content: &str) {
+        fs::create_dir_all(dir).unwrap();
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "Kar Test")
+                .env("GIT_AUTHOR_EMAIL", "test@kar.local")
+                .env("GIT_COMMITTER_NAME", "Kar Test")
+                .env("GIT_COMMITTER_EMAIL", "test@kar.local")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+        };
+        run(&["init", "-b", "main"]);
+        fs::write(dir.join(file_name), content).unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "initial"]);
+    }
+
+    #[test]
+    fn delegate_worktree_uses_parent_active_checkout_instead_of_project_root_head() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let allowed = tmp.path().canonicalize()?.join("allowed");
+        let proj_dir = allowed.join("repo");
+        let parent_wt = allowed.join("parent-wt");
+        let child_wt = allowed.join("child-wt");
+
+        init_git_repo(&proj_dir, "state.txt", "main-branch\n");
+        let app = Workbench::open(
+            crate::chat::ChatStore::open(tmp.path().join("store"))?,
+            std::slice::from_ref(&allowed),
+        )?;
+        let project = app.register(&proj_dir, "repo")?;
+
+        // Create a separate parent worktree with an extra commit NOT on project.root's main branch!
+        let parent_id = Uuid::new_v4();
+        let _ = single(
+            &app,
+            project.id,
+            parent_id,
+            parent_wt.clone(),
+            "feat/parent".into(),
+            "HEAD".into(),
+        )?;
+        fs::write(parent_wt.join("state.txt"), "parent-feature-commit\n")?;
+        assert!(
+            Command::new("git")
+                .current_dir(&parent_wt)
+                .env("GIT_AUTHOR_NAME", "Kar Test")
+                .env("GIT_AUTHOR_EMAIL", "test@kar.local")
+                .env("GIT_COMMITTER_NAME", "Kar Test")
+                .env("GIT_COMMITTER_EMAIL", "test@kar.local")
+                .args(["commit", "-am", "feature work"])
+                .output()?
+                .status
+                .success()
+        );
+
+        let child_id = Uuid::new_v4();
+        let task = app.0.task_folders.delegate_worktree(
+            &app,
+            project.id,
+            child_id,
+            &parent_wt,
+            child_wt,
+            format!("kar/task-{child_id}"),
+        )?;
+        assert_eq!(
+            fs::read_to_string(task.project_path.join("state.txt"))?,
+            "parent-feature-commit\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn delegate_worktree_supports_non_git_multi_repo_up_to_64_and_refuses_above_64() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let allowed = tmp.path().canonicalize()?.join("allowed");
+        let multi = allowed.join("multi-workspace");
+        fs::create_dir_all(&multi)?;
+        fs::write(multi.join("shared.md"), "workspace notes\n")?;
+        for i in 0..10 {
+            init_git_repo(
+                &multi.join(format!("svc-{i:02}")),
+                "id.txt",
+                &format!("svc-{i}"),
+            );
+        }
+
+        let app = Workbench::open(
+            crate::chat::ChatStore::open(tmp.path().join("store"))?,
+            std::slice::from_ref(&allowed),
+        )?;
+        let project = app.register(&multi, "multi")?;
+
+        // 10 repos (> old limit of 8, <= 64) succeeds cleanly and checks out all 10 repos!
+        let child_id = Uuid::new_v4();
+        let task = app.0.task_folders.delegate_worktree(
+            &app,
+            project.id,
+            child_id,
+            &multi,
+            allowed.join("multi-child"),
+            "kar/multi-10".into(),
+        )?;
+        assert_eq!(task.repositories.len(), 10);
+        assert_eq!(
+            fs::read_to_string(task.project_path.join("svc-09/id.txt"))?,
+            "svc-9"
+        );
+        assert_eq!(
+            fs::read_to_string(task.project_path.join("shared.md"))?,
+            "workspace notes\n"
+        );
+
+        // Adding 55 more repos (total 65 > 64) returns Error::Refused instead of an empty HashSet!
+        for i in 10..65 {
+            gix::init(multi.join(format!("svc-{i:02}"))).unwrap();
+        }
+        let err = app
+            .0
+            .task_folders
+            .delegate_worktree(
+                &app,
+                project.id,
+                Uuid::new_v4(),
+                &multi,
+                allowed.join("multi-too-many"),
+                "kar/multi-65".into(),
+            )
+            .err()
+            .expect("65 repositories must be refused");
+        assert!(matches!(err, Error::Refused(_)), "unexpected error: {err}");
+        Ok(())
+    }
 }

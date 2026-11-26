@@ -652,10 +652,12 @@ fn main() {
     }
     let selected = std::env::args().nth(1);
     if selected.as_deref() == Some("hosted-codex-qwen") {
-        assert!(
-            cfg!(target_os = "macos"),
-            "hosted workbench acceptance requires macOS"
-        );
+        const {
+            assert!(
+                cfg!(target_os = "macos"),
+                "hosted workbench acceptance requires macOS"
+            );
+        };
         return tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(hosted::run());

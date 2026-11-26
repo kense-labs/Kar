@@ -113,8 +113,8 @@ impl ChatStore {
     pub(in crate::chat) fn next_contexts(
         &self,
         state: &super::super::log::State,
-    ) -> Result<(Option<MergedContext>,Option<String>)> {
-        let inbox=self.read_inbox(&state.info)?;
-        Ok((inbox.next_merge(state).cloned(),inbox.app_snapshot(state)?))
+    ) -> Result<(Option<MergedContext>, Option<String>)> {
+        let inbox = self.read_inbox(&state.info)?;
+        Ok((inbox.next_merge(state).cloned(), inbox.app_snapshot(state)?))
     }
 }

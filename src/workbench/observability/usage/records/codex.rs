@@ -209,10 +209,9 @@ impl State {
             }
             let lowered = old.is_some_and(|a| a.iter().zip(sum).any(|(x, y)| *x > y));
             let rewound = lowered && old_time.is_some_and(|p| t > p);
-            let reconciled = if old.is_none() || rewound {
-                minus(sum, last).is_some()
-            } else {
-                minus(sum, old.unwrap()) == Some(last)
+            let reconciled = match old.filter(|_| !rewound) {
+                None => minus(sum, last).is_some(),
+                Some(prev) => minus(sum, prev) == Some(last),
             };
             if !restarted && !reconciled {
                 let bridge = pending

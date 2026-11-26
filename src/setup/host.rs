@@ -284,33 +284,36 @@ pub(super) async fn inspect(
     existing: Option<&InstallationSnapshot>,
 ) -> Result<(InstallPreview, Vec<PathBuf>), InstallRefusal> {
     let method = rt.install_plan_for(line).map_err(|e| {
-        let reason = if line.is_some_and(|l| !rt.install_lines().iter().any(|entry| entry.line == l))
-        {
-            InstallReason::UnknownLine
-        } else if line.is_none() && !rt.install_lines().is_empty() {
-            InstallReason::LineRequired
-        } else if rt.protocol == crate::Protocol::Cybion {
-            InstallReason::Bundled
-        } else if matches!(
-            rt.id.as_str(),
-            "codex"
-                | "claude"
-                | "opencode"
-                | "grok"
-                | "kimi"
-                | "devin"
-                | "antigravity"
-                | "qwen"
-                | "qoder"
-                | "factory"
-                | "cursor"
-        ) {
-            InstallReason::Platform
-        } else {
-            InstallReason::NoInstaller
-        };
+        let reason =
+            if line.is_some_and(|l| !rt.install_lines().iter().any(|entry| entry.line == l)) {
+                InstallReason::UnknownLine
+            } else if line.is_none() && !rt.install_lines().is_empty() {
+                InstallReason::LineRequired
+            } else if rt.protocol == crate::Protocol::Cybion {
+                InstallReason::Bundled
+            } else if matches!(
+                rt.id.as_str(),
+                "codex"
+                    | "claude"
+                    | "opencode"
+                    | "grok"
+                    | "kimi"
+                    | "devin"
+                    | "antigravity"
+                    | "qwen"
+                    | "qoder"
+                    | "factory"
+                    | "cursor"
+            ) {
+                InstallReason::Platform
+            } else {
+                InstallReason::NoInstaller
+            };
         let refusal = InstallRefusal::new(reason, e.to_string());
-        if matches!(reason, InstallReason::LineRequired | InstallReason::UnknownLine) {
+        if matches!(
+            reason,
+            InstallReason::LineRequired | InstallReason::UnknownLine
+        ) {
             refusal.with_lines(rt.install_lines())
         } else {
             refusal

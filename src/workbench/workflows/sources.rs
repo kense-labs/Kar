@@ -166,9 +166,11 @@ fn apply(db: &mut Data, p: Uuid, name: &str, source: Option<&str>, now: i64) -> 
         if tags.get(&id) == Some(&tag) {
             continue;
         }
-        if db.runs.values().any(|r| {
-            r.workflow == id && !r.status.is_terminal() && r.status != Status::Failed
-        }) {
+        if db
+            .runs
+            .values()
+            .any(|r| r.workflow == id && !r.status.is_terminal() && r.status != Status::Failed)
+        {
             return Err(Error::Refused(format!(
                 "unfinished runs still use {} version {}",
                 tag.0, tag.1

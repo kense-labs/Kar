@@ -179,12 +179,21 @@ impl Workbench {
             fs::TryLockError::Error(err) => err.into(),
         })?;
         // An earlier holder may have committed and unlinked after we opened the file.
-        if !path.try_exists()? || f.metadata()?.modified()?.elapsed().map_or(true, |a| a >= DAY) {
+        if !path.try_exists()?
+            || f.metadata()?
+                .modified()?
+                .elapsed()
+                .map_or(true, |a| a >= DAY)
+        {
             return Err(bad("private input expired or already consumed"));
         }
         let mut value = Zeroizing::new(String::new());
-        Read::by_ref(&mut f).take(65537).read_to_string(&mut value)?;
-        if value.len() > 65536 { return Err(bad("private input exceeded limit")); }
+        Read::by_ref(&mut f)
+            .take(65537)
+            .read_to_string(&mut value)?;
+        if value.len() > 65536 {
+            return Err(bad("private input exceeded limit"));
+        }
         let result = commit(&value)?;
         fs::remove_file(path)?;
         #[cfg(unix)]

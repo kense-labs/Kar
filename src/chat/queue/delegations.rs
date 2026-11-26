@@ -286,8 +286,7 @@ impl ChatStore {
                     Some("no spawning parent turn")
                 } else if src.parent_run.is_some() && parent.is_none() {
                     Some("spawning turn no longer in this context")
-                } else if parent_stopped
-                    || parent.is_some_and(|t| t.status == TurnStatus::Aborted)
+                } else if parent_stopped || parent.is_some_and(|t| t.status == TurnStatus::Aborted)
                 {
                     Some("spawning parent stopped")
                 } else {

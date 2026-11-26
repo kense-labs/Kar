@@ -84,12 +84,16 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
         );
         if write {
             let mut task = json!({"task":string,"title":string,"runtime":string,"model":string,"isolation":{"enum":["shared","worktree"]},"branch":string,"requested_output_schema":{"type":"object"}});
-            if !scope.unwrap().remote_projects.is_empty(){
-                task["remote"]=json!({"type":"object","properties":{"environment_id":id,"project_id":id},"required":["environment_id","project_id"],"additionalProperties":false});
+            if !scope.unwrap().remote_projects.is_empty() {
+                task["remote"] = json!({"type":"object","properties":{"environment_id":id,"project_id":id},"required":["environment_id","project_id"],"additionalProperties":false});
             }
-            task["completion_wake"]=json!({"enum":["always","settled_only"]});
-            add("kar_task_delivery","Change when this child wakes its parent, acknowledge a result in the observing parent turn, or dispose of its completion notice.",
-                json!({"task_id":id,"command_id":id,"action":{"enum":["wake_policy","acknowledge","dispose"]},"completion_wake":{"enum":["always","settled_only"]},"observed_by_run_id":id}), &["task_id","command_id","action"]);
+            task["completion_wake"] = json!({"enum":["always","settled_only"]});
+            add(
+                "kar_task_delivery",
+                "Change when this child wakes its parent, acknowledge a result in the observing parent turn, or dispose of its completion notice.",
+                json!({"task_id":id,"command_id":id,"action":{"enum":["wake_policy","acknowledge","dispose"]},"completion_wake":{"enum":["always","settled_only"]},"observed_by_run_id":id}),
+                &["task_id", "command_id", "action"],
+            );
             let mut one = task.clone();
             one["command_id"] = id.clone();
             add(
@@ -114,10 +118,22 @@ pub(super) fn tools(c: &Caller) -> Vec<Tool> {
             &[],
         );
         if write {
+            let schedule_schema = json!({
+                "type": "object",
+                "properties": {
+                    "type": {"enum": ["manual", "webhook", "interval", "cron", "daily"]},
+                    "every_ms": {"type": "integer", "minimum": 1000},
+                    "expression": string,
+                    "timezone": string,
+                    "hour": {"type": "integer", "minimum": 0, "maximum": 23},
+                    "minute": {"type": "integer", "minimum": 0, "maximum": 59}
+                },
+                "required": ["type"]
+            });
             add(
                 "kar_schedule_task",
                 "Create or edit a durable agent schedule. Optional webhook signing secrets use a private reference.",
-                json!({"command_id":id,"scheduled_task_id":id,"prompt":string,"title":string,"schedule":{"type":"object"},"runtime":string,"model":string,"enabled":flag,"fresh_session":flag,"bind_to_current_thread":flag,"webhook_secret_ref":id}),
+                json!({"command_id":id,"scheduled_task_id":id,"prompt":string,"title":string,"schedule":schedule_schema,"runtime":string,"model":string,"enabled":flag,"fresh_session":flag,"bind_to_current_thread":flag,"webhook_secret_ref":id,"effort":string,"service_tier":string,"workspace_strategy":{"enum":["local","worktree"]},"concurrency":{"enum":["allow","skip","cancel_previous"]},"tags":{"type":"array","items":string},"subject":string}),
                 &["command_id"],
             );
             add(
@@ -149,11 +165,11 @@ pub(super) async fn call(app: Workbench, c: Caller, name: &str, req: Value) -> R
         tasks::call(&app, &c, name, req).await
     }
 }
-pub(super) use tasks::owned;
 pub(in crate::workbench) use tasks::milestone_parent;
-pub(in crate::workbench) use tasks::{peer_routes,delivery_routes};
 pub(in crate::workbench::mcp) use tasks::observe_read;
+pub(super) use tasks::owned;
 pub(in crate::workbench) use tasks::{Task, recover};
+pub(in crate::workbench) use tasks::{delivery_routes, peer_routes};
 pub(in crate::workbench) fn scheduled_execution(
     app: &Workbench,
     p: Uuid,

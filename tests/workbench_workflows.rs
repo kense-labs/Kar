@@ -796,10 +796,7 @@ async fn nested_and_webhook_backlog_scenarios() {
         )
         .unwrap();
     assert_eq!(stopped_parent.status, Status::Stopped);
-    assert_eq!(
-        stopped_parent.detail.as_deref(),
-        Some("maintenance window")
-    );
+    assert_eq!(stopped_parent.detail.as_deref(), Some("maintenance window"));
     let stopped_child = app.workflow_run(project, c2.id).unwrap();
     assert_eq!(stopped_child.status, Status::Stopped);
     assert_eq!(stopped_child.detail.as_deref(), Some("maintenance window"));
@@ -847,7 +844,10 @@ async fn nested_and_webhook_backlog_scenarios() {
     // 1) Stale relay-queued & upstream webhook headers -> 410 Gone + "expired" receipt in Bucket 0.
     for (idx, (hdr_name, hdr_val)) in [
         ("x-kar-relay-queued-at", (now_ms - 6 * 60_000).to_string()),
-        ("svix-timestamp", ((now_ms - 10 * 60_000) / 1000).to_string()),
+        (
+            "svix-timestamp",
+            ((now_ms - 10 * 60_000) / 1000).to_string(),
+        ),
         (
             "x-webhook-timestamp",
             jiff::Timestamp::from_millisecond(now_ms - 7 * 60_000)

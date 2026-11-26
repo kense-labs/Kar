@@ -10,6 +10,28 @@ use uuid::Uuid;
 pub(in crate::workbench::forge) struct Options {
     include_details: Option<bool>,
 }
+pub(in crate::workbench::forge) async fn read_stack(
+    c: &Context,
+    n: u64,
+    include_details: bool,
+) -> Result<Value, ForgeError> {
+    if n == 0 {
+        return Err(ForgeError::bad("pull number must be positive"));
+    }
+    if !matches!(c.kind.as_str(), "github" | "gitcafe" | "tanstack-source") {
+        return Ok(Value::Null);
+    }
+    let data = match c.kind.as_str() {
+        "github" => match github_stack(c, n, include_details).await {
+            Err(e) if e.status == 404 => Value::Null,
+            other => other?,
+        },
+        "gitcafe" => cafe(c, n).await?,
+        _ => source(c, n).await?,
+    };
+    Ok(data)
+}
+
 pub(in crate::workbench::forge) async fn stack(
     State(app): State<crate::workbench::Workbench>,
     Path((project, n)): Path<(Uuid, u64)>,
@@ -25,14 +47,7 @@ pub(in crate::workbench::forge) async fn stack(
     if let Some(token) = credentials::resolve(&c).await? {
         c.token = Some(token);
     }
-    let data = match c.kind.as_str() {
-        "github" => match github_stack(&c, n, opts.include_details.unwrap_or(true)).await {
-            Err(e) if e.status == 404 => Value::Null,
-            other => other?,
-        },
-        "gitcafe" => cafe(&c, n).await?,
-        _ => source(&c, n).await?,
-    };
+    let data = read_stack(&c, n, opts.include_details.unwrap_or(true)).await?;
     Ok(Json(data))
 }
 fn string<'a>(v: &'a Value, field: &str) -> Result<&'a str, ForgeError> {

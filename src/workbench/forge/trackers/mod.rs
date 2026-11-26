@@ -15,7 +15,7 @@ mod connection;
 const FIRST: &str = "default";
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Account {
-    token: String,
+    token: crate::workbench::secrets::SecretValue,
     api: String,
     workspace: String,
 }
@@ -101,16 +101,20 @@ async fn list(State(app): State<Workbench>) -> Reply<Value> {
     let Data { accounts, bindings } = app.0.tracker_accounts.data.lock().unwrap().clone();
     let mut first = connection::entry(None, None, None);
     let mut extra = BTreeMap::new();
-    let views = stream::iter(accounts.into_iter().map(|(id, account)| async move {
-        let id = Uuid::parse_str(&id).ok();
-        let probe = connection::probe(&account).await;
-        (
-            id,
-            match probe {
-                Ok(info) => connection::entry(id, Some(info), None),
-                Err(err) => connection::entry(id, None, Some(err.detail)),
-            },
-        )
+    let state_dir = app.0.state.clone();
+    let views = stream::iter(accounts.into_iter().map(|(id, account)| {
+        let state_dir = state_dir.clone();
+        async move {
+            let parsed_id = Uuid::parse_str(&id).ok();
+            let probe = connection::probe(&state_dir, &id, &account).await;
+            (
+                parsed_id,
+                match probe {
+                    Ok(info) => connection::entry(parsed_id, Some(info), None),
+                    Err(err) => connection::entry(parsed_id, None, Some(err.detail)),
+                },
+            )
+        }
     }))
     .buffer_unordered(4)
     .collect::<Vec<_>>()
@@ -171,6 +175,8 @@ async fn connect(State(app): State<Workbench>, Json(input): Json<Connect>) -> Re
     let handle = key(id);
     let mut info = None;
     let mut account = None;
+    let mut plain_token = None;
+    let secrets = crate::workbench::secrets::SecretService::for_workbench(&app)?;
     if let Some(token) = input.token {
         if token.trim() != token
             || token.is_empty()
@@ -181,18 +187,25 @@ async fn connect(State(app): State<Workbench>, Json(input): Json<Connect>) -> Re
         }
         let api = std::env::var("KAR_LINEAR_API_BASE")
             .unwrap_or_else(|_| "https://api.linear.app/graphql".into());
+        let sealed = secrets.seal_input(&format!("tracker:{handle}"), token.clone())?;
         let mut incoming = Account {
-            token,
+            token: sealed,
             api: Context::base(&api)?.to_string(),
             workspace: String::new(),
         };
-        let snapshot = connection::probe(&incoming).await.map_err(|e| {
-            if e.status == 401 {
-                ForgeError::new("rejected", 401, "Linear rejected this credential")
-            } else {
-                e
-            }
-        })?;
+        let resolved_probe_token = secrets
+            .resolve_secret_value(&format!("tracker:{handle}"), &incoming.token)
+            .await?;
+        plain_token = Some(resolved_probe_token.as_str().to_owned());
+        let snapshot = connection::probe(&app.0.state, &handle, &incoming)
+            .await
+            .map_err(|e| {
+                if e.status == 401 {
+                    ForgeError::new("rejected", 401, "Linear rejected this credential")
+                } else {
+                    e
+                }
+            })?;
         incoming.workspace = snapshot.workspace.clone();
         account = Some(incoming);
         info = Some(snapshot);
@@ -204,14 +217,24 @@ async fn connect(State(app): State<Workbench>, Json(input): Json<Connect>) -> Re
             return Err(ForgeError::bad("issue tracker account is not saved"));
         }
         if let Some(next) = account {
-            if db
-                .accounts
-                .iter()
-                .any(|(other, a)| other != &handle && a.token == next.token)
+            if let Some(ref next_plain) = plain_token
+                && db.accounts.iter().any(|(other, a)| {
+                    other != &handle
+                        && secrets
+                            .resolve_local_sync(&format!("tracker:{other}"), &a.token)
+                            .is_ok_and(|existing| existing.as_str() == next_plain)
+                })
             {
                 return Err(ForgeError::bad(
                     "credential is already connected as another account",
                 ));
+            }
+            for (other_id, other_acc) in &mut db.accounts {
+                if let Ok((upgraded, true)) = secrets
+                    .upgrade_for_save(&format!("tracker:{other_id}"), other_acc.token.clone())
+                {
+                    other_acc.token = upgraded;
+                }
             }
             db.accounts.insert(handle, next);
         } else {
@@ -280,9 +303,10 @@ pub(in crate::workbench::forge) fn bound(
     let Some(b) = lock.bindings.get(&project) else {
         return Ok(None);
     };
+    let handle = b.account();
     let account = lock
         .accounts
-        .get(&b.account())
+        .get(&handle)
         .ok_or_else(|| ForgeError::remote(401, "bound account is unavailable"))?;
     let key = requested.unwrap_or(&b.scope).to_ascii_uppercase();
     if !b.permits(&key) {
@@ -291,25 +315,28 @@ pub(in crate::workbench::forge) fn bound(
             "issue scope is not bound to this project",
         ));
     }
-    let mut c = connection::context(account)?;
+    let mut c = connection::context(&app.0.state, &handle, account)?;
     c.cwd = app.project(project)?.root;
     c.repository = key;
     Ok(Some((c, account.workspace.clone())))
 }
 
+pub(in crate::workbench::forge) type ListingSource = (Context, Option<Uuid>, Option<String>);
+
 pub(in crate::workbench::forge) fn listing_sources(
     app: &Workbench,
     project: &crate::workbench::Project,
-) -> Result<Vec<(Context, Option<Uuid>, Option<String>)>, ForgeError> {
+) -> Result<Vec<ListingSource>, ForgeError> {
     let db = app.0.tracker_accounts.data.lock().unwrap();
     let Some(binding) = db.bindings.get(&project.id) else {
         return Ok(Vec::new());
     };
+    let handle = binding.account();
     let account = db
         .accounts
-        .get(&binding.account())
+        .get(&handle)
         .ok_or_else(|| ForgeError::remote(401, "bound account is unavailable"))?;
-    let context = connection::context(account)?;
+    let context = connection::context(&app.0.state, &handle, account)?;
     Ok(std::iter::once(&binding.scope)
         .chain(binding.additional_scopes.iter())
         .map(|s| {

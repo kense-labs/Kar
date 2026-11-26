@@ -189,7 +189,9 @@ pub(super) async fn execute(c: &Context, op: &Operation) -> Result<Value, ForgeE
         .split_once('/')
         .ok_or_else(|| ForgeError::bad("Linear needs a workspace/team binding"))?;
     match op {
-        Operation::PullCommand{number,command}=>crate::workbench::forge::providers::pull_tools::execute(c,*number,command).await,
+        Operation::PullCommand { number, command } => {
+            crate::workbench::forge::providers::pull_tools::execute(c, *number, command).await
+        }
         op @ (Operation::SubmitReview { .. }
         | Operation::ReplyToThread { .. }
         | Operation::SetThreadResolution { .. }
@@ -302,7 +304,7 @@ pub(super) fn listing_sources(
     app: &Workbench,
     project: &crate::workbench::Project,
     config: &super::super::Config,
-) -> Result<Vec<(Context, Option<Uuid>, Option<String>)>, ForgeError> {
+) -> Result<Vec<super::super::trackers::ListingSource>, ForgeError> {
     let bound = super::super::trackers::listing_sources(app, project)?;
     if !bound.is_empty() {
         return Ok(bound);

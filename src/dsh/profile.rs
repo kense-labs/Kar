@@ -23,6 +23,7 @@ pub(crate) fn needs_verification(opts: &crate::SessionOptions, protocol: crate::
 
 /// Lifetime is tied to the child, including the loaded DLL on Windows.
 struct Verification {
+    _mcp_bridges: super::mcp_bridge::McpBridgeSet,
     dir: PrivateDir,
     agent_controls: bool,
     requested: &'static str,
@@ -56,10 +57,20 @@ impl Verification {
             required.push("session-log-deepseek".to_owned());
         }
         let mut insert = Vec::new();
+        let mut mcp_bridges = super::mcp_bridge::McpBridgeSet::default();
         let cwd = opts.cwd.canonicalize()?;
-        for (name, server) in &opts.mcp_servers {
+        for (index, (name, server)) in opts.mcp_servers.iter().enumerate() {
             let id = format!("kar-mcp-{}", uuid::Uuid::new_v4());
-            insert.push(mcp_row(&id, name, server, &cwd)?);
+            insert.push(mcp_bridges.register_server(
+                dir.path(),
+                index,
+                &id,
+                name,
+                server,
+                &cwd,
+                &opts.env,
+                &opts.unset_env,
+            )?);
             required.push(id);
         }
         insert.push(json!({"id":"kar-verify-profile","name":url.as_str()}));
@@ -118,6 +129,7 @@ impl Verification {
             (false, true) => "agent policy plugin",
         };
         Ok(Self {
+            _mcp_bridges: mcp_bridges,
             dir,
             agent_controls,
             requested,
@@ -252,30 +264,6 @@ impl Patch {
     }
 }
 
-fn mcp_row(
-    id: &str,
-    name: &str,
-    server: &crate::McpServer,
-    cwd: &std::path::Path,
-) -> Result<Value> {
-    if name.is_empty()
-        || name.len() > 32
-        || !name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        || crate::options::instructions::reserved_server(name)
-    {
-        return Err(Error::Unsupported("invalid DSH MCP server name".into()));
-    }
-    match server {
-        crate::McpServer::Stdio{command,args,env} if env.is_empty() => Ok(json!({
-            "id":id,"name":"@deepseek-ai/dsh-mcp-client",
-            "config":{"serverName":name,"transport":"stdio","command":command,"args":args,"cwd":cwd,"failOnStartupError":true}
-        })),
-        _=>Err(Error::Unsupported("DSH session MCP requires a stdio command and arguments without credential environment or headers".into()))
-    }
-}
-
 /// DSH rewrites its profile root during startup. Coordinate session opens and
 /// inventory readers until the child has loaded the shared profile.
 pub(crate) async fn lock(
@@ -362,15 +350,28 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
-    fn mcp_patch_preserves_argv_and_refuses_unsupported_transports_before_launch() {
+    #[tokio::test]
+    async fn mcp_patch_preserves_argv_validates_inputs_and_bridges_http_and_credentialed_stdio() {
+        let dir = tempfile::tempdir().unwrap();
         let server = crate::McpServer::Stdio {
             command: "with spaces".into(),
             args: vec!["a b".into(), "".into(), "$HOME".into()],
             env: Default::default(),
         };
         let path = Path::new("workspace");
-        let row = mcp_row("entry", "server-1", &server, path).unwrap();
+        let mut bridges = super::super::mcp_bridge::McpBridgeSet::default();
+        let row = bridges
+            .register_server(
+                dir.path(),
+                0,
+                "entry",
+                "server-1",
+                &server,
+                path,
+                &Default::default(),
+                &Default::default(),
+            )
+            .unwrap();
         assert_eq!(row["config"]["command"], "with spaces");
         assert_eq!(row["config"]["args"], json!(["a b", "", "$HOME"]));
         for name in [
@@ -379,23 +380,69 @@ mod tests {
             "thirty-two-characters-plus-extra-characters",
         ] {
             assert!(matches!(
-                mcp_row("entry", name, &server, path),
+                bridges.register_server(
+                    dir.path(),
+                    1,
+                    "entry",
+                    name,
+                    &server,
+                    path,
+                    &Default::default(),
+                    &Default::default(),
+                ),
                 Err(Error::Unsupported(_))
             ));
         }
-        let mut credentials = server;
-        if let crate::McpServer::Stdio { env, .. } = &mut credentials {
-            env.insert("TOKEN".into(), "local fixture".into());
-        }
-        let http = crate::McpServer::Http {
-            url: "http://localhost".into(),
+
+        let bad_http = crate::McpServer::Http {
+            url: "ftp://localhost/mcp".into(),
             headers: Default::default(),
         };
-        for entry in [&credentials, &http] {
-            assert!(matches!(
-                mcp_row("entry", "server", entry, path),
-                Err(Error::Unsupported(_))
-            ));
+        assert!(matches!(
+            bridges.register_server(
+                dir.path(),
+                2,
+                "entry",
+                "server",
+                &bad_http,
+                path,
+                &Default::default(),
+                &Default::default(),
+            ),
+            Err(Error::Unsupported(_))
+        ));
+
+        #[cfg(unix)]
+        {
+            let mut credentials = server;
+            if let crate::McpServer::Stdio { env, .. } = &mut credentials {
+                env.insert("TOKEN".into(), "secret-local-fixture".into());
+            }
+            let http = crate::McpServer::Http {
+                url: "http://127.0.0.1:9999/mcp".into(),
+                headers: std::collections::BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer secret-header-fixture".into(),
+                )]),
+            };
+            for (idx, entry) in [(3usize, &credentials), (4usize, &http)] {
+                let bridged = bridges
+                    .register_server(
+                        dir.path(),
+                        idx,
+                        "entry",
+                        "server",
+                        entry,
+                        dir.path(),
+                        &Default::default(),
+                        &Default::default(),
+                    )
+                    .unwrap();
+                assert_eq!(bridged["config"]["transport"], "stdio");
+                let text = serde_json::to_string(&bridged).unwrap();
+                assert!(!text.contains("secret-local-fixture"));
+                assert!(!text.contains("secret-header-fixture"));
+            }
         }
     }
 }

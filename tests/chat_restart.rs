@@ -414,11 +414,23 @@ fn durable_inputs() {
         .collect();
     assert_eq!(pending.len(), 3);
 
-    run(&["resume","--chat",chat]);
-    assert_eq!(run(&["queue","--chat",chat])[0]["needs_acknowledgement"],true);
-    let decision=Uuid::new_v4().to_string();
-    let acknowledge=||run(&["acknowledge-uncertain",&held,"--chat",chat,"--command-id",&decision]);
-    assert_eq!(acknowledge(),acknowledge());
+    run(&["resume", "--chat", chat]);
+    assert_eq!(
+        run(&["queue", "--chat", chat])[0]["needs_acknowledgement"],
+        true
+    );
+    let decision = Uuid::new_v4().to_string();
+    let acknowledge = || {
+        run(&[
+            "acknowledge-uncertain",
+            &held,
+            "--chat",
+            chat,
+            "--command-id",
+            &decision,
+        ])
+    };
+    assert_eq!(acknowledge(), acknowledge());
     run(&["resume", "after drain", "--chat", chat]);
     assert_eq!(args("hold without reply", &held)["status"], "uncertain");
     assert_eq!(args("same queue text", &shared)["status"], "sent");
@@ -2012,47 +2024,53 @@ async fn manual_compaction_replay() {
 mod cursor_children;
 #[path = "support/cursor_interactions.rs"]
 mod cursor_interactions;
-#[path = "support/workbench_thread_family.rs"]
-mod workbench_thread_family;
 #[path = "support/workbench_fork.rs"]
 mod workbench_fork;
-#[path = "support/workbench_task_folders.rs"]
-mod workbench_task_folders;
 #[path = "support/workbench_projects.rs"]
 mod workbench_projects;
 #[path = "support/workbench_queue.rs"]
 mod workbench_queue;
-#[path = "support/workbench_suggestions.rs"]
-mod workbench_suggestions;
 #[path = "support/workbench_requests.rs"]
 mod workbench_requests;
 #[path = "support/workbench_server.rs"]
 mod workbench_server;
+#[path = "support/workbench_suggestions.rs"]
+mod workbench_suggestions;
+#[path = "support/workbench_task_folders.rs"]
+mod workbench_task_folders;
+#[path = "support/workbench_thread_family.rs"]
+mod workbench_thread_family;
 
-#[path = "support/worktree_chats.rs"]
-mod worktree_chats;
-#[path = "support/workbench_devices.rs"]
-mod workbench_devices;
+#[path = "support/workbench_background.rs"]
+mod workbench_background;
 #[path = "support/workbench_child_work.rs"]
 mod workbench_child_work;
 #[path = "support/workbench_cloud_live.rs"]
 mod workbench_cloud_live;
-#[path = "support/workbench_usage.rs"]
-mod workbench_usage;
+#[path = "support/workbench_devices.rs"]
+mod workbench_devices;
+#[cfg(target_os = "macos")]
+#[path = "support/workbench_editors.rs"]
+mod workbench_editors;
 #[path = "support/workbench_observability.rs"]
 mod workbench_observability;
-#[path = "support/workbench_background.rs"]
-mod workbench_background;
 #[path = "support/workbench_shell.rs"]
 mod workbench_shell;
-#[cfg(target_os="macos")]
-#[path="support/workbench_editors.rs"]
-mod workbench_editors;
+#[path = "support/workbench_usage.rs"]
+mod workbench_usage;
+#[path = "support/worktree_chats.rs"]
+mod worktree_chats;
 fn main() {
-    #[cfg(target_os="macos")]
+    #[cfg(target_os = "macos")]
     match std::env::args().nth(1).as_deref() {
-        Some("workbench-editors") => { workbench_editors::run(); return; }
-        Some("--goto") if std::env::var_os("KAR_TEST_EDITOR_RECORD").is_some() => { workbench_editors::peer(); return; }
+        Some("workbench-editors") => {
+            workbench_editors::run();
+            return;
+        }
+        Some("--goto") if std::env::var_os("KAR_TEST_EDITOR_RECORD").is_some() => {
+            workbench_editors::peer();
+            return;
+        }
         _ => {}
     }
     if std::env::args().nth(1).as_deref() == Some("workbench-shell") {
@@ -2068,21 +2086,30 @@ fn main() {
         return;
     }
     let mode = std::env::args().nth(1);
-    if mode.as_deref() == Some("workbench-native-child-work") { workbench_child_work::run(); return; }
-    if mode.as_deref() == Some("workbench-native-child-work-live") { workbench_child_work::live(); return; }
+    if mode.as_deref() == Some("workbench-native-child-work") {
+        workbench_child_work::run();
+        return;
+    }
+    if mode.as_deref() == Some("workbench-native-child-work-live") {
+        workbench_child_work::live();
+        return;
+    }
     if mode.as_deref() == Some("acp") && std::env::var_os("KAR_TEST_CHILD_PROFILE").is_some() {
         workbench_child_work::peer();
         return;
     }
-    if matches!(mode.as_deref(), Some("workbench-simlock-live" | "workbench-expo-live")) {
+    if matches!(
+        mode.as_deref(),
+        Some("workbench-simlock-live" | "workbench-expo-live")
+    ) {
         workbench_cloud_live::run(mode.as_deref() == Some("workbench-expo-live"));
         return;
     }
-    if mode.as_deref()==Some("serve") && std::env::var_os("KAR_TEST_MUSE_HOME").is_some(){
+    if mode.as_deref() == Some("serve") && std::env::var_os("KAR_TEST_MUSE_HOME").is_some() {
         workbench_usage::muse_peer();
         return;
     }
-    if mode.as_deref()==Some("workbench-usage-live"){
+    if mode.as_deref() == Some("workbench-usage-live") {
         workbench_usage::live();
         return;
     }
@@ -2094,12 +2121,30 @@ fn main() {
         workbench_observability::run();
         return;
     }
-    if matches!(mode.as_deref(),Some("workbench-devices"|"workbench-devices-live")){
-        workbench_devices::run(mode.as_deref()==Some("workbench-devices-live"));
+    if matches!(
+        mode.as_deref(),
+        Some("workbench-devices" | "workbench-devices-live")
+    ) {
+        workbench_devices::run(mode.as_deref() == Some("workbench-devices-live"));
         return;
     }
-    if std::env::var_os("KAR_DEVICE_TEST_DIR").is_some() && matches!(mode.as_deref(),Some("simctl"|"devices"|"-s"|"-T"|"-list-avds"|"--find"|"version"|"-version")){
-        workbench_devices::peer(&std::env::args().skip(1).collect::<Vec<_>>());return;
+    if std::env::var_os("KAR_DEVICE_TEST_DIR").is_some()
+        && matches!(
+            mode.as_deref(),
+            Some(
+                "simctl"
+                    | "devices"
+                    | "-s"
+                    | "-T"
+                    | "-list-avds"
+                    | "--find"
+                    | "version"
+                    | "-version"
+            )
+        )
+    {
+        workbench_devices::peer(&std::env::args().skip(1).collect::<Vec<_>>());
+        return;
     }
     if mode.as_deref() == Some("workbench-suggestions") {
         workbench_suggestions::run();

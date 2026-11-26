@@ -445,14 +445,13 @@ impl Actor {
         self.journal
             .host_event(Event::RequestResolved { id: id.into() });
         if let Some(req) = pending_req {
-            self.journal
-                .host_event(Event::RequestAnswerDispatched {
-                    cursor: req.cursor,
-                    id: req.id,
-                    method: req.method,
-                    kind: req.kind,
-                    confirmed: true,
-                });
+            self.journal.host_event(Event::RequestAnswerDispatched {
+                cursor: req.cursor,
+                id: req.id,
+                method: req.method,
+                kind: req.kind,
+                confirmed: true,
+            });
         }
         Ok(())
     }

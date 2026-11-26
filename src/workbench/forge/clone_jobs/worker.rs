@@ -300,7 +300,7 @@ async fn transfer(
                 }
             }
             _=tick.tick()=>{
-                let bytes=lfs_bytes(&checkout);
+                let bytes=lfs_bytes(checkout);
                 if bytes!=bytes_downloaded&&bytes>0 {
                     last_active=Instant::now();pulse=Pulse{stage:"checkout".into(),percent:None,detail:Some(format!("Git LFS received {bytes} bytes")),stalled:false};dirty=true;
                 }

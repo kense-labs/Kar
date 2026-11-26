@@ -805,7 +805,12 @@ fn find_matching_context_end(s: &str, tag_lower: &str) -> Option<(usize, usize)>
                 }
                 pos = at + len;
             }
-            Some(HtmlToken::Skip(len) | HtmlToken::Cdata { len, .. } | HtmlToken::Start { len, .. } | HtmlToken::End { len, .. }) => {
+            Some(
+                HtmlToken::Skip(len)
+                | HtmlToken::Cdata { len, .. }
+                | HtmlToken::Start { len, .. }
+                | HtmlToken::End { len, .. },
+            ) => {
                 pos = at + len;
             }
             None => {
@@ -816,10 +821,7 @@ fn find_matching_context_end(s: &str, tag_lower: &str) -> Option<(usize, usize)>
     None
 }
 
-pub(super) fn strip_user_context_envelopes<'a>(
-    text: &'a str,
-    cwd: Option<&Path>,
-) -> Cow<'a, str> {
+pub(super) fn strip_user_context_envelopes<'a>(text: &'a str, cwd: Option<&Path>) -> Cow<'a, str> {
     if !text.contains('<') || !contains_any_user_context_tag(text) {
         return Cow::Borrowed(text);
     }

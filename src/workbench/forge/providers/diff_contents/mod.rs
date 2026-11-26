@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 mod refs;
 const TEXT_LIMIT: usize = 1024 * 1024;
+#[allow(clippy::enum_variant_names)]
 #[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 enum Change {

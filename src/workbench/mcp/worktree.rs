@@ -166,7 +166,7 @@ fn default_origin(project: &super::super::Project, db: &crate::workbench::Catalo
         .settings
         .get("newWorktreesStartFromOrigin")
         .and_then(Value::as_bool)
-        .unwrap_or_else(||super::collaboration_tools::environment::worktrees_from_origin(db))
+        .unwrap_or_else(|| super::collaboration_tools::environment::worktrees_from_origin(db))
 }
 fn directory_ok(policy: Option<&Policy>, target: &Path) -> bool {
     policy.and_then(Policy::worktree_directory) == target.parent()
@@ -482,7 +482,7 @@ fn dispatch(
         let continuation_id = request.continuation_prompt.as_ref().map(|_| Uuid::new_v4());
         let start_from_origin = request
             .start_from_origin
-            .unwrap_or_else(|| default_origin(&registered,db));
+            .unwrap_or_else(|| default_origin(&registered, db));
         let script = request
             .run_setup_script
             .then(|| setup::Script::select(&registered))

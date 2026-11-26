@@ -86,6 +86,7 @@ pub(super) async fn execute(c: &Context, n: u64, action: &Request) -> Result<Val
             expected_head_sha,
             method,
             auto,
+            ..
         } => {
             merge::apply(
                 &pull,
@@ -267,7 +268,8 @@ mod tests {
                 &Request::Merge {
                     expected_head_sha: "other".into(),
                     method: None,
-                    auto: false
+                    auto: false,
+                    stack: false,
                 }
             )
             .await

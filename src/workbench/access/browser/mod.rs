@@ -47,7 +47,7 @@ pub(super) struct Account {
     #[serde(default)]
     peer_thread_read: bool,
     #[serde(default)]
-    peer_tasks:BTreeMap<Uuid,Uuid>,
+    peer_tasks: BTreeMap<Uuid, Uuid>,
     pub(super) until: u64,
     #[serde(default)]
     renew_until: Option<u64>,
@@ -66,7 +66,7 @@ struct Grant {
     #[serde(default)]
     peer: bool,
     #[serde(default)]
-    peer_tasks:BTreeMap<Uuid,Uuid>,
+    peer_tasks: BTreeMap<Uuid, Uuid>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Ticket {
@@ -203,7 +203,7 @@ fn consume(db: &mut Registry, code: &str) -> AccessResult<Grant> {
             label: "Kar device".into(),
             access: None,
             peer: false,
-            peer_tasks:Default::default(),
+            peer_tasks: Default::default(),
         });
     }
     Err(AccessError::Invalid)
@@ -217,16 +217,12 @@ pub(super) fn direct_peer(db: &mut Registry, raw: &str, label: &str) -> AccessRe
         return Err(AccessError::Denied);
     }
     g.label = label.into();
-    let mut scopes=BTreeSet::from(["orchestration:read".into()]);
-    if g.peer && !g.peer_tasks.is_empty() {scopes.insert("orchestration:operate".into());}
+    let mut scopes = BTreeSet::from(["orchestration:read".into()]);
+    if g.peer && !g.peer_tasks.is_empty() {
+        scopes.insert("orchestration:operate".into());
+    }
     g.access = None;
-    let (device, token) = session(
-        db,
-        g,
-        "peer-link",
-        Some(scopes),
-        None,
-    )?;
+    let (device, token) = session(db, g, "peer-link", Some(scopes), None)?;
     Ok(json!({"id":device.id,"label":device.label,"token":token}))
 }
 pub(super) fn consume_approval(
@@ -252,16 +248,29 @@ fn required(method: &Method, path: &str) -> Option<&'static str> {
     let read = method == Method::GET || method == Method::HEAD;
     let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
     match parts.as_slice() {
-        ["server","config"]|["server","config","events"]|["server","settings"] if read=>Some("orchestration:read"),
-        ["server","settings"|"keybindings"] if !read=>Some("settings:write"),
-        ["peer","delegations",_,_,_] if matches!(*method,Method::GET|Method::PUT|Method::DELETE)=>Some("orchestration:operate"),
-        ["peer","threads",_,_,"history" | "item" | "events"] if method == Method::GET => Some("orchestration:read"),
-        ["providers",_,"install",..] if read=>Some("providers:manage"),
+        ["server", "config"] | ["server", "config", "events"] | ["server", "settings"] if read => {
+            Some("orchestration:read")
+        }
+        ["server", "settings" | "keybindings"] if !read => Some("settings:write"),
+        ["peer", "delegations", _, _, _]
+            if matches!(*method, Method::GET | Method::PUT | Method::DELETE) =>
+        {
+            Some("orchestration:operate")
+        }
+        ["peer", "mcp"] if *method == Method::POST => Some("orchestration:read"),
+        ["peer", "threads", _, _, "history" | "item" | "events"] if method == Method::GET => {
+            Some("orchestration:read")
+        }
+        ["providers", _, "install", ..] if read => Some("providers:manage"),
         ["environment"] | ["projects"] | ["projects", _, "chats"] if read => {
             Some("orchestration:read")
         }
         ["search", "chats"] | ["projects", _, "search"] if read => Some("orchestration:read"),
-        ["projects", _, "chats", _, "delegations", _] => Some(if read {"orchestration:read"}else{"orchestration:operate"}),
+        ["projects", _, "chats", _, "delegations", _] => Some(if read {
+            "orchestration:read"
+        } else {
+            "orchestration:operate"
+        }),
         ["projects", _, "chats"] if !read => Some("orchestration:operate"),
         [
             "projects",
@@ -305,7 +314,13 @@ fn audience(path: &str) -> Option<&'static str> {
         ["devices", "screenshot" | "stream" | "video" | "input"]
         | ["projects", _, "previews", _, "screen" | "tunnel" | "stream"] => Some("media"),
         ["projects", _, "chats", _, "events"]
-        | ["projects", _, "terminals", _, "output" | "attach" | "observe"]
+        | [
+            "projects",
+            _,
+            "terminals",
+            _,
+            "output" | "attach" | "observe",
+        ]
         | ["projects", _, "terminals", "metadata"]
         | ["projects", _, "git", "events"]
         | ["projects", _, "preview-profiles", "report"] => Some("rpc"),
@@ -372,22 +387,42 @@ pub(super) fn authenticate(auth: &Auth, req: &Request) -> AccessResult<DeviceLea
         }
         d
     };
-    let peer_task=path.starts_with("/peer/delegations/");
+    let peer_task = path.starts_with("/peer/delegations/");
     if peer_task {
-        let selected=path.strip_prefix("/peer/delegations/").and_then(|tail| {
-            let parts=tail.split('/').collect::<Vec<_>>();
-            match parts.as_slice(){[env,p,job] if Uuid::parse_str(env).is_ok() && Uuid::parse_str(job).is_ok()=>Uuid::parse_str(p).ok(),_=>None}
+        let selected = path.strip_prefix("/peer/delegations/").and_then(|tail| {
+            let parts = tail.split('/').collect::<Vec<_>>();
+            match parts.as_slice() {
+                [env, p, job] if Uuid::parse_str(env).is_ok() && Uuid::parse_str(job).is_ok() => {
+                    Uuid::parse_str(p).ok()
+                }
+                _ => None,
+            }
         });
-        if req.headers().contains_key("origin") || !matches!(*req.method(),Method::GET|Method::PUT|Method::DELETE)
-            || !d.account.as_ref().is_some_and(|a|a.method=="peer-link" && selected.is_some_and(|p|a.peer_tasks.contains_key(&p))) {return Err(AccessError::Denied);}
+        if req.headers().contains_key("origin")
+            || !matches!(*req.method(), Method::GET | Method::PUT | Method::DELETE)
+            || !d.account.as_ref().is_some_and(|a| {
+                a.method == "peer-link" && selected.is_some_and(|p| a.peer_tasks.contains_key(&p))
+            })
+        {
+            return Err(AccessError::Denied);
+        }
     }
     let thread_read = path.starts_with("/peer/threads/");
-    if thread_read && (req.headers().contains_key("origin") || !d.account.as_ref().is_some_and(|a| a.peer_thread_read)) {
+    if thread_read
+        && (req.headers().contains_key("origin")
+            || !d.account.as_ref().is_some_and(|a| a.peer_thread_read))
+    {
         return Err(AccessError::Denied);
     }
+    let peer_mcp = path == "/peer/mcp"
+        && *req.method() == Method::POST
+        && !req.headers().contains_key("origin");
     if let Some(a) = &d.account {
         if a.method == "peer-link"
-            && !(peer_task || (thread_read && req.method() == Method::GET) || (path == "/environment" && req.method() == Method::GET)
+            && !(peer_task
+                || peer_mcp
+                || (thread_read && req.method() == Method::GET)
+                || (path == "/environment" && req.method() == Method::GET)
                 || (path == "/access/current-device" && req.method() == Method::DELETE))
         {
             return Err(AccessError::Denied);
@@ -429,7 +464,11 @@ fn session(
             cloud,
             method: method.into(),
             peer_thread_read: method == "peer-link" && grant.peer,
-            peer_tasks:if method=="peer-link" && grant.peer {grant.peer_tasks}else{Default::default()},
+            peer_tasks: if method == "peer-link" && grant.peer {
+                grant.peer_tasks
+            } else {
+                Default::default()
+            },
             until: now() + if proof.is_some() { 3600000 } else { TTL },
             renew_until: (proof.is_some() && cloud.is_none()).then(|| now() + TTL),
             scopes,
@@ -541,10 +580,49 @@ pub(super) fn routes(auth: Auth) -> Router {
 }
 
 impl AccessStore {
-    pub(in crate::workbench) fn peer_task_template(&self,device:Uuid,project:Uuid)->Option<Uuid>{
-        let db=self.registry.lock().ok()?;
-        let a=db.devices.get(&device)?.account.as_ref()?;
-        if a.method!="peer-link" || a.until<=now() || !a.scopes.contains("orchestration:operate"){return None;}
+    pub(in crate::workbench) fn peer_task_template(
+        &self,
+        device: Uuid,
+        project: Uuid,
+    ) -> Option<Uuid> {
+        let db = self.registry.lock().ok()?;
+        let a = db.devices.get(&device)?.account.as_ref()?;
+        if a.method != "peer-link"
+            || a.until <= now()
+            || !a.scopes.contains("orchestration:operate")
+        {
+            return None;
+        }
         a.peer_tasks.get(&project).copied()
+    }
+
+    pub(in crate::workbench) fn peer_mcp_access(
+        &self,
+        device: Uuid,
+        write: bool,
+        thread_access: bool,
+        project: Option<Uuid>,
+    ) -> bool {
+        let Some(db) = self.registry.lock().ok() else {
+            return false;
+        };
+        let Some(a) = db.devices.get(&device).and_then(|d| d.account.as_ref()) else {
+            return db.devices.contains_key(&device);
+        };
+        if a.method != "peer-link" || a.until <= now() || !a.scopes.contains("orchestration:read") {
+            return false;
+        }
+        if thread_access && !a.peer_thread_read {
+            return false;
+        }
+        if write {
+            if !a.scopes.contains("orchestration:operate") {
+                return false;
+            }
+            if !a.peer_tasks.is_empty() && project.is_none_or(|p| !a.peer_tasks.contains_key(&p)) {
+                return false;
+            }
+        }
+        true
     }
 }

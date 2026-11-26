@@ -6,10 +6,10 @@ use kar::{
 };
 use serde_json::json;
 use std::{collections::BTreeMap, ffi::OsString, fs, time::Duration};
-#[path = "pi_provider_live/packages.rs"]
-mod packages;
 #[path = "support/pi_model_catalog.rs"]
 mod model_catalog;
+#[path = "pi_provider_live/packages.rs"]
+mod packages;
 fn options(home: &tempfile::TempDir) -> ProviderAuthOptions {
     let agent = home.path().join("agent");
     let mut env: BTreeMap<OsString, Option<OsString>> =

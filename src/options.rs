@@ -8,7 +8,6 @@ pub(crate) mod opencode;
 pub(crate) mod qwen_memory;
 pub(crate) mod user_configuration;
 mod workbench_registration;
-pub use workbench_registration::WorkbenchRegistration;
 use crate::{Error, Result, SessionOptions};
 pub use qwen_memory::{NativeMemory, NativeMemoryDefault};
 use serde::{Deserialize, Serialize};
@@ -20,6 +19,7 @@ use std::{
     path::{Path, PathBuf},
 };
 pub use user_configuration::UserConfigurationCategory;
+pub use workbench_registration::WorkbenchRegistration;
 
 impl SessionOptions {
     pub(crate) fn confirm_model(&self, runtime: &str, reported: Option<&str>) -> Result<()> {
@@ -420,6 +420,13 @@ pub enum SessionLogUpload {
     Off,
 }
 
+/// Per-session opt-in to inherit Codex's native permission and sandbox configuration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexNativePermissions {
+    Inherit,
+}
+
 /// Native launch settings retained with a managed chat and reapplied on resume.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -457,6 +464,10 @@ pub struct SessionSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acp_mode: Option<String>,
     pub service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier_fallback: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_permissions: Option<CodexNativePermissions>,
     pub additional_directories: Vec<PathBuf>,
     /// Native final-output JSON Schema for turns started by this host.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -486,10 +497,21 @@ impl SessionSettings {
         }
         if let Some(tier) = &self.service_tier
             && (tier.trim().is_empty()
-                || (protocol == crate::Protocol::Claude
+                || ((protocol == crate::Protocol::Claude
+                    || (protocol == crate::Protocol::Acp && runtime == "cursor"))
                     && !matches!(tier.as_str(), "default" | "fast")))
         {
             return Err(Error::Refused("unsupported service tier".into()));
+        }
+        if let Some(fallback) = &self.service_tier_fallback {
+            if fallback != "default" {
+                return Err(Error::Refused("unsupported service_tier_fallback".into()));
+            }
+            if self.service_tier.is_none() {
+                return Err(Error::Refused(
+                    "service_tier_fallback requires service_tier".into(),
+                ));
+            }
         }
         if let Some(name) = &self.name
             && (name.trim().is_empty() || name.contains('\0'))

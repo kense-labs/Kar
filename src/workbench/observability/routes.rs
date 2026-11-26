@@ -55,10 +55,9 @@ async fn retry(State(app): State<Workbench>) -> Reply {
         svc.state.lock().unwrap().last = None;
         accepted = true;
     }
-    let f = if accepted || latest.is_none() {
-        svc.sample(&app).await?
-    } else {
-        latest.unwrap()
+    let f = match latest.filter(|_| !accepted) {
+        None => svc.sample(&app).await?,
+        Some(frame) => frame,
     };
     Ok(Json(
         json!({"accepted":accepted,"snapshot":f.snapshot(svc.interval())}),

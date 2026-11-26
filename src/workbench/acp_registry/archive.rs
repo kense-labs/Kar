@@ -37,7 +37,12 @@ pub(super) fn relative(raw: &str) -> Result<PathBuf> {
 pub(super) async fn install(root: &Path, source: &Url, b: &Binary) -> Result<(PathBuf, String)> {
     install_with_progress(root, source, b, |_| {}).await
 }
-pub(super) async fn install_with_progress(root: &Path, source: &Url, b: &Binary, stage: impl Fn(&'static str) + Send + Sync) -> Result<(PathBuf, String)> {
+pub(super) async fn install_with_progress(
+    root: &Path,
+    source: &Url,
+    b: &Binary,
+    stage: impl Fn(&'static str) + Send + Sync,
+) -> Result<(PathBuf, String)> {
     stage("downloading");
     let url = Url::parse(&b.archive).map_err(|_| bad("invalid archive URL"))?;
     let mut r = catalog::client(source)?

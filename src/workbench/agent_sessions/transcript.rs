@@ -108,10 +108,10 @@ fn title(s: &str, source: Source) -> Option<String> {
             s = after.trim_start();
         }
     }
-    if s.starts_with("<wake>") || s.starts_with("<wake ") {
-        if let Some((_, body)) = s.split_once('>') {
-            s = body.split("</wake>").next().unwrap_or(body).trim()
-        }
+    if (s.starts_with("<wake>") || s.starts_with("<wake "))
+        && let Some((_, body)) = s.split_once('>')
+    {
+        s = body.split("</wake>").next().unwrap_or(body).trim()
     }
     let mut width = 0;
     let result = s
