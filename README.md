@@ -16,7 +16,7 @@
   <code>20+ Agent Runtimes</code> ·
   <code>95 Scoped MCP Tools</code> ·
   <code>Native + WebAssembly</code> ·
-  <code>Apache-2.0</code>
+  <a href="LICENSE"><code>MIT</code></a>
 </p>
 
 [Why Kar?](#-why-kar-exists) ·
@@ -303,7 +303,9 @@ Deep per-vendor version notes, live binary trial flags (`--ignored`), and protoc
 
 <div align="center">
 
-Built with obsessive care in **100% Safe Rust** · Licensed under **Apache-2.0**
+Built with obsessive care in **100% Safe Rust** · Kar’s own code is licensed under [**MIT**](LICENSE).
+
+The [Kantor Office engines](https://github.com/kense-labs/kantor/blob/9b780379e32d3fa4d293499f33fbc2483655567d/LICENSE) use AGPL-3.0-or-later. The [agent logos](src/brands/NOTICE.md) and [voice catalog](src/workbench/voice/CATALOG-LICENSE) have separate notices.
 
 [**⬆ Back to Top**](#) · [**切换到简体中文 →**](README.zh-CN.md)
 

@@ -16,7 +16,7 @@
   <code>20+ 编程 Agent 运行时</code> ·
   <code>95 项模型 MCP 工具</code> ·
   <code>Native + WebAssembly</code> ·
-  <code>Apache-2.0</code>
+  <a href="LICENSE"><code>MIT</code></a>
 </p>
 
 [为什么需要 Kar](#-为什么需要-kar) ·
@@ -303,7 +303,9 @@ rustc --edition=2024 -D warnings tools/backend-coverage.rs -o /tmp/kar-coverage 
 
 <div align="center">
 
-以 **100% Safe Rust** 精工锻造 · 采用 **Apache-2.0** 开源许可
+以 **100% Safe Rust** 精工锻造 · Kar 自有代码采用 [**MIT** 许可证](LICENSE)。
+
+[Kantor Office 引擎](https://github.com/kense-labs/kantor/blob/9b780379e32d3fa4d293499f33fbc2483655567d/LICENSE)采用 AGPL-3.0-or-later。[智能体图标](src/brands/NOTICE.md)和[语音目录](src/workbench/voice/CATALOG-LICENSE)各有单独的许可声明。
 
 [**⬆ 回到顶部**](#) · [**Switch to English →**](README.md)
 

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Rust-native control and observation of coding agent runtimes"
-license = "Apache-2.0"
+license = "MIT"
 default-run = "kar"
 
 [lib]
